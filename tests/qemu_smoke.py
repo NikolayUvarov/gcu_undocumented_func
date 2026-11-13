@@ -9035,6 +9035,85 @@ def update_keys_suite(args):
           "revoked release key signed refused (351-UPD-0027); the file system is consistent", flush=True)
 
 
+def update_recovery_suite(args):
+    """351-UPD-0030 (MC-9.4, 9.6): a recovery order. A raw image with release 6 in slot A, confirmed, under floor 6, and
+    release 5 in slot B; update.txt names the test release server, with `automatic check` every 5 s. An order to go back
+    to version 5, the floor lowered to 5, signed by the release key, is refused with no record written. The same order
+    signed by the recovery key is applied: kept in system/updater's account first, then slot B on trial with the floor
+    5, through init's restart; slot B boots and is confirmed. The order, still served, is refused as replayed."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update-recovery suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    import datetime
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-recovery-"))
+    arch = args.arch
+    volume, newer, server, kept, good, _, _, _, _ = update_releases(temp, arch, minimum6=6)
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_httpd.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+    keys = (server / "keys/current").read_bytes()
+    # Release 6 in slot A under floor 6; release 5, laid out the same way, in slot B.
+    layout = temp / "layout"
+    boot_slots.layout(newer, layout, floor=6)
+    five = temp / "layout5"
+    boot_slots.layout(volume, five)
+    shutil.copytree(five / "MIND/A", layout / "MIND/B")
+    for slot, channel in (("A", good), ("B", kept)):
+        (layout / f"MIND/{slot}/CHANNEL").write_bytes(channel)
+        (layout / f"MIND/{slot}/KEYS").write_bytes(keys)
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0030)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic check\nevery 5\n")
+    image = boot_slots.Image.create(temp / "recovery.img", layout)
+    target = release_tool.destination(server)
+    k, why = release_tool.check_chain(target)
+    assert k is not None, why
+    expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = release_tool.order_bytes("stable", expires, 5, 1, 5)
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        log = updater_log(vm, "[UPDATER] CHECK: REFUSED: Older", 180)
+        require(log, "[UPDATER] SLOT A, VERSION 6; THE NEWER RECORD: SLOT A CONFIRMED, FLOOR 6")
+        # Signed by the release key: refused, nothing written.
+        target.put_file(body + release_tool.signature_lines(body, [release_tool.TEST_RELEASE_SEED]), "recovery/stable")
+        log = updater_log(vm, "[UPDATER] RECOVERY ORDER 1 REFUSED: FEWER THAN 1 OF THE RECOVERY KEYS OF KEY FILE VERSION 1 SIGNED IT", 60)
+        assert "[UPDATER] RECORD" not in log, log
+        print("PASS: update-recovery: an order below the floor the release key signed refused, nothing written", flush=True)
+        # Signed by the recovery key (sequence 2, as release.py recover writes the next): applied, slot B on trial.
+        vm.collect(); vm.output = ""
+        since = len(vm.log)
+        release_tool.order(target, "stable", k, 5, 5)
+        out = trial_confirmed(vm, since, 900)
+        for line in ("MIND CORE KERNEL: REBOOT VIA", "BOOT: SLOT B LOADED ON TRIAL"):
+            require(out, line)
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        log = updater_log(vm, "[UPDATER] RECOVERY ORDER 2 REFUSED: NOT ABOVE ORDER 2, APPLIED BEFORE", 120)
+        for line in ("[UPDATER] RECOVERY ORDER 2 OF CHANNEL stable APPLIED BEFORE (system/updater/recovery)",
+                     "[UPDATER] SLOT B ON TRIAL, VERSION 5", "[UPDATER] SLOT B CONFIRMED ON THE DISK"):
+            require(log, line)
+        print("PASS: update-recovery: the order the recovery key signed applied, slot B booted on trial under floor 5 and "
+              "confirmed; the same order served again refused as replayed", flush=True)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-recovery-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    newest = boot_slots.newest(records)[1]
+    assert (newest["slot"], newest["confirmed"], newest["floor"]) == ("B", True, 5), records
+    account = image.read("system/updater/recovery").decode()
+    assert account.startswith("stable 2 5 5 ") and account.count("\n") == 1, account
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: update-recovery: an order below the floor taken only from the recovery keys, kept in the account before it "
+          "acts, applied once (351-UPD-0030); the file system is consistent", flush=True)
+
+
 def update_store_suite(args):
     """351-UPD-0033 (MC-9.3): the updater keeps its releases in the block store. A raw image with release 5 in slot A,
     confirmed, a blank disk for the store, and update.txt naming the test release server, which offers release 6 (one
@@ -17325,6 +17404,7 @@ def main():
             updater_suite(args, args.updater_elf)
             update_suite(args)
             update_keys_suite(args)
+            update_recovery_suite(args)
             install_suite(args, args.updater_elf)
             update_store_suite(args)
             continue
@@ -17342,6 +17422,9 @@ def main():
             continue
         if suite == "updatekeys":
             update_keys_suite(args)
+            continue
+        if suite == "updaterecovery":
+            update_recovery_suite(args)
             continue
         if suite == "ehci":
             ehci_suite(args)

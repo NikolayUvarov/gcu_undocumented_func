@@ -17,6 +17,8 @@ Server layout:
                                                  by its own (351-UPD-0027)
     timestamps/<channel>                    the channel file's SHA-256, a short expiry and its own version, signed by
                                                  the timestamp keys (351-UPD-0028); renewed without the release key
+    recovery/<channel>                      a recovery order, when one is given: the version to go back to and the
+                                                 floor to lower to, signed by the recovery keys (351-UPD-0030)
 
 Usage:
     release.py stage VERSION OUT [--arch x86_64=usb_root] [--arch aarch64=aarch64_root]
@@ -25,6 +27,8 @@ Usage:
     release.py check DEST [--channel stable] [--now ISO-8601]
     release.py timestamp DEST [--channel stable] [--hours 24]   the channel's timestamp renewed, its version one more
                                                  (351-UPD-0028): the timestamp keys alone, not the release key
+    release.py recover DEST --version V --floor F [--channel stable] [--days 7]   a recovery order, its sequence one
+                                                 more (351-UPD-0030): signed by the recovery keys alone
     release.py bundle DEST OUT [--channel stable] [--arch x86_64]   one ZIP of what a device needs of the channel
                                                  (751-UPD-0032), checked first: for the Effector gateway's install
     release.py --public                     the public test release key
@@ -41,7 +45,7 @@ Usage:
 
 Keys: the release seeds from $MIND_RELEASE_KEY (files of 64 hex digits outside the repository, separated by the path
 separator) or the public test release key; the timestamp seeds from $MIND_TIMESTAMP_KEY in the same form, or the test
-timestamp key; the boot key as sign_manifest.py reads it; the root set's public keys and
+timestamp key; the recovery seeds from $MIND_RECOVERY_KEY, or the test recovery key; the boot key as sign_manifest.py reads it; the root set's public keys and
 threshold from $MIND_ROOT_KEYS (`threshold T`, then a public key a line) or the test set, three keys of which two sign.
 `publish` with the test release key puts the test key file on a server that has none. With the test keys a layout is
 checked for accident, not attack.
@@ -99,6 +103,12 @@ def release_seeds():
 
 def release_seed():
     return release_seeds()[0]
+
+
+def recovery_seeds():
+    """The seeds that sign a recovery order (351-UPD-0030): $MIND_RECOVERY_KEY's files, else the test recovery key."""
+    paths = [p for p in os.environ.get("MIND_RECOVERY_KEY", "").split(os.pathsep) if p]
+    return [read_seed(p) for p in paths] or [TEST_RECOVERY_SEED]
 
 
 def timestamp_seeds():
@@ -707,6 +717,36 @@ def stamp(target, channel, k, hours=TIMESTAMP_HOURS, seeds=None, now=None):
     return body
 
 
+def order_bytes(channel, expires, floor, sequence, version):
+    """A recovery order's body in its one encoding (351-UPD-0030): sorted keys, no spaces, a final newline."""
+    if not 1 <= floor <= version or sequence < 1:
+        raise ReleaseError("a recovery order has 1 <= floor <= version and a sequence from 1")
+    body = {"channel": channel, "expires": expires, "floor": floor, "sequence": sequence, "version": version}
+    return (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def order(target, channel, k, version, floor, days=7, seeds=None, now=None):
+    """Writes `recovery/<channel>` (351-UPD-0030): go back to `version`, the floor lowered to `floor`, its sequence one
+    above the server's order, `days` of life, signed by the recovery seeds, which the key file `k` must name to its
+    threshold. Returns the body."""
+    seeds = seeds or recovery_seeds()
+    keys, threshold = k["roles"]["recovery"]
+    named = [s for s in seeds if sm.public_key(s) in keys]
+    if len(named) < len(seeds) or len(set(map(sm.public_key, named))) < threshold:
+        raise ReleaseError(f"keys/current names {len(named)} of the {len(seeds)} recovery keys given, and its recovery role needs {threshold}")
+    sequence, held = 1, target.read(f"recovery/{channel}")
+    if held is not None:
+        try:
+            sequence = json.loads(held.split(b"\n")[0])["sequence"] + 1
+        except (ValueError, KeyError, TypeError):
+            raise ReleaseError(f"recovery/{channel} on the server: not a recovery order")
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = order_bytes(channel, expires, floor, sequence, version)
+    target.put_file(body + signature_lines(body, seeds), f"recovery/{channel}")
+    return body
+
+
 def check_timestamp(target, channel, k, now=None):
     """None if `timestamps/<channel>` names the channel file the server holds, the timestamp keys of `k` signed it to
     their threshold and it has not expired; else the reason."""
@@ -758,6 +798,13 @@ def main(argv):
                 raise ReleaseError(f"the server's key files: {why}")
             body = stamp(target, channel, k, int(option("--hours", str(TIMESTAMP_HOURS))))
             print(f"TIMESTAMPED {body.decode().strip()}" + (" (THE TEST TIMESTAMP KEY)" if timestamp_seeds() == [TEST_TIMESTAMP_SEED] else ""))
+        elif argv[:1] == ["recover"] and len(argv) >= 2 and option("--version") and option("--floor"):
+            target, channel = destination(argv[1]), option("--channel", "stable")
+            k, why = check_chain(target)
+            if k is None:
+                raise ReleaseError(f"the server's key files: {why}")
+            body = order(target, channel, k, int(option("--version")), int(option("--floor")), int(option("--days", "7")))
+            print(f"RECOVERY ORDER {body.decode().strip()}" + (" (THE TEST RECOVERY KEY)" if recovery_seeds() == [TEST_RECOVERY_SEED] else ""))
         elif argv[:1] == ["bundle"] and len(argv) >= 3:
             paths = bundle(argv[1], argv[2], option("--channel", "stable"), option("--arch", many=True) or None)
             print(f"BUNDLED {len(paths)} FILES OF channels/{option('--channel', 'stable')} INTO {argv[2]} ({Path(argv[2]).stat().st_size} BYTES)")

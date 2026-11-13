@@ -370,6 +370,26 @@ class Releases(unittest.TestCase):
         path.unlink()
         self.assertEqual(self.check(), "timestamps/stable: missing")
 
+    def test_a_recovery_order_with_the_recovery_key_alone(self):
+        # 351-UPD-0030: `recover` writes recovery/<channel>, its sequence one more each time, signed by the recovery key
+        # the key file names; another key is refused.
+        import contextlib, io
+        release.publish(self.staged(1), self.dest, now=NOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(release.main(["recover", str(self.dest), "--version", "1", "--floor", "1"]), 0, out.getvalue())
+            self.assertEqual(release.main(["recover", str(self.dest), "--version", "1", "--floor", "1", "--days", "2"]), 0, out.getvalue())
+        whole = (self.dest / "recovery/stable").read_bytes()
+        body, signatures = release.split_signed(whole)[0]
+        o = json.loads(body)
+        self.assertEqual((o["channel"], o["sequence"], o["version"], o["floor"]), ("stable", 2, 1, 1))
+        self.assertEqual(signatures[0][0], sm.public_key(release.TEST_RECOVERY_SEED))
+        k, _ = release.check_chain(release.destination(self.dest), now=NOW)
+        with self.assertRaisesRegex(release.ReleaseError, "names 0 of the 1 recovery keys"):
+            release.order(release.destination(self.dest), "stable", k, 1, 1, seeds=[release.TEST_RELEASE_SEED])
+        with self.assertRaisesRegex(release.ReleaseError, "1 <= floor <= version"):
+            release.order(release.destination(self.dest), "stable", k, 1, 2)
+
     def test_a_server_without_a_key_file(self):
         # The test key file goes up with a channel the test release key signs; with real keys none is made.
         release.publish(self.staged(1), self.dest, now=NOW)

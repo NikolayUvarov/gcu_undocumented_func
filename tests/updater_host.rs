@@ -32,7 +32,7 @@ mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
 
-use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, period, raise, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, keeps, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -178,6 +178,23 @@ fn the_floor_rises_to_a_minimum_the_confirmed_slot_meets_and_never_falls() {
     assert_eq!(raise([Some(rec(4, b'B', b'A', 2, false)), None], b'B', 5, 7), None, "not before the running slot is confirmed");
     // With the floor at 5, release 7 confirmed, release 6 stays at or above it: a rollback to it is allowed.
     assert!(raise(at(0), b'B', 5, 7).is_some_and(|(_, r)| 6 >= r.floor));
+}
+
+#[test]
+fn a_recovery_order_lowers_the_floor_and_boots_the_other_slot_on_trial() {
+    // 351-UPD-0030: the one write that lowers the floor, for an order the recovery threshold signed.
+    let at = [Some(Record { floor: 6, ..rec(4, b'B', b'A', 0, true) }), Some(Record { floor: 6, ..rec(3, b'B', b'A', 1, false) })];
+    assert_eq!(recover(at, b'B', 5), Some((1, Record { floor: 5, ..rec(5, b'A', b'B', 1, false) })), "slot A on trial, one try, floor 5");
+    assert_eq!(floor(at), 6);
+    let (file, record) = recover(at, b'B', 5).unwrap();
+    let mut after = at;
+    after[file] = Some(record);
+    assert_eq!(floor(after), 5, "the bootloader reads the newer record's floor");
+    // The updater's own writes carry the lower floor on from there, and never lower it again.
+    assert_eq!(trial_of_other(after, b'A', 3).map(|(_, r)| r.floor), Some(5));
+    assert_eq!(recover([None, None], b'A', 2), Some((0, Record { floor: 2, ..rec(1, b'B', b'A', 1, false) })), "from no record");
+    let last = [Some(Record { floor: 6, ..rec(slots::SEQUENCE_LAST - 1, b'B', b'A', 0, true) }), None];
+    assert_eq!(recover(last, b'B', 5), None, "no sequence left for the trial's count");
 }
 
 #[test]

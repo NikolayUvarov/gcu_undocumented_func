@@ -91,6 +91,14 @@ pub fn trial_of_other(records: [Option<Record>; 2], running: u8, tries: u8) -> O
     next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0, floor: 0 })
 }
 
+/// The record a recovery order writes (351-UPD-0030): the other slot on trial with one try, falling back to the running
+/// one, the floor lowered to `floor`. The one write that lowers the floor, and only for an order the recovery keys'
+/// threshold signed; a trial needs two more sequence numbers, which the bootloader writes.
+pub fn recover(records: [Option<Record>; 2], running: u8, floor: u64) -> Option<(usize, Record)> {
+    let (file, sequence) = newest(records).map_or((0, 1), |(k, r)| (1 - k, r.sequence + 1));
+    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { slot: other(running), fallback: running, tries: 1, confirmed: false, sequence, floor }))
+}
+
 /// The record that raises the version floor (351-UPD-0024) to `minimum`, a checked channel's, once the newer record
 /// confirms `running` and its manifest names `version` at or above it: the newer record again, one on, with that
 /// floor. None leaves the floor as it is: it is never lowered, and a confirmed trial alone raises nothing, so a

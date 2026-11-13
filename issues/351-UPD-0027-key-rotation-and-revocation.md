@@ -53,7 +53,9 @@ With a key file ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-sign
   - `tests/release_test.py`: rotation and revocation by the tool, a version published out of turn, a history with a version missing;
   - `tests/updater_host.rs`, `tests/vfs_zone_host.rs`, `tests/http_serve_host.rs`, `tests/link_update_test.py`, `tests/idl_fuzz_host.rs`, `tools/httpd`'s tests;
   - `updater`, `parse`, `vfs_server` and `init` build for x86, `updater` for aarch64.
-- **The QEMU check** `update-keys` (`tests/qemu_smoke.py`, in the `updater` suite), x86 and aarch64: versions 2 (the release key rotated) and 3 (the root rotated) taken in turn and the channel the old release key signed refused; version 1 served again refused, and a version 4 the rotated-away root signed; the channel the new key signed taken; after `svc restart updater` and after a reboot, version 3 read back and version 1 refused; slot A, whose channel only the revoked key signed, no fallback. Runs on the maintainer's machines: below, once made.
+- **The QEMU check** `update-keys` (`tests/qemu_smoke.py`, in the `updater` suite), x86 and aarch64: versions 2 (the release key rotated) and 3 (the root rotated) taken in turn and the channel the old release key signed refused; version 1 served again refused, and a version 4 the rotated-away root signed; the channel the new key signed taken; after `svc restart updater` and after a reboot, version 3 read back and version 1 refused; slot A, whose channel only the revoked key signed, no fallback.
+- **Run** in this container (x86, QEMU 8.2.2 under TCG) at b2736f71: `--suites updatekeys` passed, every step above; `--suites update` passed, 351-UPD-0026's key-file case now as version 2 refused by version 1's root.
+- Runs on the maintainer's machines: below, once made.
 
 ## Related
 
