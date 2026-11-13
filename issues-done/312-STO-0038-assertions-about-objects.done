@@ -1,8 +1,8 @@
 # 312-STO-0038 — Assertions about objects: a claim with its type, source and interpretation, kept apart from content — done
 
-**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, Appendix B.3
+**Type:** storage (`libmind`, `blocks`) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-31) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, Appendix B.3
 
-Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its third step: "assertions, apart from content (MC-4.12): a claim about an object, its subject's CID, its author and its origin; signed where it crosses a trust zone (B.3); each kind of metadata names its source of truth".
+Split from [312](312-the-minds-memory.done) (2026-10-31), its third step: "assertions, apart from content (MC-4.12): a claim about an object, its subject's CID, its author and its origin; signed where it crosses a trust zone (B.3); each kind of metadata names its source of truth".
 
 No personal data is written before [308](308-encryption-at-rest.done) is done: the tests and the pilot assert test text only.
 
@@ -123,4 +123,4 @@ Landed in `main` 370e905c (round 370e905c) as 5efb10ba and 5c4b5fe0.
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [303](303-retention-and-collection.done), [308](308-encryption-at-rest.done).
+[312](312-the-minds-memory.done), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [303](303-retention-and-collection.done), [308](308-encryption-at-rest.done).

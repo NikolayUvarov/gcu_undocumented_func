@@ -1,6 +1,6 @@
 # 312-STO-0047 — A vector index of a journal's embeddings, an exact scan — done
 
-**Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
+**Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.5, MC-4.6, MC-4.12, MC-4.13, MC-10.3
 
 ## Problem
 
@@ -65,4 +65,4 @@ Done on `claude/relaxed-meitner-5bmhpz` as 8f9311ef:
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [312-STO-0038](312-STO-0038-assertions-about-objects.done), [310](../issues/310-the-index-on-the-medium.md), [310-STO-0048](310-STO-0048-the-longest-free-runs-kept.done), [900-NRL-0017](../issues/900-NRL-0017-native-runtime-and-nnd-integration.md).
+[312](312-the-minds-memory.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [312-STO-0038](312-STO-0038-assertions-about-objects.done), [310](../issues/310-the-index-on-the-medium.md), [310-STO-0048](310-STO-0048-the-longest-free-runs-kept.done), [900-NRL-0017](../issues/900-NRL-0017-native-runtime-and-nnd-integration.md).

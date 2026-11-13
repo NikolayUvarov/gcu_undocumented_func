@@ -567,7 +567,7 @@ The damage and the blank disk are made by the test, between writes and reads, an
 
 ## A journal, checked from its head — host-tested, run in QEMU on x86 and aarch64 (312-STO-0034)
 
-A journal is an ordered record under a name, which a reader checks whole from its head (`libmind/src/journal.rs`), the first step of [312](../../issues/312-the-minds-memory.md): every entry there, none reordered, changed or dropped, and the record never rewritten from an older point. It is a client's use of `put`, `publish`, `snapshot` and `get`: `blockstore.wit` and the store's layout do not change.
+A journal is an ordered record under a name, which a reader checks whole from its head (`libmind/src/journal.rs`), the first step of [312](../../issues-done/312-the-minds-memory.done): every entry there, none reordered, changed or dropped, and the record never rewritten from an older point. It is a client's use of `put`, `publish`, `snapshot` and `get`: `blockstore.wit` and the store's layout do not change.
 
 - **An entry** is one DAG-CBOR block `{"v": 1, "seq", "boot", "kind", "prev", "clock", "source", "content", "calendar", "monotonic"}`, its keys in DAG-CBOR's order:
   - `seq`: its sequence, from 1;
@@ -626,7 +626,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
 ## A text index derived from a journal — host-tested, run in QEMU on x86 and aarch64 (312-STO-0035)
 
-A text index tells which entries of a journal hold a word without reading every content (`libmind/src/index.rs`), the second step of [312](../../issues/312-the-minds-memory.md). It is derived (MC-4.12): built only from what the journal holds, it may be dropped and rebuilt, and a rebuild gives the same index. It is not authority: each answer is checked against the journal. It is a client's use of `put`, `publish`, `snapshot` and `get`: `blockstore.wit` and the store's layout do not change.
+A text index tells which entries of a journal hold a word without reading every content (`libmind/src/index.rs`), the second step of [312](../../issues-done/312-the-minds-memory.done). It is derived (MC-4.12): built only from what the journal holds, it may be dropped and rebuilt, and a rebuild gives the same index. It is not authority: each answer is checked against the journal. It is a client's use of `put`, `publish`, `snapshot` and `get`: `blockstore.wit` and the store's layout do not change.
 
 - **An index is an object of `tree`** (above), published under a name of its own by compare-and-swap, `index/<journal>` unless one is given. So the store retains and walks it, a copy carries it, and its owner is charged the bytes of its files. Its root holds two entries:
   - `manifest`: a file, one `raw` block, holding a canonical DAG-CBOR map `{"v": 1, "seq", "head", "kind", "terms", "entries", "journal", "postings", "tokenizer"}`, its keys in DAG-CBOR's order: the journal's name; the sequence and the CID (a link) of the head it was built from; `kind` `"text"`; `tokenizer` 1; how many entries hold a term, how many terms and how many postings. At most 208 bytes, and accepted only if re-encoding it gives exactly its bytes. `"v"` is the schema's version: another is refused by its number (`version(n)`), and so is another tokenizer (`tokenizer(n)`); another kind is refused (`kind`). The manifest is a file, whose bytes the store does not read: an index does not retain its journal.
@@ -669,7 +669,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
 ## Assertions about objects — host-tested, run in QEMU on x86 and aarch64 (312-STO-0038)
 
-An assertion says something about an object without changing it (`libmind/src/assertion.rs`), the third step of [312](../../issues/312-the-minds-memory.md): a claim with its type, the version of the type's meaning, its source and its time (MC-4.6), kept apart from the object's content (MC-4.12). A title or a tag written into an object's content would change its CID, so it would no longer be the same object, and nothing would tell who said it. It is a client's use of the journal (above): `blockstore.wit` and the store's layout do not change.
+An assertion says something about an object without changing it (`libmind/src/assertion.rs`), the third step of [312](../../issues-done/312-the-minds-memory.done): a claim with its type, the version of the type's meaning, its source and its time (MC-4.6), kept apart from the object's content (MC-4.12). A title or a tag written into an object's content would change its CID, so it would no longer be the same object, and nothing would tell who said it. It is a client's use of the journal (above): `blockstore.wit` and the store's layout do not change.
 
 - **An assertion** is one canonical DAG-CBOR map `{"v": 1, "type", "basis", "value", "interp", "subject", "retracts"}`, its keys in DAG-CBOR's order:
   - `subject`: the CID it is about;
@@ -718,7 +718,7 @@ Evidence: host tests of the code, not a proof (MC-12.2).
 
 ## A vector index derived from a journal of embeddings — host-tested, run in QEMU on x86 and aarch64 (312-STO-0047)
 
-A vector index answers which objects are nearest to a query by their embeddings (`libmind/src/vector.rs`), the fourth step of [312](../../issues/312-the-minds-memory.md). As the plan divides it (2026-10-27), a model's runtime makes the embeddings and this track keeps them and their index: **the store runs no model and reads none.** The index is derived (MC-4.12): it may be dropped and rebuilt, and is never authority. It is a client's use of the journal and of `tree`: `blockstore.wit` and the store's layout do not change.
+A vector index answers which objects are nearest to a query by their embeddings (`libmind/src/vector.rs`), the fourth step of [312](../../issues-done/312-the-minds-memory.done). As the plan divides it (2026-10-27), a model's runtime makes the embeddings and this track keeps them and their index: **the store runs no model and reads none.** The index is derived (MC-4.12): it may be dropped and rebuilt, and is never authority. It is a client's use of the journal and of `tree`: `blockstore.wit` and the store's layout do not change.
 
 - **An embedding** is one canonical DAG-CBOR map `{"v": 1, "model", "vector", "subject"}`, its keys in DAG-CBOR's order:
   - `vector`: its components, 1 to 1024, each a signed byte (two's complement), as a byte string. A producer that makes floats scales and rounds them (a unit vector times 127, say); this module does not.
@@ -979,6 +979,11 @@ On the platform:
 - the `store` suite on x86's qemu64, without RDRAND: no domain made, `no-random`, and the log says why;
 - the `boot` suite's store disk on x86 with RDRAND: a domain forgotten before a reboot is unreadable after it and its records are collected; another domain's object reads back whole;
 - a domain made with a limit of 8 KiB refuses a publish past it while the volume takes the same object (the `store` suite on aarch64), and its limit and usage are the same after a reboot (the `boot` suite on x86).
+- a client of a domain that only reads (`blocks -dr`) reads its name and block and is refused a put and a publish (the `store` suite on aarch64, 312-STO-0049);
+- **a stand-in agent with a memory of its own** (312, the `store` suite's `store_agent_check` on aarch64, on 4a69edb6 in this session's container):
+  - `blocks`, started by the shell's `run -d` (312-APP-0134) with one domain's client alone, writes a journal, its text index and a claim there, and reads them back;
+  - the volume's names, another domain's and any other domain are out of its reach, and the volume does not see its memory;
+  - its domain forgotten, its memory is gone at once, a collection frees its records, and the other domain stands.
 
 ## Several names at once — run on the platform (304)
 
@@ -1187,7 +1192,7 @@ Planned on 2026-10-27 from the kernel session's draft. None of it is a guarantee
 | [309](../../issues-done/309-copies-scrub-and-repair.done) | Copies on a second medium, scrub and repair | the scrub built ([309-STO-0025](../../issues-done/309-STO-0025-scrub.done)), copies in a file with repair from them ([309-STO-0031](../../issues-done/309-STO-0031-a-copy-of-named-roots-in-a-file.done)), and copies of chosen names on a second medium with repair from either, host-tested and run in QEMU on x86 and aarch64 (309-STO-0040, above); on real machines after 307 |
 | [310](../../issues/310-the-index-on-the-medium.md) | The index on the medium, 64-bit sectors (a layout after 3), longer histories | when sizes ask for it |
 | [311](../../issues-done/311-storefs-a-file-face.done) | `storefs`: a file view of a named root, with snapshots and history | after 307 |
-| [312](../../issues/312-the-minds-memory.md) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), above), a text index derived from it ([312-STO-0035](../../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), above), and assertions about objects kept in a journal ([312-STO-0038](../../issues-done/312-STO-0038-assertions-about-objects.done), above); no personal data before 308 |
+| [312](../../issues-done/312-the-minds-memory.done) | A journal, assertions and derived indexes, forgetting by domain | the journal built ([312-STO-0034](../../issues-done/312-STO-0034-a-journal-checked-from-its-head.done), above), a text index derived from it ([312-STO-0035](../../issues-done/312-STO-0035-a-text-index-derived-from-a-journal.done), above), and assertions about objects kept in a journal ([312-STO-0038](../../issues-done/312-STO-0038-assertions-about-objects.done), above); no personal data before 308 |
 | [313](../../issues/313-persistent-actors.md) | Checkpoints of services with queues, an effect journal | after 308 |
 | [314](../../issues/314-models-mapped-from-the-store.md) | Models mapped read-only from the store | after 307 |
 | [315](../../issues/315-memory-across-machines.md) | Memory across machines | an intention only |

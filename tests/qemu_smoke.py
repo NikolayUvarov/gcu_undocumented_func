@@ -4655,6 +4655,7 @@ def store_suite(vm):
     store_index_check(vm)
     store_assertion_check(vm)
     store_vector_check(vm)
+    store_agent_check(vm)
     storefs_writers_check(vm)
     store_recovery_check(vm)
 
@@ -5301,6 +5302,73 @@ def store_vector_check(vm):
     require(blocks(f"-d {domain} vector check memory"), f"blocks: domain {domain}: NotFound")
     require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 7: EQUAL")
     print("PASS: a vector index: one in a memory domain is the domain's alone and goes with it", flush=True)
+
+
+def store_agent_check(vm):
+    """312: a stand-in agent with a memory of its own. `blocks` is started by `run -d` (312-APP-0134) in a memory domain
+    the owner (the shell) made, and holds that domain's client alone. It writes its memory (three notes in a journal, a
+    text index of them, an assertion) and reads it back (the journal listed and checked, a search, `about`). The
+    volume's names, another domain's and any other domain are out of its reach, and the volume does not see its
+    memory. The owner forgets its domain: the memory is gone at once, a collection frees its records, and the other
+    domain stands. Without a random source (x86's qemu64) no domain is made, and no agent is run."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        print("NOTE: a stand-in agent: no memory domain without a random source (x86's qemu64), so none is run", flush=True)
+        return
+    mine = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    theirs = int(re.search(r"DOMAIN (\d+) MADE", blocks("domain new"))[1])
+
+    def agent(args, timeout=240):
+        vm.send(f"run -d {mine} blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"run -d {mine} blocks {args}\n")
+    # Another program's memory, in the other domain.
+    require(vm.command("write ram:theirs.txt kept by another"), "WROTE 16 BYTES")
+    kept = cid_raw(b"kept by another\n")
+    require(blocks(f"-d {theirs} put ram:theirs.txt"), f"PUT {kept} SIZE 16")
+    require(blocks(f"-d {theirs} publish private {kept}"), "PUBLISHED private VERSION 1")
+    # The agent writes its memory: three notes, an index of them, a claim about what it met.
+    notes = ["met the user at nine", "the user likes tea", "tea at four with the user"]
+    for k, note in enumerate(notes, 1):
+        require(agent(f"journal append self note {note}"), f"APPENDED self SEQUENCE {k} BOOT 1 ENTRY ")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {mine}")
+    require(agent("index build self"), "PUBLISHED index/self VERSION 1 ROOT")
+    user = cid_raw(b"the user")
+    require(agent(f"assert add claims {user} likes tea"), f"ASSERTED claims SEQUENCE 1 ASSERTION ")
+    # And reads it back.
+    out = agent("journal list self")
+    for k, note in enumerate(notes, 1):
+        assert re.search(rf"^ENTRY {k} ", out, re.M), out
+        require(out, f"TEXT {note}")
+    require(out, "3 ENTRIES OF self AT VERSION 3, NEWEST FIRST")
+    require(agent("journal check self"), "CHECKED self: 3 ENTRIES, SEQUENCE 1 TO 3, AT VERSION 3: WHOLE")
+    out = agent("index search self tea")
+    assert re.search(r"^SEQUENCES 3 2\r?$", out, re.M), out
+    require(out, "INDEX index/self OF self AT SEQUENCE 3: CURRENT")
+    require_all(agent(f"assert about claims {user}"), "  TEXT tea", f"1 ASSERTIONS ABOUT {user} IN claims AT VERSION 1, NEWEST FIRST")
+    print("PASS: a stand-in agent: blocks started by run -d in a memory domain writes its memory (a journal, its index, a "
+          "claim) and reads it back, checked from the journal's head", flush=True)
+    # Out of its reach: the volume's names (store_index_check's journal), the other domain's, any other domain.
+    require(agent("journal check notes"), "blocks: journal notes: NotFound")
+    require(agent("resolve private"), "blocks: resolve private: NotFound")
+    require(agent(f"-d {theirs} resolve private"), f"blocks: domain {theirs}: Rights")
+    require(agent("domain new"), "blocks: domain new: Rights")
+    # Nor does the volume see the agent's memory.
+    require(blocks("journal check self"), "blocks: journal self: NotFound")
+    print("PASS: a stand-in agent: the volume's names, another domain's and any other domain are out of its reach, and the "
+          "volume does not see its memory", flush=True)
+    # The owner forgets the agent's domain: its memory goes at once, a collection frees its records, the other stands.
+    require(blocks(f"domain forget {mine}"), f"DOMAIN {mine} FORGOTTEN")
+    require(vm.command(f"run -d {mine} blocks journal check self"), "RUN -D: NO LIVE MEMORY DOMAIN OF THE SHELL'S HAS THAT NUMBER")
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", collected), collected
+    out = blocks("domains")
+    assert f"DOMAIN {mine} " not in out and f"DOMAIN {theirs} LIVE" in out, out
+    require(blocks(f"-d {theirs} resolve private"), f"private VERSION 1 ROOT {kept}")
+    print("PASS: a stand-in agent: its domain forgotten by the owner, its memory is gone at once and a collection frees its "
+          "records; the other domain stands", flush=True)
 
 
 def storefs_writers_check(vm):
