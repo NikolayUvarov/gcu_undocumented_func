@@ -1,8 +1,8 @@
-# 312-APP-0134 — The shell starts a program in a memory domain
+# 312-APP-0134 — The shell starts a program in a memory domain — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` in `main` since round 124, 267ad266, 2026-11-12; a read-only start waits for 312-STO-0049 in `main`) · **Blocked by:** — (a read-only start: 312-STO-0049, `blockstore.wit` 2.8 `domain-client-with(id, rights)`, STO's answer of 2026-11-12) · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
-**Asked by:** STO, for 312's QEMU criterion, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
+**Asked by:** STO, for 312's QEMU criterion, in [requests-APP.md](../issues/requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
 ## Problem
 
@@ -19,13 +19,13 @@ A memory domain is a set of names, pins and blocks under a key of its own (308-S
 - **Host tests:** the words of `run -d`.
 - **QEMU (`store` suite):** `blocks` started with `-d` on a domain the shell made writes and reads its own names, and finds neither the volume's nor another domain's; a read-only start is refused a put; an unknown domain is refused.
 
-## Progress (2026-11-12)
+## Resolution
 
 - **`run -d <domain> <program> [arguments] [&]`** (`shell/src/domainrun.rs`, `shell/src/main.rs`'s `start_with`): the store's client of the domain is asked for through the shell's client (`SLOT_BLOCKSTORE`), after the other grants, and lent in `SLOT_BLOCKSTORE` in place of the volume's; the system log says `[SHELL] BLOCKS STARTS IN MEMORY DOMAIN 2`.
 - **Refused before the start,** each with its text: `-d` with no number or no program (`USAGE: RUN [-D <DOMAIN>] <NAME> [ARGUMENTS] [&]`), a program that asks for no block store, one with no store client to lend (no store, or a script without `requires: blockstore`), a service, and for now one that asks only to read; after the loader's session begins, the store's `not-found`, `rights` and `full`, the session aborted.
-- **Tested:** `tests/shell_host.rs`'s `run_d_names_a_memory_domain_before_the_program` (the words and the texts). The `store` suite's `run_in_domain_check` passes: on x86 (31 checks) the refusals, where no domain is made without a random source; on aarch64 (32 checks, on 34635ebe52) `blocks` started in the first domain reading that domain's name, not seen from the second, refused `domain new` and `domains` through the domain's client, and `blocksro` refused the start.
+- **Tested:** `tests/shell_host.rs`'s `run_d_names_a_memory_domain_before_the_program` (the words and the texts). The `store` suite's `run_in_domain_check`, on this branch after round 127 (fd6f7bbb, 4 CPUs): on x86 (33 checks) the refusals, where no domain is made without a random source; on aarch64 (38 checks) `blocks` started in the first domain writing and reading a name of its own there, reading that domain's name, reaching neither the second's nor the volume's, refused `domain new` and `domains` through the domain's client, and `blocksro`, which asks only to read, reading the domain's name and refused a put and a publish.
 - **A read-only start** (312-STO-0049 in `main` since round 127): for a program that asks only for `REQUEST_BLOCKSTORE_READ`, the shell asks through its writing client, the domains' owner, for `domain-client-with(id, BADGE_GET)`, so the program holds the get badge's rights alone in the domain; the system log adds `, READ ONLY`. The aarch64 `store` suite had shown `domain-client` through the read-only client refused (`rights`, another owner).
 
 ## Related
 
-[312](../issues-done/312-the-minds-memory.done), [requests-APP.md](requests-APP.md), 308-STO-0023 (memory domains).
+[312](312-the-minds-memory.done), [requests-APP.md](../issues/requests-APP.md), 308-STO-0023 (memory domains).
