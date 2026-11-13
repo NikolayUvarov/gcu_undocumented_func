@@ -1122,7 +1122,7 @@ impl Init {
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }
             // The updater (351-KRN-0022): the clock and the boot disk, read-only but for the update zone (351-UPD-0008:
-            // the slot that did not boot, the boot records in place); TLS over the flow the policy gives "updater" (made
+            // the slot that did not boot, the boot records in place) and system/updater (351-UPD-0027); TLS over the flow the policy gives "updater" (made
             // here and kept for restarts: the policy's term bounds it); a lifecycle client of init that may ask for a
             // restart of the machine; the firmware's boot variables.
             "updater" => {

@@ -85,6 +85,19 @@ fn only_the_time_services_badge_opens_its_floor() {
     for path in ["data", "data/x", "kernel.elf"] { assert_eq!(zone(path, BADGE_TIMED, None), Zone::ReadOnly, "{path}"); }
 }
 
+// 351-UPD-0027: the key file the updater trusts, in system/updater, which its badge alone opens, whether or not it
+// booted from a slot; no other badge, the user's included, can put an older key file back and so bring revoked keys back.
+#[test]
+fn only_the_updaters_badge_opens_its_key_file() {
+    for inactive in [None, Some("B")] {
+        for path in ["system/updater", "system/updater/keys", "system/updater/keys.new"] { assert_eq!(zone(path, BADGE_UPDATE, inactive), Zone::Writable, "{path}"); }
+    }
+    for badge in [APP, BADGE_USER, BADGE_READER, BADGE_TIMED, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_OWNERS, BADGE_EFFECTOR, BADGE_EFFECTOR_GW] {
+        assert_eq!(zone("system/updater/keys", badge, Some("B")), Zone::Hidden, "badge {badge}");
+    }
+    for path in ["system/timed", "system/keystore", "system/own"] { assert_eq!(zone(path, BADGE_UPDATE, Some("B")), Zone::Hidden, "{path}"); }
+}
+
 // 000-KRN-0170: the programs' own directories under system/own/: the loader's badge alone opens them, to scope each into
 // its program; every other badge, the user's and the programs' included, finds them hidden.
 #[test]

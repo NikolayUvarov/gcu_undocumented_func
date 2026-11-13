@@ -152,7 +152,7 @@ pub fn matches_tag(header: Option<&str>, tag: &str) -> bool {
     header.is_some_and(|h| h.split(',').map(|t| t.trim().trim_start_matches("W/")).any(|t| t == "*" || t == tag))
 }
 
-/// What a path of the release layout names; a blob never changes, a channel and the key file are fetched fresh.
+/// What a path of the release layout names; a blob never changes, a channel, its timestamp and the key file are fetched fresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { Blob, Manifest, Channel }
 
@@ -210,6 +210,8 @@ pub fn resolve(target: &str) -> Result<(&str, Kind), Refusal> {
         ["releases", version, arch, file] if digits(version) && ARCHES.contains(arch) && MANIFESTS.contains(file) => Kind::Manifest,
         ["channels", name] if channel_name(name) => Kind::Channel,
         ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
+        ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
+        ["timestamps", name] if channel_name(name) => Kind::Channel, // a channel's timestamp (351-UPD-0028), fetched fresh
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((relative, kind))

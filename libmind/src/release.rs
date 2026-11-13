@@ -1,5 +1,6 @@
-//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026) and a boot
-//! manifest. The parser service reads them (`parse_channel`, `parse_keys`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
+//! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026), a timestamp
+//! file (351-UPD-0028) and a boot manifest. The parser service reads them (`parse_channel`, `parse_keys`,
+//! `parse_timestamp`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
 //! what the parser says only if it encodes again to exactly the signed bytes (`encode_channel`, `encode_line`,
 //! `encode_file`), so a parser that lies is caught (MC-11.5, 11.11). Both formats have one encoding, which `parse_*`
 //! demands: anything else is malformed.
@@ -7,12 +8,13 @@
 /// The largest channel file, key file and boot manifest read.
 pub const CHANNEL_MAX: usize = 2560;
 pub const KEYS_MAX: usize = 4096;
+pub const TIMESTAMP_MAX: usize = 2048;
 pub const MANIFEST_MAX: usize = 32768;
 /// Signature lines a channel or a key file carries, at most; public keys a role names, at most.
 pub const SIGNATURES_MAX: usize = 8;
 pub const ROLE_KEYS: usize = 4;
-/// The roles of a key file, in its order (351-UPD-0026).
-pub const ROLES: [&str; 4] = ["boot", "recovery", "release", "timestamp"];
+/// The roles of a key file, in its order (351-UPD-0026; `root` since 351-UPD-0027, the keys that sign the next file).
+pub const ROLES: [&str; 5] = ["boot", "recovery", "release", "root", "timestamp"];
 /// A channel's name, an architecture's name, a manifest's path: their longest.
 pub const NAME_MAX: usize = 32;
 pub const ARCH_MAX: usize = 16;
@@ -90,16 +92,47 @@ impl Role {
 /// What a key file says (351-UPD-0026, after TUF's root metadata): its version, when it expires, and each role's keys
 /// and threshold, in `ROLES`' order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Keys { pub version: u64, pub expires: [u8; 20], pub roles: [Role; 4] }
+pub struct Keys { pub version: u64, pub expires: [u8; 20], pub roles: [Role; ROLES.len()] }
 
 impl Keys {
     /// The role named `name`, one of `ROLES`.
     pub fn role(&self, name: &str) -> Option<&Role> { ROLES.iter().position(|&r| r == name).map(|i| &self.roles[i]) }
+    /// The root role: the keys and threshold that sign the next key file (351-UPD-0027).
+    pub fn root(&self) -> &Role { &self.roles[3] }
+}
+
+/// What a key file is to a device that holds version `held` and trusts the root `keys` and `threshold` (351-UPD-0027,
+/// after TUF's root rotation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Version `held` + 1, signed by that root's threshold and by its own root's, which differs when it rotates the root.
+    Next,
+    /// Version `held` again: the caller compares it with the file it holds.
+    Same,
+    /// Below `held`: served again, it would bring back the keys a later version revoked.
+    Lower,
+    /// Above `held` + 1: the versions between are taken first.
+    Skips,
+    /// Version `held` + 1 without both thresholds' signatures.
+    Unsigned,
+}
+
+/// The step key file `next` (`body` signed as `signed`) is from version `held` under the root `keys` and `threshold`.
+pub fn step(held: u64, keys: &[[u8; 32]], threshold: u8, next: &Keys, body: &[u8], signed: &Signed, verify: impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> Step {
+    match next.version {
+        v if v < held => Step::Lower,
+        v if v == held => Step::Same,
+        v if v > held.saturating_add(1) => Step::Skips,
+        _ => {
+            let root = next.root();
+            if signed_by(keys, threshold, body, signed, &verify) && signed_by(root.keys(), root.threshold, body, signed, &verify) { Step::Next } else { Step::Unsigned }
+        }
+    }
 }
 
 /// Whether at least `threshold` of `keys` signed `body`: each key counts once however many lines name it, a line whose
 /// key is not among `keys` is passed over, and `verify(key, body, signature)` is the Ed25519 check (MC-9.6).
-pub fn signed_by(keys: &[[u8; 32]], threshold: u8, body: &[u8], signed: &Signed, verify: impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> bool {
+pub fn signed_by(keys: &[[u8; 32]], threshold: u8, body: &[u8], signed: &Signed, verify: &impl Fn(&[u8; 32], &[u8], &[u8; 64]) -> bool) -> bool {
     if threshold == 0 { return false; }
     let mut counted = 0usize;
     for (i, key) in keys.iter().enumerate() {
@@ -251,7 +284,7 @@ pub fn parse_channel(file: &[u8]) -> Result<(Channel, Signed), Malformed> {
 }
 
 /// A key file (351-UPD-0026): `{"expires":…,"roles":{"boot":{"keys":[…],"threshold":…},"recovery":…,"release":…,
-/// "timestamp":…},"version":…}`, every role present, in that order, each with 1 to ROLE_KEYS public keys in 64 hex digits
+/// "root":…,"timestamp":…},"version":…}`, every role present, in that order (`root` since 351-UPD-0027), each with 1 to ROLE_KEYS public keys in 64 hex digits
 /// in ascending order and a threshold from 1 to their number; the version at least 1; no spaces; then the root keys'
 /// signature lines, as a channel's.
 pub fn parse_keys(file: &[u8]) -> Result<(Keys, Signed), Malformed> {
@@ -262,7 +295,7 @@ pub fn parse_keys(file: &[u8]) -> Result<(Keys, Signed), Malformed> {
         s.literal(b"{\"expires\":\"")?;
         let expires = timestamp(s.until(b'"')?)?;
         s.literal(b"\",\"roles\":{")?;
-        let mut roles = [Role::EMPTY; 4];
+        let mut roles = [Role::EMPTY; ROLES.len()];
         for (i, name) in ROLES.iter().enumerate() {
             if i > 0 { s.literal(b",")?; }
             s.literal(b"\"")?; s.literal(name.as_bytes())?; s.literal(b"\":{\"keys\":[")?;
@@ -358,6 +391,46 @@ pub fn encode_channel(channel: &Channel, out: &mut [u8]) -> Option<usize> {
     o.put(b"}\n")?;
     Some(o.len)
 }
+
+/// What a timestamp file says (351-UPD-0028, after TUF's timestamp metadata): the channel it is for, the SHA-256 of that
+/// channel's file as published, signatures included, a short expiry, and its own version, which each renewal raises.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timestamp { pub channel: Text<NAME_MAX>, pub digest: [u8; 32], pub expires: [u8; 20], pub version: u64 }
+
+/// A timestamp file: `{"channel":…,"digest":"<64 hex digits>","expires":…,"version":…}`, no spaces, the version at least
+/// 1, then its timestamp keys' signature lines, as a channel's.
+pub fn parse_timestamp(file: &[u8]) -> Result<(Timestamp, Signed), Malformed> {
+    if file.len() > TIMESTAMP_MAX { return Err(Malformed); }
+    let (body, signed) = split_signed(file)?;
+    let mut s = Scan { text: &file[..body], at: 0 };
+    let parsed = (|| {
+        s.literal(b"{\"channel\":")?;
+        let channel = s.string::<NAME_MAX>()?;
+        s.literal(b",\"digest\":\"")?;
+        let digest = hex::<32>(s.until(b'"')?)?;
+        s.literal(b"\",\"expires\":\"")?;
+        let expires = timestamp(s.until(b'"')?)?;
+        s.literal(b"\",\"version\":")?;
+        let version = s.digits()?;
+        s.literal(b"}\n")?;
+        (s.at == body && version >= 1).then_some(Timestamp { channel, digest, expires, version })
+    })();
+    parsed.map(|stamp| (stamp, signed)).ok_or(Malformed)
+}
+
+/// The first line of a timestamp file, with its newline, in its one encoding: what the timestamp keys sign.
+pub fn encode_timestamp(stamp: &Timestamp, out: &mut [u8]) -> Option<usize> {
+    let mut o = Out { buf: out, len: 0 };
+    o.put(b"{\"channel\":\"")?; o.put(stamp.channel.as_bytes())?;
+    o.put(b"\",\"digest\":\"")?; o.hex(&stamp.digest)?;
+    o.put(b"\",\"expires\":\"")?; o.put(&stamp.expires)?;
+    o.put(b"\",\"version\":")?; o.decimal(stamp.version)?;
+    o.put(b"}\n")?;
+    Some(o.len)
+}
+
+/// Whether a timestamp's fields and signatures are exactly `file`, as `channel_is` for a channel.
+pub fn timestamp_is(file: &[u8], stamp: &Timestamp, signed: &Signed) -> bool { file_is(file, signed, |out| encode_timestamp(stamp, out)) }
 
 /// A file line of a boot manifest: `file <path> <size> <sha256> <flags in 8 hex digits> <MiB>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
