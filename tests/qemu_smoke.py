@@ -11949,11 +11949,13 @@ def timed_check(args, disk):
         try:
             require(vm.service_logs("timed", "NO ANSWER IN"), "[TIMED] STARTED: THE FLOOR IS ")
             require(vm.command("date"), "DATE: 2024-01-01 ")
+            # The host counts from the command sent, before the guest can start its sleep, so the count does not
+            # lean on the host's own sleep of a second, which a coarse host timer lengthens (111-NET-0076).
+            started = time.monotonic()
             vm.send("msh data/sleep.msh\n")
             time.sleep(1)
             for server in servers:
                 server.answering.set()
-            started = time.monotonic()
             out = vm.expect("MIND> ", timeout=60, after="SLEPT ")
             slept = time.monotonic() - started
             guest = int(re.search(r"SLEPT (\d+) MS", out)[1])
@@ -11964,7 +11966,7 @@ def timed_check(args, disk):
             assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
             require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
             # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
-            assert 25_000 <= guest < 26_500 and 24 <= slept < 32, (guest, slept)
+            assert 25_000 <= guest < 26_500 and 25 <= slept < 33, (guest, slept)
             shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
             gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
             assert gap < 3, (shown, gap)
