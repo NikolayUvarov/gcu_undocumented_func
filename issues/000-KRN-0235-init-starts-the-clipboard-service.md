@@ -43,6 +43,13 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **`init`'s part:** the service's server endpoint with `CAP_BADGE` in `SLOT_SERVICE`, as `blockstore`'s; `docs/profile/bootstrap.md`'s row says so.
 - Either lands alone without harm: without the right, `wm`'s programs keep their own copy buffers, as before.
 
+**Round 127's gate (2026-11-13)** failed in "x86: USB image" (acc-2, 121 s), where `clipboard` now runs:
+- **What failed:** `tests/usb_image_smoke.py`'s unplugged step reads this boot's saved log for `DRIVE DOES NOT ANSWER` with `cat`, which shows a file's first 16 KiB on the screen (`... 932 MORE BYTES`). `clipboard` logs `IN FRONT` each time the shell names a program in front, and the log passed that size before the drive came back. Read from the QEMU log of that run; the drive's line was in the 932 bytes not shown.
+- **The fix** (in this test, 211-KRN-0050's, the kernel track's): the log is read whole through a pipe, `cat log:… | grep DRIVE` (a capture keeps up to 1 MiB, 000-APP-0074).
+- **Landed anyway:** the group passed on its second run, alone, as the gate's rule allows, so round 127 landed (`main` 86794305) with this task's code; the check's fix follows in a later round.
+
+**Left:** APP's `tools` checks (their 0532Z request, 208d3ea0: `clipboard_check`, with the shell's copy given `CAP_GRANT`); the check's fix above.
+
 ## Related
 
 - [requests-KRN.md](requests-KRN.md), where it was asked.

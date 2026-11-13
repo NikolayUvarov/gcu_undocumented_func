@@ -289,9 +289,10 @@ def unplugged(vm, booted, name):
         raise AssertionError("memmap does not start after the disk is plugged in again")
     require(vm.service_logs("vfs_server", "DRIVE ANSWERS AGAIN"), "DRIVE ANSWERS AGAIN")
     require(vm.command("sync"), "OK")
-    # The records of the time without the disk reach this boot's log once it is back (the journal kept them).
+    # The records of the time without the disk reach this boot's log once it is back (the journal kept them). Read
+    # whole through a pipe: `cat` shows a file's first 16 KiB on the screen, and by now this boot's log is longer.
     for _ in range(40):
-        saved = vm.command(f"cat log:{name}", raw=True)
+        saved = vm.command(f"cat log:{name} | grep DRIVE", raw=True)
         if "DRIVE ANSWERS AGAIN" in saved:
             break
         time.sleep(1)

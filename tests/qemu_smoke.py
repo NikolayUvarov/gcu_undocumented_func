@@ -1964,6 +1964,49 @@ def tools_suite(vm):
     dictate_check(vm)
     speak_check(vm)
     monitors_check(vm)
+    clipboard_check(vm)
+
+
+def clipboard_check(vm):
+    """000-APP-0032: the system clipboard, where init starts the service (000-KRN-0235). edit copies a line through it
+    (Ctrl+C, the shell naming it in front), the shell's line pastes it (Ctrl+V) and a second edit pastes it into its
+    file; the service logs each text set and read with its length, never the text. Skipped until clipboard is a boot
+    service."""
+    services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
+    if '"clipboard"' not in services:
+        print("SKIP: clipboard: not a boot service yet (000-KRN-0235)", flush=True)
+        return
+    require(vm.service_logs("clipboard", "READY"), "[CLIPBOARD] READY")
+    text = "from the clipboard"
+
+    def edit(path, keys):
+        vm.send_bytes(f"edit {path}\n".encode())
+        status_line(vm, "[EDIT] READY")
+        for data, wait in keys:
+            vm.send_bytes(data)
+            status_line(vm, wait)
+        vm.send_bytes(b"\x1bOQ")  # F2
+        status_line(vm, f"[EDIT] SAVED {len(text)} BYTES TO {path}")
+        vm.send_bytes(b"\x1b[21~")  # F10
+        require(vm.expect("EXITED. SHELL RESUMED."), "[EDIT] DONE")
+        time.sleep(.1); vm.collect(); vm.output = ""
+    # Typed, Shift+Home selects the line, Ctrl+C copies it to the clipboard.
+    edit("ram:clip1.txt", [(text.encode(), f"BYTES={len(text)} "), (b"\x1b[1;2H", "BYTES="),
+                           (b"\x03", f"[EDIT] COPIED {len(text)} BYTES TO THE CLIPBOARD, GENERATION ")])
+    log = vm.service_logs("clipboard", "SET BY PID")
+    assert re.search(rf"\[CLIPBOARD\] SET BY PID \d+: {len(text)} BYTES, GENERATION \d+", log) and text not in log, log[-1500:]
+    # The shell's line: Ctrl+V pastes the clipboard's first line into it.
+    vm.send_bytes(b"logger \x16\n")
+    require(vm.expect("MIND> ", after=f"logger {text}\n"), "LOGGED")
+    require(vm.command("dmesg -s shell", raw=True), text)
+    # A second edit pastes it into its own file.
+    edit("ram:clip2.txt", [(b"\x16", f"[EDIT] PASTED {len(text)} BYTES FROM THE CLIPBOARD")])
+    require(vm.command("cat ram:clip2.txt"), text)
+    assert text not in vm.service_logs("clipboard", "READ BY PID"), "the service logs no text"
+    for path in ("ram:clip1.txt", "ram:clip2.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    print("PASS: clipboard: edit copied a line through the service, the shell's line and a second edit pasted it; the "
+          "service logged each set and read by its length alone (000-APP-0032)", flush=True)
 
 
 def fbank_check(vm):
