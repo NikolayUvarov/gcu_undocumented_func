@@ -59,7 +59,7 @@ Its criteria are met.
 **Its tasks,** all done: 312-STO-0034 (the journal), 0035 (a text index), 0038 (assertions), 0046 (a domain's limit), 0047 (a vector index) and 0049 (a domain's client with fewer rights, for a read-only `run -d`).
 
 **What the plan has that was not built goes where it belongs:**
-- **a domain's term:** [312-STO-0050](../issues/312-STO-0050-a-memory-domains-term.md), which waits for a choice of what a term's end does, then for a calendar clock in `blockstore`; the owner's `domain-forget` is the termination condition until then;
+- **a domain's term:** [312-STO-0050](312-STO-0050-a-memory-domains-term.done), which waits for a choice of what a term's end does, then for a calendar clock in `blockstore`; the owner's `domain-forget` is the termination condition until then;
 - **signed assertions** where provenance crosses a trust zone (Appendix B.3): [315](../issues/315-memory-across-machines.md)'s plan;
 - **an approximate vector index** (HNSW) and an index of assertions by subject, when sizes ask: [310](../issues/310-the-index-on-the-medium.md)'s plan;
 - **embeddings made on the platform:** `NRL`'s runtime (900-NRL-0017), for which the store's format is in `main` and NRL was told.
