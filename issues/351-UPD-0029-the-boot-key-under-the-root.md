@@ -59,6 +59,12 @@ The bootloader checks the manifest with one boot key built into it. Changing tha
   - PCU: "aarch64: programs, shell and four CPUs" (588 s), "aarch64: NVMe boot disk" (234 s), "aarch64: files and the block store" (1110 s).
   Every one passed.
 
+**The third criterion on aarch64 (2026-11-13).** The `boot` suite runs on x86 alone, so a key file short of the root threshold stopping the boot with `BOOT ERROR: KEYS` was shown only there.
+- **The check:** the suite's signed-volume cases are now a suite of their own, `bootkeys` (`tests/qemu_smoke.py`, `signed_volume_check`), which `boot` still runs. "aarch64: the updater and the modes" runs it too (`scripts/ci_local.sh`, `.github/workflows/ci.yml`).
+- **Docs:** docs/update/slots.md, slots_RU.md and the profile's Article 9 row name it.
+- **Tested** in this container: `bootkeys` passed on aarch64 and on x86.
+- **Left:** its run on the maintainer's machines, and the gate.
+
 ## Related
 
 [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).

@@ -184,7 +184,8 @@ jobs:
           - group: a developer's release through the Effector agent
             suites: effector-update
           - group: the updater and the modes
-            suites: updater,modes
+            # the signed volume's refusals, the key file's among them (351-UPD-0029)
+            suites: updater,modes,bootkeys
           - group: an update through the link
             suites: linkupdate
           - group: the link
