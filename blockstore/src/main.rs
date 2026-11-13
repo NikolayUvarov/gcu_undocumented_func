@@ -28,7 +28,7 @@ use mind::{cid, dag, journal, sha256, tree};
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
-use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_RTC, SLOT_SERVICE};
+use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT, OWNER_BITS, OWNER_UPDATER};
 use copies::{Copies, Event, Gate, Medium as Side, Standing, Step};
@@ -61,6 +61,8 @@ const SCRUB_STEP: u64 = 256;
 const SCRUB_PAUSE_MS: u32 = 20;
 // How often the calendar time is read and the terms acted on (312-STO-0050).
 const TERMS_EVERY_NS: u64 = 60 * 1_000_000_000;
+// init's rtc client for the store, without the setting badge (312-KRN-0239); empty when rtc does not run.
+const SLOT_STORE_RTC: usize = 5;
 const SCRUB_EVERY_NS: u64 = 24 * 3600 * 1_000_000_000;
 
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
@@ -273,12 +275,17 @@ fn domain_made(made: Result<u16, Error>, owner: u16, pid: u64, kib: u32) {
     }
 }
 
-// The calendar time (seconds since 1970 UTC) from `rtc`, where init gave a client of it in SLOT_RTC; none without one,
-// or if it does not answer (312-STO-0050).
+// The calendar time (seconds since 1970 UTC) from `rtc`, where init gave a client of it in SLOT_STORE_RTC; none
+// without one, or if it does not answer (312-STO-0050). The time is read on both sides of the date, so a midnight
+// between the two reads takes the later date, as `mind::rtc` does.
 fn calendar() -> Option<u64> {
-    if mind::dev::cap_info(SLOT_RTC).0 != CAP_KIND_ENDPOINT { return None; }
-    let (days, seconds) = mind::rtc::local_now_in(mind::rtc::Zone::UTC)?;
-    Some((days as u64 + 10957) * 86_400 + seconds as u64)
+    if mind::dev::cap_info(SLOT_STORE_RTC).0 != CAP_KIND_ENDPOINT { return None; }
+    let rtc = Endpoint(SLOT_STORE_RTC);
+    let first = mind::idl::rtc::now(rtc).ok()??;
+    let days = mind::idl::rtc::date(rtc).ok()??;
+    let seconds = mind::idl::rtc::now(rtc).ok()??;
+    let days = if seconds < first { mind::idl::rtc::date(rtc).ok()?? } else { days };
+    (seconds < 86_400).then(|| (days as u64 + 10957) * 86_400 + seconds as u64)
 }
 
 // A term's mode as the wire carries it, and as the store keeps it (the maintainer's numbers).
@@ -298,7 +305,7 @@ fn act_on_terms(s: &mut Store<'static, Medium>, clients: &mut DomainClients, tol
     if clock.replace(now.is_some()) != Some(now.is_some()) {
         match now {
             Some(t) => mind::println!("[BLOCKSTORE] CALENDAR TIME {} FROM RTC: TERMS ACT", t),
-            None => mind::println!("[BLOCKSTORE] NO CALENDAR CLOCK (NO RTC CLIENT, OR IT DOES NOT ANSWER): NO TERM ACTS, EVERY DOMAIN AS IN REPORT"),
+            None => mind::println!("[BLOCKSTORE] NO CALENDAR CLOCK (NO RTC CLIENT IN SLOT 5, OR IT DOES NOT ANSWER): NO TERM ACTS, EVERY DOMAIN AS IN REPORT"),
         }
     }
     loop {

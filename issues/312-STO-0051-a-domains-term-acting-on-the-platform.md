@@ -1,6 +1,6 @@
 # 312-STO-0051 — A domain's term acting on the platform, once `blockstore` hears a calendar clock
 
-**Type:** test (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** a calendar clock for `blockstore`, an `rtc` client that only reads in `SLOT_RTC` ([requests-KRN.md](requests-KRN.md), 2026-11-13) · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
+**Type:** test (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open · **Blocked by:** 312-KRN-0239, `KRN`'s `rtc` client for `blockstore` in slot 5, in the landing queue on 2026-11-13 · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
 
 Split from [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done), whose store, interface and host tests are done.
 
@@ -8,7 +8,7 @@ Split from [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done
 
 - **What is done:** a domain's term and mode are kept on the medium and set by their owner. The store acts on them by the calendar time it hears, forgetting, releasing or reporting a domain past its term. This is host-tested on a simulated clock.
 - **What is run in QEMU:** a term set and read, and found again after a reboot. With no calendar clock heard, none acts.
-- **What is not:** `init` gives `blockstore` no `rtc` client, so on the platform no term has ever acted. The service's part is written: it reads `SLOT_RTC` when it holds an endpoint, at most once a minute and at once after a set.
+- **What is not:** until 312-KRN-0239 is in `main`, `init` gives `blockstore` no `rtc` client, so on the platform no term has ever acted. The service's part is written: it reads slot 5 when it holds an endpoint, at most once a minute and at once after a set.
 
 ## Plan
 

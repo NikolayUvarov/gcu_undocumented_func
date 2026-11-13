@@ -62,7 +62,7 @@ Done on `claude/relaxed-meitner-5bmhpz` as 2a63ae54 and 72ce0f6d (the IDL fuzzer
   - past its term, by the calendar time heard: `forget` as `domain-forget` does (`expire`); `release`, its names and pins out before the mark so a collection frees its records, writes `read-only`, its key kept, nothing lost if set back before; `report`, told (`past_terms`);
   - without a calendar time none acts.
 - **`blockstore.wit` 2.9:** `domain-set-term(id, mode, until)`, `domain-term(id)`, the enum `term-mode` and the record `term`, its bindings regenerated.
-- **`blockstore`** reads the calendar time from `rtc` where `init` gives a client in `SLOT_RTC`, at most once a minute and at once after a set. Without one, the log says no term acts, and says it again when a term is set.
+- **`blockstore`** reads the calendar time from `rtc` where `init` gives a client in slot 5 (312-KRN-0239, `KRN`'s choice of slot), at most once a minute and at once after a set. It read `SLOT_RTC` (2) at 2a63ae54; once 312-KRN-0239 named slot 5, a commit of 2026-11-13 moved it there, and the QEMU checks were made to pass with the clock and without it. Without one, the log says no term acts, and says it again when a term is set.
 - **`blocks domain term <id> [forget|release|report <until>]`.**
 - **Tests:**
   - `tests/blockstore_host.rs`, five tests: a term and mode found again after a remount, one record a domain on the medium; no clock, no act; report; release, also set back before a collection; forget, and its term reaching no new domain; a change of term cut after every write and flush, read against the records on the medium. Eight faults put in by hand were each caught;
