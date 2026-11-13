@@ -1,6 +1,6 @@
 # 351-UPD-0028 — A short-lived timestamp key for the channel
 
-**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) (in landing round 127), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), on whose branch it is made · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
+**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), on whose branch it is made · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
@@ -48,4 +48,4 @@ A channel's expiry is set when the channel is published, for days or weeks. So a
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done).

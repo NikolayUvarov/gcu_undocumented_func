@@ -1,10 +1,10 @@
-# 112-NET-0071 — The SSH server's role in `ssh/`, host-tested against OpenSSH's client
+# 112-NET-0071 — The SSH server's role in `ssh/`, host-tested against OpenSSH's client — done
 
-**Type:** network (`ssh/`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [112](112-our-own-ssh-server.md) (stage 1) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-10.3, MC-11.9, MC-11.11, MC-12.2
+**Type:** network (`ssh/`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [112](../issues/112-our-own-ssh-server.md) (stage 1) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-10.3, MC-11.9, MC-11.11, MC-12.2
 
 ## Problem
 
-[112](112-our-own-ssh-server.md) has a MIND machine take SSH logins and file copies. `ssh/` is a client only (351-NET-0026): nothing speaks the server's side of the protocol. That side comes first, apart from the service: a crate with no I/O of its own, so that the host tests run it against OpenSSH's own client, as the client's tests run against OpenSSH's server.
+[112](../issues/112-our-own-ssh-server.md) has a MIND machine take SSH logins and file copies. `ssh/` is a client only (351-NET-0026): nothing speaks the server's side of the protocol. That side comes first, apart from the service: a crate with no I/O of its own, so that the host tests run it against OpenSSH's own client, as the client's tests run against OpenSSH's server.
 
 ## Plan
 
@@ -29,7 +29,7 @@
   - `scp` copies a file up and down whole; `sftp` makes, lists, renames and removes; a path outside the root is refused;
   - this crate's own client reads a file over SFTP with the host key pinned;
   - the owner's log holds each login, refusal and write.
-- **A fuzz target** for what the server parses, as [500-ASR-0001](500-ASR-0001-idl-decoder-fuzzing.md)'s harness: the plaintext key exchange and the payloads after it, random and mutated, never panic.
+- **A fuzz target** for what the server parses, as [500-ASR-0001](../issues/500-ASR-0001-idl-decoder-fuzzing.md)'s harness: the plaintext key exchange and the payloads after it, random and mutated, never panic.
 - The crate builds for the MIND targets with the `server` feature.
 
 ## Progress
@@ -46,8 +46,16 @@
   - The crate builds with `server` for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
 - **Left:** the gate. Then the service, `sshd`, as the next task of 112.
 
+## Resolution
+
+**All three criteria are met.**
+- **The host tests** (`ssh/tests/server_openssh.rs`, five tests), every case of the criterion, against OpenSSH's client: 9.6p1 in the kernel session's container, and 8.9 on x32-128 in the gate. `scp` runs with `-s` (SFTP), which 8.9 does not use by default; the old SCP protocol is stage 2 of [112](../issues/112-our-own-ssh-server.md). Round 126's gate was returned on that alone.
+- **The fuzz target** (`ssh/tests/server_fuzz.rs`): 3000 plaintext streams and 1000 connections after a real key exchange, with four other seeds; no panic. Both run in `scripts/host_tests.sh`.
+- **The crate builds** with `server` for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
+- **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI. Tests are evidence, not proofs (MC-12.2).
+
 ## Related
 
-- [112](112-our-own-ssh-server.md): the main task.
-- [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done): the client.
-- [351-NET-0027](351-NET-0027-the-ssh-service.md): `keystore`'s `ssh-login`.
+- [112](../issues/112-our-own-ssh-server.md): the main task.
+- [351-NET-0026](351-NET-0026-the-ssh-protocol.done): the client.
+- [351-NET-0027](../issues/351-NET-0027-the-ssh-service.md): `keystore`'s `ssh-login`.

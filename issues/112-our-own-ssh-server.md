@@ -56,6 +56,10 @@
   - with no listening grant, nothing answers on port 22.
 - **The profile** says what `sshd` is trusted with: the host key's use, the console's authority, the scope.
 
+## Progress
+
+**Stage 1 landed (2026-11-13)** in `main` 86794305 (round 127): [112-NET-0071](../issues-done/112-NET-0071-the-ssh-servers-role-in-ssh.done), the server's role in `ssh/`, and [112-NET-0072](../issues-done/112-NET-0072-sshd-as-a-mind-core-service.done), `sshd`, both closed; the console through the shell is [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md), APP's. Every criterion above is met by them; the main task closes once 112-APP-0136 is closed. Stage 2 stays an intention.
+
 ## Related
 
 [110](110-our-own-web-server.md), [110-NET-0052](../issues-done/110-NET-0052-listening-tcp-sockets.done), [351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [351-NET-0027](351-NET-0027-the-ssh-service.md), [800-KRN-0155](../issues-done/800-KRN-0155-the-links-console-mode.done), [000-ASR-0008](000-ASR-0008-test-only-openssh-path.md).

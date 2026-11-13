@@ -1,6 +1,6 @@
-# 111-NET-0073 — The TLS service offers an application protocol and derives keying material: `tls.wit` 1.4 for NTS-KE
+# 111-NET-0073 — The TLS service offers an application protocol and derives keying material: `tls.wit` 1.4 for NTS-KE — done
 
-**Type:** network (`tls`, `idl/tls.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) (stage 2) · **Roadmap:** track D · **Constitution:** MC-5.6, MC-11.9, MC-11.11, MC-12.2, MC-12.4
+**Type:** network (`tls`, `idl/tls.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) (stage 2) · **Roadmap:** track D · **Constitution:** MC-5.6, MC-11.9, MC-11.11, MC-12.2, MC-12.4
 
 ## Problem
 
@@ -22,7 +22,7 @@ rustls's unbuffered connections, which `tls` uses, have no public exporter: only
 ## Acceptance criteria
 
 - **Host:** `tests/tls_exporter_host.rs` derives what OpenSSL derives, for a SHA-256 and a SHA-384 suite, from the exporter secret OpenSSL's key log holds. Lengths of 0 and 65, and a label of 250 bytes, are refused. The key log keeps the exporter secret and nothing else.
-- **QEMU, x86 and aarch64:** `timed`'s NTS-KE through `tls` agrees on `ntske/1` and derives keys the NTS server shares ([111-NET-0075](111-NET-0075-timed-with-nts.md)). A server that agrees on no protocol is refused.
+- **QEMU, x86 and aarch64:** `timed`'s NTS-KE through `tls` agrees on `ntske/1` and derives keys the NTS server shares ([111-NET-0075](111-NET-0075-timed-with-nts.done)). A server that agrees on no protocol is refused.
 - The service builds for both targets; the IDL test passes.
 
 ## Progress
@@ -34,8 +34,15 @@ rustls's unbuffered connections, which `tls` uses, have no public exporter: only
 - **On the maintainer's machines** (8869cfda): both TLS groups passed, 111-NET-0075's `nts_check` among them.
 - **Left:** the gate.
 
+## Resolution
+
+**Every criterion is met.**
+- **Host:** `tests/tls_exporter_host.rs` against OpenSSL's key log, SHA-256 and SHA-384 suites; the refused lengths and label.
+- **QEMU, x86 and aarch64:** `timed`'s NTS-KE through `tls` agrees on `ntske/1` and derives the keys the servers share, and a server that agrees on no protocol is refused ([111-NET-0075](111-NET-0075-timed-with-nts.done)'s `nts_check`): on the maintainer's machines at 8869cfda and in round 127's gate.
+- **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI.
+
 ## Related
 
-- [111](111-network-time.md): the main task, stage 2.
-- [110-NET-0069](110-NET-0069-the-tls-services-server-role.md): `tls.wit` 1.3, the server role.
-- [111-NET-0074](111-NET-0074-a-grants-host-names.md), [111-NET-0075](111-NET-0075-timed-with-nts.md): the rest of stage 2.
+- [111](../issues/111-network-time.md): the main task, stage 2.
+- [110-NET-0069](../issues/110-NET-0069-the-tls-services-server-role.md): `tls.wit` 1.3, the server role.
+- [111-NET-0074](111-NET-0074-a-grants-host-names.done), [111-NET-0075](111-NET-0075-timed-with-nts.done): the rest of stage 2.
