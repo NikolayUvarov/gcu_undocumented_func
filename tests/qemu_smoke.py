@@ -2338,8 +2338,10 @@ def monitors_check(vm):
     vm.serial()  # Enter: the details window of the selected task
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
-    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
-    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    # clock, idle, sorts last by CPU and may be below the screen's last row (aarch64's holds 28 tasks, the services are
+    # 28 with clipboard): its row and budget are read below, with the applications alone.
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET"), screen
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
@@ -2367,6 +2369,14 @@ def monitors_check(vm):
     vm.expect("DETAILS=0")
     vm.send("S")
     assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: clock's or top's details
+    assert table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    tool_status(vm, "DETAILS=")
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
     vm.send("t")
     vm.expect("TREE=1")
     vm.send("q")
