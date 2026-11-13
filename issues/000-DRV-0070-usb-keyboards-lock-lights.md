@@ -51,6 +51,7 @@ From the maintainer's Ryzen PC, 2026-11-13.
 - **QEMU x86, 4 CPUs:**
   - the `usb` suite: the keyboard is sent `REPORT 00` when it is set up; `caps_lock`, `a`, `num_lock`, `kp_1` type `A` and `1` and send `02`, then `03`; a keyboard plugged in with both on is sent `03` at once, types `M`, and its Caps Lock and Num Lock send `01`, then `00`;
   - the `ehci` suite: the report is taken over EHCI as well as xHCI.
+- **QEMU aarch64 `virt`, 4 CPUs:** the same `usb` suite.
 - **On the Ryzen, the maintainer** (not done yet):
   - Caps Lock and Num Lock light on 17EF:60A1;
   - a keyboard plugged in after Caps Lock was turned on lights it at once.
