@@ -19,6 +19,10 @@
 //! call waits for a peer, so a slow one holds up no other session: a handshake goes on as `served`, `send` and
 //! `receive` are called, and one not done within 10 s of its accept fails. TLS 1.3 alone, no resumption, no client
 //! certificate asked for. The service holds 16 sessions, 8 of one client.
+//!
+//! 1.4 (111-NET-0073) adds what NTS-KE (RFC 8915) needs: `connect-alpn`, a client session that offers one application
+//! protocol (RFC 7301) and is refused when the server does not agree on it, and `export`, the keying material RFC 8446
+//! section 7.5 derives from an established session's secrets, for its own client alone. The session's keys stay here.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -28,7 +32,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:tls";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -268,6 +272,47 @@ pub fn served(endpoint: Endpoint, session: u32) -> Result<core::result::Result<P
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Peer as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// As `connect` without the device certificate, offering the application protocol `protocol` (1.4): a server that
+/// does not agree on it is refused (`handshake`).
+pub fn connect_alpn(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, protocol: &str, timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        session.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<253>(name, &mut w).ok_or(SysError::Invalid)?;
+        address.encode(&mut w).ok_or(SysError::Invalid)?;
+        port.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<32>(protocol, &mut w).ok_or(SysError::Invalid)?;
+        timeout_ms.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 5, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Peer as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// `length` bytes (1 to 64) of keying material from the session's TLS 1.3 exporter (RFC 8446, section 7.5) for
+/// `label` and `context` (1.4). `invalid` before the handshake is done, or for another length; `again` while a
+/// served handshake goes on. The same label and context give the peer the same bytes.
+pub fn export(endpoint: Endpoint, session: u32, label: &str, context: &[u8], length: u8, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        session.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<64>(label, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<255>(context, &mut w).ok_or(SysError::Invalid)?;
+        length.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 13 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 66, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<64>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -285,6 +330,8 @@ pub enum Request<'a> {
     Listen { session: u32, port: u16, backlog: u8 },
     Accept { listener: u32 },
     Served { session: u32 },
+    ConnectAlpn { session: u32, name: Text<253>, address: u32, port: u16, protocol: Text<32>, timeout_ms: u32 },
+    Export { session: u32, label: Text<64>, context: &'a [u8], length: u8 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -387,6 +434,30 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Served { session }, call))
         }
+        12 => {
+            let (call, length) = wire::take_buffer(request, cap, 5, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let session = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let name = <Text<253> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let address = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let port = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let protocol = <Text<32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let timeout_ms = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::ConnectAlpn { session, name, address, port, protocol, timeout_ms }, call))
+        }
+        13 => {
+            let (call, length) = wire::take_buffer(request, cap, 66, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let session = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let label = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let context = codec::decode_bytes::<255>(&mut r).ok_or(Reject::Invalid)?;
+            let length = <u8 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Export { session, label, context, length }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -434,4 +505,12 @@ pub fn reply_accept(call: Call, value: core::result::Result<&Accepted, Error>) -
 pub fn reply_served(call: Call, value: core::result::Result<&Peer, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_connect_alpn(call: Call, value: core::result::Result<&Peer, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_export(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_bytes::<64>(value, w))
 }

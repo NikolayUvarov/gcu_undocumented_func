@@ -12,13 +12,14 @@ pub const CONFIGURABLE: [&str; 28] = ["blockstore", "storefs", "gpio", "battery"
 pub const NEEDS: [(&str, &str); 13] = [("storefs", "blockstore"), ("netpolicy", "netstack"), ("timed", "netpolicy"), ("tls", "netstack"), ("tls", "keystore"), ("ssh", "netstack"), ("ssh", "keystore"), ("tts", "audio_gw"),
                                          ("httpd", "netpolicy"), ("httpd", "tls"), ("httpd", "parse"), ("sshd", "netpolicy"), ("sshd", "keystore")];
 // What init grants the first only when the second already runs: the first starts after it.
-pub const BEFORE: [(&str, &str); 20] = [("wlan", "bcm_wifi"), ("wlan", "rtw88_wifi"), ("wlan", "wlansim"), ("wlan", "keystore"), ("netstack", "virtio_net"), ("netstack", "rtl8168"),
+pub const BEFORE: [(&str, &str); 21] = [("wlan", "bcm_wifi"), ("wlan", "rtw88_wifi"), ("wlan", "wlansim"), ("wlan", "keystore"), ("netstack", "virtio_net"), ("netstack", "rtl8168"),
                                         ("netstack", "wlan"), ("updater", "tls"), ("updater", "parse"), ("updater", "netpolicy"), ("shell", "battery"),
                                         ("shell", "wlan"), ("shell", "ssh"), ("shell", "updater"), ("shell", "blockstore"), ("shell", "gpio"), ("shell", "video_gw"),
-                                        ("shell", "nnd"), ("shell", "storefs"), ("blockstore", "keystore")];
+                                        ("shell", "nnd"), ("shell", "storefs"), ("blockstore", "keystore"), ("timed", "tls")];
 // Images that start later than their place in BOOT_SERVICES, each right after the one named: the block store's secrets
-// client is keystore's (308-KRN-0183), and nothing before keystore needs the store.
-pub const LATE: [(&str, &str); 1] = [("blockstore", "keystore")];
+// client is keystore's (308-KRN-0183), and nothing before keystore needs the store; timed's NTS-KE client is tls's
+// (111-NET-0075), and nothing needs timed.
+pub const LATE: [(&str, &str); 2] = [("blockstore", "keystore"), ("timed", "tls")];
 
 // The images in init's start order: BOOT_SERVICES' order from 1, each of LATE moved to just after the one it follows.
 pub fn start_images(images: &'static [&'static str]) -> impl Iterator<Item = usize> {

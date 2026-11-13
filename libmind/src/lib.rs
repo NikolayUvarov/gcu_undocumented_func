@@ -97,6 +97,8 @@ pub mod inflate;
 pub mod http_coding;
 pub mod sntp;
 #[cfg(feature = "alloc")]
+pub mod nts;
+#[cfg(feature = "alloc")]
 pub mod sse;
 #[cfg(feature = "alloc")]
 pub mod zip;

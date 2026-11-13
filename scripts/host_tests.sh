@@ -10,7 +10,7 @@ rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
 # Every tests/*_host.rs, but those built on a line of their own (flags, a crate, an order): a new test needs no line
 # here, so tracks that add tests do not meet in this file (000-KRN-0238).
-OWN_LINES=" blockstore hostname index journal listen network_budget regdb rtw89_service rtw89_station_filter tts vector voice "
+OWN_LINES=" blockstore hostname index journal listen network_budget nts regdb rtw89_service rtw89_station_filter tls_exporter tts vector voice "
 for file in tests/*_host.rs; do
     test=$(basename "$file" _host.rs)
     [[ $OWN_LINES == *" $test "* ]] && continue
@@ -24,6 +24,8 @@ cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-ta
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
 cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
+cargo test --quiet --manifest-path tests/tls_exporter/Cargo.toml --target-dir "$OUT/tls-exporter-target" # the TLS service's exporter against OpenSSL's (111-NET-0073)
+cargo test --quiet --manifest-path tests/nts/Cargo.toml --target-dir "$OUT/nts-target" # timed's NTS: AES-SIV against RFC 5297, NTS-KE, the fields, the parsers fuzzed (111-NET-0075)
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
 cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)

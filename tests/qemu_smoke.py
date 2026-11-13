@@ -12807,8 +12807,314 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
+    # Before httpd_check, which removes the certificates' directory when it ends.
+    nts_check(args, disk, with_entropy, certificates)
     httpd_check(args, disk, with_entropy, certificates)
     sshd_check(args, disk, with_entropy)
+
+
+def _cmac(key, data):
+    from cryptography.hazmat.primitives import cmac
+    from cryptography.hazmat.primitives.ciphers import algorithms
+    mac = cmac.CMAC(algorithms.AES(key))
+    mac.update(data)
+    return mac.finalize()
+
+
+def _dbl(block):
+    n = int.from_bytes(block, "big") << 1
+    return ((n ^ 0x87 if n >> 128 else n) & (1 << 128) - 1).to_bytes(16, "big")
+
+
+def _xor(a, b):
+    return bytes(x ^ y for x, y in zip(a, b))
+
+
+def _s2v(key, headers, plain):
+    d = _cmac(key, bytes(16))
+    for header in headers:
+        d = _xor(_dbl(d), _cmac(key, header))
+    if len(plain) >= 16:
+        return _cmac(key, plain[:-16] + _xor(plain[-16:], d))
+    return _cmac(key, _xor(_dbl(d), (plain + b"\x80").ljust(16, b"\0")))
+
+
+def _siv_ctr(key, v, data):
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    q = bytearray(v)
+    q[8] &= 0x7F
+    q[12] &= 0x7F
+    crypt = Cipher(algorithms.AES(key), modes.CTR(bytes(q))).encryptor()
+    return crypt.update(data) + crypt.finalize()
+
+
+def _siv_seal(key, headers, plain):
+    # AEAD_AES_SIV_CMAC_256 (RFC 5297) over `cryptography`'s AES-CMAC and AES-CTR: written apart from timed's own
+    # (RustCrypto's aes-siv), each checked against RFC 5297's example.
+    v = _s2v(key[:16], headers, plain)
+    return v + _siv_ctr(key[16:], v, plain)
+
+
+def _siv_open(key, headers, sealed):
+    import hmac as hmac_module
+    v = sealed[:16]
+    plain = _siv_ctr(key[16:], v, sealed[16:])
+    return plain if len(sealed) >= 16 and hmac_module.compare_digest(_s2v(key[:16], headers, plain), v) else None
+
+
+def _siv_selftest():
+    # RFC 5297, A.2: two associated data and the nonce last.
+    h = lambda text: bytes.fromhex(text.replace(" ", ""))
+    sealed = _siv_seal(h("7f7e7d7c 7b7a7978 77767574 73727170 40414243 44454647 48494a4b 4c4d4e4f"),
+                       [h("00112233 44556677 8899aabb ccddeeff deaddada deaddada ffeeddcc bbaa9988 77665544 33221100"), h("10203040 50607080 90a0"),
+                        h("09f91102 9d74e35b d84156c5 635688c0")],
+                       h("74686973 20697320 736f6d65 20706c61 696e7465 78742074 6f20656e 63727970 74207573 696e6720 5349562d 414553"))
+    assert sealed == h("7bdb6e3b 432667eb 06f4d14b ff2fbd0f cb900f2f ddbe4043 26601965 c889bf17 dba77ceb 094fa663 b7a3f748 ba8af829 ea64ad54 4a272e9c 485b62a3 fd5c0d"), sealed.hex()
+
+
+def _tls_exporter(hash_name, secret, label, context, length):
+    # RFC 8446, section 7.5, from the exporter secret OpenSSL's key log holds (Python's ssl offers no exporter); checked
+    # against OpenSSL's own -keymatexport in 111-NET-0073.
+    import hmac as hmac_module
+
+    def expand_label(key, name, ctx, n):
+        full = b"tls13 " + name
+        info = n.to_bytes(2, "big") + bytes([len(full)]) + full + bytes([len(ctx)]) + ctx
+        out, block, i = b"", b"", 1
+        while len(out) < n:
+            block = hmac_module.new(key, block + info + bytes([i]), hash_name).digest()
+            out, i = out + block, i + 1
+        return out[:n]
+    derived = expand_label(secret, label, hashlib.new(hash_name, b"").digest(), hashlib.new(hash_name).digest_size)
+    return expand_label(derived, b"exporter", hashlib.new(hash_name, context).digest(), length)
+
+
+def _records(*records):
+    return b"".join(struct.pack(">HH", kind, len(body)) + body for kind, body in records)
+
+
+def _field(kind, value):
+    padded = max((len(value) + 3) & ~3, 12)
+    return struct.pack(">HH", kind, 4 + padded) + value.ljust(padded, b"\0")
+
+
+def _fields(data, at=48):
+    out = []
+    while at + 4 <= len(data):
+        kind, length = struct.unpack(">HH", data[at:at + 4])
+        if length < 4 or length % 4 or at + length > len(data):
+            return None
+        out.append((kind, data[at + 4:at + length], at))
+        at += length
+    return out if at == len(data) else None
+
+
+class _Nts:
+    """An NTS server on the host for timed's check (111-NET-0075, RFC 8915): NTS-KE over TLS 1.3 (ALPN ntske/1, the keys
+    from the exporter), then NTPv4 with its extension fields, sealed with AEAD_AES_SIV_CMAC_256. Its cookies hold the
+    client's keys sealed under a key of its own. `mode`: `honest`; `forge` changes a byte of each answer's sealed part;
+    `replay` answers each request with an authentic answer to another request (another identifier and origin time),
+    as a replay of an earlier answer carries; `alpn` agrees on no application protocol. NTS-KE names its NTP port."""
+
+    def __init__(self, certificates, leaf, mode="honest", shift=0.0):
+        _siv_selftest()
+        self.mode, self.shift, self.master, self.asked, self.kes = mode, shift, os.urandom(32), 0, 0
+        self.keylog = Path(tempfile.mkdtemp(prefix="mind-nts-")) / "keys.log"
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.minimum_version = ssl.TLSVersion.TLSv1_3
+        self.context.load_cert_chain(certificates / f"{leaf}.pem", certificates / f"{leaf}.key")
+        self.context.set_alpn_protocols(["http/1.1"] if mode == "alpn" else ["ntske/1"])
+        self.context.keylog_filename = str(self.keylog)
+        self.ke = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.ke.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.ke.bind(("127.0.0.1", 0))
+        self.ke.listen(4)
+        self.ntp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.ntp.bind(("127.0.0.1", 0))
+        self.ke_port, self.ntp_port = self.ke.getsockname()[1], self.ntp.getsockname()[1]
+        threading.Thread(target=self.serve_ke, daemon=True).start()
+        threading.Thread(target=self.serve_ntp, daemon=True).start()
+
+    def cookie(self, c2s, s2c):
+        nonce = os.urandom(16)
+        return nonce + _siv_seal(self.master, [nonce], c2s + s2c)
+
+    def serve_ke(self):
+        while True:
+            try:
+                raw, _ = self.ke.accept()
+            except OSError:
+                return
+            try:
+                raw.settimeout(20)
+                with self.context.wrap_socket(raw, server_side=True) as conn:
+                    request = b""
+                    while not request.endswith(b"\x80\x00\x00\x00"):
+                        chunk = conn.recv(1024)
+                        if not chunk:
+                            break
+                        request += chunk
+                    hash_name = "sha384" if conn.cipher()[0].endswith("SHA384") else "sha256"
+                    secret = bytes.fromhex([line.split()[2] for line in self.keylog.read_text().splitlines() if line.startswith("EXPORTER_SECRET")][-1])
+                    label = b"EXPORTER-network-time-security"
+                    c2s, s2c = (_tls_exporter(hash_name, secret, label, bytes([0, 0, 0, 15, d]), 32) for d in (0, 1))
+                    self.kes += 1
+                    conn.sendall(_records((0x8001, b"\0\0"), (0x8004, b"\0\x0f"), (7, struct.pack(">H", self.ntp_port)),
+                                          *((5, self.cookie(c2s, s2c)) for _ in range(8)), (0x8000, b"")))
+                    try:
+                        conn.unwrap()
+                    except (OSError, ssl.SSLError):
+                        pass
+            except (OSError, ssl.SSLError, IndexError, TypeError):
+                pass
+
+    def answer(self, request):
+        fields = _fields(request)
+        if not fields or fields[-1][0] != 0x0404:
+            return None
+        uid = next((v for k, v, _ in fields if k == 0x0104), None)
+        cookie = next((v for k, v, _ in fields if k == 0x0204), None)
+        placeholders = sum(1 for k, _, _ in fields if k == 0x0304)
+        value, start = fields[-1][1], fields[-1][2]
+        nonce_length, sealed_length = struct.unpack(">HH", value[:4])
+        nonce, sealed = value[4:4 + nonce_length], value[4 + ((nonce_length + 3) & ~3):][:sealed_length]
+        keys = cookie and _siv_open(self.master, [cookie[:16]], cookie[16:])
+        if uid is None or not keys or _siv_open(keys[:32], [request[:start], nonce], sealed) is None:
+            return None
+        s2c = keys[32:]
+        if self.mode == "replay":
+            uid, origin = os.urandom(32), os.urandom(8)
+        else:
+            origin = request[40:48]
+        t = time.time() + self.shift
+        stamp = struct.pack(">II", int(t) + 2_208_988_800, int((t % 1) * 2**32))
+        head = bytes([0x24, 2, 6, 0xEC]) + bytes(8) + b"MIND" + stamp + origin + stamp + stamp + _field(0x0104, uid)
+        plain = b"".join(_field(0x0204, self.cookie(keys[:32], s2c)) for _ in range(1 + placeholders))
+        server_nonce = os.urandom(16)
+        sealed = bytearray(_siv_seal(s2c, [head, server_nonce], plain))
+        if self.mode == "forge":
+            sealed[-1] ^= 1
+        value = struct.pack(">HH", 16, len(sealed)) + server_nonce + bytes(sealed)
+        return head + struct.pack(">HH", 0x0404, 4 + ((len(value) + 3) & ~3)) + value.ljust((len(value) + 3) & ~3, b"\0")
+
+    def serve_ntp(self):
+        while True:
+            try:
+                data, peer = self.ntp.recvfrom(2048)
+            except OSError:
+                return
+            self.asked += 1
+            reply = self.answer(data) if len(data) > 48 else None
+            if reply:
+                self.ntp.sendto(reply, peer)
+
+    def close(self):
+        self.ke.close()
+        self.ntp.close()
+
+
+def _nts_certificate(directory):
+    # The NTS-KE server's certificate from the test CA, for mind.test and 10.0.2.2, valid from 2020 to two days from now,
+    # so that a clock set back to 2024 still finds it valid: the circularity the profile states (111).
+    import datetime
+
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    (directory / "nts-index.txt").write_text("")
+    (directory / "nts-serial.txt").write_text("2000\n")
+    (directory / "nts-ca.cnf").write_text("[ca]\ndefault_ca = test\n[test]\ndatabase = nts-index.txt\nnew_certs_dir = .\nserial = nts-serial.txt\n"
+                                          "default_md = sha256\npolicy = any\nunique_subject = no\n[any]\ncommonName = supplied\n")
+    end = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)).strftime("%Y%m%d%H%M%SZ")
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "nts.key", "-out", "nts.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "nts-ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "nts.csr", "-out", "nts.pem", "-notext",
+        "-startdate", "20200101000000Z", "-enddate", end, "-extfile", "names.cnf")
+
+
+def _timed_lines(vm, until, timeout=180):
+    # timed's lines of the system log, all of them since boot, once `until` is among them (or the time is up).
+    deadline = time.monotonic() + timeout
+    while True:
+        log = vm.command("dmesg -s timed", raw=True)
+        if until in log or time.monotonic() > deadline:
+            return log
+        time.sleep(3)
+
+
+def nts_check(args, disk, cpu, certificates):
+    """111-NET-0073, 0074, 0075: timed sets the clock from NTS servers (RFC 8915) on the host. The policy names four by
+    the host name mind.test, which the test's resolver gives as 10.0.2.2: NTS-KE through tls agrees on ntske/1, checks
+    the certificate for that name and takes the keys from the exporter (a name that waited for the network at boot is
+    added to the grant once it resolves); two honest servers agree and set the clock from
+    2024, a third's answers are forged and refused as not authentic, a fourth's are authentic answers to other requests
+    and refused as not ours; the cookies come back to eight. A second boot: a server that agrees on no application
+    protocol and one whose certificate no root vouches for are refused at NTS-KE, so nothing is set."""
+    import datetime
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    _nts_certificate(certificates)
+    dns = _dns_server()
+    servers = [_Nts(certificates, "nts"), _Nts(certificates, "nts", shift=0.2), _Nts(certificates, "nts", "forge"), _Nts(certificates, "nts", "replay")]
+    card = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", cpu]
+
+    def lines(list_):
+        return (f"resolver 10.0.2.2:{dns.getsockname()[1]}\n"
+                + "".join(f"timed mind.test tcp {s.ke_port} {2**32 - 1}\ntimed mind.test udp {s.ntp_port} {2**32 - 1}\n" for s in list_))
+    try:
+        policy.write_text(lines(servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2024-01-01T00:00:00", extra=card)
+        try:
+            log = _timed_lines(vm, "[TIMED] SET ")
+            for s in servers:
+                assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{s.ke_port}\): 8 COOKIES, NTP AT 10\.0\.2\.2:{s.ntp_port}", log), log[-4000:]
+            for s in servers[:2]:
+                assert re.search(rf"\[TIMED\] 10\.0\.2\.2:{s.ntp_port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, AUTHENTICATED BY NTS \(mind\.test, 8 COOKIES\), AGREES", log), log[-4000:]
+            require(log, f"[TIMED] 10.0.2.2:{servers[2].ntp_port}: ITS ANSWER REFUSED, NOT AUTHENTIC UNDER THE SERVER'S KEY")
+            require(log, f"[TIMED] 10.0.2.2:{servers[3].ntp_port}: ITS ANSWER REFUSED, ITS UNIQUE IDENTIFIER IS NOT OUR REQUEST'S")
+            require_all(log, "(WAS 2024-01-01 ", "2 OF 4 SERVERS AGREED, 2 BY NTS")
+            assert all(s.kes == 1 and s.asked >= 1 for s in servers), [(s.kes, s.asked) for s in servers]
+            tls_log = vm.command("dmesg -s tls", raw=True)
+            assert tls_log.count("mind.test VERIFIED, PROTOCOL ntske/1, SUITE") >= 4, tls_log[-3000:]
+            # Resolved at the grant, or (a boot service's grant made before DHCP) once the network came up (111-NET-0074).
+            policy_log = vm.command("dmesg -s netpolicy", raw=True)
+            require(policy_log, "[NETPOLICY] timed: mind.test IS 10.0.2.2")
+            if "WAITS FOR THE NETWORK" in policy_log:
+                require(policy_log, "RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP")
+            shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
+            gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
+            assert gap < 3, (shown, gap)
+            assert "FAULT PID=" not in vm.command("faults")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-{args.cpus}cpu.log").write_text(vm.log)
+        for s in servers:
+            s.close()
+        servers = [_Nts(certificates, "nts", "alpn"), _Nts(certificates, "rogue"), _Nts(certificates, "nts")]
+        policy.write_text(lines(servers))
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=card)
+        try:
+            log = _timed_lines(vm, "[TIMED] NOTHING SET")
+            assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[0].ke_port}\) FAILED: TLS REFUSED IT: Handshake; AGAIN IN 10 S", log), log[-4000:]
+            assert re.search(rf"\[TIMED\] NTS-KE WITH mind\.test \(10\.0\.2\.2:{servers[1].ke_port}\) FAILED: TLS REFUSED IT: Certificate; AGAIN IN 10 S", log), log[-4000:]
+            require_all(log, f"NTS-KE WITH mind.test (10.0.2.2:{servers[2].ke_port}): 8 COOKIES", "[TIMED] NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)")
+            tls_log = vm.command("dmesg -s tls", raw=True)
+            require(tls_log, "mind.test REFUSED: IT DID NOT AGREE ON THE PROTOCOL ntske/1")
+            require(tls_log, "mind.test REFUSED: CERTIFICATE")
+            assert "[TIMED] SET " not in log, log[-3000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nts-refused-{args.cpus}cpu.log").write_text(vm.log)
+    finally:
+        for s in servers:
+            s.close()
+        dns.close()
+        if before is None:
+            policy.unlink()
+        else:
+            policy.write_text(before)
+    print(f"PASS: NTS (111-NET-0073, 0074, 0075): timed set the clock from 2024 ({gap:.1f} s from the host's) by two NTS servers "
+          "named mind.test, NTS-KE through tls (ntske/1, the certificate checked for the policy's name, the keys from the exporter), "
+          "a forged answer refused as not authentic and another request's answer as not ours, the cookies back to 8; a server "
+          "agreeing on no protocol and one no root vouches for refused at NTS-KE", flush=True)
 
 
 def httpd_check(args, disk, cpu, certificates):
@@ -16932,6 +17238,12 @@ def main():
                 continue
             if suite == "tls":
                 tls_suite(args, disk)
+                continue
+            if suite == "nts":  # the tls suite's NTS check alone (111-NET-0075)
+                certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
+                _certificates(certificates)
+                _roots_with_test_ca(certificates, disk)
+                nts_check(args, disk, "max" if args.arch == "aarch64" else "qemu64,+rdrand", certificates)
                 continue
             if suite == "effector":
                 effector_suite(args, disk)

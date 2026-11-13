@@ -1173,11 +1173,13 @@ impl Init {
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // Network time (111-KRN-0206): the flow the policy gives program `timed`, whose UDP rules are its time servers;
-            // the clock with the setting badge; and its private directory, system/timed, for the floor. Nothing else. Not
-            // started when the policy gives it no flow.
+            // the clock with the setting badge; and its private directory, system/timed, for the floor. For NTS-KE
+            // (111-NET-0075), its TCP rules' servers, a TLS client without the right to the device certificate, when tls
+            // runs (it starts right after tls). Nothing else. Not started when the policy gives it no flow.
             "timed" => {
                 let Some(flow) = self.flow(&mut minted, "timed") else { return Err(Error::NotFound) };
                 grants.add(SLOT_NETWORK, flow, CLIENT);
+                if self.present("tls") { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
                 grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_TIMED)?, CLIENT);
             }

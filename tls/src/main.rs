@@ -7,11 +7,14 @@
 // is the device certificate, signed for by the key service. The server role (1.3, 110-NET-0069): a session listens on
 // its lent flow and each connection it accepts is a session served with the device certificate (or tlsserver.pem's
 // chain for the device key), its handshake taken as far as the peer's bytes allow at each call, so no peer is waited
-// for. Random bytes come from RDRAND only: without it every connection is refused. Holds: an RTC client (slot 2,
+// for. 1.4 (111-NET-0073): a client session may offer one application protocol (ALPN), and any established session's
+// client may derive keying material from its exporter (`exporter.rs`). Random bytes come from RDRAND only: without it
+// every connection is refused. Holds: an RTC client (slot 2,
 // certificate times), a VFS client (slot 3, the root store and the server's chain), the key service's signer client (slot 4).
 extern crate alloc;
 
 mod device;
+mod exporter;
 mod pem;
 mod pinned;
 mod provider;
@@ -33,7 +36,8 @@ use rustls::client::{UnbufferedClientConnection, WebPkiServerVerifier};
 use rustls::server::UnbufferedServerConnection;
 use rustls::unbuffered::{ConnectionState, EncodeError, UnbufferedStatus};
 use rustls::crypto::CryptoProvider;
-use rustls::{ClientConfig, CommonState, RootCertStore, ServerConfig};
+use rustls::crypto::hash::HashAlgorithm;
+use rustls::{ClientConfig, CommonState, KeyLog, RootCertStore, ServerConfig, SupportedCipherSuite};
 
 const RECEIVED: usize = 9;
 const KEYS: Endpoint = Endpoint(4);
@@ -45,6 +49,14 @@ const HANDSHAKE_MS: u64 = 10_000; // longest a served handshake takes from its a
 const CHUNK: usize = 4096; // largest send or receive (idl/tls.wit)
 const IDLE_MS: u64 = 5000; // longest wait for the peer in send, receive and close
 const PLAIN_MAX: usize = 64 * 1024; // decrypted bytes held for a client before the socket is read again
+
+/// The key log of one connection: its exporter secret alone (1.4).
+#[derive(Debug)]
+struct Keys(Arc<exporter::Secret>);
+impl KeyLog for Keys {
+    fn will_log(&self, label: &str) -> bool { label == "EXPORTER_SECRET" }
+    fn log(&self, label: &str, _client_random: &[u8], secret: &[u8]) { self.0.log(label, secret); }
+}
 
 /// Why a connection failed: a TLS error (logged with its details) or an error for the client.
 enum Failure { Tls(rustls::Error), Client(Error) }
@@ -128,7 +140,7 @@ struct Serving { address: u32, port: u16, until: u64, outcome: Option<Result<Pee
 
 struct Session {
     id: u32, owner: u64, flow: usize,
-    conn: Option<Conn>, link: Option<Link>, device: Option<Arc<device::Device>>,
+    conn: Option<Conn>, link: Option<Link>, device: Option<Arc<device::Device>>, secret: Option<Arc<exporter::Secret>>,
     incoming: Vec<u8>, outgoing: Vec<u8>, plain: VecDeque<u8>, peer_closed: bool,
     listener: Option<Listener>, serving: Option<Serving>,
 }
@@ -190,7 +202,7 @@ fn handle<D>(status: UnbufferedStatus<'_, '_, D>, link: &mut Link, outgoing: &mu
 
 impl Session {
     fn new(id: u32, owner: u64, flow: usize) -> Box<Session> {
-        Box::new(Session { id, owner, flow, conn: None, link: None, device: None, incoming: Vec::new(), outgoing: Vec::new(), plain: VecDeque::new(),
+        Box::new(Session { id, owner, flow, conn: None, link: None, device: None, secret: None, incoming: Vec::new(), outgoing: Vec::new(), plain: VecDeque::new(),
                            peer_closed: false, listener: None, serving: None })
     }
 
@@ -298,7 +310,7 @@ impl Service {
     }
 
     // The server verified against the root store, or by its pins.
-    fn config(&self, device: Option<Arc<device::Device>>, pins: Option<pinned::Pinned>) -> Result<ClientConfig, Error> {
+    fn config(&self, device: Option<Arc<device::Device>>, pins: Option<pinned::Pinned>, alpn: Option<&str>, secret: Arc<exporter::Secret>) -> Result<ClientConfig, Error> {
         let builder = ClientConfig::builder_with_details(self.provider.clone(), Arc::new(provider::Rtc))
             .with_protocol_versions(&[&rustls::version::TLS13]).map_err(|_| Error::Handshake)?;
         let builder = match pins {
@@ -309,10 +321,14 @@ impl Service {
                 builder.with_webpki_verifier(WebPkiServerVerifier::builder_with_provider(Arc::new(roots), self.provider.clone()).build().map_err(|_| Error::NoRoots)?)
             }
         };
-        Ok(match device { Some(device) => builder.with_client_cert_resolver(device), None => builder.with_no_client_auth() })
+        let mut config = match device { Some(device) => builder.with_client_cert_resolver(device), None => builder.with_no_client_auth() };
+        config.alpn_protocols = alpn.map(|p| alloc::vec![p.as_bytes().to_vec()]).unwrap_or_default();
+        config.key_log = Arc::new(Keys(secret));
+        Ok(config)
     }
 
-    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, pins: Option<pinned::Pinned>, timeout: u32) -> Result<Peer, Error> {
+    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, pins: Option<pinned::Pinned>, alpn: Option<&str>,
+               timeout: u32) -> Result<Peer, Error> {
         if !mind::random::available() { return Err(Error::NoEntropy); }
         let server = pki_types::ServerName::try_from(name).map_err(|_| Error::Invalid)?.to_owned();
         let device = if client_certificate { Some(Arc::new(device::Device::new(KEYS).ok_or(Error::Denied)?)) } else { None };
@@ -320,7 +336,9 @@ impl Service {
         // connect-pinned (1.1) logs its refusal as it always did; connect-pins (1.2) has one or two pins of either kind.
         let unmatched = match &pins { Some(p) if p.checked => "NOT A PINNED KEY OR CERTIFICATE", _ => "NOT THE PINNED KEY" };
         let pinned = pins.is_some();
-        let config = Arc::new(self.config(device.clone(), pins)?);
+        if alpn.is_some_and(|p| p.is_empty()) { return Err(Error::Invalid); }
+        let secret = Arc::new(exporter::Secret::new());
+        let config = Arc::new(self.config(device.clone(), pins, alpn, secret.clone())?);
         let session = self.session(id, pid)?;
         if session.conn.is_some() || session.listener.is_some() || session.serving.is_some() { return Err(Error::Invalid); }
         let deadline = now() + timeout.clamp(100, 60_000) as u64;
@@ -328,11 +346,17 @@ impl Service {
         let socket = flow(socket::tcp_connect(endpoint, address, port, timeout.clamp(100, 60_000)))?;
         session.link = Some(Link { flow: endpoint, socket, eof: false });
         session.device = device;
+        session.secret = Some(secret);
         let id = session.id;
         let result = match UnbufferedClientConnection::new(config, server) {
             Ok(conn) => { session.conn = Some(Conn::Client(conn)); session.handshake(deadline) }
             Err(error) => Err(Failure::Tls(error)),
         };
+        // A server that did not agree on the protocol offered (1.4).
+        let agreed = session.conn.as_ref().and_then(|c| c.state().alpn_protocol());
+        let disagreed = result.is_ok() && alpn.is_some_and(|p| agreed != Some(p.as_bytes()));
+        let result = if disagreed { Err(Failure::Client(Error::Handshake)) } else { result };
+        let how = match alpn { Some(p) if agreed == Some(p.as_bytes()) => alloc::format!("{}, PROTOCOL {}", how, p), _ => how.into() };
         match result {
             Ok(()) => {
                 let (suite, group) = negotiated(session.conn.as_ref().ok_or(Error::Invalid)?);
@@ -347,13 +371,34 @@ impl Service {
                     }
                     Failure::Tls(rustls::Error::InvalidCertificate(why)) => { mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: CERTIFICATE {:?}", id, pid, name, why); Error::Certificate }
                     Failure::Tls(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {} FAILED: {:?}", id, pid, name, error); Error::Handshake }
+                    _ if disagreed => {
+                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: IT DID NOT AGREE ON THE PROTOCOL {}", id, pid, name, alpn.unwrap_or("")); Error::Handshake
+                    }
                     Failure::Client(error) => { mind::println!("[TLS] SESSION {} OF PID {}: {} FAILED: {:?}", id, pid, name, error); *error }
                 };
                 if let Some(link) = session.link.take() { let _ = socket::close(link.flow, link.socket); }
                 session.conn = None;
+                session.secret = None;
                 Err(error)
             }
         }
+    }
+
+    // `out.len()` bytes of the established session's exporter for `label` and `context` (1.4).
+    fn export(&mut self, id: u32, pid: u64, label: &str, context: &[u8], out: &mut [u8]) -> Result<(), Error> {
+        self.ready(id, pid)?;
+        let session = self.session(id, pid)?;
+        let state = session.conn.as_ref().ok_or(Error::Invalid)?.state();
+        if state.is_handshaking() || out.is_empty() || out.len() > exporter::LENGTH_MAX { return Err(Error::Invalid); }
+        let hash = match state.negotiated_cipher_suite() {
+            Some(SupportedCipherSuite::Tls13(suite)) if suite.common.hash_provider.algorithm() == HashAlgorithm::SHA384 => exporter::Hash::Sha384,
+            Some(SupportedCipherSuite::Tls13(_)) => exporter::Hash::Sha256,
+            _ => return Err(Error::Invalid),
+        };
+        let secret = session.secret.as_ref().and_then(|s| s.get()).ok_or(Error::Invalid)?;
+        let made = exporter::export(hash, &secret, label.as_bytes(), context, out);
+        exporter::forget(secret);
+        made.ok_or(Error::Invalid)
     }
 
     fn send(&mut self, id: u32, pid: u64, data: &[u8]) -> Result<u32, Error> {
@@ -454,7 +499,10 @@ impl Service {
         let taken = flow(socket::tcp_accept(Endpoint(flow_slot), socket_id))?;
         // A child of the listener's flow, so that either can end without the other; the client's revocation removes both.
         let child = match ipc::mint(flow_slot, u8::MAX, 0, 0) { Ok(child) => child, Err(_) => { let _ = socket::close(Endpoint(flow_slot), taken.socket); return Err(Error::Limit); } };
-        let conn = match UnbufferedServerConnection::new(config) {
+        let secret = Arc::new(exporter::Secret::new());
+        let mut config = (*config).clone();
+        config.key_log = Arc::new(Keys(secret.clone()));
+        let conn = match UnbufferedServerConnection::new(Arc::new(config)) {
             Ok(conn) => conn,
             Err(error) => {
                 mind::println!("[TLS] SESSION {} OF PID {}: NO SERVER CONNECTION: {:?}", id, pid, error);
@@ -466,6 +514,7 @@ impl Service {
         let number = self.number();
         let mut session = Session::new(number, pid, child);
         session.conn = Some(Conn::Server(conn));
+        session.secret = Some(secret);
         session.link = Some(Link { flow: Endpoint(child), socket: taken.socket, eof: false });
         session.serving = Some(Serving { address: taken.address, port: taken.port, until: now() + HANDSHAKE_MS, outcome: None });
         self.sessions.push(session);
@@ -556,12 +605,12 @@ fn main(_info: &'static BootInfo) {
                 let peer = if client_certificate && badge & BADGE_TLS_NO_DEVICE != 0 {
                     mind::println!("[TLS] PID {}: THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT", pid);
                     Err(Error::Denied)
-                } else { service.connect(session, pid, name.as_str(), address, port, client_certificate, None, timeout_ms) };
+                } else { service.connect(session, pid, name.as_str(), address, port, client_certificate, None, None, timeout_ms) };
                 api::reply_connect(call, peer.as_ref().map_err(|e| *e))
             }
             Ok((api::Request::ConnectPinned { session, name, address, port, pin, timeout_ms }, call)) => {
                 let peer = match <[u8; 32]>::try_from(pin) {
-                    Ok(pin) => service.connect(session, pid, name.as_str(), address, port, false, Some(pinned::Pinned::key(pin, service.provider.clone())), timeout_ms),
+                    Ok(pin) => service.connect(session, pid, name.as_str(), address, port, false, Some(pinned::Pinned::key(pin, service.provider.clone())), None, timeout_ms),
                     Err(_) => Err(Error::Invalid),
                 };
                 api::reply_connect_pinned(call, peer.as_ref().map_err(|e| *e))
@@ -575,8 +624,23 @@ fn main(_info: &'static BootInfo) {
                     match <[u8; 32]>::try_from(pin.digest.as_slice()) { Ok(digest) => *slot = (kind, digest), Err(_) => valid = false }
                 }
                 chosen.count = list.len().min(2);
-                let peer = if valid { service.connect(session, pid, name.as_str(), address, port, false, Some(chosen), timeout_ms) } else { Err(Error::Invalid) };
+                let peer = if valid { service.connect(session, pid, name.as_str(), address, port, false, Some(chosen), None, timeout_ms) } else { Err(Error::Invalid) };
                 api::reply_connect_pins(call, peer.as_ref().map_err(|e| *e))
+            }
+            Ok((api::Request::ConnectAlpn { session, name, address, port, protocol, timeout_ms }, call)) => {
+                let peer = service.connect(session, pid, name.as_str(), address, port, false, None, Some(protocol.as_str()), timeout_ms);
+                api::reply_connect_alpn(call, peer.as_ref().map_err(|e| *e))
+            }
+            Ok((api::Request::Export { session, label, context, length }, call)) => {
+                let mut out = [0u8; exporter::LENGTH_MAX];
+                let length = (length as usize).min(exporter::LENGTH_MAX + 1);
+                let result = match out.get_mut(..length) {
+                    Some(part) if length > 0 => service.export(session, pid, label.as_str(), context, part).map(|()| length),
+                    _ => Err(Error::Invalid),
+                };
+                let sent = api::reply_export(call, result.map(|n| &out[..n]));
+                out.iter_mut().for_each(|b| unsafe { core::ptr::write_volatile(b, 0) });
+                sent
             }
             Ok((api::Request::Send { session, data }, call)) => api::reply_send(call, service.send(session, pid, data)),
             Ok((api::Request::Receive { session, length }, call)) => {

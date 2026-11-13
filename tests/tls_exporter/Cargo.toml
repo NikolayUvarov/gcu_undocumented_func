@@ -1,0 +1,13 @@
+[package]
+name = "tls-exporter-tests"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# The TLS service's exporter (tls.wit 1.4, 111-NET-0073) against OpenSSL's: tests/tls_exporter_host.rs.
+[lib]
+path = "../tls_exporter_host.rs"
+
+[dev-dependencies]
+sha2 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
