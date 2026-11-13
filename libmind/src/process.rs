@@ -221,6 +221,9 @@ pub const BADGE_SHELL_LINK: u16 = 1;
 /// The badge of the copy of its command client the shell lends for REQUEST_SECRET_LINE (000-KRN-0224, for 000-APP-0126):
 /// through it the shell answers `shell.wit` 1.12 `secret-line` alone.
 pub const BADGE_SHELL_SECRET: u16 = 2;
+/// The badge of the shell's command client init is to mint for the SSH server, `sshd` (112-NET-0072), once the shell
+/// takes that client's lines on a remote session's rule (requests-APP.md): nothing that asks on the machine's screen.
+pub const BADGE_SHELL_REMOTE: u16 = 3;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)

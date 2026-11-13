@@ -1,0 +1,53 @@
+# 112-NET-0071 — The SSH server's role in `ssh/`, host-tested against OpenSSH's client
+
+**Type:** network (`ssh/`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [112](112-our-own-ssh-server.md) (stage 1) · **Roadmap:** track D · **Constitution:** MC-5.1, MC-10.3, MC-11.9, MC-11.11, MC-12.2
+
+## Problem
+
+[112](112-our-own-ssh-server.md) has a MIND machine take SSH logins and file copies. `ssh/` is a client only (351-NET-0026): nothing speaks the server's side of the protocol. That side comes first, apart from the service: a crate with no I/O of its own, so that the host tests run it against OpenSSH's own client, as the client's tests run against OpenSSH's server.
+
+## Plan
+
+1. **The transport's other side** (`Transport::accept`):
+   - curve25519-sha256 with OpenSSH's strict key exchange when the client asks for it;
+   - an ssh-ed25519 host key whose signature of the exchange hash, 32 bytes, comes from the caller (`Keys`). In `sshd` that is `keystore`, so the private key never enters the server (MC-11.9).
+   - chacha20-poly1305@openssh.com both ways.
+2. **`server::serve`:**
+   - **Logins:** public keys only. `Owner::rights` names what a listed key may do: the console, the files, or both. `none` is answered with `publickey` alone, so no client sends a password; at most 6 tries a connection.
+   - **One session channel at a time:**
+     - `exec` and `shell` run console lines (`Owner::command`), with a terminal's echo and line editing after `pty-req`;
+     - the `sftp` subsystem (version 3) reaches the owner's files (`Files`) by paths that cannot leave its root (`server::normal`);
+     - nothing else: no port forwarding, agent, X11, `env`.
+   - **The owner's log** (`Owner::event`): each login with its key's fingerprint, each refusal and why, each console line, each file written or removed, the session's end. No session's data.
+3. **Not here:** the service (`sshd`), `keystore`'s purpose for the host key, the listening grant and `init`'s grants. They are the next task, which this one's tests do not need.
+
+## Acceptance criteria
+
+- **Host tests** (`ssh/tests/server_openssh.rs`), the server in a thread on 127.0.0.1:
+  - OpenSSH's `ssh` runs a command and a console with a terminal, the host key checked against known_hosts;
+  - an unlisted key, a client that would use a password, another user, a key without the console's right, and a changed host key are refused;
+  - `scp` copies a file up and down whole; `sftp` makes, lists, renames and removes; a path outside the root is refused;
+  - this crate's own client reads a file over SFTP with the host key pinned;
+  - the owner's log holds each login, refusal and write.
+- **A fuzz target** for what the server parses, as [500-ASR-0001](500-ASR-0001-idl-decoder-fuzzing.md)'s harness: the plaintext key exchange and the payloads after it, random and mutated, never panic.
+- The crate builds for the MIND targets with the `server` feature.
+
+## Progress
+
+**Made (2026-11-12)** on `claude/112-NET-0071-ssh-server-role`:
+- **`ssh/src/transport.rs`:** `Transport::accept`, the server's side of the key exchange: its KEXINIT with `kex-strict-s-v00@openssh.com`, the client's KEXINIT and KEX_ECDH_INIT, the exchange hash signed by the caller's `Keys`, NEWKEYS; sealing with the server's keys ('D'), opening with the client's ('C').
+- **`ssh/src/server.rs`:** `serve`, `Owner`, `Files`, `Rights`, `Event`, `normal`, as planned. An `exec` line is held to `LINE_MAX` (1024 bytes) as a typed line is; a longer one is refused.
+- **One key exchange a connection,** as the client: a client's later KEXINIT (a rekey, which OpenSSH asks for after some gigabytes) ends the session.
+- **The feature `server`** (`ssh/Cargo.toml`); the client is unchanged without it.
+- **Tested** (this container, OpenSSH 9.6p1's client):
+  - `ssh/tests/server_openssh.rs`: five tests, every case of the host tests' criterion. They pass.
+  - `ssh/tests/server_fuzz.rs`: 3000 plaintext streams (of which some 670 reached the host key's signature), and 1000 connections after a real key exchange (some 195 logins, the console and the files reached). No panic; a console line only for a key with its right, the files only for one with theirs; every path below the root. Four other seeds at 9000 and 3000: the same. Evidence of those executions, not a proof (MC-12.2).
+  - `scripts/host_tests.sh` runs both.
+  - The crate builds with `server` for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
+- **Left:** the gate. Then the service, `sshd`, as the next task of 112.
+
+## Related
+
+- [112](112-our-own-ssh-server.md): the main task.
+- [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done): the client.
+- [351-NET-0027](351-NET-0027-the-ssh-service.md): `keystore`'s `ssh-login`.

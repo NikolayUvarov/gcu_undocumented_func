@@ -6,11 +6,11 @@ pub const MAX: usize = 4096;
 
 // What the file may turn off or order: services init starts after vfs_server, the essential ones aside (the core,
 // loader, the link, the Effector services, which data/mode.conf decides, the shell, and tpm, which seals the device key).
-pub const CONFIGURABLE: [&str; 27] = ["blockstore", "storefs", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi",
-                                      "keystore", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "httpd", "ssh", "windows", "sysmon", "nnd", "updater"];
+pub const CONFIGURABLE: [&str; 28] = ["blockstore", "storefs", "gpio", "battery", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bt_hci", "bcm_wifi",
+                                      "keystore", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "httpd", "sshd", "ssh", "windows", "sysmon", "nnd", "updater"];
 // What one cannot work without: turning the second off turns the first off, and the first starts after it.
-pub const NEEDS: [(&str, &str); 11] = [("storefs", "blockstore"), ("netpolicy", "netstack"), ("timed", "netpolicy"), ("tls", "netstack"), ("tls", "keystore"), ("ssh", "netstack"), ("ssh", "keystore"), ("tts", "audio_gw"),
-                                         ("httpd", "netpolicy"), ("httpd", "tls"), ("httpd", "parse")];
+pub const NEEDS: [(&str, &str); 13] = [("storefs", "blockstore"), ("netpolicy", "netstack"), ("timed", "netpolicy"), ("tls", "netstack"), ("tls", "keystore"), ("ssh", "netstack"), ("ssh", "keystore"), ("tts", "audio_gw"),
+                                         ("httpd", "netpolicy"), ("httpd", "tls"), ("httpd", "parse"), ("sshd", "netpolicy"), ("sshd", "keystore")];
 // What init grants the first only when the second already runs: the first starts after it.
 pub const BEFORE: [(&str, &str); 21] = [("wlan", "bcm_wifi"), ("wlan", "rtw88_wifi"), ("wlan", "wlansim"), ("wlan", "keystore"), ("netstack", "virtio_net"), ("netstack", "rtl8168"),
                                         ("netstack", "wlan"), ("updater", "tls"), ("updater", "parse"), ("updater", "netpolicy"), ("shell", "battery"),
