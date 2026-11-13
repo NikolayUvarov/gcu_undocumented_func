@@ -38,6 +38,11 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **"x86: one CPU":** `clipboard` logs each program the shell names in front, `dmesg` itself among them, and that record may follow the forged line `dmesg -n 1` looked for. The check now looks in the last three records (a4217c78).
 - **A gap this shows, not closed here:** `wm` lends its programs no clipboard copy. The shell lends it one that may badge, through the loader's `grant`. But the IDL runtime passes no capability with the right to badge (`idl::wire::PASSED`, [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done)), so `wm`'s own mints are refused. Read from the code and `wm`'s log; no trace was taken. Its programs keep their own copy buffers, the fallback 000-APP-0032 names. The shell's console and the programs the shell starts are not affected. Recorded for APP in [requests-APP.md](requests-APP.md), with two ways out.
 
+**The first way taken (2026-11-13):**
+- **APP's part** (`KRN/2026-11-13T0216Z-APP-the-first-way-clipboard-wit-1-1-is-ready.md`, LANDING 0246Z): `clipboard.wit` 1.1 `program-client`, answered on a `BADGE_MANAGER` copy alone, moves to the caller a `BADGE_PROGRAM` client the service mints from `SLOT_SERVICE`. The shell lends a window manager a `BADGE_MANAGER` copy, and `wm` asks the service for each program's.
+- **`init`'s part:** the service's server endpoint with `CAP_BADGE` in `SLOT_SERVICE`, as `blockstore`'s; `docs/profile/bootstrap.md`'s row says so.
+- Either lands alone without harm: without the right, `wm`'s programs keep their own copy buffers, as before.
+
 ## Related
 
 - [requests-KRN.md](requests-KRN.md), where it was asked.

@@ -1093,7 +1093,9 @@ impl Init {
             // lifecycle client.
             "nnd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "nnd")?, ALL); }
             // The system clipboard (000-KRN-0235): its endpoint and nothing else; the shell gets the one client of it.
-            "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL); }
+            // With the right to badge: it mints the BADGE_PROGRAM client a window manager asks for each program
+            // (clipboard.wit 1.1 `program-client`, 000-APP-0032), as no copy on the wire carries that right (000-KRN-0073).
+            "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL | CAP_BADGE); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
                 if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
