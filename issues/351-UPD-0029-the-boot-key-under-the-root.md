@@ -48,7 +48,16 @@ The bootloader checks the manifest with one boot key built into it. Changing tha
   - `tests/release_test.py`, `tests/usb_image_test.py`, `tests/manifest_test.py`, `tests/link_update_test.py`.
   - QEMU, the `boot` suite: no key file, and one key file short of the root threshold.
   - QEMU, the `updatebootkey` suite (new, in the updater group): a boot key rotated through key file 2. Release 7, signed by the new key, is staged, booted on trial and confirmed, and the records hold version 2. Slot A is then refused at boot, by its key file's version and by its old key's signature, and slot B boots.
-- **Tested so far** (this container): the host and Python tests above pass; the bootloader builds for both targets and the updater for x86, with no warning. The QEMU runs are next.
+- **Tested in this container:**
+  - the host and Python tests above pass, `tests/manifest_test.py`'s key file check among them (9eb5465f);
+  - the bootloader builds for both targets and the updater too, with no warning;
+  - QEMU x86: the `boot` suite (the key file refusals; records of formats 1 and 2 named and not read) and the `updatebootkey` suite pass.
+- **Run** at this branch with `main` ada2b041 merged in, at 629398b3, on the maintainer's machines (Effector, QEMU under TCG):
+  - x32-128: "x86: the updater and an update through the link" (1089 s), "x86: boot, display, shell, memory, clock" (731 s), "x86: USB image" (106 s), "x86: Secure Boot with our keys" (23 s), "x86: reproducible build" (232 s), "x86: NVMe boot disk" (83 s);
+  - its second lane: "host tests" (977 s), "x86: files and block writes" (933 s), "x86: keys, shell, tools" (633 s), "x86: a developer's release through the Effector agent" (48 s), "x86: network, TLS and Effector" (1415 s);
+  - acc-2: "aarch64: the updater and the modes" (1046 s), "aarch64: boot and fault containment" (174 s), "aarch64: an update through the link" (743 s), "aarch64: the board from a device tree, under U-Boot" (117 s), "aarch64: network, TLS and Effector" (1234 s), "aarch64: the link" (211 s), "aarch64: GICv2 with GICv2m" (851 s);
+  - PCU: "aarch64: programs, shell and four CPUs" (588 s), "aarch64: NVMe boot disk" (234 s), "aarch64: files and the block store" (1110 s).
+  Every one passed.
 
 ## Related
 
