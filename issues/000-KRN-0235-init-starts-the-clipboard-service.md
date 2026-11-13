@@ -48,6 +48,10 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **The fix** (in this test, 211-KRN-0050's, the kernel track's): the log is read whole through a pipe, `cat log:… | grep DRIVE` (a capture keeps up to 1 MiB, 000-APP-0074).
 - **Landed anyway:** the group passed on its second run, alone, as the gate's rule allows, so round 127 landed (`main` 86794305) with this task's code; the check's fix follows in a later round.
 
+**Round 128's gate (2026-11-13)** failed once in "x86: services, storage, audio" (x32-2, 35 s), where `clipboard` now runs:
+- **What failed:** `dmesg_check` counted four records in `dmesg -n 3`. `dmesg` takes the last three when it starts and reads on until no record is left, so `clipboard`'s `IN FRONT: PID 14`, sent for `dmesg` itself while it read, came fourth. Read from the gate's log of that run.
+- **The fix** (this test, the kernel track's): at most three records up to the forged line, and only `clipboard`'s `IN FRONT` records after it.
+
 **Left:** APP's `tools` checks (their 0532Z request, 208d3ea0: `clipboard_check`, with the shell's copy given `CAP_GRANT`); the check's fix above.
 
 ## Related
