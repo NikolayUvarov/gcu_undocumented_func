@@ -2003,10 +2003,20 @@ def clipboard_check(vm):
     edit("ram:clip2.txt", [(b"\x16", f"[EDIT] PASTED {len(text)} BYTES FROM THE CLIPBOARD")])
     require(vm.command("cat ram:clip2.txt"), text)
     assert text not in vm.service_logs("clipboard", "READ BY PID"), "the service logs no text"
+    # A program in front pastes; the same program in the background is refused; one that asked for none holds no client.
+    if vm.args.clip_elf:
+        require(vm.command("clipstub", timeout=30), f"CLIP STUB: PASTED {len(text)} BYTES")
+        started = vm.command("run clipstub &", raw=True, timeout=30)  # real PIDs, as the service's log has them
+        pid = re.search(r"STARTED PID=(\d+) NAME=clipstub", started)[1]
+        require(vm.service_logs("clipboard", "READ REFUSED"), f"[CLIPBOARD] READ REFUSED TO PID {pid}: Behind")
+        require(vm.command("clipnone", timeout=30), "CLIP STUB: NO CLIPBOARD CLIENT")
+    else:
+        print("SKIP: clipboard: a program in front and behind (000-APP-0032): no tests/clip_stub build (scripts/x86_fixtures.sh)", flush=True)
     for path in ("ram:clip1.txt", "ram:clip2.txt"):
         require(vm.command(f"rm {path}"), "OK")
-    print("PASS: clipboard: edit copied a line through the service, the shell's line and a second edit pasted it; the "
-          "service logged each set and read by its length alone (000-APP-0032)", flush=True)
+    print("PASS: clipboard: edit copied a line through the service, the shell's line and a second edit pasted it; a "
+          "program in front pasted it, the same in the background was refused, one that asked for none held no client; "
+          "the service logged each set and read by its length alone (000-APP-0032)", flush=True)
 
 
 def fbank_check(vm):
@@ -2328,8 +2338,10 @@ def monitors_check(vm):
     vm.serial()  # Enter: the details window of the selected task
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
-    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
-    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    # clock, idle, sorts last by CPU and may be below the screen's last row (aarch64's holds 28 tasks, the services are
+    # 28 with clipboard): its row and budget are read below, with the applications alone.
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET"), screen
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
@@ -2340,6 +2352,9 @@ def monitors_check(vm):
     tool_status(vm, "DETAILS=0")
     vm.send("N")
     vm.expect("[TOP] SORT=PID")
+    # Home: the first row, as top keeps the selected row in view and the table may be longer than the screen.
+    vm.send_bytes(b"\x1b[H")
+    vm.expect("SELECTED=1 ")
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
@@ -2357,6 +2372,14 @@ def monitors_check(vm):
     vm.expect("DETAILS=0")
     vm.send("S")
     assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: clock's or top's details
+    assert table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
+    tool_status(vm, "DETAILS=")
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
     vm.send("t")
     vm.expect("TREE=1")
     vm.send("q")
@@ -2372,7 +2395,18 @@ def monitors_check(vm):
     vm.serial()
     tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
     assert table_row(screen, canon("Physical address space")) and table_row(screen, canon("free RAM")), screen
-    assert table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    arena, page = table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    for _ in range(4):
+        if arena:
+            break
+        # The list is longer than the screen (aarch64's, as the boot images grew): further down, a page at a time.
+        vm.send_bytes(b"\x1b[6~")  # PgDn
+        tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
+        time.sleep(.2)
+        page = screen_text(vm)
+        vm.serial()
+        arena = table_row(page, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena")
+    assert arena, page
     usable = re.search(r"RAM (\d+(?:\.\d)?)M usable", "\n".join(screen))
     assert usable and 128 < float(usable[1]) < 512, screen  # the VM has 512 MiB
     vm.send("2")
@@ -2395,8 +2429,11 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
-    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
-                 r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
+    # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
+    base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
+    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
+                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+        line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
     vm.expect("VIEW=QUOTAS")
@@ -2438,11 +2475,21 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     tool_status(vm, "[HW] TOP=0")
-    for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
-                 "00:01.1  010180  IDE controller", "Interrupt lines", "kernel arena 64.0M"):
+    # Each architecture's own (000-APP-0137): x86's CPUID features, its IDE controller and the keyboard's line; on
+    # aarch64's virt the MPIDR affinities, the generic timer's stated rate, a virtio disk and virtio_input's lines.
+    if vm.arch == "aarch64":
+        names = (f"{vm.cpus} CPUs online, MPIDR affinities", "generic timer", "MHz (CNTFRQ_EL0)", "010000  storage")
+        line = r"IRQ \d+ .* virtio_input \(PID \d+\) \(\+1 holding a copy\)"
+    else:
+        names = (f"{vm.cpus} CPUs online, APIC IDs", "+NX", "TSC", "MHz (calibrated)", "00:01.1  010180  IDE controller")
+        line = r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"
+    for text in ("Processor", "Interrupt lines", "kernel arena 64.0M") + names:
         assert table_row(screen, re.escape(canon(text))), (text, screen)
+    # The framebuffer holds the screen's cells, 8 by 16 pixels each; its height need not be a whole row (aarch64's 600).
+    frame = re.search(r"GOP framebuffer (\d+)x(\d+)", "\n".join(screen))
+    assert frame and int(frame[1]) // 8 == len(screen[0]) and int(frame[2]) // 16 == len(screen), (frame and frame[0], screen)
     # The holder of a line is the driver; init keeps a copy for restarts (issues 075, 076).
-    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"), screen
+    assert table_row(screen, line), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -2561,7 +2608,8 @@ def fm_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()  # Enter on "..": back to EFI
-    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
+    # The architecture's loader at the removable-media path, as main() sets BOOT_EFI (000-APP-0137).
+    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, rf"║{re.escape(Path(BOOT_EFI).name)} +│ +\d+│"), screen
     assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
@@ -2647,17 +2695,33 @@ def fm_check(vm):
             time.sleep(.05)
         vm.serial(enter=False)
         return text and logged(vm, start, text)
-    clicked = mouse(*mouse_moves((10 - 80) * 8, (3 - 25) * 16), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
+    # aarch64's virt has a VirtIO tablet, which takes only places on the screen, so QEMU's relative moves go nowhere:
+    # the tablet is put at the cell's pixel instead (000-APP-0137). Buttons and the wheel reach either.
+    tablet = vm.arch == "aarch64"
+    if tablet:
+        _, size, _, _ = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        frame = tuple(map(int, size.split()[:2]))
+
+    def to(x, y, fro):
+        # The mouse to cell (x, y): the tablet at that cell's pixel (the grid centred on a screen of no whole rows,
+        # as aarch64's 600 pixels hold 37), the PS/2 mouse by the cells from `fro`.
+        if tablet:
+            vm.tablet_at(frame[0] % 8 // 2 + x * 8 + 4, frame[1] % 16 // 2 + y * 16 + 8, *frame)
+            return []
+        return mouse_moves((x - fro[0]) * 8, (y - fro[1]) * 16)
+    clicked = mouse(*to(10, 3, (80, 25)), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
     require(clicked, "[FM] POINTER 10,3 BUTTONS=1 WHEEL=0")
     assert "LEFT=/ FULL" in clicked, clicked
     mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", text="LEFT=/EFI FULL")
     require(mouse("mouse_move 0 0 -1", text="CURRENT=BOOT "), "[FM] POINTER 10,3 BUTTONS=0 WHEEL=1")
-    mouse(*mouse_moves(0, 30 * 16))  # moves are not logged
+    mouse(*to(10, 33, (10, 3)))  # moves are not logged
     time.sleep(.3)
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
-    width = int(size.split()[0])
-    corner = lambda x, y: pixels[(y * 16 * width + x * 8) * 3:(y * 16 * width + x * 8) * 3 + 3]
+    width, height = map(int, size.split()[:2])
+    x0, y0 = width % 8 // 2, height % 16 // 2  # the grid centred, as mind::tui::Terminal puts it
+    corner = lambda x, y: pixels[((y0 + y * 16) * width + x0 + x * 8) * 3:((y0 + y * 16) * width + x0 + x * 8) * 3 + 3]
     assert corner(10, 33) != corner(12, 33) and corner(9, 33) == corner(12, 33), (corner(10, 33), corner(12, 33))
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
@@ -2713,13 +2777,19 @@ def console_check(vm):
     assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
     assert screen[-1].startswith(canon("> ")), screen[-1]
     # console's own commands (issue u006): ps, ls; a shell command is named as such, ping without a network says why.
+    # ps alone on a cleared screen first: its rows and the next commands' outgrow a screen of 37 rows (aarch64's).
     vm.send_bytes(b"clear\r")
-    for line in (b"ps", b"ls docs", b"kill 1", b"ping ya.ru"):
+    vm.send_bytes(b"ps\r")
+    time.sleep(.6)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
+    vm.send_bytes(b"clear\r")
+    for line in (b"ls docs", b"kill 1", b"ping ya.ru"):
         vm.send_bytes(line + b"\r")
         time.sleep(.6)
     screen = screen_text(vm)
     vm.serial(enter=False)
-    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
     assert any(row.startswith(canon("notes.txt ")) for row in screen), screen
     assert any(row.startswith(canon("kill: a command of the shell")) for row in screen), screen
     assert any(row.startswith(canon("ping: ")) for row in screen), screen
@@ -2767,7 +2837,10 @@ def vfs_check(vm):
     # Boot files and the rest of the boot disk stay read-only; paths cannot climb out; data/ is writable.
     require(vm.command("write kernel.elf x"), "ERROR: WRITE: DENIED")
     require(vm.command("write EFI/BOOT/x.txt x"), "ERROR: WRITE: DENIED")
-    require(vm.command("mkdir system"), "ERROR: MKDIR: DENIED")
+    # A new directory outside data/ (system/ may exist already: keystore keeps the device key there where no TPM seals
+    # it, as on aarch64's virt, and mkdir of one that exists is fine), and one in system/, whose others are hidden.
+    require(vm.command("mkdir outside"), "ERROR: MKDIR: DENIED")
+    require(vm.command("mkdir system/shell"), "ERROR: MKDIR: DENIED")
     require(vm.command("cat ram:../kernel.elf"), "ERROR: CAT: INVALID PATH")
     require(vm.command("rm kernel.elf"), "ERROR: RM: DENIED")
     require(vm.command("mkdir data"), "OK")
@@ -3023,7 +3096,10 @@ def search_check(vm):
     assert lines(vm.command("find ram:")) == ["ram:a.txt", "ram:docs/", "ram:docs/b.md", "ram:docs/заметки.txt"], vm.output
     assert lines(vm.command("find ram: -name *.txt -type f")) == ["ram:a.txt", "ram:docs/заметки.txt"]
     assert lines(vm.command("find ram: -size +12")) == ["ram:docs/заметки.txt"], "20 bytes of Cyrillic text"
-    assert lines(vm.command("find A: -name kernel.elf")) == ["kernel.elf"]
+    # system/'s private directories are refused on the way (keystore's holds the device key where no TPM seals it, as
+    # on aarch64's virt): find says so for them alone.
+    found = lines(vm.command("find A: -name kernel.elf"))
+    assert [l for l in found if not re.fullmatch(r"FIND: system/[\w.-]+: DENIED", l)] == ["kernel.elf"], found
     assert lines(utf8("grep -rn привет ram:")) == [], "case matters without -i"
     assert lines(utf8("grep -rin привет ram:")) == ["ram:docs/заметки.txt:1:Привет, мир"]
     assert lines(utf8("grep -l o ram:a.txt ram:docs/заметки.txt ram:docs/b.md")) == ["ram:a.txt"]
@@ -5597,8 +5673,8 @@ def run_in_domain_check(vm, first=None, second=None, note=None):
     client of the shell's memory domain the store mints. Refused before the start: no number, a domain that is not live,
     a program that asks for no block store, a service. With domains (a random source), `blocks` started in the first
     holds that domain's client alone: it reads the first's name, which neither the volume nor the second shows, and
-    makes no domain through it; `blocksro`, which asks only to read, is refused until the store mints a domain's client
-    with fewer rights."""
+    makes no domain through it; `blocksro`, which asks only to read, gets the domain's client with the get badge's
+    rights alone."""
     def run(args, timeout=240):
         vm.send(f"run {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"run {args}\n")
@@ -5611,16 +5687,30 @@ def run_in_domain_check(vm, first=None, second=None, note=None):
               "store and a service (no domain without a random source)", flush=True)
         return
     require(run(f"-d {first} blocks resolve secret"), f"secret VERSION 1 ROOT {note}")
+    # It writes and reads a name of its own there, and does not reach the volume's names.
+    require(run(f"-d {first} blocks publish mine {note}"), "PUBLISHED mine VERSION 1")
+    require(run(f"-d {first} blocks resolve mine"), f"mine VERSION 1 ROOT {note}")
+    require(run("blocks put ram:dom.txt"), f"PUT {note} SIZE 12")
+    require(run(f"blocks publish volume-name {note}"), "PUBLISHED volume-name VERSION 1")
+    require(run(f"-d {first} blocks resolve volume-name"), "blocks: resolve volume-name: NotFound")
+    require(run("blocks resolve mine"), "blocks: resolve mine: NotFound")
+    require(run("blocks unpublish volume-name 1"), "REMOVED volume-name VERSION")
     require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKS STARTS IN MEMORY DOMAIN {first}")
     require(run(f"-d {second} blocks resolve secret"), "blocks: resolve secret: NotFound")
     require(run(f"-d {first} blocks domain new"), "blocks: domain new: Rights")
     require(run(f"-d {first} blocks domains"), "blocks: domains: Rights")
-    # Not yet a read-only start: blocksro asks for the get badge alone, and the store mints a domain's client with the
-    # asking client's rights and owner, while the shell's domains are its writing client's (requests-STO.md).
-    require(run(f"-d {first} blocksro resolve secret"), "RUN -D: NOT YET FOR A PROGRAM THAT ONLY READS")
-    print("PASS: run -d: blocks started in a memory domain reads that domain's name, not the other's, and makes no "
-          "domain; refused without a number, for a domain that is not live, a program that asks for no block store or "
-          "only to read, and a service", flush=True)
+    # A read-only start: blocksro asks for the get badge alone, so the shell asks the store, through its writing client,
+    # for the domain's client with the get badge's rights (domain-client-with, 312-STO-0049): it reads the domain's name
+    # and is refused a put and a publish.
+    require(run(f"-d {first} blocksro resolve secret"), f"secret VERSION 1 ROOT {note}")
+    require(vm.command("dmesg -s shell", raw=True), f"[SHELL] BLOCKSRO STARTS IN MEMORY DOMAIN {first}, READ ONLY")
+    out = run(f"-d {first} blocksro put ram:dom.txt")
+    require(out, "blocks: put:"); require(out, "Rights")
+    require(run(f"-d {first} blocksro publish ro {note}"), "blocks: publish ro: Rights")
+    print("PASS: run -d: blocks started in a memory domain writes and reads a name of its own there, reads that domain's "
+          "name, not the other domain's nor the volume's, and makes no "
+          "domain; started asking only to read, it reads there and is refused a put and a publish; refused without a "
+          "number, for a domain that is not live, a program that asks for no block store and a service", flush=True)
 
 
 def fm_store_check(vm):
@@ -9577,6 +9667,11 @@ def audio_suite(vm, wav):
     require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
     require(played, "[BEEP] DONE")
     assert task_rows_reaped(vm) == {}, "beep ended with its sound"
+    # 551-APP-0138: a tone on one channel, a second apart, so that the WAV below holds each alone.
+    for word, line in (("left 660 300", "[BEEP] PLAYED 1 NOTES, 300 MS ON THE LEFT"), ("RIGHT", "[BEEP] PLAYED 1 NOTES, 500 MS ON THE RIGHT")):
+        time.sleep(1.5)
+        require(vm.command(f"beep {word}"), line)
+    require(vm.command("beep 440 left"), "BEEP: left: NOT A NUMBER")
     # After beep, which the suite expects as the session's first program.
     if vm.args.levels_elf:
         out = vm.command("levelstub")
@@ -9647,14 +9742,22 @@ def audio_suite(vm, wav):
     with wave.open(str(wav)) as audio:
         frames = audio.readframes(audio.getnframes())
         rate = audio.getframerate()
-    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
-    loud = [i for i, sample in enumerate(left) if sample]
+    samples = struct.unpack(f"<{len(frames) // 2}h", frames)
+    left, right = samples[0::2], samples[1::2]
+    loud = [i for i in range(len(left)) if left[i] or right[i]]
     assert loud, "AC97 produced no audio"
-    # The demo, then after a second of silence the notes, then wm's test tone (000-APP-0076).
+    # The demo, then after a second of silence the notes, the left's tone, the right's, then wm's test tone (000-APP-0076).
     gaps = [k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate] + [len(loud)]
-    assert len(gaps) >= 3, [round(loud[k] / rate, 2) for k in gaps[:-1]]
+    assert len(gaps) >= 5, [round(loud[k] / rate, 2) for k in gaps[:-1]]
     gap = gaps[0]
-    demo, notes, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]]
+    demo, notes, on_left, on_right, tone = loud[:gap], loud[gap:gaps[1]], loud[gaps[1]:gaps[2]], loud[gaps[2]:gaps[3]], loud[gaps[3]:gaps[4]]
+    # 551-APP-0138: each channel's tone (660 Hz for 300 ms; 440 Hz for 500 ms, the word alone) and the other silent.
+    for part, sounds, silent, hz, ms in ((on_left, left, right, 660, 300), (on_right, right, left, 440, 500)):
+        seconds = (part[-1] - part[0]) / rate
+        assert ms / 1000 - 0.03 < seconds < ms / 1000 + 0.03, (hz, seconds)
+        assert not any(silent[part[0]:part[-1] + 1]), (hz, "the other channel is silent")
+        middle = part[0] + int(rate * 0.1)
+        assert tone_power(sounds, rate, middle, hz) > 5 * tone_power(sounds, rate, middle, 880), hz
     seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
@@ -9675,7 +9778,7 @@ def audio_suite(vm, wav):
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
-          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
+          f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
 
@@ -17223,6 +17326,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
+    parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
@@ -17261,7 +17365,7 @@ def main():
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
     args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
     # The shell suite's console programs (000-APP-0126, 311-APP-0121): aarch64 beside the image, x86 in MIND_TEST_OUT.
-    for name in ("secret", "storewrite"):
+    for name in ("secret", "storewrite", "clip"):
         built = ROOT / IMAGE / f"fixture-{name}.elf" if args.arch == "aarch64" else \
             Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / f"mind-{name}-target/x86_64-unknown-none/release/{name}_stub"
         setattr(args, f"{name}_elf", getattr(args, f"{name}_elf") or (str(built) if built.exists() else None))
@@ -17405,6 +17509,14 @@ def main():
                 note = elf.index(b"MINDREQ1") + 8
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
+            if suite == "tools" and args.clip_elf:
+                # The clipboard's stub (000-APP-0032), and a copy whose request note asks for no clipboard
+                # (REQUEST_CLIPBOARD 524288), as blocksro is made below.
+                elf = bytearray(Path(args.clip_elf).read_bytes())
+                shutil.copyfile(args.clip_elf, disk / "clipstub.elf")
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~524288).to_bytes(4, "little")
+                (disk / "clipnone.elf").write_bytes(elf)
             if suite == "tools":
                 # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
                 # and runs the toy transducer on it; one byte changed in a copy fails its checksum.

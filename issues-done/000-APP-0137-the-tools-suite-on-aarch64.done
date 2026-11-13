@@ -1,0 +1,42 @@
+# 000-APP-0137 — The tools suite on aarch64: the monitors' checks read each architecture's screen — done
+
+**Type:** tools (tests, `hw`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+**Recorded by:** the tools track, 2026-11-13, from aarch64 runs of the `tools` suite for 000-APP-0032.
+
+## Problem
+
+- **The gate runs the `tools` suite on x86 alone** (`scripts/ci_local.sh --list`: no aarch64 group holds it), so on aarch64 its checks drifted from what the programs show there, and nothing said so.
+- **Found on aarch64** (4 CPUs, in a container, 2026-11-13), each after the last was fixed:
+  - `top`: with 30 tasks on aarch64's 28 rows, clock's row and the PID-sorted table's first row fell outside the screen (fixed: 9e8539b8, f98e7a17);
+  - `memmap`: the kernel arena's row below the physical map's first screen (fixed: 8e03eca1), and the task window at x86's base, where aarch64's starts at L0 entry 255 (fixed: ab3eb2c6);
+  - `hw`: the check expects x86's `+NX`, the IDE controller at `00:01.1` and `IRQ 1` held by `ps2_kbd`, none of which aarch64's `virt` has; and `hw` itself names aarch64's CPU IDs `APIC IDs` and its counter `TSC`.
+- **Not reached on aarch64 yet:** the rest of `monitors_check`, and the checks after it, `clipboard_check` among them (000-APP-0032 is checked on x86).
+
+## Plan
+
+- **`hw`:** each architecture's names (MPIDR or CPU IDs, the generic timer's counter for aarch64), host-tested.
+- **The checks:** each architecture's expectations in `monitors_check` (the processor's features, the PCI devices and the interrupt lines `virt` has), and the rest of the suite run until it passes on aarch64.
+- **Then KRN:** the `tools` suite in an aarch64 group of `scripts/ci_local.sh`, asked in `requests-KRN.md`, so it stays checked.
+
+## Acceptance criteria
+
+- **QEMU:** the `tools` suite passes on aarch64 (4 CPUs) and on x86, the clipboard check included.
+- **Host tests:** `hw`'s names on each architecture.
+
+## Resolution
+
+- **`hw`** (`monitor/src/hw.rs`): each architecture's names, `Local`'s `ids`, `counter` and `counter_rate`: x86's APIC IDs and TSC (calibrated), aarch64's MPIDR affinities and generic timer (CNTFRQ_EL0); no features line where EL0 reads no ID registers (aece74be). Host-tested in `tests/monitor_host.rs` (`the_hardware_report_names_aarch64s_own`).
+- **The checks** (`tests/qemu_smoke.py`), each found by the run before it on aarch64:
+  - `top`'s clock row read with the applications alone, and its first row selected before the PID-sorted table (9e8539b8, f98e7a17);
+  - `memmap`'s kernel arena found a page at a time, and the task window at the architecture's base, `255 << 39` on aarch64 (8e03eca1, ab3eb2c6);
+  - `hw`'s lines for each architecture: x86's CPUID features, IDE controller and keyboard line; aarch64's MPIDR affinities, generic timer, virtio disk and `virtio_input`'s lines; the framebuffer by whole cells, as 600 pixels hold 37 rows (aece74be, 59199032);
+  - `fm`: the architecture's EFI loader (`BOOT_EFI`), the VirtIO tablet put at a cell's pixel, as it takes no relative moves, and the cells of a grid centred on a screen of no whole rows (febb1449, 383bfd5c, 6d1bc35d);
+  - the files: a new directory outside `data/` and one in `system/`, since `system/` exists where `keystore` keeps the device key on disk (0b269acc); `find` may say `system/`'s private directories are refused (3324594d);
+  - `console`: `ps` read on a screen of its own (a67d94b8).
+- **Tested:** the `tools` suite on a67d94b8, 4 CPUs, in this container: aarch64 11 checks, `clipboard_check` with `tests/clip_stub` among them; x86 11.
+- **Asked of KRN:** the suite in an aarch64 group of the gate (`requests-KRN.md`, f09fc327).
+
+## Related
+
+[000-APP-0032](000-APP-0032-system-clipboard.done) (the clipboard's check, in this suite).
