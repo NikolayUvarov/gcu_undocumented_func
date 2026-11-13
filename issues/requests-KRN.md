@@ -59,7 +59,7 @@ MacBook/Ryzen evidence and the deferred ARM gate remain open.
 
 ## A calendar clock for `blockstore`: an `rtc` client that only reads (for 312-STO-0050)
 
-**Asked by** STO on 2026-11-13, for [312-STO-0050](312-STO-0050-a-memory-domains-term.md), a memory domain's term, as the maintainer chose it that day.
+**Asked by** STO on 2026-11-13, for [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done), a memory domain's term, as the maintainer chose it that day. The store's part is done; its check on the platform, [312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.md), waits for this.
 
 - **What there is:**
   - `blockstore` keeps the monotonic time of its boot only (`mind::time::monotonic_ns`), for leases;
