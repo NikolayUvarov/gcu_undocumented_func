@@ -1020,6 +1020,38 @@ fn a_tree_that_needs_more_steps_than_the_store_gives_is_refused() {
 }
 
 #[test]
+fn a_store_with_more_gaps_than_its_list_of_runs_keeps_the_longest() {
+    // 310-STO-0048: a list of 8 runs, and 20 gaps of a sector between blocks, then the rest of the medium.
+    let mut medium = Memory::new(1024);
+    let mut room = Room::new(256);
+    room.holes = vec![Extent::EMPTY; 8];
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let small: Vec<Cid> = (0..40).map(|i| store.put(Codec::Raw, &block(100 + i, 64)).unwrap()).collect();
+    assert_eq!(record_sectors(64), 1);
+    // The odd ones put again later, so their leases run on when the even ones' have ended.
+    store.set_time(LEASE_NS);
+    for (i, cid) in small.iter().enumerate().skip(1).step_by(2) { assert_eq!(store.put(Codec::Raw, &block(100 + i, 64)), Ok(*cid)); }
+    assert_eq!(store.collect().unwrap().blocks, 20);
+    let tail = 1024 - store.stats().used;
+    assert!(tail > 900, "{tail}");
+    // The list keeps the rest of the medium, not only the first gaps: a block of many sectors finds room.
+    assert_eq!(store.stats().free, tail + 7);
+    let big = store.put(Codec::Raw, &block(1, 4000)).unwrap();
+    assert!(record_sectors(4000) > 1);
+    // A block of one sector goes into the first gap.
+    let one = store.put(Codec::Raw, &block(2, 64)).unwrap();
+    drop(store);
+    // A mount scans the same and keeps the same.
+    let mut room = Room::new(256).at(LEASE_NS);
+    room.holes = vec![Extent::EMPTY; 8];
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((get(&mut store, &big), get(&mut store, &one)), (Ok(block(1, 4000)), Ok(block(2, 64))));
+    assert!(store.stats().free >= 1024 - store.stats().used, "{:?}", store.stats());
+    assert!(store.put(Codec::Raw, &block(3, 8000)).is_ok());
+    for cid in small.iter().skip(1).step_by(2) { assert_eq!(get(&mut store, cid).map(|_| ()), Ok(()), "{cid:?}"); }
+}
+
+#[test]
 fn a_collection_stopped_in_the_middle_is_finished_by_the_next_mount() {
     let mut medium = Memory::new(64);
     let x;
@@ -1995,6 +2027,59 @@ fn two_domains_open_only_under_their_own_keys() {
         assert_eq!(get(&mut store, &cid).unwrap(), data);
     }
     assert_eq!(store.resolve(b"only-b"), Ok((1, cid)));
+}
+
+#[test]
+fn a_domains_limit_bounds_what_it_retains() {
+    // 312-STO-0046: a domain made with a limit of 8 KiB retains at most that through its names and pins, each root
+    // counted once; the volume and another domain of the same owner are not bound by it; 0 sets none; the limit is
+    // found again after a remount.
+    let mut medium = Memory::new(512);
+    let (small, free, first, second, third);
+    {
+        let mut room = Room::new(64);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        small = store.domain_create_limited(OWNER, 8).unwrap();
+        free = store.domain_create_limited(OWNER, 0).unwrap();
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.quota, u.names, u.pins)), Ok((0, 8 * 1024, 0, 0)));
+        assert_eq!(store.domain_usage(free, OWNER).map(|u| u.quota), Ok(0));
+        assert_eq!(store.domain_usage(small, OWNER + 1).map(|u| u.quota), Err(Error::Rights));
+        assert_eq!(store.domain_usage(VOLUME, OWNER).map(|u| u.quota), Err(Error::NotFound));
+        store.set_domain(small).unwrap();
+        (first, second, third) = (store.put(Codec::Raw, &block(5, 5000)).unwrap(), store.put(Codec::Raw, &block(6, 4000)).unwrap(),
+                                  store.put(Codec::Raw, &block(7, 3000)).unwrap());
+        assert_eq!(store.publish(b"a", 0, &first, OWNER), Ok(1));
+        // The same root under a second name, and pinned, counts once.
+        assert_eq!(store.publish(b"b", 0, &first, OWNER), Ok(1));
+        assert!(store.pin(&first, OWNER).is_ok());
+        // 5000 and 4000 pass 8192 bytes: a publish, a pin and a commit of the second are each refused, nothing changed.
+        assert_eq!(store.publish(b"c", 0, &second, OWNER), Err(Error::Quota));
+        assert_eq!(store.pin(&second, OWNER), Err(Error::Quota));
+        assert_eq!(store.commit(&[Update { name: b"c", expected: 0, root: Some(second) }], OWNER), Err(Error::Quota));
+        assert_eq!(store.resolve(b"c"), Err(Error::NotFound));
+        // 5000 and 3000 fit.
+        assert_eq!(store.publish(b"d", 0, &third, OWNER), Ok(1));
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.names, u.pins)), Ok((8000, 3, 1)));
+        // The volume and the other domain are not bound by it, and their roots are not counted in it.
+        for domain in [VOLUME, free] {
+            store.set_domain(domain).unwrap();
+            assert_eq!(store.put(Codec::Raw, &block(6, 4000)), Ok(second));
+            assert_eq!(store.publish(b"c", 0, &second, OWNER), Ok(1));
+        }
+        assert_eq!(store.domain_usage(small, OWNER).map(|u| u.retained), Ok(8000));
+    }
+    // Found again after a remount, and still refusing.
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.domains().map(|d| (d.id, d.limit)).collect::<Vec<_>>(), vec![(small, 8 * 1024), (free, 0)]);
+    assert_eq!(store.domain_usage(small, OWNER).map(|u| (u.retained, u.names, u.pins)), Ok((8000, 3, 1)));
+    store.set_domain(small).unwrap();
+    assert_eq!(store.put(Codec::Raw, &block(6, 4000)), Ok(second));
+    assert_eq!(store.publish(b"c", 0, &second, OWNER), Err(Error::Quota));
+    // Its key record holds the limit, and a forget leaves a tombstone with none.
+    store.set_domain(VOLUME).unwrap();
+    assert_eq!(store.domain_forget(small, OWNER), Ok(()));
+    assert_eq!(store.domain_usage(small, OWNER).map(|u| u.quota), Err(Error::NotFound));
 }
 
 #[test]

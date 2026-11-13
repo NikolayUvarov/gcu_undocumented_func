@@ -2,10 +2,12 @@
 //! a `mind::http::Parser` that asks the service, so a program that holds the network and its files parses no response
 //! head itself (MC-11.11). `mind::http::get` checks whatever comes back against what it asked for (MC-11.5). Release
 //! channels and boot manifests to and from `mind::release` (351-NET-0011): the updater encodes what comes back again
-//! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010).
+//! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010). Request
+//! heads to and from `mind::http_serve::Request` (2.1, 110-NET-0070), for a server that parses none itself.
 use crate::http::{self, Encoding, Field, Head, Range, RetryAfter};
+use crate::http_serve::{self, Bad};
 use crate::idl::codec::{List, Text};
-use crate::idl::parse::{self, ContentCoding, HttpResponse, RetryKind};
+use crate::idl::parse::{self, ContentCoding, HttpMethod, HttpRefusal, HttpRequest, HttpResponse, RetryKind};
 use crate::ipc::{Endpoint, Message};
 use crate::release;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +24,40 @@ pub fn to_response(head: &Head) -> HttpResponse {
     HttpResponse { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total,
                    chunked: head.chunked, close: head.close, encoding, media: Text::new(head.media.as_str()).unwrap_or_default(),
                    location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after }
+}
+
+/// A request head as parse.wit 2.1's `http-request` carries it, or its refusal (110-NET-0070).
+pub fn to_request(parsed: &Result<http_serve::Request, Bad>) -> HttpRequest {
+    let refused = |refusal| HttpRequest { refusal, ..HttpRequest::default() };
+    match parsed {
+        Err(Bad::Malformed) => refused(HttpRefusal::Malformed),
+        Err(Bad::Method) => refused(HttpRefusal::Method),
+        Err(Bad::Version) => refused(HttpRefusal::Version),
+        Err(Bad::NoHost) => refused(HttpRefusal::NoHost),
+        Err(Bad::TooManyHeaders) => refused(HttpRefusal::TooManyHeaders),
+        Err(Bad::TooLong) => refused(HttpRefusal::TooLong),
+        Ok(r) => HttpRequest {
+            refusal: HttpRefusal::None, method: if r.method == http_serve::Method::Get { HttpMethod::Get } else { HttpMethod::Head },
+            target: Text::new(r.target.as_str()).unwrap_or_default(), http11: r.http11, keep_alive: r.keep_alive,
+            range: Text::new(r.range.as_str()).unwrap_or_default(), if_none_match: Text::new(r.if_none_match.as_str()).unwrap_or_default(), body: r.body,
+        },
+    }
+}
+
+/// The head a parser's `http-request` says, or its refusal; Malformed if its fields are not what a head may carry.
+pub fn from_request(r: &HttpRequest) -> Result<http_serve::Request, Bad> {
+    Err(match r.refusal {
+        HttpRefusal::Malformed => Bad::Malformed, HttpRefusal::Method => Bad::Method, HttpRefusal::Version => Bad::Version,
+        HttpRefusal::NoHost => Bad::NoHost, HttpRefusal::TooManyHeaders => Bad::TooManyHeaders, HttpRefusal::TooLong => Bad::TooLong,
+        HttpRefusal::None => {
+            fn text<const N: usize>(s: &str) -> Result<http_serve::Text<N>, Bad> { http_serve::Text::new(s).ok_or(Bad::Malformed) }
+            let target = text(r.target.as_str())?;
+            if target.is_empty() { return Err(Bad::Malformed); }
+            let method = if r.method == HttpMethod::Get { http_serve::Method::Get } else { http_serve::Method::Head };
+            return Ok(http_serve::Request { method, target, http11: r.http11, keep_alive: r.keep_alive, range: text(r.range.as_str())?,
+                                            if_none_match: text(r.if_none_match.as_str())?, body: r.body });
+        }
+    })
 }
 
 /// The head a parser's `http-response` says; None if its media type or location is not what a head may carry.

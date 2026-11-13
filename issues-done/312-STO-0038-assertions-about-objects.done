@@ -4,7 +4,7 @@
 
 Split from [312](../issues/312-the-minds-memory.md) (2026-10-31), its third step: "assertions, apart from content (MC-4.12): a claim about an object, its subject's CID, its author and its origin; signed where it crosses a trust zone (B.3); each kind of metadata names its source of truth".
 
-No personal data is written before [308](../issues/308-encryption-at-rest.md) is done: the tests and the pilot assert test text only.
+No personal data is written before [308](308-encryption-at-rest.done) is done: the tests and the pilot assert test text only.
 
 ## Problem
 
@@ -123,4 +123,4 @@ Landed in `main` 370e905c (round 370e905c) as 5efb10ba and 5c4b5fe0.
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [303](303-retention-and-collection.done), [308](../issues/308-encryption-at-rest.md).
+[312](../issues/312-the-minds-memory.md), [312-STO-0034](312-STO-0034-a-journal-checked-from-its-head.done), [312-STO-0035](312-STO-0035-a-text-index-derived-from-a-journal.done), [303](303-retention-and-collection.done), [308](308-encryption-at-rest.done).

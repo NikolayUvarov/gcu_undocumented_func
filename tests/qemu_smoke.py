@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -4357,6 +4357,36 @@ def assertion_node(subject, kind, interp, value=None, retracts=None, basis=None)
     return cbor_head(5, len(fields)) + b"".join(cbor_text(k) + v for k, v in fields)
 
 
+def embedding_node(subject, model, vector):
+    """An embedding (312-STO-0047) written here from its schema and the DAG-CBOR specification, not from libmind:
+    `{"v": 1, "model", "vector", "subject"}`, its keys in DAG-CBOR's order; the CIDs' binary forms and the components,
+    signed bytes, each a byte string."""
+    def string(data):
+        return cbor_head(2, len(data)) + data
+    return (cbor_head(5, 4) + cbor_text("v") + cbor_head(0, 1) + cbor_text("model") + string(model) + cbor_text("vector")
+            + string(bytes(c & 0xff for c in vector)) + cbor_text("subject") + string(subject))
+
+
+def vector_index(journal, seq, head, model, dims, vectors):
+    """A vector index of a journal (312-STO-0047) written here from its layout and the DAG-CBOR and directory schemas,
+    not from libmind: `vectors` the (sequence, components) of the model's embeddings up to `seq`, newest first, `head`
+    the binary CID of the entry at `seq`, `model` the model's. The root holds `manifest` and `vectors`, whose files
+    `0000`, `0001`, ... each hold as many vectors as a block of 16384 bytes does, a vector its sequence (u32,
+    little-endian), then its components. Returns the root's CID."""
+    def directory(entries):
+        node = cbor_head(5, 2) + cbor_text("v") + cbor_head(0, 1) + cbor_text("entries") + cbor_head(4, len(entries))
+        for name, kind, size, cid in sorted(entries):
+            node += cbor_head(4, 4) + cbor_head(3, len(name)) + name + cbor_head(0, kind) + cbor_head(0, size) + cbor_link(cid)
+        return cid_binary(0x71, node)
+    per = 16384 // (4 + dims)
+    files = [b"".join(s.to_bytes(4, "little") + bytes(c & 0xff for c in v) for s, v in vectors[k:k + per]) for k in range(0, len(vectors), per)]
+    listed = directory([(f"{k:04x}".encode(), 0, len(f), cid_binary(0x55, f)) for k, f in enumerate(files)])
+    manifest = (cbor_head(5, 9) + cbor_text("v") + cbor_head(0, 1) + cbor_text("seq") + cbor_head(0, seq) + cbor_text("dims") + cbor_head(0, dims)
+                + cbor_text("head") + cbor_link(head) + cbor_text("kind") + cbor_text("vector") + cbor_text("model") + cbor_head(2, len(model)) + model
+                + cbor_text("metric") + cbor_text("dot") + cbor_text("entries") + cbor_head(0, len(vectors)) + cbor_text("journal") + cbor_text(journal))
+    return cid_text(directory([(b"manifest", 0, len(manifest), cid_binary(0x55, manifest)), (b"vectors", 1, len(files), listed)]))
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -4602,6 +4632,7 @@ def store_suite(vm):
     store_journal_check(vm)
     store_index_check(vm)
     store_assertion_check(vm)
+    store_vector_check(vm)
     storefs_writers_check(vm)
     store_recovery_check(vm)
 
@@ -5154,6 +5185,102 @@ def store_assertion_check(vm):
     print("PASS: assertions: one in a memory domain is the domain's alone and goes with it", flush=True)
 
 
+def store_vector_check(vm):
+    """312-STO-0047: a vector index of a journal of embeddings through `blocks vector`. Five embeddings of four
+    components by a stand-in model are appended, and one by another model; each embedding's CID is the one this suite
+    computes from the schema. `build` publishes the index of the first model's, whose root this suite computes from the
+    layout (`vector_index`); `near` prints the k nearest by the dot product, highest first and of equal scores the newest
+    first, as the scores computed here order them, and `scan` the same without the index; `check` says EQUAL. After
+    another append, `near` says the index lacks one entry and still finds it first, and `check` says STALE 1; rebuilt,
+    EQUAL. A query of other dimensions or by another model is refused, and an embedding by the model of other dimensions
+    leaves its journal without an index. Where a memory domain is made (aarch64), an index in it is the domain's alone."""
+    import base64
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def cid_bytes(text):
+        return base64.b32decode(text[1:].upper() + "=" * (-len(text[1:]) % 8))
+    # The models and the objects are mentioned, never put.
+    model, other = cid_raw(b"a stand-in model of 4 dimensions"), cid_raw(b"another model")
+    held, heads, counts = [], [], {}
+
+    def add(vector, by=model, journal="memory"):
+        seq = counts[journal] = counts.get(journal, 0) + 1
+        subject = cid_raw(f"object {seq} of {journal}".encode())
+        cid = cid_text(cid_binary(0x55, embedding_node(cid_bytes(subject), cid_bytes(by), vector)))
+        out = blocks(f"vector add {journal} {subject} {by} {','.join(map(str, vector))}")
+        found = re.search(rf"^EMBEDDED {journal} SEQUENCE {seq} ENTRY (\S+) EMBEDDING {cid} OF {subject} BY {by}, {len(vector)} DIMS \(", out, re.M)
+        assert found, out
+        if journal == "memory":
+            held.append((seq, vector, subject, by))
+            heads.append(found[1])
+
+    def mine(upto):
+        return [(s, v) for s, v, _, by in reversed(held[:upto]) if by == model]
+
+    def build(version):
+        root = vector_index("memory", len(held), cid_bytes(heads[-1]), cid_bytes(model), 4, mine(len(held)))
+        require_all(blocks(f"vector build memory {model} 4"), f"INDEXED memory TO SEQUENCE {len(held)}: {len(mine(len(held)))} VECTORS OF 4 DIMS BY {model}",
+                    f"PUBLISHED vector/memory VERSION {version} ROOT {root} (")
+        return root
+
+    def near(query, k, at, state):
+        scored = sorted(((sum(a * b for a, b in zip(v, query)), s, subject) for s, v, subject, by in held if by == model), key=lambda x: (-x[0], -x[1]))[:k]
+        expected = [(str(s), str(score), subject) for score, s, subject in scored]
+        q = ",".join(map(str, query))
+        out = blocks(f"vector near memory {model} {q} {k}")
+        assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT (\S+)\r?$", out, re.M) == expected, out
+        require_all(out, f"INDEX vector/memory OF memory AT SEQUENCE {at}: {state}", f"NEAREST {len(expected)} OF {len(mine(len(held)))} VECTORS IN memory, EACH CHECKED AGAINST THE JOURNAL")
+        out = blocks(f"vector scan memory {model} {q} {k}")
+        assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT (\S+)\r?$", out, re.M) == expected, out
+        require(out, f"NEAREST {len(expected)} OF {len(mine(len(held)))} VECTORS IN memory, AN EXACT SCAN")
+        return [int(s) for s, _, _ in expected]
+    for vector in [[100, 0, 0, 0], [0, 100, 0, 0], [70, 70, 0, 0], [-100, 0, 0, 0], [0, 0, 100, 0]]:
+        add(vector)
+    add([1, 2, 3], by=other)
+    root = build(1)
+    assert near([90, 10, 0, 0], 3, 6, "CURRENT") == [1, 3, 2]
+    assert near([0, 0, 0, 1], 2, 6, "CURRENT") == [5, 4]
+    assert near([-128, 127, -1, 0], 5, 6, "CURRENT") == [4, 2, 3, 5, 1]
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 6: EQUAL")
+    require(blocks(f"vector build memory {model} 4"), f"UNCHANGED vector/memory VERSION 1 ROOT {root}")
+    print("PASS: a vector index: built from five embeddings of a model, not another model's, to the root computed here; "
+          "each search answers the nearest by the scores computed here, each checked against the journal, as the exact "
+          "scan does; the check rebuilds it equal", flush=True)
+    # One more: the index lacks it, a search scores it and answers it first, the check says by how much.
+    add([95, 5, 0, 0])
+    assert near([90, 10, 0, 0], 2, 6, "STALE, LACKS 1 ENTRIES, SCANNED") == [1, 7]
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 6: STALE 1")
+    build(2)
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 7: EQUAL")
+    assert near([90, 10, 0, 0], 2, 7, "CURRENT") == [1, 7]
+    # Refused: a query of other dimensions, or by another model; k past 16.
+    require(blocks(f"vector near memory {model} 1,2,3 1"), "blocks: vector near memory: Dims(0)")
+    require(blocks(f"vector near memory {other} 1,2,3,4 1"), "blocks: vector near memory: Model")
+    require(blocks(f"vector near memory {model} 1,2,3,4 17"), "blocks: vector near memory: Count")
+    # An embedding by the model of other dimensions: its journal has no index, nothing published.
+    add([1, 2, 3, 4], journal="mixed")
+    add([1, 2, 3], journal="mixed")
+    require(blocks(f"vector build mixed {model} 4"), "blocks: vector build mixed: Dims(2)")
+    require(blocks("vector check mixed"), "blocks: vector check mixed: NotFound")
+    print("PASS: a vector index: after an append it is told one entry short and the search still finds that entry; "
+          "rebuilt, the check says equal; a query of other dimensions or by another model is refused, and a journal "
+          "with an embedding by the model of other dimensions has no index", flush=True)
+    made = blocks("domain new")
+    if "NoRandom" in made:
+        return
+    domain = int(re.search(r"DOMAIN (\d+) MADE", made)[1])
+    require(blocks(f"-d {domain} vector add memory {held[0][2]} {model} 0,0,0,9"), "EMBEDDED memory SEQUENCE 1 ENTRY ")
+    require(blocks(f"-d {domain} vector build memory {model} 4"), "PUBLISHED vector/memory VERSION 1 ROOT")
+    out = blocks(f"-d {domain} vector near memory {model} 0,0,0,1 3")
+    assert re.findall(r"^NEAR (\d+) SCORE (-?\d+) SUBJECT", out, re.M) == [("1", "9")], out
+    require(out, "NEAREST 1 OF 1 VECTORS IN memory, EACH CHECKED AGAINST THE JOURNAL")
+    require(blocks(f"domain forget {domain}"), f"DOMAIN {domain} FORGOTTEN")
+    require(blocks(f"-d {domain} vector check memory"), f"blocks: domain {domain}: NotFound")
+    require(blocks("vector check memory"), "INDEX vector/memory OF memory AT SEQUENCE 7: EQUAL")
+    print("PASS: a vector index: one in a memory domain is the domain's alone and goes with it", flush=True)
+
+
 def storefs_writers_check(vm):
     """311-STO-0032, 0037: storefs's writers and scopes on the platform, through `fsstep`, which the shell starts with a
     writable scope of its file's directory on the store volume `w:` (the store's name `fs/w`), as for every program that
@@ -5271,7 +5398,9 @@ def store_domains_check(vm):
     """308-STO-0023: memory domains on the store's RAM disk. Where the processor gives random numbers (RNDR on aarch64's
     `max`), a domain is made; its blocks, names and journal (312-STO-0034) are its own, a domain's client makes no
     domain, and a forgotten domain is gone at once, its journal with it and its records then collected, while another
-    domain stands. Without a random source (x86's qemu64), no domain is made, and the store says why."""
+    domain stands. 312-STO-0046: a domain made with a limit of 8 KiB refuses a publish past it, while the volume takes
+    the same object, and says what it retains. Without a random source (x86's qemu64), no domain is made, and the store
+    says why."""
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
@@ -5295,6 +5424,19 @@ def store_domains_check(vm):
     require(blocks(f"-d {first} get {note} ram:back.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:back.txt"), "in a domain")
     require(blocks(f"-d {first} domain new"), "blocks: domain new: Rights")
+    # 312-STO-0046: a domain with a limit of its own: 5000 bytes fit in 8 KiB, 4000 more do not; the volume is not bound.
+    limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", blocks("domain new 8"))[1])
+    require(vm.service_logs("blockstore", "RETAINING AT MOST"), f"[BLOCKSTORE] DOMAIN {limited} MADE FOR BADGE")
+    fits = re.search(r"PUT (\S+) SIZE 5000", blocks(f"-d {limited} pattern 5000"))[1]
+    require(blocks(f"-d {limited} publish fits {fits}"), "PUBLISHED fits VERSION 1")
+    past = re.search(r"PUT (\S+) SIZE 4000", blocks(f"-d {limited} pattern 4000"))[1]
+    require(blocks(f"-d {limited} publish past {past}"), "blocks: publish past: Quota")
+    require(blocks(f"-d {limited} pin {past}"), "Quota")
+    require(blocks(f"domain usage {limited}"), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+    require(blocks(f"domain usage {second}"), f"DOMAIN {second} RETAINS 0 BYTES, NO LIMIT OF ITS OWN")
+    require(blocks(f"-d {first} domain usage {limited}"), "Rights")
+    require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
+    require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
     require(blocks(f"-d {first} journal append log note in a domain"), "APPENDED log SEQUENCE 1 BOOT 1 ENTRY")
     require(blocks(f"-d {first} journal check log"), "CHECKED log: 1 ENTRIES, SEQUENCE 1 TO 1, AT VERSION 1: WHOLE")
@@ -5319,7 +5461,8 @@ def store_domains_check(vm):
     assert f"DOMAIN {first} " not in out and f"DOMAIN {second} LIVE" in out, out
     require(blocks(f"-d {second} get {note} ram:again.txt"), "GOT 12 BYTES")
     print("PASS: memory domains: two made with keys from the processor; a domain's block, name and journal are its own, its "
-          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole", flush=True)
+          "client makes no domain; a forgotten domain is gone at once and its records collected, the other one whole; one "
+          "made with a limit of 8 KiB refuses a publish and a pin past it while the volume takes the same object (312-STO-0046)", flush=True)
 
 
 def run_in_domain_check(vm, first=None, second=None, note=None):
@@ -7644,11 +7787,14 @@ def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
     and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
-    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart.
+    251-STO-0015: a model's file mapped by the model's name, copied once into a sealed memory object, timed beside `get`."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
     # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
     tree = temp / "models-tree"
+    # A third, of one file of 2 MiB, before the one that differs: an import stops at that one.
     files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "map-test": {"weights.bin": b"".join(hashlib.sha256(i.to_bytes(4, "little")).digest() for i in range(65536))},
              "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
     entries = []
     for model_id, model_files in files.items():
@@ -7688,6 +7834,8 @@ def disks_check(args, boot, temp):
         encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
         require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
         require(out, "AS models/asr-test VERSION 1")
+        weights = files["map-test"]["weights.bin"]
+        require(out, f"IMPORTED map-test: 1 FILES, {len(weights)} BYTES, OBJECT ")
         require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
         require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
 
@@ -7698,6 +7846,27 @@ def disks_check(args, boot, temp):
             require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
         get_back("am/encoder.int8.onnx", encoder)
         get_back("tokens.txt", tokens)
+        # 251-STO-0015: a file copied once into a sealed memory object and mapped, as a recognizer would map it, beside
+        # `get` to the RAM disk; the times are this configuration's (QEMU under TCG), not a machine's.
+        def timed(command):
+            started = time.monotonic()
+            vm.send(f"{command}\n")
+            out = vm.expect("MIND> ", timeout=240, after=f"{command}\n")
+            return out, time.monotonic() - started
+        sha = hashlib.sha256(weights).hexdigest()
+        out, got = timed("blocks models get map-test weights.bin ram:w.bin")
+        require(out, f"GOT weights.bin OF models/map-test: {len(weights)} BYTES, SHA-256 {sha}")
+        vm.command("rm ram:w.bin")
+        out, mapped = timed("blocks models map map-test weights.bin")
+        copied = re.search(rf"^MAPPED weights.bin OF models/map-test: {len(weights)} BYTES, SEALED, SHA-256 {sha}, COPIED IN (\d+) MS\r?$", out, re.M)
+        assert copied, out
+        require(timed("blocks models map asr-test tokens.txt")[0], f"MAPPED tokens.txt OF models/asr-test: {len(tokens)} BYTES, SEALED, SHA-256 {hashlib.sha256(tokens).hexdigest()}, COPIED IN ")
+        require(vm.command("blocks models map asr-test nothing"), "blocks: models: models/asr-test has no file nothing")
+        require(vm.command("blocks models map nothing tokens.txt"), "blocks: models: models/nothing: NotFound")
+        print(f"NOTE: a model's file of {len(weights)} bytes from the store: `get` to the RAM disk {got:.1f} s, `map` {mapped:.1f} s "
+              f"(its copy into memory {int(copied[1]) / 1000:.1f} s), QEMU under TCG", flush=True)
+        print("PASS: a model's file mapped from the store by the model's name (251-STO-0015): copied once into a memory object, "
+              "sealed, mapped by the stand-in for a recognizer, its bytes the manifest's SHA-256; a path or a model not there refused", flush=True)
         # A restarted store finds the model again on its disk.
         pid = vm.services()["blockstore"]
         require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
@@ -12482,6 +12651,11 @@ def tls_suite(args, disk):
         out = vm.command(f"webcheck https://10.0.2.2:{ports['asking']}/program --name mind.test --client-cert", timeout=60)
         assert "Denied" in out and "CERTIFICATE SENT" not in out, out
         require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
+        # 110-NET-0069: nor may it serve as the device (tls.wit 1.3's server role), refused before any port is looked at.
+        require(vm.command("webcheck listen:8443", timeout=60), "WEBCHECK LISTEN 8443: Ok(Err(Denied))")
+        require(vm.command("dmesg -s tls"), "THE SERVER ROLE REFUSED TO A CLIENT WITHOUT THE RIGHT TO THE DEVICE CERTIFICATE")
+        # 110-NET-0070: no listening grant for httpd in this policy, so init does not start it.
+        require(vm.command("dmesg -s init", raw=True), "[INIT] httpd NOT STARTED: THE POLICY GIVES IT NO LISTENING GRANT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys; the
@@ -12518,7 +12692,6 @@ def tls_suite(args, disk):
         require(vm.command("tls cert"), "TLS: NotFound")
     finally:
         vm.close()
-    shutil.rmtree(certificates, ignore_errors=True)
     print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
@@ -12527,6 +12700,108 @@ def tls_suite(args, disk):
     passphrase_wait_check(args, with_entropy)
     tpm_check(args, with_entropy)
     recovery_key_check(args, with_entropy)
+    httpd_check(args, disk, with_entropy, certificates)
+
+
+def httpd_check(args, disk, cpu, certificates):
+    """110-NET-0069 and 0070: a MIND machine serves the release layout over HTTPS: httpd, through the TLS service's server
+    role, whose every signature keystore makes with the device key. The host's TLS 1.3 client (Python's ssl) gets the
+    device certificate, the one `tls cert` prints; a channel and a blob whole, the blob resumed with Range (206), 304 for
+    its ETag, two requests on one connection; 404 outside the layout, 400 for a query string, 405 for POST; one log line
+    each, without the query. A peer that never finishes its handshake is cut after 10 s. A second boot with a
+    tlsserver.pem whose certificate holds another key: refused at listen, and httpd says so."""
+    import http.client
+    releases = disk / "data" / "releases"
+    blob = bytes((i * 7 + 3) % 251 for i in range(150_000))
+    digest = hashlib.sha256(blob).hexdigest()
+    (releases / "blobs").mkdir(parents=True, exist_ok=True)
+    (releases / "channels").mkdir(parents=True, exist_ok=True)
+    (releases / "blobs" / digest).write_bytes(blob)
+    (releases / "channels" / "stable").write_text('{"version":6}\n')
+    policy = disk / "netpolicy.txt"
+    before = policy.read_text() if policy.exists() else None
+    policy.write_text((before or "") + "listen httpd tcp 443 from 10.0.2.0/24\n")
+    port = free_port()
+    network = ["-nic", "none", "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:443", "-device", "virtio-net-pci,netdev=n0"]
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname, context.verify_mode, context.minimum_version = False, ssl.CERT_NONE, ssl.TLSVersion.TLSv1_3
+    served = disk / "tlsserver.pem"
+    try:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "[HTTPD] SERVING"), "[HTTPD] SERVING data/releases/ OVER HTTPS ON TCP 443, AT MOST 7 CONNECTIONS")
+            require(vm.command("dmesg -s tls"), "LISTENS ON TCP 443, SERVING THE DEVICE CERTIFICATE")
+            pem = re.search(r"-----BEGIN CERTIFICATE-----\r?\n.*?-----END CERTIFICATE-----", vm.command("tls cert"), re.S)[0].replace("\r", "")
+            device = ssl.PEM_cert_to_DER_cert(pem)
+            connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+
+            def get(path, method="GET", headers=None, keep=None):
+                c = keep or http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=60)
+                c.request(method, path, headers=headers or {})
+                # Before the response: one the server closes after (Connection: close) closes the client's socket too.
+                assert c.sock.getpeercert(binary_form=True) == device, "not the device certificate"
+                assert c.sock.version() == "TLSv1.3", c.sock.version()
+                response = c.getresponse()
+                body = response.read()
+                if not keep:
+                    c.close()
+                return response.status, {k.lower(): v for k, v in response.getheaders()}, body
+            # Two requests on one kept connection: the channel, then the blob whole.
+            status, headers, body = get("/channels/stable", keep=connection)
+            assert (status, body, headers["cache-control"]) == (200, b'{"version":6}\n', "no-cache"), (status, headers, body)
+            status, headers, body = get(f"/blobs/{digest}", keep=connection)
+            assert (status, len(body), headers["etag"]) == (200, len(blob), f'"{digest}"') and body == blob, (status, headers, len(body))
+            connection.close()
+            status, headers, body = get(f"/blobs/{digest}", headers={"Range": "bytes=100000-"})
+            assert (status, headers["content-range"], body) == (206, "bytes 100000-149999/150000", blob[100000:]), (status, headers)
+            status, _, body = get(f"/blobs/{digest}", headers={"If-None-Match": f'"{digest}"'})
+            assert (status, body) == (304, b""), status
+            for path, method, expected in (("/index.html", "GET", 404), ("/channels/stable?x=1", "GET", 400), ("/channels/stable", "POST", 405)):
+                status, headers, _ = get(path, method)
+                assert status == expected, (path, method, status)
+                if expected == 405:
+                    assert headers["allow"] == "GET, HEAD", headers
+            log = vm.service_logs("httpd", " 405 ")
+            for line in ("10.0.2.2 GET /channels/stable 200 14 ", f"10.0.2.2 GET /blobs/{digest} 200 150000 ", f"10.0.2.2 GET /blobs/{digest} 206 50000 ",
+                         f"10.0.2.2 GET /blobs/{digest} 304 0 ", "10.0.2.2 GET /index.html 404 ", "10.0.2.2 GET /channels/stable 400 ", "(a query string is not served)",
+                         "10.0.2.2 - - 405 "):
+                require(log, line)
+            assert "?x=1" not in log, log[-2000:]
+            require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsServer FOR PID")
+            require(vm.command("dmesg -s tls"), "SERVED 10.0.2.2:")
+            # A peer that sends nothing: its handshake is cut after 10 s, and the connection with it.
+            with socket.create_connection(("127.0.0.1", port), timeout=30) as idle:
+                started = time.monotonic()
+                try:
+                    left = idle.recv(16)
+                except OSError:
+                    left = b""
+                assert left == b"" and 9 < time.monotonic() - started < 25, (left, time.monotonic() - started)
+            require(vm.service_logs("httpd", "took longer than 10 s"), "(the TLS handshake took longer than 10 s)")
+            require(vm.command("dmesg -s tls"), "TIMED OUT")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-httpd-{args.cpus}cpu.log").write_text(vm.log)
+        # A chain whose first certificate holds another key than the device's: refused at listen, nothing served.
+        served.write_text((certificates / "server.pem").read_text())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", cpu])
+        try:
+            require(vm.service_logs("httpd", "NOT LISTENED ON"), "[HTTPD] TCP 443 NOT LISTENED ON: Ok(Err(Certificate))")
+            require(vm.command("dmesg -s tls"), "tlsserver.pem: ITS FIRST CERTIFICATE DOES NOT HOLD THE DEVICE KEY")
+        finally:
+            vm.close()
+    finally:
+        served.unlink(missing_ok=True)
+        shutil.rmtree(releases, ignore_errors=True)
+        if before is None:
+            policy.unlink(missing_ok=True)
+        else:
+            policy.write_text(before)
+        shutil.rmtree(certificates, ignore_errors=True)
+    print("PASS: httpd over the TLS service's server role (110-NET-0069, 0070): the device certificate served and every signature "
+          "keystore's; a channel and a blob whole on one connection, a range resumed (206), 304 for the tag, 404, 400 for a query, "
+          "405 for POST, one log line each without the query; a silent peer cut after 10 s; a program refused the server role; "
+          "a tlsserver.pem for another key refused at listen", flush=True)
 
 
 def passphrase_wait_check(args, cpu):
@@ -15552,8 +15827,9 @@ def store_partition_disk_check(args, disk):
     another system's partition before the store's and after it, and beside it a disk of the other bus that is wholly
     another system's. init takes the store's partition, window 1 of its driver; an object put and a name published there
     are found after a reboot. On the host afterwards, every sector outside the store's partition on both disks is as it
-    was written, and the store has written inside its own past the superblock. The images are written in place. On
-    aarch64 ahci finds its disk where AAVMF leaves the controller untouched since 307-DRV-0068."""
+    was written, and the store has written inside its own past the superblock. 308-STO-0045: read there without its
+    key, the partition holds neither the object's bytes, nor the name, nor the CID in text or binary. The images are
+    written in place. On aarch64 ahci finds its disk where AAVMF leaves the controller untouched since 307-DRV-0068."""
     if getattr(args, "disk", "default") != "default":
         print("SKIP: the store on an NVMe and an AHCI partition (307-STO-0044): the boot disk is on one of those buses", flush=True)
         return
@@ -15568,6 +15844,7 @@ def store_partition_disk_check(args, disk):
             written = partitioned_image(own, 81920, scheme, [(k, a, n) for k, (a, n) in zip(kinds, spans)], seed=f"{bus} store")
             elsewhere = partitioned_image(other, 32768, other_scheme, [(other_kinds[0], 2048, 28672)], seed=f"{other_bus} other")
             store_first = spans[1][0]
+            name = f"sealed-name-check-{bus}"  # long enough that the sealed bytes do not hold it by chance
             extra = []
             for image, on, name in ((own, bus, "own"), (other, other_bus, "other")):
                 extra += ["-drive", f"format=raw,file={image},if=none,id={name},snapshot=off"]
@@ -15601,13 +15878,13 @@ def store_partition_disk_check(args, disk):
                 mounted()
                 require(vm.service_logs(bus, "WINDOW 1 SET"), f"[BLOCK] WINDOW 1 SET: {count} SECTORS FROM {store_first}")
                 put = re.search(r"PUT (\S+) SIZE 5000", blocks("pattern 5000"))[1]
-                blocks(f"publish part {put}", "PUBLISHED part VERSION 1 (FLUSHED)")
+                blocks(f"publish {name} {put}", f"PUBLISHED {name} VERSION 1 (FLUSHED)")
                 vm.send("reboot\n")
                 vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
                 vm.expect("MIND>", timeout=60)
                 time.sleep(1); vm.collect(); vm.output = ""
                 mounted()
-                blocks("resolve part", f"part VERSION 1 ROOT {put}")
+                blocks(f"resolve {name}", f"{name} VERSION 1 ROOT {put}")
                 blocks(f"check {put} pattern", "CHECKED 5000 BYTES = PATTERN")
             finally:
                 vm.close()
@@ -15616,12 +15893,22 @@ def store_partition_disk_check(args, disk):
             assert now[:start] == written[:start], f"{bus}: the table or the partition before the store's was written"
             assert now[end:] == written[end:], f"{bus}: the partition after the store's, or GPT's backup, was written"
             assert any(now[start + 512:end]), f"{bus}: the store wrote nothing past its superblock, so the comparison shows nothing"
+            # 308-STO-0045: the partition read without its key, as a disk taken elsewhere is: its object's bytes, its name
+            # and its CID, in text and in binary, are nowhere in it.
+            sealed = now[start:end]
+            assert b"MIND-SLD" in sealed, f"{bus}: no sealed record's frame where the store's partition was read"  # frames are in the clear
+            pattern = bytes((i * 31 + 7) % 251 for i in range(1000, 1064))  # 64 bytes of the object, `blocks pattern`'s
+            cid = base64.b32decode(put[1:].upper() + "=" * (-len(put[1:]) % 8))
+            for what, needle in (("the object's bytes", pattern), ("the name", name.encode()), ("the CID's text", put.encode()),
+                                 ("the CID", cid), ("the CID's digest", cid[-32:])):
+                assert needle not in sealed, f"{bus}: {what} in the clear on the store's partition"
             assert other.read_bytes() == elsewhere, f"{other_bus}: another system's disk was written"
             shown.append(f"{bus} ({scheme.upper()}) beside {other_bus} ({other_scheme.upper()})")
     print(f"PASS: the store on its own partition of {' and of '.join(shown)}: init takes partition 2, window 1 of its "
           "driver; an object and a name found after a reboot (FLUSHED); on the host every sector outside the store's "
           "partition is as written, another system's partition before and after it and GPT's backup, and the disk beside "
-          "it untouched, while the store wrote inside its own (307-STO-0044)", flush=True)
+          "it untouched, while the store wrote inside its own (307-STO-0044); read without its key, the partition holds "
+          "neither the object's bytes, nor its name, nor its CID (308-STO-0045)", flush=True)
 
 
 def store_disk_check(args, disk):
@@ -15651,6 +15938,10 @@ def store_disk_check(args, disk):
             kept = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {second} pattern 4000", raw=True))[1]
             require(vm.command(f"blocks -d {second} publish kept {kept}", raw=True), "PUBLISHED kept VERSION 1")
             require(vm.command(f"blocks domain forget {first}", raw=True), f"DOMAIN {first} FORGOTTEN")
+            # 312-STO-0046: a domain with a limit of 8 KiB, 5000 bytes named in it; its limit outlives the reboot.
+            limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", vm.command("blocks domain new 8", raw=True))[1])
+            held = re.search(r"PUT (\S+) SIZE 5000", vm.command(f"blocks -d {limited} pattern 5000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish held {held}", raw=True), "PUBLISHED held VERSION 1")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -15669,6 +15960,9 @@ def store_disk_check(args, disk):
             require(mounted, f"[BLOCKSTORE] DOMAIN {second} OF BADGE")
             require(vm.command(f"blocks -d {first} resolve gone", raw=True), f"blocks: domain {first}: NotFound")
             require(vm.command(f"blocks -d {second} check {kept} pattern", raw=True), "CHECKED 4000 BYTES = PATTERN")
+            require(vm.command(f"blocks domain usage {limited}", raw=True), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
+            past = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {limited} pattern 4000", raw=True))[1]
+            require(vm.command(f"blocks -d {limited} publish past {past}", raw=True), "blocks: publish past: Quota")
             assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
             domains = vm.command("blocks domains", raw=True)
             assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
@@ -15676,7 +15970,8 @@ def store_disk_check(args, disk):
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
           "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
-          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023)", flush=True)
+          "reboot stays unreadable after it and is collected, another one whole (308-STO-0023); a domain's limit of 8 KiB, "
+          "its usage the same after the reboot, refuses a publish past it (312-STO-0046)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"

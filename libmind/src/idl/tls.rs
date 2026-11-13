@@ -9,6 +9,16 @@
 //! one of two pins, so that a pin can rotate, with its name, validity and purpose still checked; and a client badged
 //! `BADGE_TLS_NO_DEVICE` (`mind::network`, 351-NET-0022) is refused `client-certificate` (`denied`): a launcher lends
 //! such a client to a program, so that it cannot sign in as the device.
+//!
+//! 1.3 adds the server role (110-NET-0069). A session listens on a TCP port of its lent flow (`listen`), whose listening
+//! grant (socket.wit 2.9) names the port and the networks a peer may connect from; each connection a peer set up becomes
+//! a new session of the same client (`accept`), and the service runs its TLS 1.3 handshake as the server, with the
+//! device certificate, or the chain in `tlsserver.pem` on the boot disk whose first certificate holds the device key.
+//! The key service makes every signature (keystore.wit 1.7 `tls-server`): the private key never enters this service.
+//! The server role presents the device, so a client badged `BADGE_TLS_NO_DEVICE` may not listen (`denied`). No server
+//! call waits for a peer, so a slow one holds up no other session: a handshake goes on as `served`, `send` and
+//! `receive` are called, and one not done within 10 s of its accept fails. TLS 1.3 alone, no resumption, no client
+//! certificate asked for. The service holds 16 sessions, 8 of one client.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -18,7 +28,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:tls";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -67,6 +77,15 @@ impl Wire for Pin {
     const MAX: usize = <PinKind as Wire>::MAX + <List<u8, 32> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.kind.encode(w)?; self.digest.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { kind: Wire::decode(r)?, digest: Wire::decode(r)? }) }
+}
+
+/// A connection a listening session took (1.3): the new session, and the peer's IPv4 address and TCP port.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accepted { pub session: u32, pub address: u32, pub port: u16 }
+impl Wire for Accepted {
+    const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u16 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.session.encode(w)?; self.address.encode(w)?; self.port.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { session: Wire::decode(r)?, address: Wire::decode(r)?, port: Wire::decode(r)? }) }
 }
 
 /// A new session on the client's network flow (its socket client, idl/socket.wit).
@@ -200,6 +219,55 @@ pub fn connect_pins(endpoint: Endpoint, session: u32, name: &str, address: u32, 
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Peer as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The session listens on TCP `port` of its lent flow, holding up to `backlog` (1 to 16) connections set up and
+/// not yet accepted (1.3). `denied`: a client badged `BADGE_TLS_NO_DEVICE`, a port the flow's listening grant does
+/// not name, or no device key; `refused`: another socket listens on the port; `certificate`: `tlsserver.pem` is
+/// there and holds no certificate, or its first does not hold the device key; `invalid`: the session is connected
+/// or listens already.
+pub fn listen(endpoint: Endpoint, session: u32, port: u16, backlog: u8) -> Result<core::result::Result<(), Error>> {
+    let words = [9 | MAJOR << 8 | ((session) as usize) << 16 | ((port) as usize) << 48, ((backlog) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// The oldest connection the listening session holds, as a new session of the same client whose handshake as the
+/// server has started (1.3). It waits for no peer: `again` when no connection waits; `limit` when the client holds
+/// 8 sessions or the service 16, the connection left waiting.
+pub fn accept(endpoint: Endpoint, listener: u32) -> Result<core::result::Result<Accepted, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        listener.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 10, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Accepted as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// An accepted session's handshake, taken as far as the peer's bytes allow (1.3): `again` while it waits for the
+/// peer; the suite and group once it is done (`client-certificate` is false: none is asked for); `timeout` when it
+/// was not done within 10 s of its accept, `handshake` when it failed otherwise (no Ed25519 among the peer's
+/// signature schemes, a key service that would not sign). A failed session holds no connection; `close` frees it.
+/// Until the handshake is done, `send` and `receive` answer `again`.
+pub fn served(endpoint: Endpoint, session: u32) -> Result<core::result::Result<Peer, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        session.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 5, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Peer as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -214,6 +282,9 @@ pub enum Request<'a> {
     Certificate,
     ConnectPinned { session: u32, name: Text<253>, address: u32, port: u16, pin: &'a [u8], timeout_ms: u32 },
     ConnectPins { session: u32, name: Text<253>, address: u32, port: u16, pins: List<Pin, 2>, timeout_ms: u32 },
+    Listen { session: u32, port: u16, backlog: u8 },
+    Accept { listener: u32 },
+    Served { session: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -296,6 +367,26 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::ConnectPins { session, name, address, port, pins, timeout_ms }, call))
         }
+        9 => {
+            wire::body(request, cap, [0xffffffffffff0000, 0xff], CAP_KIND_NONE, false)?;
+            Ok((Request::Listen { session: wire::field(&words, 0, 16, 32) as u32, port: wire::field(&words, 0, 48, 16) as u16, backlog: wire::field(&words, 1, 0, 8) as u8 }, Call::words(request, cap)))
+        }
+        10 => {
+            let (call, length) = wire::take_buffer(request, cap, 10, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let listener = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Accept { listener }, call))
+        }
+        11 => {
+            let (call, length) = wire::take_buffer(request, cap, 5, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let session = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Served { session }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -329,6 +420,18 @@ pub fn reply_connect_pinned(call: Call, value: core::result::Result<&Peer, Error
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_connect_pins(call: Call, value: core::result::Result<&Peer, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_listen(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_accept(call: Call, value: core::result::Result<&Accepted, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_served(call: Call, value: core::result::Result<&Peer, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

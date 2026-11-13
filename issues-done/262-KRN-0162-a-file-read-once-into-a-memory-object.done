@@ -21,7 +21,7 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](../issues/requ
 4. **The shared-mapping limit** becomes the larger of 256 MiB and the task's memory quota, so a program and its workers can map the object whole.
 5. **Files up to 4 GiB − 1 byte,** FAT32's limit. A larger model is published as several files (GGUF's splits), each read into its own object.
 6. **A file shared by several programs** (one copy for all, kept by `vfs_server`) is not part of this task. It waits for a measurement that it is needed.
-7. **The store's models** are [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md)'s, the storage track's; this task covers files of volumes.
+7. **The store's models** are [251-STO-0015](251-STO-0015-a-model-read-into-memory.done)'s, the storage track's; this task covers files of volumes.
 
 ## Acceptance criteria
 
@@ -56,4 +56,4 @@ Made on `claude/youthful-mendel-mf1soy`:
 
 ## Related
 
-[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done), [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done), [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md), [251](../issues/251-model-cache-and-model-disk.md) (the model disk).
+[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done), [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done), [251-STO-0015](251-STO-0015-a-model-read-into-memory.done), [251](../issues/251-model-cache-and-model-disk.md) (the model disk).

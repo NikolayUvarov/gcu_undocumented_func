@@ -153,6 +153,7 @@ const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
 const PSCI_SYSTEM_RESET: u64 = 0x8400_0009;
 
 pub unsafe fn reboot() -> ! {
+    super::watchdog::stop(); // TF-A's reset may use the same timer
     serial_print("MIND CORE KERNEL: REBOOT VIA PSCI SYSTEM_RESET\n");
     psci(PSCI_SYSTEM_RESET, 0, 0, 0);
     crate::cpu::halt_all()
@@ -160,6 +161,7 @@ pub unsafe fn reboot() -> ! {
 
 /// Turns the machine off (PSCI SYSTEM_OFF).
 pub unsafe fn power_off() -> ! {
+    super::watchdog::stop();
     serial_print("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF\n");
     psci(PSCI_SYSTEM_OFF, 0, 0, 0);
     crate::cpu::halt_all()

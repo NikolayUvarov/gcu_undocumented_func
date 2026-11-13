@@ -80,6 +80,22 @@ A service that talks to one server for as long as the machine runs, such as the 
   - leaf: `openssl x509 -in cert.pem -outform der | sha256sum`;
   - SPKI: `openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum`.
 
+## The server role (`idl/tls.wit` 1.3)
+
+A client serves TLS 1.3 as the device (110-NET-0069). The release server `httpd` is the first that does ([docs/update/server.md](../update/server.md)).
+
+- **`listen(session, port, backlog)`:** the attached session listens on `port` of the flow the client lent. That flow's listening grant names the port and the networks a peer may connect from (`socket.wit` 2.9, the policy's `listen` line).
+- **`accept(listener)`:** the oldest connection a peer set up, as a new session of the same client, whose handshake as the server has started. It answers `again` when none waits, and `limit` when the client holds 8 sessions or the service 16 (the connection waits in the backlog).
+- **`served(session)`:** the handshake taken as far as the peer's bytes allow. It answers `again` while it waits for the peer; the suite and group once it is done; `timeout` when it was not done within 10 s of its accept; `handshake` when it failed otherwise. `send` and `receive` answer `again` until it is done.
+- **No call waits for a peer.** The service runs one request at a time, so a slow peer would otherwise hold up every other session.
+- **The certificate:**
+  - the device certificate (Ed25519, self-signed); or
+  - the chain in `tlsserver.pem` on the boot disk, whose first certificate must hold the device key (else `listen` answers `certificate`).
+
+  Each signature is `keystore`'s (`keystore.wit` 1.7 `tls-server`, at most 120 a minute): the private key never enters `tls`.
+- **Who may serve:** a client with the right to the device certificate. One badged `BADGE_TLS_NO_DEVICE`, the copy the shell lends a program, is denied `listen`, and `tls` logs it.
+- **Not provided:** TLS 1.2, resumption (no tickets), client certificates, ALPN, and a key other than the device's.
+
 ## JSON read by the parser service (`idl/parse.wit` 1.4)
 
 - **`json(text, start)`.** `parse` reads a whole JSON text (RFC 8259, UTF-8, up to 16 KiB) with `mind::json` and answers its values in document order, 16 at a time from `start`, with how many there are. Each value comes with:
