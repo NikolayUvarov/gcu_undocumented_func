@@ -1,6 +1,6 @@
-# 111-NET-0074 — A grant keeps the host names its addresses were resolved from: `socket.wit` 2.12
+# 111-NET-0074 — A grant keeps the host names its addresses were resolved from: `socket.wit` 2.12 — done
 
-**Type:** network (`netstack`, `netpolicy`, `idl/socket.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) (stage 2) · **Roadmap:** track D · **Constitution:** MC-11.4, MC-11.6, MC-12.4
+**Type:** network (`netstack`, `netpolicy`, `idl/socket.wit`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) (stage 2) · **Roadmap:** track D · **Constitution:** MC-11.4, MC-11.6, MC-12.4
 
 ## Problem
 
@@ -25,7 +25,7 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 ## Acceptance criteria
 
 - `netstack` and `netpolicy` build for both targets; the IDL test passes.
-- **QEMU, x86 and aarch64:** `timed`, given an NTS server by name through the test's resolver, reads the name back and has `tls` check the server's certificate for it ([111-NET-0075](111-NET-0075-timed-with-nts.md)).
+- **QEMU, x86 and aarch64:** `timed`, given an NTS server by name through the test's resolver, reads the name back and has `tls` check the server's certificate for it ([111-NET-0075](111-NET-0075-timed-with-nts.done)).
 
 ## Progress
 
@@ -37,7 +37,14 @@ NTS-KE checks the server's certificate for the server's name (RFC 8915, section 
 
 **Left:** the gate.
 
+## Resolution
+
+**Every criterion is met.**
+- `netstack` and `netpolicy` build for both targets; the IDL test passes (`socket::Named` in the fuzzer since round 125's return).
+- **QEMU, x86 and aarch64:** `timed` reads back the name `mind.test` its NTS servers were resolved from and has `tls` check their certificate for it ([111-NET-0075](111-NET-0075-timed-with-nts.done)'s `nts_check`): on the maintainer's machines at 8869cfda and in round 127's gate.
+- **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI.
+
 ## Related
 
-- [111](111-network-time.md): the main task, stage 2.
-- [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.md), [111-NET-0075](111-NET-0075-timed-with-nts.md).
+- [111](../issues/111-network-time.md): the main task, stage 2.
+- [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.done), [111-NET-0075](111-NET-0075-timed-with-nts.done).

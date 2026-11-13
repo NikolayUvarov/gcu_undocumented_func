@@ -1,6 +1,6 @@
-# 111-NET-0075 — `timed` authenticates its time servers with NTS (RFC 8915)
+# 111-NET-0075 — `timed` authenticates its time servers with NTS (RFC 8915) — done
 
-**Type:** network (`timed`, `mind::nts`; `init`'s grant as a `KRN` part) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) (stage 2) · **Roadmap:** track D, track C · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.9, MC-11.11, MC-12.2, MC-12.3
+**Type:** network (`timed`, `mind::nts`; `init`'s grant as a `KRN` part) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) (stage 2) · **Roadmap:** track D, track C · **Constitution:** MC-5.6, MC-9.4, MC-10.3, MC-11.4, MC-11.9, MC-11.11, MC-12.2, MC-12.3
 
 ## Problem
 
@@ -51,9 +51,18 @@ Stage 1's `timed` takes SNTP answers that anyone on the path can forge, within b
 - **On the maintainer's machines** (Effector, QEMU under TCG), at 8869cfda (`main` 60b995bd merged): "x86: network, TLS and Effector" passed on x32-2 (1342 s), "aarch64: network, TLS and Effector" on acc-2 (1153 s), `nts_check` among them. The first run, at 959212a6, failed on both in `nts_check` alone: `httpd_check` had removed the certificates' directory before it; `nts_check` now runs first.
 - **Left:** the gate.
 
+## Resolution
+
+**Every criterion is met.**
+- **Host:** `tests/nts_host.rs`, as the criterion lists.
+- **QEMU, x86 and aarch64** (`nts_check`): the clock set from 2024 by two NTS servers that agree; a forged answer and another request's refused; the cookies back to 8; no protocol agreed and an untrusted certificate refused at NTS-KE. On the maintainer's machines at 8869cfda ("x86: network, TLS and Effector" on x32-2, 1342 s; aarch64 on acc-2, 1153 s) and in round 127's gate.
+- **Interop:** against two `chronyd` 4.5 NTS servers (GnuTLS) in the kernel session's container, a local script, not a gate test.
+- **The profile:** `docs/profile/clocks.md`.
+- **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI. Tests are evidence, not proofs (MC-12.2).
+
 ## Related
 
-- [111](111-network-time.md): the main task, stage 2.
-- [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.md): ALPN and the exporter in `tls`.
-- [111-NET-0074](111-NET-0074-a-grants-host-names.md): the grant's host names.
-- [111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done): stage 1.
+- [111](../issues/111-network-time.md): the main task, stage 2.
+- [111-NET-0073](111-NET-0073-tls-alpn-and-the-exporter.done): ALPN and the exporter in `tls`.
+- [111-NET-0074](111-NET-0074-a-grants-host-names.done): the grant's host names.
+- [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done): stage 1.

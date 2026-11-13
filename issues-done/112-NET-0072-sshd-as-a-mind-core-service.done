@@ -1,10 +1,10 @@
-# 112-NET-0072 — `sshd` as a MIND Core service: logins with the owner's keys, SFTP into `data/`, the host key in `keystore`
+# 112-NET-0072 — `sshd` as a MIND Core service: logins with the owner's keys, SFTP into `data/`, the host key in `keystore` — done
 
-**Type:** network (a new service `sshd/`, `keystore` 1.8, `ssh` `keys`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the console: the request in [requests-APP.md](requests-APP.md), "The shell takes a remote session's lines") · **Main task:** [112](112-our-own-ssh-server.md) (stage 1) · **Roadmap:** track D · **Constitution:** MC-3.4, MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.3
+**Type:** network (a new service `sshd/`, `keystore` 1.8, `ssh` `keys`, the grants in `init` as a `KRN` part) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — (the console: the request in [requests-APP.md](../issues/requests-APP.md), "The shell takes a remote session's lines") · **Main task:** [112](../issues/112-our-own-ssh-server.md) (stage 1) · **Roadmap:** track D · **Constitution:** MC-3.4, MC-5.1, MC-5.2, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.3
 
 ## Problem
 
-[112-NET-0071](112-NET-0071-the-ssh-servers-role-in-ssh.md) made the protocol's server role, host-tested against OpenSSH's client. Nothing runs it on a MIND machine: no service listens on TCP 22, no host key, no list of the owner's keys.
+[112-NET-0071](112-NET-0071-the-ssh-servers-role-in-ssh.done) made the protocol's server role, host-tested against OpenSSH's client. Nothing runs it on a MIND machine: no service listens on TCP 22, no host key, no list of the owner's keys.
 
 ## Plan
 
@@ -46,8 +46,18 @@
 - **On the maintainer's machines** (Effector, QEMU under TCG), at d95c55c5 (`main` 60b995bd with 112-APP-0136 merged): "x86: network, TLS and Effector" passed on x32 (1357 s), "aarch64: network, TLS and Effector" on acc-1 (1145 s), `sshd_check` with the console among them.
 - **Left:** the gate.
 
+## Resolution
+
+**Every criterion is met.**
+- **Host:** `ssh/tests/keys.rs` (4 tests), in `scripts/host_tests.sh`.
+- **QEMU, x86 and aarch64** (`sshd_check`, in the `tls` suite): the host key against a known_hosts line made of the device key; `scp` into `data/` and back with equal SHA-256; `sftp`; `data/ssh/` and paths above the root refused; an unlisted key and a password refused; each login, refusal and write logged; `keystore`'s `SIGNED SshHost`. Passed on the maintainer's machines at d95c55c5 ("x86: network, TLS and Effector" on x32, 1357 s; "aarch64: network, TLS and Effector" on acc-1, 1145 s) and in round 127's gate.
+- **Without the grant:** `init` says `THE POLICY GIVES IT NO LISTENING GRANT` (the `tls` suite's first boot).
+- **The console** (with [112-APP-0136](../issues/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md)): the console key's `ps` through the shell, `update` refused, no console for the files' key.
+- **The profile:** the MC-11.9 row, `tcb.md` and `bootstrap.md` say what `sshd` is trusted with.
+- **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI. Tests are evidence, not proofs (MC-12.2).
+
 ## Related
 
-- [112](112-our-own-ssh-server.md): the main task.
-- [112-NET-0071](112-NET-0071-the-ssh-servers-role-in-ssh.md): the protocol's server role.
-- [110-NET-0070](110-NET-0070-httpd-as-a-mind-core-service.md): `httpd`, the other listening service, started the same way.
+- [112](../issues/112-our-own-ssh-server.md): the main task.
+- [112-NET-0071](112-NET-0071-the-ssh-servers-role-in-ssh.done): the protocol's server role.
+- [110-NET-0070](../issues/110-NET-0070-httpd-as-a-mind-core-service.md): `httpd`, the other listening service, started the same way.
