@@ -520,6 +520,12 @@ def require(text, fragment):
     assert fragment in text, (fragment, text)
 
 
+def require_match(text, pattern):
+    """`pattern` (a regular expression) matches somewhere in `text`, or the test fails with it."""
+    if not re.search(pattern, text):
+        raise AssertionError(f"expected a match for {pattern!r}, got:\n{text[-1500:]}")
+
+
 def require_all(text, *fragments):
     for fragment in fragments:
         require(text, fragment)
@@ -4506,6 +4512,17 @@ def vector_index(journal, seq, head, model, dims, vectors):
     return cid_text(directory([(b"manifest", 0, len(manifest), cid_binary(0x55, manifest)), (b"vectors", 1, len(files), listed)]))
 
 
+# 312-STO-0050: a term the suites set, seconds since 1970 UTC, and the text `blocks domain term` gives it; ahead of
+# the guest's clock, so it has not passed, or the store hears no clock.
+TERM_AT = 1_900_000_000
+TERM_STATE = "(?:NOT PASSED|NO CALENDAR CLOCK)"
+
+
+def term_text(until):
+    import datetime
+    return f"UNTIL {until} ({datetime.datetime.fromtimestamp(until, datetime.timezone.utc):%Y-%m-%d %H:%M:%S} UTC)"
+
+
 def guest_seconds(vm):
     """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
     hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
@@ -5636,6 +5653,18 @@ def store_domains_check(vm):
     require(blocks(f"domain usage {limited}"), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
     require(blocks(f"domain usage {second}"), f"DOMAIN {second} RETAINS 0 BYTES, NO LIMIT OF ITS OWN")
     require(blocks(f"-d {first} domain usage {limited}"), "Rights")
+    # 312-STO-0050: a domain's term and mode, report and none until set; set and read by its owner, through a client of
+    # the volume only. With the store's rtc client (312-KRN-0239) a term in 2030 has not passed; without it the store
+    # hears no calendar clock and says so; either way none acts here.
+    require_match(blocks(f"domain term {second}"), rf"DOMAIN {second} NO TERM, MODE REPORT, {TERM_STATE}")
+    require(blocks(f"domain term {second} forget {TERM_AT}"), f"DOMAIN {second} TERM SET: {term_text(TERM_AT)}, MODE FORGET")
+    require_match(blocks(f"domain term {second}"), rf"DOMAIN {second} {re.escape(term_text(TERM_AT))}, MODE FORGET, {TERM_STATE}")
+    require(blocks(f"-d {first} domain term {second}"), "blocks: domain term")
+    require(blocks(f"-d {first} domain term {second} report 0"), "Rights")
+    require(blocks(f"domain term 999 report 0"), "blocks: domain term 999: NotFound")
+    require(vm.service_logs("blockstore", "TERM SET BY PID"), f"[BLOCKSTORE] DOMAIN {second}'S TERM SET BY PID")
+    require(blocks(f"domain term {second} report 0"), f"DOMAIN {second} TERM SET: NO TERM, MODE REPORT")
+    require(vm.service_logs("blockstore", "TERM SET BY PID"), f"[BLOCKSTORE] DOMAIN {second}'S TERM SET BY PID")
     require(re.search(r"PUT (\S+) SIZE 4000", blocks("pattern 4000"))[1], past)
     require(blocks(f"publish past {past}"), "PUBLISHED past VERSION 1")
     # 312-STO-0034: a journal in a domain is written through the domain's client, and is the domain's alone.
@@ -16964,6 +16993,8 @@ def store_disk_check(args, disk):
             limited = int(re.search(r"DOMAIN (\d+) MADE, RETAINING AT MOST 8 KIB", vm.command("blocks domain new 8", raw=True))[1])
             held = re.search(r"PUT (\S+) SIZE 5000", vm.command(f"blocks -d {limited} pattern 5000", raw=True))[1]
             require(vm.command(f"blocks -d {limited} publish held {held}", raw=True), "PUBLISHED held VERSION 1")
+            # 312-STO-0050: a term and mode set on it, found again after the reboot.
+            require(vm.command(f"blocks domain term {limited} release {TERM_AT}", raw=True), f"DOMAIN {limited} TERM SET: {term_text(TERM_AT)}, MODE RELEASE")
             vm.send("reboot\n")
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND>", timeout=60)
@@ -16985,6 +17016,10 @@ def store_disk_check(args, disk):
             require(vm.command(f"blocks domain usage {limited}", raw=True), f"DOMAIN {limited} RETAINS 5000 OF 8192 BYTES, 1 NAMES, 0 PINS")
             past = re.search(r"PUT (\S+) SIZE 4000", vm.command(f"blocks -d {limited} pattern 4000", raw=True))[1]
             require(vm.command(f"blocks -d {limited} publish past {past}", raw=True), "blocks: publish past: Quota")
+            # 312-STO-0050: its term and mode the same after the reboot; a term in 2030 has not passed, or the store hears
+            # no clock (without 312-KRN-0239's rtc client): either way none acts, and the publish past it was Quota, not
+            # read-only.
+            require_match(vm.command(f"blocks domain term {limited}", raw=True), rf"DOMAIN {limited} {re.escape(term_text(TERM_AT))}, MODE RELEASE, {TERM_STATE}")
             assert re.search(r"COLLECTED [1-9]\d* BLOCKS", vm.command("blocks collect", raw=True))
             domains = vm.command("blocks domains", raw=True)
             assert f"DOMAIN {first} " not in domains and f"DOMAIN {second} LIVE" in domains, domains
@@ -16993,7 +17028,8 @@ def store_disk_check(args, disk):
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot; "
           "its writes report FLUSHED, and a name published there is found after the reboot; a memory domain forgotten before the "
           "reboot stays unreadable after it and is collected, another one whole (308-STO-0023); a domain's limit of 8 KiB, "
-          "its usage the same after the reboot, refuses a publish past it (312-STO-0046)", flush=True)
+          "its usage the same after the reboot, refuses a publish past it (312-STO-0046); its term and mode the same after the "
+          "reboot, acting on nothing without a calendar clock (312-STO-0050)", flush=True)
     # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
     with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
         big = Path(temp) / "store.img"

@@ -17,7 +17,8 @@
 /// each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
 /// A memory domain may be made with a limit of its own on what it retains, beside its owner's quota (312-STO-0046, 2.7).
 /// An owner may lend a client of its domain with fewer rights than its own, one that only reads (312-STO-0049, 2.8).
-package mind:blockstore@2.8.0;
+/// A memory domain has a term and a mode: past it, the store forgets it, releases it or only reports it (312-STO-0050, 2.9).
+package mind:blockstore@2.9.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -114,6 +115,13 @@ interface blockstore {
     /// every block of the name; else, and with `check`, the store's own class); how the walk ended, and the CID it stopped
     /// at (36 bytes; empty when whole).
     record rebuilt { version: u64, visited: u32, lacked: u32, put: u32, durability: durability, walked: walked, at: list<u8, 36> }
+    /// What the store does with a memory domain past its term (2.9, 312-STO-0050): forget it, as `domain-forget` does;
+    /// release it, its names and pins retaining nothing, so a collection frees its records, writes through it refused
+    /// (`read-only`) and its key kept; or only report it. A domain is in `report` until its owner sets another.
+    enum term-mode { forget, release, report }
+    /// A domain's term (seconds since 1970 UTC; 0, none) and mode, whether the store hears a calendar clock, and whether
+    /// the term has passed by it: without a clock no term acts, and every domain is as in `report` (2.9).
+    record term { until: u64, mode: term-mode, clock: bool, passed: bool }
 
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. How far it reached is the medium's, in `stat`: a put is retained only by its lease
@@ -185,6 +193,13 @@ interface blockstore {
     /// too: 1 get, 2 put, 4 publish, as the badges grant them. So an owner lends a client that only reads. Errors as
     /// `domain-client`'s, and invalid (none of `rights` held, or a bit that is no such right) (2.8, 312-STO-0049).
     domain-client-with: func(id: u16, rights: u16) -> result<borrow<endpoint>, error>;
+    /// Sets domain `id`'s mode and term (seconds since 1970 UTC; 0, none), its owner's, at any time and either way: a
+    /// term record written, then the one before erased. The store acts on it from the next calendar time it hears, at
+    /// most a minute later. Errors: not-found (no such live domain), rights (another owner's, or asked through a domain's
+    /// client), full, read-only, device (2.9, 312-STO-0050).
+    domain-set-term: func(id: u16, mode: term-mode, until: u64) -> result<_, error>;
+    /// Domain `id`'s term, as its owner set it, and whether it has passed. Errors as `domain-usage`'s (2.9).
+    domain-term: func(id: u16) -> result<term, error>;
     /// Forgets domain `id` of the caller's owner (MC-4.8): a tombstone is written, then its key record erased. Its
     /// names, pins and blocks are gone at once and its clients revoked; its records never open again, and the next
     /// collection frees them. Copies already read, and a flash medium's spare blocks, are outside this. Errors:
