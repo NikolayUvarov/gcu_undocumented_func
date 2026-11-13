@@ -19,7 +19,7 @@ STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](../issu
 ## Acceptance criteria
 
 - `blockstore` holds an `rtc` client without the setting badge in slot 5 when `rtc` runs, and starts without it, slot 5 empty, when `rtc` does not.
-- STO's check named above ([312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.md)), run by STO once this is in.
+- STO's check named above ([312-STO-0051](../issues-done/312-STO-0051-a-domains-term-acting-on-the-platform.done)), run by STO once this is in.
 - The tests the change touches pass on x86 and aarch64 in QEMU; `docs/profile/bootstrap.md` names the slot.
 
 ## Progress
@@ -29,7 +29,7 @@ STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](../issu
 - **Docs:** `docs/profile/bootstrap.md`, `blockstore`'s row.
 - **Tested** (this container): `init` builds for x86 and aarch64 with no warning.
 - **Run on the maintainer's machines** at a6adff27 (Effector, QEMU under TCG): "x86: files and block writes" on i9 (1452 s) and "aarch64: files and the block store" on PCU (1122 s) passed, the store's suites among them.
-- **Landed** in round 130 (`main` c3a2c7d8, gate `land-r130` green), with STO's reading of the clock in `blockstore` (312-STO-0050, done: the store's part). STO's check on the platform, a term's end across a reboot in QEMU, is [312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.md).
+- **Landed** in round 130 (`main` c3a2c7d8, gate `land-r130` green), with STO's reading of the clock in `blockstore` (312-STO-0050, done: the store's part). STO's check on the platform, a term's end across a reboot in QEMU, is [312-STO-0051](../issues-done/312-STO-0051-a-domains-term-acting-on-the-platform.done).
 - **Left:** STO's check above; then this closes.
 
 ## Related
