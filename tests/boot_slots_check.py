@@ -16,7 +16,7 @@ On a raw disk image with both slots and the bootloader of the build:
   leave the machine on slot A; a slot without a loader of its own boots as before. In `run` both slots hold the
   build's loader, the same file, and none is started;
 - `version_floor` (351-UPD-0024): a slot whose signed manifest names a version below the newer record's floor is not
-  booted, the other slot boots instead; one at the floor boots on trial; records of format 1 are not read.
+  booted, the other slot boots instead; one at the floor boots on trial; records of formats 1 and 2 are not read.
 - the loader's mark (000-KRN-0211): each boot leaves `MIND/REACHED` at `HANDOVER` with a count one more than the last;
   a slot's own loader carries the count the loader at EFI/BOOT/ started, and a boot reset in its pause is left at
   `READ`, as `scripts/boot_switch.py logs` reads it.
@@ -317,15 +317,22 @@ def version_floor(boot, temp, volume, label):
     out = booted("BOOT: VERSION FLOOR 5", "BOOT: SLOT B LOADED ON TRIAL", STARTED)
     assert "BELOW THE FLOOR" not in out, out[-3000:]
     print(f"PASS ({label}): a slot at the floor boots: a rollback to a release at or above the minimum stays possible", flush=True)
-    # Records of format 1, before the floor, are not read (the maintainer, 2026-10-25): each is named, and the disk boots
-    # as one without a valid record, slot A first. Nothing reads or converts them; such a disk is written again.
-    for name in boot_slots.FILES:
-        image.write(name, format1(1, "B"))
-    booted("BOOT: RECORD MIND\\BOOT0 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN", "BOOT: RECORD MIND\\BOOT1 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN",
+    # Records of format 1, before the floor, and of format 2, before the key file version (351-UPD-0029), are not read
+    # (the maintainer, 2026-10-25): each is named, and the disk boots as one without a valid record, slot A first.
+    # Nothing reads or converts them; such a disk is written again.
+    image.write(boot_slots.FILES[0], format1(1, "B"))
+    image.write(boot_slots.FILES[1], format2(2, "B"))
+    booted("BOOT: RECORD MIND\\BOOT0 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN", "BOOT: RECORD MIND\\BOOT1 OF FORMAT 2, NOT READ: WRITE THE DISK AGAIN",
            "BOOT: NO VALID BOOT RECORD; TRYING SLOT A, THEN B", "BOOT: SLOT A LOADED\n", STARTED)
     assert boot_slots.records(image.path) == [None, None]
     fsck(image)
-    print(f"PASS ({label}): records of format 1 are not read, each named; the disk boots as one without a valid record", flush=True)
+    print(f"PASS ({label}): records of formats 1 and 2 are not read, each named; the disk boots as one without a valid record", flush=True)
+
+
+def format2(sequence, slot):
+    """A record of format 2, before the key file version (351-UPD-0029): made here only to show it is refused."""
+    data = struct.pack("<8sIQ4BQ", boot_slots.MAGIC, 2, sequence, ord(slot), 0, 0, 1, 0).ljust(boot_slots.RECORD - 4, b"\0")
+    return data + struct.pack("<I", zlib.crc32(data))
 
 
 def format1(sequence, slot):
