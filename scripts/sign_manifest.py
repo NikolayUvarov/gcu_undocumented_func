@@ -2,9 +2,11 @@
 """Signs a boot volume (350-UPD-0002, docs/update/README.md; MC-9.1, 9.2, 3.11).
 
 Writes VOLUME/MANIFEST, a versioned list of every shipped file with its size, SHA-256 and requested authorities, and
-the build's inputs; and VOLUME/MANIFEST.SIG, an Ed25519 signature (RFC 8032) over the manifest's exact bytes. The
-bootloader checks the signature against the public key built into it, and each image it loads against the manifest.
-A manifest describes; it grants nothing (MC-3.11).
+the build's inputs; VOLUME/MANIFEST.SIG, an Ed25519 signature (RFC 8032) over the manifest's exact bytes; and the key
+files, VOLUME/KEYS with KEYS.1, KEYS.2, … of its root changes (351-UPD-0029): the last of the key history in
+$MIND_KEYS, or the test key file. The bootloader checks KEYS under the root keys built into it, the signature against
+the boot keys KEYS names, and each image it loads against the manifest. A manifest describes; it grants nothing
+(MC-3.11).
 
 Usage: sign_manifest.py VOLUME [--version N]  sign with the key in $MIND_BOOT_SIGNING_KEY, or with the test key; with
                                             --version, the release version the boot key vouches for (351-UPD-0024)
@@ -200,13 +202,37 @@ def manifest(volume, public, inputs=None, version=None):
     return ("\n".join(lines) + "\n").encode()
 
 
+def write_keys(volume, history=None):
+    """Writes the volume's key files (351-UPD-0029, release.volume_keys) in place of those it held; returns the key file."""
+    import release  # it imports this module: read once both are
+    volume = Path(volume)
+    for old in volume.glob("KEYS*"):
+        if old.is_file() and (old.name == "KEYS" or (old.name[:5] == "KEYS." and old.name[5:].isdigit())):
+            old.unlink()
+    files = release.volume_keys(history)
+    for name, data in files:
+        (volume / name).write_bytes(data)
+    return files[-1][1]
+
+
+def boot_keys(keys_file):
+    """The public keys the boot role of `keys_file` names."""
+    import release
+    signed, _ = release.split_signed(keys_file)
+    k, why = release.keys_from(signed[0]) if signed else (None, "not signed")
+    if k is None:
+        raise ValueError(f"KEYS: {why}")
+    return k["roles"]["boot"][0]
+
+
 def sign_volume(volume, seed=None, inputs=None, version=None):
-    """Writes the volume's manifest and signature; returns the manifest."""
+    """Writes the volume's manifest, its signature and its key files; returns the manifest."""
     volume = Path(volume)
     seed = seed or signing_seed()
     text = manifest(volume, public_key(seed), inputs, version)
     (volume / "MANIFEST").write_bytes(text)
     (volume / "MANIFEST.SIG").write_bytes(sign(seed, text))
+    write_keys(volume)
     return text
 
 
@@ -245,6 +271,10 @@ def main(argv):
     elif len(argv) == 1 or (len(argv) == 3 and argv[1] == "--version" and argv[2].isdigit()):
         seed = signing_seed()
         text = sign_volume(argv[0], seed, version=int(argv[2]) if len(argv) == 3 else None)
+        # The boot key must be one the key file names, or the bootloader refuses the volume.
+        if public_key(seed) not in boot_keys((Path(argv[0]) / "KEYS").read_bytes()):
+            print(f"{argv[0]}/KEYS names no boot key that signed it: give $MIND_KEYS, the key history naming it (351-UPD-0029)")
+            return 1
         files = text.count(b"\nfile ")
         print(f"SIGNED {argv[0]}/MANIFEST: {files} FILES, KEY {hashlib.sha256(public_key(seed)).hexdigest()[:16]}" + (" (THE TEST KEY)" if seed == TEST_SEED else ""))
     else:

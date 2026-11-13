@@ -6,7 +6,7 @@ mod slots;
 use slots::{crc32, plan, spent, Plan, Record, FORMAT, RECORD, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
-    Record { sequence, slot, fallback, tries, confirmed, floor: 0 }
+    Record { sequence, slot, fallback, tries, confirmed, floor: 0, keys: 0 }
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn damaged_records_are_refused() {
     assert_eq!(Record::parse(&[0u8; RECORD]), None);
     assert_eq!(Record::parse(&good[..RECORD - 1]), None);
     // Fields the CRC covers but the format does not allow.
-    for (offset, value) in [(20, b'C'), (21, b'Z'), (23, 2), (32, 1), (100, 1)] {
+    for (offset, value) in [(20, b'C'), (21, b'Z'), (23, 2), (40, 1), (100, 1)] {
         let mut data = good;
         data[offset] = value;
         let crc = crc32(&data[..RECORD - 4]);
@@ -59,13 +59,13 @@ fn the_newer_valid_record_counts() {
     assert_eq!(plan([Some(a), Some(b)]).chosen, Some(1));
     assert_eq!(plan([Some(b), Some(a)]).chosen, Some(0));
     // A torn newer record is not read: the older one counts.
-    assert_eq!(plan([Some(a), None]), Plan { chosen: Some(0), order: [b'A', 0], trial: false, write: None, floor: 0 });
-    assert_eq!(plan([None, Some(b)]), Plan { chosen: Some(1), order: [b'B', b'A'], trial: false, write: None, floor: 0 });
+    assert_eq!(plan([Some(a), None]), Plan { chosen: Some(0), order: [b'A', 0], trial: false, write: None, floor: 0, keys: 0 });
+    assert_eq!(plan([None, Some(b)]), Plan { chosen: Some(1), order: [b'B', b'A'], trial: false, write: None, floor: 0, keys: 0 });
 }
 
 #[test]
 fn no_valid_record_tries_either_slot() {
-    assert_eq!(plan([None, None]), Plan { chosen: None, order: [b'A', b'B'], trial: false, write: None, floor: 0 });
+    assert_eq!(plan([None, None]), Plan { chosen: None, order: [b'A', b'B'], trial: false, write: None, floor: 0, keys: 0 });
 }
 
 #[test]
@@ -73,19 +73,19 @@ fn a_trial_counts_down_on_the_other_record() {
     let confirmed_a = rec(1, b'A', 0, 0, true);
     let staged_b = rec(2, b'B', b'A', 2, false);
     let first = plan([Some(confirmed_a), Some(staged_b)]);
-    assert_eq!(first, Plan { chosen: Some(1), order: [b'B', b'A'], trial: true, write: Some((0, rec(3, b'B', b'A', 1, false))), floor: 0 });
+    assert_eq!(first, Plan { chosen: Some(1), order: [b'B', b'A'], trial: true, write: Some((0, rec(3, b'B', b'A', 1, false))), floor: 0, keys: 0 });
     // The write leaves the staged record as it was: a cut during it loses one try at most.
     let second = plan([Some(first.write.unwrap().1), Some(staged_b)]);
-    assert_eq!(second, Plan { chosen: Some(0), order: [b'B', b'A'], trial: true, write: Some((1, rec(4, b'B', b'A', 0, false))), floor: 0 });
+    assert_eq!(second, Plan { chosen: Some(0), order: [b'B', b'A'], trial: true, write: Some((1, rec(4, b'B', b'A', 0, false))), floor: 0, keys: 0 });
     // Not confirmed and no tries left: the last confirmed slot, and nothing written.
     let third = plan([Some(rec(3, b'B', b'A', 1, false)), Some(second.write.unwrap().1)]);
-    assert_eq!(third, Plan { chosen: Some(1), order: [b'A', 0], trial: false, write: None, floor: 0 });
+    assert_eq!(third, Plan { chosen: Some(1), order: [b'A', 0], trial: false, write: None, floor: 0, keys: 0 });
 }
 
 #[test]
 fn a_confirmed_slot_keeps_its_fallback() {
     let p = plan([Some(rec(9, b'B', b'A', 0, true)), Some(rec(8, b'B', b'A', 0, false))]);
-    assert_eq!(p, Plan { chosen: Some(0), order: [b'B', b'A'], trial: false, write: None, floor: 0 });
+    assert_eq!(p, Plan { chosen: Some(0), order: [b'B', b'A'], trial: false, write: None, floor: 0, keys: 0 });
     // A record that names its own slot as the fallback has none.
     assert_eq!(plan([Some(rec(2, b'A', b'A', 0, true)), None]).order, [b'A', 0]);
     // Not confirmed, no tries, no fallback: the slot itself rather than nothing.
@@ -117,19 +117,42 @@ fn a_sequence_that_cannot_count_down_is_refused() {
 }
 
 #[test]
-fn a_record_of_format_1_is_not_read() {
-    // 351-UPD-0024: format 2 adds the floor. A record of format 1 is refused, not read, and its format named.
-    let mut old = [0u8; RECORD];
-    old[..8].copy_from_slice(b"MINDBOOT");
-    old[8..12].copy_from_slice(&1u32.to_le_bytes());
-    old[12..24].copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, b'A', 0, 0, 1]);
-    let crc = crc32(&old[..RECORD - 4]);
-    old[RECORD - 4..].copy_from_slice(&crc.to_le_bytes());
-    assert_eq!(Record::parse(&old), None);
-    assert_eq!(Record::other_format(&old), Some(1));
+fn a_record_of_format_1_or_2_is_not_read() {
+    // 351-UPD-0024: format 2 adds the floor; 351-UPD-0029: format 3 the key file version. A record of an earlier
+    // format is refused, not read, and its format named.
+    for format in [1u32, 2] {
+        let mut old = [0u8; RECORD];
+        old[..8].copy_from_slice(b"MINDBOOT");
+        old[8..12].copy_from_slice(&format.to_le_bytes());
+        old[12..24].copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, b'A', 0, 0, 1]);
+        let crc = crc32(&old[..RECORD - 4]);
+        old[RECORD - 4..].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(Record::parse(&old), None);
+        assert_eq!(Record::other_format(&old), Some(format));
+    }
     assert_eq!(Record::other_format(&rec(1, b'A', 0, 0, true).encode()), None);
     assert_eq!(Record::other_format(&[0u8; RECORD]), None, "an empty record is no record of ours");
-    assert_eq!(FORMAT, 2);
+    assert_eq!(FORMAT, 3);
+}
+
+#[test]
+fn the_newer_records_key_file_version_counts_and_the_count_down_carries_it() {
+    // 351-UPD-0029: as the floor, at bytes 32 to 40; a byte past them set is a record of no format of ours.
+    let confirmed_a = Record { keys: 2, ..rec(1, b'A', 0, 0, true) };
+    let staged_b = Record { keys: 3, ..rec(2, b'B', b'A', 2, false) };
+    assert_eq!(Record::parse(&staged_b.encode()), Some(staged_b));
+    assert_eq!(&staged_b.encode()[32..40], &3u64.to_le_bytes());
+    let p = plan([Some(confirmed_a), Some(staged_b)]);
+    assert_eq!(p.keys, 3);
+    assert_eq!(p.write, Some((0, Record { keys: 3, ..rec(3, b'B', b'A', 1, false) })), "the count-down carries it");
+    assert_eq!(spent(p.write.unwrap()).1.keys, 3);
+    assert_eq!(plan([Some(confirmed_a), None]).keys, 2, "the newer one torn: the older one's");
+    assert_eq!(plan([None, None]).keys, 0);
+    let mut past = staged_b.encode();
+    past[40] = 1;
+    let crc = crc32(&past[..RECORD - 4]);
+    past[RECORD - 4..].copy_from_slice(&crc.to_le_bytes());
+    assert_eq!(Record::parse(&past), None);
 }
 
 #[test]

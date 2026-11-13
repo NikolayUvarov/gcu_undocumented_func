@@ -12,7 +12,11 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod mark; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod keychain; mod mark; mod slots; mod verify;
+// The key file's format, the updater's and the parser's own (351-UPD-0029).
+#[path = "../../libmind/src/release.rs"]
+#[allow(dead_code)]
+mod release;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -456,13 +460,31 @@ fn mark(services: &BootServices, image: Handle, stage: mark::Stage) {
     }
 }
 
+// The key file of `dir` ("" or a slot's directory) checked under the root keys built in, its version not below `held`,
+// the one the boot records name (351-UPD-0029): its boot role, which signs the manifest there.
+fn volume_keys(root: &mut uefi::proto::media::file::Directory, dir: &str, held: u64) -> Result<release::Role, (&'static str, &'static str)> {
+    let built_in = keychain::built_in(&verify::ROOT_KEYS, verify::ROOT_THRESHOLD);
+    match keychain::check(built_in, held, |name, buffer| read_file(root, dir, name, buffer).map(|data| data.len()), |file| release::parse_keys(file).ok(), verify::ed25519) {
+        Ok(checked) => {
+            let _ = writeln!(Serial, "\r\nBOOT: {}KEYS: VERSION {}, CHECKED UNDER THE ROOT KEYS BUILT IN{}{}\r", dir,
+                             checked.keys.version, if verify::ROOT_TEST_KEYS { " (THE TEST ROOT KEYS)" } else { "" },
+                             match checked.rotations { 0 => "", 1 => ", THROUGH 1 ROOT CHANGE", _ => ", THROUGH ITS ROOT CHANGES" });
+            Ok(checked.keys.roles[0])
+        }
+        Err(refusal) => {
+            let _ = writeln!(Serial, "\r\nBOOT: {}{}\r", dir, refusal);
+            Err(("KEYS", refusal.reason()))
+        }
+    }
+}
+
 // A slot whose signed manifest names a version below the floor is not booted (351-UPD-0024).
-fn at_or_above(root: &mut uefi::proto::media::file::Directory, dir: &str, floor: u64, manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
+fn at_or_above(root: &mut uefi::proto::media::file::Directory, dir: &str, floor: u64, boot: &release::Role, manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
     if floor == 0 { return Ok(()); }
     let mut signature = [0u8; 128];
     let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
     let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
-    let version = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?.version();
+    let version = verify::Manifest::verified(text, signature, boot).map_err(|e| ("MANIFEST", e))?.version();
     if version < floor {
         let _ = writeln!(Serial, "\r\nBOOT: {}: VERSION {} BELOW THE FLOOR {}\r", dir, version, floor);
         return Err(("MANIFEST", "below the version floor (MC-9.4)"));
@@ -530,7 +552,7 @@ fn own_digest(services: &BootServices, image: Handle, root: &mut uefi::proto::me
 // The slot's own loader (351-UPD-0010). None in the slot (one staged before), or the same file as this one: Ok, this
 // loader loads the slot. Another: checked against the slot's signed manifest and started from the bytes checked, told
 // the slot, the trial and the safe start; it returns only when it could not load its slot, and that is the error.
-fn chain(services: &BootServices, image: Handle, root: &mut uefi::proto::media::file::Directory, to: Chained, own: Option<[u8; 32]>,
+fn chain(services: &BootServices, image: Handle, root: &mut uefi::proto::media::file::Directory, to: Chained, own: Option<[u8; 32]>, boot: &release::Role,
          file_buf: &mut [u8], manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
     use uefi::proto::device_path::{build, DevicePath};
     use uefi::table::boot::LoadImageSource;
@@ -542,7 +564,7 @@ fn chain(services: &BootServices, image: Handle, root: &mut uefi::proto::media::
     let mut signature = [0u8; 128];
     let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
     let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
-    verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?.check(LOADER.0, data).map_err(|e| (LOADER.0, e))?;
+    verify::Manifest::verified(text, signature, boot).map_err(|e| ("MANIFEST", e))?.check(LOADER.0, data).map_err(|e| (LOADER.0, e))?;
     // The full path of the file: this loader's device, then the file, so that the slot's loader reads its own volume.
     let mut name = [0u16; 64];
     let mut full = [core::mem::MaybeUninit::<u8>::uninit(); 512];
@@ -568,15 +590,15 @@ fn chain(services: &BootServices, image: Handle, root: &mut uefi::proto::media::
     Err((LOADER.0, "it returned: it could not load its slot"))
 }
 
-// Reads the kernel and the boot services from `dir` ("" or a slot's directory), checks each against the signed
-// manifest there and loads them; on an error nothing stays allocated but a kernel that failed to relocate.
-fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Directory, dir: &str, file_buf: &mut [u8], manifest_buf: &mut [u8])
+// Reads the kernel and the boot services from `dir` ("" or a slot's directory), checks each against the manifest there,
+// signed by a key of `boot`, and loads them; on an error nothing stays allocated but a kernel that failed to relocate.
+fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Directory, dir: &str, boot: &release::Role, file_buf: &mut [u8], manifest_buf: &mut [u8])
     -> Result<(u64, [ProgramImage; abi::BOOT_IMAGES], [u8; 32], LaunchRecord), (&'static str, &'static str)> {
     // Nothing is loaded before the manifest's signature checks; each image is checked against it (350-UPD-0003).
     let mut signature = [0u8; 128];
     let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
     let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
-    let manifest = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?;
+    let manifest = verify::Manifest::verified(text, signature, boot).map_err(|e| ("MANIFEST", e))?;
     // Only system services are loaded into memory; loader reads applications from disk later.
     let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES];
     let mut checked = 0;
@@ -611,8 +633,8 @@ fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Direct
     let digest = manifest.digest();
     let _ = write!(Serial, "\r\nBOOT: MANIFEST ");
     for b in &digest[..8] { let _ = write!(Serial, "{:02x}", b); }
-    let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if verify::TEST_KEY { " (THE TEST KEY)" } else { "" }, checked);
-    let mut launch = LaunchRecord { test_key: verify::TEST_KEY as u32, images: checked, ..Default::default() };
+    let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if manifest.test_key() { " (THE TEST KEY)" } else { "" }, checked);
+    let mut launch = LaunchRecord { test_key: manifest.test_key() as u32, images: checked, ..Default::default() };
     for (to, from) in launch.key.iter_mut().zip(manifest.key().bytes()) { *to = from; }
     Ok((kernel_entry, programs, digest, launch))
 }
@@ -668,13 +690,16 @@ fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uef
     let own = own_digest(services, image, root, file_buf);
     let floor = plan.floor;
     if floor > 0 { let _ = writeln!(Serial, "BOOT: VERSION FLOOR {}\r", floor); }
+    if plan.keys > 0 { let _ = writeln!(Serial, "BOOT: KEY FILE VERSION {} OR ABOVE\r", plan.keys); }
     let mut last = ("boot volume", "no slot to boot");
     for (k, &slot) in order.iter().enumerate() {
         if slot == 0 { continue; }
         let trial = k == 0 && written.is_some();
-        let set = at_or_above(root, slot_dir(slot), floor, manifest_buf)
-            .and_then(|()| chain(services, image, root, Chained { slot, trial, safe }, own, file_buf, manifest_buf))
-            .and_then(|()| load_set(services, root, slot_dir(slot), file_buf, manifest_buf));
+        let set = volume_keys(root, slot_dir(slot), plan.keys).and_then(|boot| {
+            at_or_above(root, slot_dir(slot), floor, &boot, manifest_buf)
+                .and_then(|()| chain(services, image, root, Chained { slot, trial, safe }, own, &boot, file_buf, manifest_buf))
+                .and_then(|()| load_set(services, root, slot_dir(slot), &boot, file_buf, manifest_buf))
+        });
         match set {
             Ok((entry, programs, digest, launch)) => return Some(Ok((entry, programs, slot, trial, digest, launch))),
             Err((file, reason)) => {
@@ -738,10 +763,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             // A volume with boot records boots a slot; one without, as before them, its root (351-UPD-0006). A slot's
             // own loader loads its slot, and gives its buffers back when it cannot: the loader that started it goes on.
             let set = match chained {
-                Some(c) => load_set(boot_services, &mut root, slot_dir(c.slot), file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, Some((c.slot, c.trial)), digest, launch)),
+                Some(c) => volume_keys(&mut root, slot_dir(c.slot), 0).and_then(|boot| load_set(boot_services, &mut root, slot_dir(c.slot), &boot, file_buf, manifest_buf))
+                    .map(|(entry, programs, digest, launch)| (entry, programs, Some((c.slot, c.trial)), digest, launch)),
                 None => match load_slots(boot_services, image, safe, &mut root, file_buf, manifest_buf) {
                     Some(slot) => slot.map(|(entry, programs, slot, trial, digest, launch)| (entry, programs, Some((slot, trial)), digest, launch)),
-                    None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, None, digest, launch)),
+                    None => volume_keys(&mut root, "", 0).and_then(|boot| load_set(boot_services, &mut root, "", &boot, file_buf, manifest_buf))
+                        .map(|(entry, programs, digest, launch)| (entry, programs, None, digest, launch)),
                 },
             };
             if set.is_err() && chained.is_some() {

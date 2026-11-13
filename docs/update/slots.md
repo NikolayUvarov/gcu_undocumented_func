@@ -1,6 +1,6 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 1.1 (2026-11-05): the loader's mark in `MIND/REACHED` (000-KRN-0211); 1.0 (2026-10-25): records of format 2 hold the version floor, and format 1 is not read (351-UPD-0024); 0.9: the version floor in `MIND/FLOOR`; 0.8 (2026-10-24): each slot carries its own loader, which the loader at `EFI/BOOT/` checks and starts (351-UPD-0010); 0.7 (2026-10-22): the applications in the slot with the services (351-UPD-0023); 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 1.2 (2026-11-13): each slot carries its key file, checked under the root keys built in, and records of format 3 hold the key file's version (351-UPD-0029); 1.1 (2026-11-05): the loader's mark in `MIND/REACHED` (000-KRN-0211); 1.0 (2026-10-25): records of format 2 hold the version floor, and format 1 is not read (351-UPD-0024); 0.9: the version floor in `MIND/FLOOR`; 0.8 (2026-10-24): each slot carries its own loader, which the loader at `EFI/BOOT/` checks and starts (351-UPD-0010); 0.7 (2026-10-22): the applications in the slot with the services (351-UPD-0023); 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
 The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater stages a release in the other slot, activates it with a trial record and writes the confirmed record ([updater.md](updater.md)).
 
@@ -8,8 +8,8 @@ The bootloader can boot either of two copies of the system, slots A and B. Which
 
 | Path | Holds |
 |---|---|
-| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services, the applications, the slot's own loader `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64, 351-UPD-0010) and the build's `MANIFEST` and `MANIFEST.SIG` (351-UPD-0023). The loader opens an application from the booted slot when the slot holds any (351-KRN-0151); a slot staged before holds none, and the root's run. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
-| `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each; each holds the version floor too ([below](#the-version-floor-351-upd-0024)) |
+| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services, the applications, the slot's own loader `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64, 351-UPD-0010), the build's `MANIFEST` and `MANIFEST.SIG` (351-UPD-0023), and the key file `KEYS` whose boot keys signed the manifest, with `KEYS.1`, `KEYS.2`, … of its root changes (351-UPD-0029). The loader opens an application from the booted slot when the slot holds any (351-KRN-0151); a slot staged before holds none, and the root's run. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
+| `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each; each holds the version floor ([below](#the-version-floor-351-upd-0024)) and the key file version ([below](#the-key-file-version-351-upd-0029)) too |
 | `MIND/REACHED` | the loader's mark (000-KRN-0211): one line of 48 bytes, `MIND-REACHED 1 <count> <stage>`. The loader at `EFI/BOOT/` counts each boot one more and writes `STARTED`; whichever loader loads the slot writes `READ` once the kernel and services are checked, and `HANDOVER` before boot services end. Only the loaders write it, in place; a write that fails is named on the serial line (`BOOT: NO MARK …`) and the boot goes on. `scripts/boot_switch.py logs` reads it to say how far a boot that left no log got ([write-disk.md](../write-disk.md), section 10). A volume without `MIND/` gets none |
 | `EFI/BOOT/` | the loader the firmware starts, outside the slots. An update never rewrites it: it starts a slot's own loader ([below](#a-slots-own-loader-351-upd-0010)) |
 | the root | the licences and the voice model, shared by both slots |
@@ -23,19 +23,20 @@ A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before sl
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 8 | magic `MINDBOOT` |
-| 8 | 4 | format, 2 |
+| 8 | 4 | format, 3 |
 | 12 | 8 | sequence number |
 | 20 | 1 | slot: `A` or `B` |
 | 21 | 1 | the slot to fall back to: `A`, `B` or 0 for none |
 | 22 | 1 | tries left |
 | 23 | 1 | flags: bit 0, confirmed |
 | 24 | 8 | the version floor (351-UPD-0024) |
-| 32 | 476 | zeros |
+| 32 | 8 | the key file version (351-UPD-0029) |
+| 40 | 468 | zeros |
 | 508 | 4 | CRC-32 (IEEE, as zlib computes it) of bytes 0–507 |
 
 A record of another size, magic or format, with a bad CRC, an unknown slot or flag, or anything but zeros in the reserved bytes is ignored. So is one whose sequence number is above 2^64 − 3: a trial writes one more, and its failure one more again, and each must count as newer (351-UPD-0015). A record file of zeros is empty: never written.
 
-**Format 1** (before the floor) is not read. The bootloader names such a record (`BOOT: RECORD MIND\BOOT0 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN`), the updater says the same, and `boot_slots.py show` too. A disk with both records of format 1 boots as one without a valid record. Before the first release no older format of ours is read or converted (the maintainer, 2026-10-25; [AGENTS.md](../../AGENTS.md), section 3): such a disk is written again with `make_usb_image.py --slots`. The refusal is the explicit transition (MC-12.4).
+**Formats 1 and 2** (before the floor, before the key file version) are not read. The bootloader names such a record (`BOOT: RECORD MIND\BOOT0 OF FORMAT 2, NOT READ: WRITE THE DISK AGAIN`), the updater says the same, and `boot_slots.py show` too. A disk with both records of an older format boots as one without a valid record. Before the first release no older format of ours is read or converted (the maintainer, 2026-10-25; [AGENTS.md](../../AGENTS.md), section 3): such a disk is written again with `make_usb_image.py --slots`. The refusal is the explicit transition (MC-12.4).
 
 ## What the bootloader does
 
@@ -47,7 +48,7 @@ A record of another size, magic or format, with a bad CRC, an unknown slot or fl
 4. **Not confirmed, no tries left:** the trial is over. It boots the fallback slot (`BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT`) and writes nothing.
 5. **No valid record:** it tries slot A, then slot B.
 
-A slot "verifies" as in [README.md](README.md): its manifest's signature, then the size and SHA-256 of each image. What it loaded is printed as the launch record, followed by `BOOT: SLOT <x> LOADED`. The console shows the slot too. If no slot verifies, the boot stops with `BOOT ERROR` and the last reason.
+A slot "verifies" as in [README.md](README.md): its key file under the root keys built in, its manifest's signature by a boot key that key file names, then the size and SHA-256 of each image. What it loaded is printed as the launch record, followed by `BOOT: SLOT <x> LOADED`. The console shows the slot too. If no slot verifies, the boot stops with `BOOT ERROR` and the last reason.
 
 ## A slot's own loader (351-UPD-0010)
 
@@ -84,6 +85,16 @@ A signature says a release is ours, not that it is current: an old release with 
 - **The floor is the channel's minimum,** not the highest version confirmed here. The publisher raises a channel's minimum only for a fix (`release.py publish --minimum N`); without it the minimum stays as published. An ordinary release can therefore still be rolled back from, to any release at or above the minimum.
 - **The updater raises it,** never down, to the highest minimum it has seen in a checked channel, once the running slot is confirmed and its own manifest names that version or above: the newer record again, one on, with the higher floor. Lowering it is the recovery authority's (351-UPD-0030).
 - **The limit:** the floor is in the records, on the same disk, and they are not signed. Whoever has the disk in hand can lower it; the floor that only goes up is a TPM counter (351-UPD-0011).
+
+## The key file version (351-UPD-0029)
+
+A boot key is changed or revoked by a new key file, which the bootloader reads from the slot. A slot carrying an older key file could still name the revoked key; the records name the lowest key file version a slot may hold.
+
+- **The records hold it** (bytes 32–39), as the floor: the newer valid record's counts, and every write carries it on, the bootloader's count of a trial's tries and a recovery order's record too. Nothing lowers it.
+- **The bootloader** reads the slot's `KEYS` before its manifest and refuses a slot whose key file is below it (`BOOT: KEY FILE VERSION 2 OR ABOVE`, `BOOT: MIND\A\KEYS: VERSION 1 BELOW VERSION 2, WHICH THE BOOT RECORDS NAME`). The slot then counts as one that does not verify. The key file itself is checked as in [README.md](README.md): signed by the root keys built in, or through the files of the root's changes, `KEYS.1` on.
+- **The updater raises it** when it confirms a slot: the confirmation carries the version of the running slot's key file. Before that it writes the key files it trusts into the other slot when a boot key they name signed that slot's manifest, so the slot stays a fallback; otherwise it says that slot is no fallback from then on ([updater.md](updater.md)).
+- **An image's records** start at 0 (`boot_slots.py layout`, `make_usb_image.py --slots`): the first confirmed update raises them.
+- **The limit:** as the floor, the version is in records nobody signs; whoever has the disk in hand can lower it. And the bootloader holds no key file, only this version: whoever holds a root's keys can make key files above it that the bootloader takes ([README.md](README.md), "Trust model").
 
 ## Writing a record
 
@@ -136,6 +147,7 @@ The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each
   - A slot without a loader of its own boots through the loader at `EFI/BOOT/`, as before.
   - In the other checks both slots hold the build's loader, the same file as `EFI/BOOT/`'s, and no second loader is started.
 - **The version floor** (351-UPD-0024; `version_floor`, x86 and aarch64): under floor 6, slot B's release 5 is not booted and slot A boots, B left with no tries; at floor 5 it boots on trial. Records of format 1 are each named and not read, and the disk boots as one without a valid record. In the `update` check release 6 raises the minimum to 6: once it is confirmed the floor is 6, and a record that boots slot A's release 5 boots slot B. Host tests: the floor in the record and every flipped bit, a record of format 1 refused, the newer record's floor counting and the count-down carrying it (`tests/boot_slots_host.rs`); that the updater only raises it, to a minimum the confirmed slot meets, and that none of its writes lowers it (`tests/updater_host.rs`).
+- **The key files** (351-UPD-0029). A volume without `KEYS`, or with one only one of the test root's two keys signed, stops the boot with `BOOT ERROR: KEYS: …` (the `boot` suite). In the `updatebootkey` check (x86 and aarch64, in the updater group) key file 2 names a second boot key in place of the test one and release 7 is signed by it: the updater stages it with that key file in slot B, the bootloader checks it under the root keys built in and boots it on trial, and the confirmation writes key file version 2 into the records; slot A, signed by the old key, is then refused twice, by its key file's version and, given key file 2, by its manifest's signature, and slot B boots. Host tests: the check of a directory's key files, its root changes and its refusals (`tests/boot_keys_host.rs`); the version in the record, carried and never lowered (`tests/boot_slots_host.rs`, `tests/updater_host.rs`).
 - The updater itself moves a slot volume from release 5 in slot A to release 6 in slot B: fetched over HTTPS, booted on trial through `init`'s restart and confirmed on the disk past the kernel's deadline; refused releases leave the records as they were (the `update` check, x86 and aarch64, [updater.md](updater.md)). Release 6 there, and in the `linkupdate` check, carries a loader of its own (bytes past its sections): the updater stages it into slot B, and the trial boots through it. Its records are host-tested against the bootloader's choice (`tests/updater_host.rs`).
 
 The suites with a root volume show that a volume without records boots as before.
@@ -146,6 +158,6 @@ The suites with a root volume show that a volume without records boots as before
 - **A loader that differs in what it does.** The checks start a loader whose bytes differ, not its code.
 
 - **A confirmation the updater is told of.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The updater learns of the confirmation only by outliving the deadline, so the record reaches the disk about two minutes after the boot ([updater.md](updater.md)).
-- **A floor someone with the disk cannot lower** (351-UPD-0011, a TPM counter). The version floor above stops a record written over the network or by a program; the records, floor and all, are not signed, so whoever can write the volume can still choose a slot, and lower the floor, but only among releases signed with the boot key.
+- **A floor someone with the disk cannot lower** (351-UPD-0011, a TPM counter). The version floor above stops a record written over the network or by a program; the records, floor and all, are not signed, so whoever can write the volume can still choose a slot, and lower the floor, but only among releases signed with a boot key the slot's key file names, and with a key file at or above the version the records name.
 - **Slot images by default.** `make_usb_image.py` lays the build out in slots only with `--slots` ([write-disk.md](../write-disk.md)); `files` still reads the kernel at the root ([requests-APP.md](../../issues/requests-APP.md)).
 - **A cut during the bootloader's own write, on real media** (351-ASR-0005).

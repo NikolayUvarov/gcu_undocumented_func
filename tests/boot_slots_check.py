@@ -102,7 +102,7 @@ def run(boot, temp, volume, label, updater=None):
     # A trial of B with one try: it runs on trial, its try counted on the other record first; confirmed, it stays.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     out = booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
-    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0, "keys": 0}, newer()
     marked(out, 1)
     assert mark(image) == (1, "HANDOVER"), mark(image)
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
@@ -127,7 +127,7 @@ def run(boot, temp, volume, label, updater=None):
     image.write("MIND/B/rtc.elf", rtc[:-1] + bytes([rtc[-1] ^ 1]))
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
     booted("A", "BOOT: SLOT B: rtc.elf: not as the manifest says")
-    assert newer()[1] == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    assert newer()[1] == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0, "keys": 0}, newer()
     image.write("MIND/B/rtc.elf", rtc)
     print(f"PASS ({label}): slot B with a damaged service is not loaded; slot A boots and B has no tries left", flush=True)
 
@@ -231,7 +231,7 @@ def own_loaders(boot, temp, volume, label):
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("BOOT: MARK 1 STARTED", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
            started + ", ON TRIAL", "BOOT: MARK 1 READ", "BOOT: SLOT B LOADED ON TRIAL", "BOOT: MARK 1 HANDOVER", STARTED)
-    assert newer() == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    assert newer() == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0, "keys": 0}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     booted("SLOT B, CONFIRMED", "BOOT: SLOT B: STARTING ITS OWN LOADER", started + "\n", "BOOT: SLOT B LOADED\n", STARTED)
     print(f"PASS ({label}): slot B holding a loader of its own boots through it on trial, its try counted once before, "
@@ -257,7 +257,7 @@ def own_loaders(boot, temp, volume, label):
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
     booted(started + ", ON TRIAL", "BOOT: SLOT B: rtc.elf: not as the manifest says", "; BACK TO THE LOADER AT EFI/BOOT/",
            f"BOOT: SLOT B: {path}: it returned: it could not load its slot", "BOOT: SLOT A LOADED\n", STARTED)
-    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0, "keys": 0}, newer()
     image.write("MIND/B/rtc.elf", rtc)
     print(f"PASS ({label}): slot B's own loader that cannot load its slot returns; slot A boots at once and B has no "
           "tries left", flush=True)
@@ -268,7 +268,7 @@ def own_loaders(boot, temp, volume, label):
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
     out = booted(f"BOOT: SLOT B: {path}: not as the manifest says", "BOOT: SLOT A LOADED\n", STARTED)
     assert "OWN LOADER" not in out, out[-3000:]
-    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0, "keys": 0}, newer()
     print(f"PASS ({label}): a slot's loader that is not as its manifest lists it is never started; slot A boots", flush=True)
 
     # A slot without a loader of its own, as one staged before: the loader at EFI/BOOT/ loads it, as before.
@@ -310,7 +310,7 @@ def version_floor(boot, temp, volume, label):
     booted("BOOT: VERSION FLOOR 6", "BOOT: MIND\\B\\: VERSION 5 BELOW THE FLOOR 6", "BOOT: SLOT B: MANIFEST: below the version floor",
            "BOOT: SLOT A LOADED\n", STARTED)
     found = boot_slots.newest(boot_slots.records(image.path))[1]
-    assert found == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 6}, found
+    assert found == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 6, "keys": 0}, found
     print(f"PASS ({label}): a slot whose manifest names a version below the floor is not booted; the other slot boots", flush=True)
     # At the floor it boots: a rollback to a release at or above the minimum stays possible.
     boot_slots.write_next(image, slot="B", fallback="A", tries=1, floor=5)
