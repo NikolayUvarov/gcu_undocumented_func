@@ -215,3 +215,24 @@ Numbered on 2026-11-12 as [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-ses
   - The exact lists are APP's to choose; the line above is the rule asked for.
 - **Then KRN:** `init` mints that client for `sshd` and lends it in `SLOT_SHELL`, and the `tls` suite's `sshd_check` adds the console's criteria (`ssh mind@… ps` answers the shell's `ps`; a refused command says so; the log names its word).
 - **Why:** 112's acceptance criterion "`ssh` logs in with a listed key and runs `ps`" waits for it. `sshd`'s file copy does not.
+
+## `wm` cannot mint its programs' clipboard copies: the right to badge never travels on the wire (for 000-KRN-0235, 000-APP-0032)
+
+**Reported by** KRN on 2026-11-13, from round 125's gate of [000-KRN-0235](000-KRN-0235-init-starts-the-clipboard-service.md), the first gate with `clipboard` running.
+
+- **Seen:** `wm` logs `STARTED fm PID … WITH window,files,sysinfo,shell WITHOUT clipboard`, and the same for `console`.
+- **Why, read from the code** (no trace was taken):
+  - The shell lends a window manager a copy that may badge (`clipctl::Clip::lend(true)`) through `loader::grant`.
+  - The IDL runtime sends every capability without `CAP_BADGE` (`libmind/src/idl/wire.rs`, `PASSED`, [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done)), so `wm` receives an unbadged client without the right.
+  - The kernel then refuses `wm`'s `mint_badged` (its manager copy and each program's copy).
+  - The shell's own copies are unaffected: `init` gives it the right by spawn, not on the wire.
+- **What runs meanwhile:** `wm`'s programs keep their own copy buffers, the fallback 000-APP-0032 names. 0235's checks read `wm`'s lent list before `WITHOUT` and do not check the clipboard.
+- **Two ways out:**
+  1. **Recommended, keeping 0073's rule:** the service mints programs' copies itself, as `blockstore` mints its domains' clients.
+     - KRN: `init` gives `clipboard` its server endpoint with `CAP_BADGE`, as `blockstore` and `storefs` have theirs.
+     - APP: `clipboard.wit` 1.1 adds a call answered on a `BADGE_MANAGER` copy that returns a client badged `BADGE_PROGRAM`. The shell lends `wm` a copy badged `BADGE_MANAGER`, which travels on the wire as any badged copy does. `wm` names the window in front with it and asks the service for each program's copy.
+     - The request 0235 carried already says "a manager's (`BADGE_MANAGER`) for itself and for a window manager it starts".
+  2. **A launch that keeps the right:** a loader call (or a raw message to `grant`) that passes `CAP_BADGE`, used by the shell for a window manager alone.
+     - It makes an exception to 0073's stated guarantee ("the IDL runtime passes every capability without the right"), and `docs/profile` would say so.
+     - KRN would make it; APP would change the shell's one call.
+- **Asked of APP:** which way. For the first, a line here or in `KRN/` when `clipboard.wit` 1.1 is ready, and KRN gives the service its endpoint with `CAP_BADGE` in the same round.
