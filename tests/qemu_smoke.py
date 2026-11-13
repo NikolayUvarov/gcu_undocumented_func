@@ -6239,7 +6239,10 @@ def dmesg_check(vm):
     assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
     # The text may claim any source; logd records the sender.
     require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
-    require(vm.command("dmesg -n 1", raw=True), f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    # The last records: clipboard may log the program the shell names in front (dmesg itself) after the forged line.
+    last = vm.command("dmesg -n 3", raw=True)
+    require(last, f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    assert len(re.findall(r"^\[\s*\d+\.\d{3}\] ", last, re.M)) <= 3, last
     only = vm.command("dmesg -s vfs_server", raw=True)
     assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
     assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
@@ -14858,7 +14861,7 @@ def wm_suite(vm):
         # no leaves it.
         run_line("fm ram:fmrun.msh", "STARTED fm")
         started_fm = re.findall(r"\[WM\] STARTED fm PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
-        assert "shell" in started_fm[1].split(","), started_fm
+        assert "shell" in started_fm[1].split(" WITHOUT ")[0].split(","), started_fm  # what it lacks follows WITHOUT
         while not any(m[1] == started_fm[0] for m in windows_re.findall("".join(seen))):
             wait("[WM] WINDOW", lines=0)
         files = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == started_fm[0])
