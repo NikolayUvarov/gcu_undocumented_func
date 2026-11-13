@@ -1,6 +1,6 @@
-# 111-NET-0076 — Two of the time checks i9 showed: the refused NTS servers and the sleep across the step
+# 111-NET-0076 — Two of the time checks i9 showed: the refused NTS servers and the sleep across the step — done
 
-**Type:** network (tests of `timed`) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [111](111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
+**Type:** network (tests of `timed`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -34,6 +34,16 @@ Round 129's gate (2026-11-13) failed "x86: network, TLS and Effector" twice on i
   - at dd79ebc0, "x86: network, TLS and Effector" on x32-128 (1421 s, its other lane idle) and "aarch64: network, TLS and Effector" on PCU (1411 s) passed;
   - on i9 at dd79ebc0, the `net` suite passed, `timed_check` with it, but the `tls` suite stopped after its TLS client check: nothing more was logged for 40 minutes, until the operation's limit (3500 s). That check and the ones after it, up to the NTS check, are not this task's; the hang is recorded for the kernel track's next look at i9. At c57928a1 the group's first run there timed out the same way, its logs overwritten.
 
+## Resolution
+
+Landed in round 130 (`main` c3a2c7d8):
+- **The refused NTS servers' check** waits for each server's key establishment.
+- **The sleep across the step** is counted on the host from the command sent.
+- **The criteria:** both suites passed in round 130's gate:
+  - "x86: network, TLS and Effector" (acc-2, 1516 s);
+  - "aarch64: network, TLS and Effector" (acc-1, 1172 s).
+- **On i9** the `net` suite passed with both changes (the runs listed above); its `tls` suite stopped once after the TLS client check, recorded above. The gate's pool gave the x86 group to acc-2.
+
 ## Related
 
-[111-NET-0057](../issues-done/111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), [111-NET-0074](../issues-done/111-NET-0074-a-grants-host-names.done), [111-NET-0075](../issues-done/111-NET-0075-timed-with-nts.done).
+[111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), [111-NET-0074](111-NET-0074-a-grants-host-names.done), [111-NET-0075](111-NET-0075-timed-with-nts.done).

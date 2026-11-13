@@ -1,6 +1,6 @@
-# 000-NET-0077 — The take-down of a run-time question read across the screen's width
+# 000-NET-0077 — The take-down of a run-time question read across the screen's width — done
 
-**Type:** network (a test of the run-time question) · **Owner:** `NET` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([000-NET-0049](../issues-done/000-NET-0049-a-flow-grant-asked-at-run-time.done)) · **Roadmap:** track D · **Constitution:** MC-12.2
+**Type:** network (a test of the run-time question) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** — ([000-NET-0049](000-NET-0049-a-flow-grant-asked-at-run-time.done)) · **Roadmap:** track D · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -22,6 +22,10 @@ The check reads the log since the command, its lines joined and ANSI codes remov
 **Made (2026-11-13)** on `claude/111-NET-0076-nts-refused-race`, with 111-NET-0076: `tests/qemu_smoke.py` `browse_check` and `joined()`.
 - **Run** at dd79ebc0 on the maintainer's machines (QEMU under TCG): "x86: network, TLS and Effector" on x32-128 (1421 s) and "aarch64: network, TLS and Effector" on PCU (1411 s) passed; on i9 the `net` suite passed, `browse_check`'s take-down with it (the group then stopped in the `tls` suite, 111-NET-0076).
 
+## Resolution
+
+Landed in round 130 (`main` c3a2c7d8), with 111-NET-0076: `browse_check` waits for the prompt after the take-down in the log with its lines joined. The `net` suite passed in round 130's gate on x86 ("x86: network, TLS and Effector", acc-2, 1516 s) and aarch64 ("aarch64: network, TLS and Effector", acc-1, 1172 s), and on i9 (the run above).
+
 ## Related
 
-[000-NET-0060](../issues-done/000-NET-0060-the-run-time-question-read-whole-from-the-log.done), [000-APP-0120](../issues-done/000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), [111-NET-0076](111-NET-0076-two-time-checks-i9-showed.md).
+[000-NET-0060](000-NET-0060-the-run-time-question-read-whole-from-the-log.done), [000-APP-0120](000-APP-0120-the-shell-asks-the-user-about-a-programs-flow.done), [111-NET-0076](111-NET-0076-two-time-checks-i9-showed.done).

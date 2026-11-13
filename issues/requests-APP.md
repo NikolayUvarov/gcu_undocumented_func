@@ -220,7 +220,7 @@ Numbered on 2026-11-12 as [112-APP-0136](../issues-done/112-APP-0136-the-shell-t
 
 Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done), the first way: `clipboard.wit` 1.1 `program-client`, the shell lending a window manager a copy badged `BADGE_MANAGER` (on the tools branch, 892fcd94).
 
-**Reported by** KRN on 2026-11-13, from round 125's gate of [000-KRN-0235](000-KRN-0235-init-starts-the-clipboard-service.md), the first gate with `clipboard` running.
+**Reported by** KRN on 2026-11-13, from round 125's gate of [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done), the first gate with `clipboard` running.
 
 - **Seen:** `wm` logs `STARTED fm PID … WITH window,files,sysinfo,shell WITHOUT clipboard`, and the same for `console`.
 - **Why, read from the code** (no trace was taken):

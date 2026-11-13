@@ -1,17 +1,17 @@
-# 351-UPD-0029 — The boot key under the root, in the bootloader
+# 351-UPD-0029 — The boot key under the root, in the bootloader — done
 
-**Type:** update (boot, keys) · **Owner:** `UPD` track, with `KRN`/`PRT` for `bootloader/` · **Priority:** P2 · **Status:** in progress · **Blocked by:** [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
+**Type:** update (boot, keys) · **Owner:** `UPD` track, with `KRN`/`PRT` for `bootloader/` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
 
-Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
+Split from [351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
 ## Problem
 
-The bootloader checks the manifest with one boot key built into it. Changing that key still needs a new loader at `EFI/BOOT/`: since [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) a slot carries its own loader, but the one at `EFI/BOOT/` checks it against the slot's manifest with its own built-in key. A compromised boot key cannot be revoked through the key file the updater reads.
+The bootloader checks the manifest with one boot key built into it. Changing that key still needs a new loader at `EFI/BOOT/`: since [351-UPD-0010](351-UPD-0010-updating-the-bootloader.done) a slot carries its own loader, but the one at `EFI/BOOT/` checks it against the slot's manifest with its own built-in key. A compromised boot key cannot be revoked through the key file the updater reads.
 
 ## Plan
 
 - **The bootloader carries the root's public keys and threshold**, built in. It reads the key file from the slot, checks it, and checks the manifest with the boot keys the file names. It parses with `libmind` `release`, shared with the updater.
-- **The highest key-file version** is kept in the boot records beside the version floor ([351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done)). A slot whose key file is below it is refused.
+- **The highest key-file version** is kept in the boot records beside the version floor ([351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.done)). A slot whose key file is below it is refused.
 - **The updater stages the key file** into the slot with the boot files.
 - **The transition** (MC-12.4): while no key file has been seen, the bootloader accepts the built-in boot key. Once one has been, it requires one in every slot.
 - The bootloader change is made together with `KRN`/`PRT` (TRACKS.md).
@@ -66,6 +66,17 @@ The bootloader checks the manifest with one boot key built into it. Changing tha
 - **Run on the maintainer's machines** at d161203f, on x32-128 (Effector, QEMU under TCG): "x86: boot, display, shell, memory, clock" (733 s) and "aarch64: the updater and the modes" (873 s) passed, the latter with `bootkeys`' line (`PASS: signed boot volume: … no key file and a key file short of the root threshold …`) beside `update-bootkey`'s and `update-recovery`'s.
 - **Left:** the gate.
 
+## Resolution
+
+Landed in round 130 (`main` c3a2c7d8, gate `land-r130` green on acc-1, acc-2, i9, PCU and x32-128, QEMU under TCG):
+- **The bootloader** is built with the root set and no boot key. It checks a volume's `KEYS` under that root, through the files of the root's changes (`KEYS.1` on), then the manifest against the key file's `boot` role (`bootloader/src/keychain.rs`, `verify.rs`, `main.rs`).
+- **Boot records of format 3** hold the key file version; a slot below it is not booted. Records of formats 1 and 2 are named and not read.
+- **The updater** checks manifests against the trusted key file's `boot` role, stages the key files with a slot, and raises the records' version when it confirms one.
+- **The criteria, QEMU, x86 and aarch64:**
+  - a slot signed by a boot key its key file names boots, and after the boot key's rotation a slot signed by the old key is refused at boot: `updatebootkey`, in "x86: the updater and an update through the link" (acc-1, 1113 s) and "aarch64: the updater and the modes" (PCU, 1707 s);
+  - a key file short of the root threshold stops the boot with `BOOT ERROR: KEYS: …`: the `boot` suite on x86 ("x86: boot, display, shell, memory, clock", acc-2, 807 s) and `bootkeys` on aarch64 (in the aarch64 updater group).
+- **Docs:** docs/update/README.md, slots.md and slots_RU.md give the check; updater.md and publishing.md, with their Russian versions, the updater's and the publisher's sides.
+
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0010](351-UPD-0010-updating-the-bootloader.done), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md).

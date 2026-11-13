@@ -15,7 +15,7 @@ With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.don
 
 - **The highest key-file version is kept.** The updater keeps the highest version it has accepted on the disk, in the update zone beside the boot records, and refuses a lower one.
 - **The root rotates like TUF's.** A key file that changes the root is signed by the threshold of the old root and of the new one.
-- **A key the file lists no more is revoked.** A channel signed only by it is refused, at a check and at a rollback: a slot whose kept channel carries only that key's signature is not a fallback. The boot key at boot is [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md).
+- **A key the file lists no more is revoked.** A channel signed only by it is refused, at a check and at a rollback: a slot whose kept channel carries only that key's signature is not a fallback. The boot key at boot is [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done).
 - **Commands:** `scripts/release.py keys --rotate ROLE` and `--revoke KEY`.
 
 ## Acceptance criteria
@@ -69,4 +69,4 @@ With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.don
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
