@@ -2429,8 +2429,11 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
-    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
-                 r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
+    # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
+    base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
+    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
+                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+        line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
     vm.expect("VIEW=QUOTAS")
