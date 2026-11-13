@@ -52,7 +52,11 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **What failed:** `dmesg_check` counted four records in `dmesg -n 3`. `dmesg` takes the last three when it starts and reads on until no record is left, so `clipboard`'s `IN FRONT: PID 14`, sent for `dmesg` itself while it read, came fourth. Read from the gate's log of that run.
 - **The fix** (this test, the kernel track's): at most three records up to the forged line, and only `clipboard`'s `IN FRONT` records after it.
 
-**Left:** APP's `tools` checks (their 0532Z request, 208d3ea0: `clipboard_check`, with the shell's copy given `CAP_GRANT`); the check's fix above.
+- **Run on the maintainer's machines** at e5a27f3a (the fix with round 128's `main` merged in): "x86: services, storage, audio" (666 s) and "x86: one CPU" (136 s) passed on x32-128.
+
+**Round 128 landed (2026-11-13)**, `main` ada2b041: APP's `tools` checks (208d3ea0: `clipboard_check`, with the shell's copy given `CAP_GRANT`) and the USB check's fix are in, and passed in that gate.
+
+**Left:** the `dmesg -n 3` check's fix above, in the landing queue; then this task closes.
 
 ## Related
 
