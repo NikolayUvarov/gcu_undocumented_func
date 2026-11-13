@@ -2777,13 +2777,19 @@ def console_check(vm):
     assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
     assert screen[-1].startswith(canon("> ")), screen[-1]
     # console's own commands (issue u006): ps, ls; a shell command is named as such, ping without a network says why.
+    # ps alone on a cleared screen first: its rows and the next commands' outgrow a screen of 37 rows (aarch64's).
     vm.send_bytes(b"clear\r")
-    for line in (b"ps", b"ls docs", b"kill 1", b"ping ya.ru"):
+    vm.send_bytes(b"ps\r")
+    time.sleep(.6)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
+    vm.send_bytes(b"clear\r")
+    for line in (b"ls docs", b"kill 1", b"ping ya.ru"):
         vm.send_bytes(line + b"\r")
         time.sleep(.6)
     screen = screen_text(vm)
     vm.serial(enter=False)
-    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
     assert any(row.startswith(canon("notes.txt ")) for row in screen), screen
     assert any(row.startswith(canon("kill: a command of the shell")) for row in screen), screen
     assert any(row.startswith(canon("ping: ")) for row in screen), screen
