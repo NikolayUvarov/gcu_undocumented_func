@@ -13,6 +13,7 @@ use mind::ipc::Endpoint;
 use mind::sys::Error;
 use mind::mem::{self, Mapping};
 
+mod codec;
 mod hda;
 mod levels;
 

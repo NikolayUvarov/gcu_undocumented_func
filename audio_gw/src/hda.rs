@@ -5,6 +5,7 @@
 use mind::dev::Mmio;
 use mind::mem::Mapping;
 use crate::levels::{self, Amp};
+use crate::codec::{self, Widget, OUTPUT, INPUT, MIXER, PIN, VENDOR, LINE_OUT, SPEAKER, HEADPHONE, LINE_IN, MICROPHONE};
 
 pub const BUFFERS: usize = 32;
 pub const BUFFER_BYTES: usize = 4096;
@@ -26,13 +27,10 @@ const SD_CTL: usize = 0x00; const SD_STS: usize = 0x03; const SD_LPIB: usize = 0
 const FORMAT: u16 = 0x0011; // 48 kHz, 16 bits, 2 channels
 const OUT_TAG: u32 = 1; const IN_TAG: u32 = 2;
 
-// Widget types (audio widget capabilities, bits 23:20).
-const OUTPUT: u8 = 0; const INPUT: u8 = 1; const MIXER: u8 = 2; const PIN: u8 = 4;
-const WIDGETS: usize = 96; const CONNECTIONS: usize = 16;
+const WIDGETS: usize = 96;
 const SUMMARY: usize = 160; // the codec's line in the log
-
-#[derive(Clone, Copy, Default)]
-struct Widget { nid: u8, kind: u8, caps: u32, pin_caps: u32, config: u32, connections: [u8; CONNECTIONS], count: u8 }
+// The dump's lines a second: logd takes 64 a second from a sender (logd/src/ring.rs), and the gateway logs others.
+const DUMP_RATE: usize = 40;
 
 pub struct Hda {
     regs: Mmio, ring: Mapping, physical: u64, codec: u32, afg: u8, rirb_read: usize, corb_entries: usize, rirb_entries: usize,
@@ -143,6 +141,9 @@ impl Hda {
     // One verb to the codec and its response, by polling the RIRB's write pointer.
     fn verb(&mut self, nid: u8, verb: u32, payload: u32) -> Option<u32> {
         let command = self.codec << 28 | (nid as u32) << 20 | if verb >= 0x100 { verb << 8 | (payload & 0xFF) } else { verb << 16 | (payload & 0xFFFF) };
+        // A response that came after its verb gave up, or an unsolicited one, is no answer to this verb.
+        let waiting = self.regs.read16(RIRBWP) as usize & 0xFF;
+        if waiting != self.rirb_read { self.rirb_read = waiting; self.regs.write8(RIRBSTS, 0x5); }
         let write = ((self.regs.read16(CORBWP) as usize & 0xFF) + 1) % self.corb_entries;
         self.dma()[CORB_AT + write * 4..CORB_AT + write * 4 + 4].copy_from_slice(&command.to_le_bytes());
         self.regs.write16(CORBWP, write as u16);
@@ -183,15 +184,15 @@ impl Hda {
                 let (long, total) = (length & 0x80 != 0, (length & 0x7F) as usize);
                 let per = if long { 2 } else { 4 };
                 let mut index = 0;
-                while index < total && (w.count as usize) < CONNECTIONS {
+                while index < total && (w.count as usize) < codec::CONNECTIONS {
                     let entries = self.verb(nid, 0xF02, index as u32).unwrap_or(0);
                     for k in 0..per.min(total - index) {
                         let entry = if long { (entries >> (16 * k)) & 0xFFFF } else { (entries >> (8 * k)) & 0xFF };
                         let range = entry & if long { 0x8000 } else { 0x80 } != 0;
                         let id = (entry & if long { 0x7FFF } else { 0x7F }) as u8;
                         // A range entry lists every node from the previous one to this one.
-                        if range && w.count > 0 { let mut from = w.connections[w.count as usize - 1] + 1; while from <= id && (w.count as usize) < CONNECTIONS { w.connections[w.count as usize] = from; w.count += 1; from += 1; } }
-                        else if (w.count as usize) < CONNECTIONS { w.connections[w.count as usize] = id; w.count += 1; }
+                        if range && w.count > 0 { let mut from = w.connections[w.count as usize - 1] + 1; while from <= id && (w.count as usize) < codec::CONNECTIONS { w.connections[w.count as usize] = from; w.count += 1; from += 1; } }
+                        else if (w.count as usize) < codec::CONNECTIONS { w.connections[w.count as usize] = id; w.count += 1; }
                     }
                     index += per;
                 }
@@ -199,20 +200,6 @@ impl Hda {
             list[n] = w; n += 1;
         }
         n
-    }
-
-    // A chain from `from` through connections to a widget of `kind`, at most 5 deep: the node IDs and, for each node,
-    // the index of the connection taken.
-    fn find(list: &[Widget], from: u8, kind: u8, depth: usize, path: &mut [(u8, u8); 6]) -> Option<usize> {
-        let w = list.iter().find(|w| w.nid == from)?;
-        path[depth].0 = from;
-        if w.kind == kind && depth > 0 { return Some(depth + 1); }
-        if depth >= 5 { return None; }
-        for (index, &next) in w.connections[..w.count as usize].iter().enumerate() {
-            path[depth].1 = index as u8;
-            if let Some(n) = Self::find(list, next, kind, depth + 1, path) { return Some(n); }
-        }
-        None
     }
 
     // An amplifier's capabilities (0x12 output, 0xD input): the widget's own when it overrides them, else the function
@@ -280,16 +267,13 @@ impl Hda {
         let mut list = [Widget::default(); WIDGETS];
         let n = self.widgets(&mut list);
         let list = &list[..n];
-        let device = |w: &Widget| (w.config >> 20) & 0xF;
-        let connected = |w: &Widget| (w.config >> 30) != 1;
-        let internal = |w: &Widget| (w.config >> 30) == 2;
         // Output: an internal speaker, else headphones, else line out; each fed by a DAC through mixers or selectors.
-        let outputs = [(1, true), (1, false), (2, false), (0, true), (0, false)];
+        let outputs = [(SPEAKER, true), (SPEAKER, false), (HEADPHONE, false), (LINE_OUT, true), (LINE_OUT, false)];
         let mut output = None;
         'out: for (kind, inside) in outputs {
-            for pin in list.iter().filter(|w| w.kind == PIN && connected(w) && device(w) == kind && internal(w) == inside && w.pin_caps & (1 << 4) != 0) {
+            for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == kind && w.internal() == inside && w.pin_caps & codec::OUT != 0) {
                 let mut path = [(0u8, 0u8); 6];
-                if let Some(depth) = Self::find(list, pin.nid, OUTPUT, 0, &mut path) { output = Some((*pin, path, depth)); break 'out; }
+                if let Some(depth) = codec::find(list, pin.nid, OUTPUT, 0, &mut path) { output = Some((*pin, path, depth)); break 'out; }
             }
         }
         let Some((pin, path, depth)) = output else { return false };
@@ -302,19 +286,19 @@ impl Hda {
         let dac = path[depth - 1].0;
         let _ = self.verb(dac, 0x706, OUT_TAG << 4);
         let _ = self.verb(dac, 0x2, FORMAT as u32);
-        let headphone = device(&pin) == 2;
+        let headphone = pin.device() == HEADPHONE;
         let _ = self.verb(pin.nid, 0x707, 0x40 | if headphone { 0x80 } else { 0 });
         if pin.pin_caps & (1 << 16) != 0 { let _ = self.verb(pin.nid, 0x70C, 2); } // EAPD: the external amplifier on
-        put(summary, len, format_args!("; OUT PIN {:#X} ({}) <- DAC {:#X}", pin.nid, ["LINE", "SPEAKER", "HEADPHONE"].get(device(&pin) as usize).unwrap_or(&"?"), dac));
+        put(summary, len, format_args!("; OUT PIN {:#X} ({}) <- DAC {:#X}", pin.nid, ["LINE", "SPEAKER", "HEADPHONE"].get(pin.device() as usize).unwrap_or(&"?"), dac));
         self.apple_amplifiers(headphone);
         // Input: an internal microphone, else a microphone jack, else line in; an ADC reaching it.
-        let inputs = [(0xA, true), (0xA, false), (8, false)];
+        let inputs = [(MICROPHONE, true), (MICROPHONE, false), (LINE_IN, false)];
         let mut input = None;
         'inp: for (kind, inside) in inputs {
-            for pin in list.iter().filter(|w| w.kind == PIN && connected(w) && device(w) == kind && internal(w) == inside && w.pin_caps & (1 << 5) != 0) {
+            for pin in list.iter().filter(|w| w.kind == PIN && w.connected() && w.device() == kind && w.internal() == inside && w.pin_caps & codec::IN != 0) {
                 for adc in list.iter().filter(|w| w.kind == INPUT) {
                     let mut path = [(0u8, 0u8); 6];
-                    if let Some(depth) = Self::find_pin(list, adc.nid, pin.nid, 0, &mut path) { input = Some((*pin, path, depth)); break 'inp; }
+                    if let Some(depth) = codec::find_pin(list, adc.nid, pin.nid, 0, &mut path) { input = Some((*pin, path, depth)); break 'inp; }
                 }
             }
         }
@@ -334,27 +318,86 @@ impl Hda {
                 let _ = self.verb(adc, 0x706, IN_TAG << 4);
                 let _ = self.verb(adc, 0x2, FORMAT as u32);
                 // A microphone gets its bias voltage (80 % where the pin offers it).
-                let vref = if device(&pin) == 0xA && pin.pin_caps & (1 << 12) != 0 { 4 } else { 0 };
+                let vref = if pin.device() == MICROPHONE && pin.pin_caps & (1 << 12) != 0 { 4 } else { 0 };
                 let _ = self.verb(pin.nid, 0x707, 0x20 | vref);
                 self.cirrus_digital_microphone(pin.nid);
-                put(summary, len, format_args!("; IN PIN {:#X} ({}) -> ADC {:#X}", pin.nid, if device(&pin) == 0xA { "MICROPHONE" } else { "LINE" }, adc));
+                put(summary, len, format_args!("; IN PIN {:#X} ({}) -> ADC {:#X}", pin.nid, if pin.device() == MICROPHONE { "MICROPHONE" } else { "LINE" }, adc));
             }
             _ => { self.has_input = false; put(summary, len, format_args!("; NO INPUT PATH")); }
         }
+        let mut sent = 0;
+        self.dump(list, &mut sent);
+        if let Some(jack) = codec::headphone_jack(list, pin.nid) {
+            let sense = self.sense(&jack);
+            mind::println!("[AUDIO] HEADPHONE JACK: PIN {:#X}, SENSE {:08X}: {}", jack.nid, sense, if codec::present(sense) { "HEADPHONES IN" } else { "EMPTY" });
+        }
+        let codecs = self.regs.read16(STATESTS);
+        self.dump_others(codecs, &mut sent);
         true
     }
 
-    // A chain from the ADC `from` to the pin `target`.
-    fn find_pin(list: &[Widget], from: u8, target: u8, depth: usize, path: &mut [(u8, u8); 6]) -> Option<usize> {
-        let w = list.iter().find(|w| w.nid == from)?;
-        path[depth].0 = from;
-        if from == target { return Some(depth + 1); }
-        if depth >= 5 || (w.kind == PIN && depth > 0) { return None; }
-        for (index, &next) in w.connections[..w.count as usize].iter().enumerate() {
-            path[depth].1 = index as u8;
-            if let Some(n) = Self::find_pin(list, next, target, depth + 1, path) { return Some(n); }
+    // A pin's sense (verb F09), measured first where the pin needs a trigger.
+    fn sense(&mut self, pin: &Widget) -> u32 {
+        if pin.pin_caps & codec::TRIGGER != 0 { let _ = self.verb(pin.nid, 0x709, 0); mind::time::sleep(1); }
+        self.verb(pin.nid, 0xF09, 0).unwrap_or(0)
+    }
+
+    // The codec's every widget to the log once (551-DRV-0056), as now set: what it is, a pin's configuration and
+    // capabilities, the connections and amplifiers; a Cirrus codec's vendor coefficients too. `sent` counts the lines.
+    fn dump(&mut self, list: &[Widget], sent: &mut usize) {
+        let mut sink = |line: &str| {
+            if *sent > 0 && *sent % DUMP_RATE == 0 { mind::time::sleep(1020 - mind::time::uptime_ms() % 1000); }
+            mind::println!("{}", line);
+            *sent += 1;
+        };
+        let (afg, address) = (self.afg, self.codec);
+        let mut q = |id: u32| self.parameter(afg, id).unwrap_or(0);
+        let mut g = codec::Group { address, nid: afg, nodes: q(4), caps: q(8), pcm: q(0xA), formats: q(0xB), amp_in: q(0xD), amp_out: q(0x12),
+                                   power: q(0xF), gpio: q(0x11), ..codec::Group::default() };
+        g.vendor = self.parameter(0, 0).unwrap_or(0);
+        g.revision = self.parameter(0, 2).unwrap_or(0);
+        g.subsystem = self.verb(afg, 0xF20, 0).unwrap_or(0);
+        g.gpio_data = self.verb(afg, 0xF15, 0).unwrap_or(0);
+        g.gpio_mask = self.verb(afg, 0xF16, 0).unwrap_or(0);
+        g.gpio_direction = self.verb(afg, 0xF17, 0).unwrap_or(0);
+        codec::dump_group(&g, &mut sink);
+        for w in list {
+            let mut s = codec::State::default();
+            if w.count > 1 && w.kind != MIXER { s.selected = self.verb(w.nid, 0xF01, 0).unwrap_or(0) as u8; }
+            if w.caps & (1 << 1) != 0 {
+                s.amp_in = self.amp_caps(w, 0xD);
+                let inputs = if w.kind == MIXER { (w.count as usize).clamp(1, 4) } else { 1 };
+                for i in 0..inputs {
+                    let index = if w.kind == MIXER { i as u32 } else { s.selected as u32 };
+                    s.gains_in[i] = self.verb(w.nid, 0xB, 0x2000 | index).unwrap_or(0) as u8;
+                }
+            }
+            if w.caps & (1 << 2) != 0 { s.amp_out = self.amp_caps(w, 0x12); s.gain_out = self.verb(w.nid, 0xB, 0xA000).unwrap_or(0) as u8; }
+            if w.kind == PIN {
+                s.control = self.verb(w.nid, 0xF07, 0).unwrap_or(0) as u8;
+                if w.pin_caps & codec::EAPD != 0 { s.eapd = self.verb(w.nid, 0xF0C, 0).unwrap_or(0) as u8; }
+                if w.pin_caps & codec::PRESENCE != 0 { s.sense = self.sense(w); }
+            }
+            codec::dump_widget(self.codec, w, &s, &mut sink);
+            if w.kind == VENDOR && g.vendor >> 16 == 0x1013 {
+                let mut coefficients = [0u16; 32];
+                for (i, c) in coefficients.iter_mut().enumerate() { let _ = self.verb(w.nid, 0x5, i as u32); *c = self.verb(w.nid, 0xC00, 0).unwrap_or(0) as u16; }
+                codec::dump_coefficients(self.codec, w.nid, &coefficients, &mut sink);
+            }
         }
-        None
+    }
+
+    // The other codecs on the link to the log too (551-DRV-0056); the gateway drives the first.
+    fn dump_others(&mut self, codecs: u16, sent: &mut usize) {
+        let (driven, afg) = (self.codec, self.afg);
+        for address in (0..15).filter(|&a| a != driven && codecs & (1 << a) != 0) {
+            self.codec = address;
+            let mut list = [Widget::default(); WIDGETS];
+            let n = self.widgets(&mut list);
+            if n == 0 { mind::println!("[AUDIO] CODEC {}: NO AUDIO FUNCTION GROUP", address); continue; }
+            self.dump(&list[..n], sent);
+        }
+        (self.codec, self.afg) = (driven, afg);
     }
 
     // A stream descriptor reset and set to a cyclic list of `count` buffers from DMA offset `at`.
