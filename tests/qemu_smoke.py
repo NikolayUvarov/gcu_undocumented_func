@@ -12343,8 +12343,8 @@ def timed_check(args, disk):
             require(log, f"[TIMED] 10.0.2.2:{servers[2].port}: OFFSET ")
             assert re.search(rf"10\.0\.2\.2:{servers[2].port}: OFFSET \+\d+ MS, ROUND TRIP \d+ MS, LEFT OUT: IT DISAGREES WITH THE OTHERS", log), log[-3000:]
             require_all(log, "(WAS 2024-01-01 ", "2 OF 3 SERVERS AGREED")
-            # The sleep that spanned the step lasted what it asked, by the guest's monotonic clock and by the host's.
-            assert 25_000 <= guest < 26_500 and 25 <= slept < 33, (guest, slept)
+            # The sleep across the step lasted what it asked, by the guest's clock and the host's (the guest's up to 4% fast, 111-NET-0078).
+            assert 25_000 <= guest < 26_500 and guest * 0.96 / 1000 <= slept < 33, (guest, slept)
             shown = re.search(r"DATE: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", vm.command("date"))[1]
             gap = abs(datetime.datetime.strptime(shown, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp() - (time.time() + 0.1))
             assert gap < 3, (shown, gap)
