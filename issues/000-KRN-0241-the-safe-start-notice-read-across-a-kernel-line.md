@@ -1,6 +1,6 @@
 # 000-KRN-0241 — The watchdog suite reads the shell's safe-start notice across a kernel line
 
-**Type:** kernel track (a test of the gate, `tests/qemu_smoke.py`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** kernel track (a test of the gate, `tests/qemu_smoke.py`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and run on the machines; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -20,6 +20,13 @@ The kernel and the shell share COM1. Other suites already read again a line that
 
 - The expression finds the notice in round 132's text (the kernel line inside `tts`) and in a notice with no kernel line in it.
 - "x86: the watchdog" passes on the maintainer's machines, then in a gate.
+
+## Progress
+
+**Made (2026-11-13)** on `claude/000-KRN-0241-safe-start-notice-across-a-kernel-line`: `watchdog_suite` reads the notice in what the serial line gave with every `MIND CORE KERNEL: …` line and its newline taken out.
+- **The expression** found the notice in round 132's text (the ACPI line inside `tts`) and in a notice with no kernel line in it, run on both strings in this container.
+- **Run** at 5085be75 (`main` d35515e0 merged in) on the maintainer's machines (QEMU under TCG): "x86: the watchdog" on x32-128 passed (130 s). That run had no kernel line inside the notice; the expression's case is the one above.
+- **Left:** the gate.
 
 ## Related
 
