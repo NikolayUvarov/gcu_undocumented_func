@@ -78,6 +78,8 @@
 - **Run again** at 38cb3ed4 (`main` 23f1f33e merged in; `scripts/host_tests.sh` taken as `main` has it, which finds `tests/usb_storage_host.rs` by name), on the maintainer's machines (QEMU under TCG): "x86: USB image" (166 s) and "x86: files and block writes" (989 s) on acc-1, "aarch64: files and the block store" (919 s) on acc-2, "host tests" (1849 s) on x32-128. Every one passed.
 - **Left:** the gate; the criterion's swap in `run()` (DRV); a driver killed and restarted (`run usb_storage` after `stop`), and the block store's window after a swap (plan step 5's criterion).
 
+**Landed** in round 131 (`main` b631de76, 2026-11-13): steps 2 and 3, with DRV's 000-DRV-0058 (`usb_storage`'s `returned`) whole; every group of the gate passed with it, "x86: USB image" and both arches' file and block-store groups among them. **Left:** the criterion's swap in `run()` (DRV), a driver killed and restarted (`run usb_storage` after `stop`), and the block store's window after a swap (plan step 5's criterion).
+
 ## Related
 
 [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).

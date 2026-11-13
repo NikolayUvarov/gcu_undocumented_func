@@ -1,6 +1,6 @@
 # 551-DRV-0010 — Intel HD Audio in `audio_gw`: controller, codecs, playback and capture
 
-**Type:** driver · **Owner:** `DRV` (made by the kernel session for 551; it stays with that session until done, TRACKS 1.5) · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Constitution:** MC-1.5, MC-6.3, MC-11.4
+**Type:** driver · **Owner:** `DRV` (made by the kernel session for 551; it stays with that session until done, TRACKS 1.5) · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's speakers heard, 2026-11-13; the critique's items of 2026-10-14 left) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Constitution:** MC-1.5, MC-6.3, MC-11.4
 
 ## Problem
 
@@ -94,6 +94,14 @@ Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and th
   - **A controller given up on goes back into reset** (CORB and RIRB stopped, CRST low). Its command rings no longer write into the DMA region that both share.
   - **QEMU** with two `intel-hda` controllers, the first without a codec and the second with `hda-output`: the second was driven with interrupts, and `beep` played through it.
   - **Not yet:** the Ryzen itself, `05:00.6` behind the HDMI function `05:00.1`.
+
+**2026-11-13: the MacBook Pro's speakers heard** (DRV's run, `KRN/2026-11-13T2014Z-DRV-the-macs-speakers-heard-for-551-drv-0010.md` on `internal-dev-messages`).
+- **The machine:** the MacBook Pro on release 202611131315 (`main` 20fba2c5), slot A.
+- **`beep` and `say`, run over the link:** the maintainer heard both from the speakers at a sufficient level.
+- **The volume (000-DRV-0057):** `volume 30` (−38.5 dB), then `volume 100` (+6 dB), a beep at each; both heard, the second louder.
+- **Left and right** (a `beep` with one channel zeroed): clearly told apart. Pin 0xA alone gives the stereo pair.
+- **The codec's dump** (with 551-DRV-0056's `audio_gw`) is in 551-DRV-0056's progress; it shows a second speaker pin, 0xB (DAC 0x4), left off.
+- **Left here:** the critique's items of 2026-10-14 above (a late response, the table of vendor settings, the `unwrap`s, the run scripts' `MIND_AUDIO_HW`); none is in `audio_gw` yet. The microphone is 551's next step.
 
 ## Related
 
