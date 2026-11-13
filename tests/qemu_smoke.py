@@ -6439,10 +6439,13 @@ def dmesg_check(vm):
     assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
     # The text may claim any source; logd records the sender.
     require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
-    # The last records: clipboard may log the program the shell names in front (dmesg itself) after the forged line.
+    # -n 3: the last three records when dmesg starts, then those sent while it reads (clipboard naming dmesg in front).
     last = vm.command("dmesg -n 3", raw=True)
-    require(last, f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
-    assert len(re.findall(r"^\[\s*\d+\.\d{3}\] ", last, re.M)) <= 3, last
+    forged = f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"
+    require(last, forged)
+    records = re.findall(r"^\[\s*\d+\.\d{3}\] (.*)$", last, re.M)
+    at = max(i for i, record in enumerate(records) if record.startswith(forged)) + 1
+    assert at <= 3 and all("[CLIPBOARD] IN FRONT:" in record for record in records[at:]), last
     only = vm.command("dmesg -s vfs_server", raw=True)
     assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
     assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
