@@ -64,11 +64,9 @@ fn main(_info: &'static BootInfo) {
                 }
                 api::reply_program_client(call, minted)
             }
-            Ok((api::Request::Front { pid: front }, call)) => {
-                let set = clipboard.set_front(caller, front);
-                if set.is_ok() && clipboard.in_front() != 0 { mind::println!("[CLIPBOARD] IN FRONT: PID {} (NAMED BY PID {})", front, pid); }
-                api::reply_front(call, set.map_err(error))
-            }
+            // Not logged: the shell names a program in front at each command typed, and the boot's log would fill with it
+            // (KRN's remark of 2026-11-13); a read or a set refused names the caller.
+            Ok((api::Request::Front { pid: front }, call)) => api::reply_front(call, clipboard.set_front(caller, front).map_err(error)),
         };
     }
 }
