@@ -79,8 +79,13 @@ Decided on the way:
 
 **Docs:** `docs/update/publishing.md` and `publishing_RU.md` (0.4: the format and the commands), `updater.md` and `updater_RU.md`, `docs/idl/README.md`, and `docs/profile/README.md`'s Article 9 row.
 
+**QEMU on the maintainer's machines** (Effector, TCG), each group passed:
+- at ce07c8a2: "x86: the updater and an update through the link" on acc-1 (918 s) and "aarch64: the updater and the modes" on PCU (1336 s). At 8cc9527f the x86 group's store check had counted the kept tree without the key file; ce07c8a2 counts it;
+- at 8cc9527f: "host tests" on x32 (1797 s), "aarch64: an update through the link" on acc-2 (746 s), both groups of "a developer's release through the Effector agent" (x86 on x32-2, 70 s; aarch64 on acc-2, 105 s), and "x86: USB image" on x32-2 (127 s).
+
+In this container, "--suites update" on x86 passed, with the key file's refusal. Its output: `PASS: update: a key file one of the 2-of-3 root keys signed refused, nothing written (351-UPD-0026)`.
+
 **Left:**
-- the QEMU update groups on x86 and aarch64;
 - the gate;
 - the fuzz target for `parse_keys`, asked of ASR (351-ASR-0006's harness).
 
