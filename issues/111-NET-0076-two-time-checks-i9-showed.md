@@ -29,6 +29,10 @@ Round 129's gate (2026-11-13) failed "x86: network, TLS and Effector" twice on i
 
 **Made (2026-11-13)** on `claude/111-NET-0076-nts-refused-race`: `tests/qemu_smoke.py` `nts_check` and `timed_check`.
 - **Not run in this container:** its `tls` suite stops before the NTS check, at Python's `cryptography` there (`No module named '_cffi_backend'`). They run on the maintainer's machines, i9 among them.
+- **Run on the maintainer's machines** (Effector, QEMU under TCG), with 000-NET-0077:
+  - at c57928a1, "aarch64: network, TLS and Effector" on PCU (1420 s) passed;
+  - at dd79ebc0, "x86: network, TLS and Effector" on x32-128 (1421 s, its other lane idle) and "aarch64: network, TLS and Effector" on PCU (1411 s) passed;
+  - on i9 at dd79ebc0, the `net` suite passed, `timed_check` with it, but the `tls` suite stopped after its TLS client check: nothing more was logged for 40 minutes, until the operation's limit (3500 s). That check and the ones after it, up to the NTS check, are not this task's; the hang is recorded for the kernel track's next look at i9. At c57928a1 the group's first run there timed out the same way, its logs overwritten.
 
 ## Related
 

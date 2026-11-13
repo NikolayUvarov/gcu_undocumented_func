@@ -20,6 +20,7 @@ The check reads the log since the command, its lines joined and ANSI codes remov
 ## Progress
 
 **Made (2026-11-13)** on `claude/111-NET-0076-nts-refused-race`, with 111-NET-0076: `tests/qemu_smoke.py` `browse_check` and `joined()`.
+- **Run** at dd79ebc0 on the maintainer's machines (QEMU under TCG): "x86: network, TLS and Effector" on x32-128 (1421 s) and "aarch64: network, TLS and Effector" on PCU (1411 s) passed; on i9 the `net` suite passed, `browse_check`'s take-down with it (the group then stopped in the `tls` suite, 111-NET-0076).
 
 ## Related
 
