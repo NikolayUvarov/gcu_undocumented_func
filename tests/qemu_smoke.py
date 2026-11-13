@@ -2831,7 +2831,10 @@ def vfs_check(vm):
     # Boot files and the rest of the boot disk stay read-only; paths cannot climb out; data/ is writable.
     require(vm.command("write kernel.elf x"), "ERROR: WRITE: DENIED")
     require(vm.command("write EFI/BOOT/x.txt x"), "ERROR: WRITE: DENIED")
-    require(vm.command("mkdir system"), "ERROR: MKDIR: DENIED")
+    # A new directory outside data/ (system/ may exist already: keystore keeps the device key there where no TPM seals
+    # it, as on aarch64's virt, and mkdir of one that exists is fine), and one in system/, whose others are hidden.
+    require(vm.command("mkdir outside"), "ERROR: MKDIR: DENIED")
+    require(vm.command("mkdir system/shell"), "ERROR: MKDIR: DENIED")
     require(vm.command("cat ram:../kernel.elf"), "ERROR: CAT: INVALID PATH")
     require(vm.command("rm kernel.elf"), "ERROR: RM: DENIED")
     require(vm.command("mkdir data"), "OK")
