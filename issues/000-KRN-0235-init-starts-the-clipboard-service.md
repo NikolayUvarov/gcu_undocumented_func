@@ -1,12 +1,12 @@
 # 000-KRN-0235 — `init` starts the clipboard service and gives the shell its client to mint copies from
 
-**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([000-APP-0032](000-APP-0032-system-clipboard.md)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
+**Type:** kernel track (`init`, the boot images) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done)) · **Roadmap:** track G · **Constitution:** MC-2.3, MC-3.4, MC-12.4
 
 ## Problem and plan
 
-APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP-0032-system-clipboard.md). The request as it was written, kept whole:
+APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done). The request as it was written, kept whole:
 
-**Asked by** APP on 2026-11-12, for [000-APP-0032](000-APP-0032-system-clipboard.md). [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) gave `SLOT_CLIPBOARD` (31) and `REQUEST_CLIPBOARD` (bit 19), and left `init` starting the service until the tools track wrote it.
+**Asked by** APP on 2026-11-12, for [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done). [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) gave `SLOT_CLIPBOARD` (31) and `REQUEST_CLIPBOARD` (bit 19), and left `init` starting the service until the tools track wrote it.
 
 - **The service:** `clipboard` (`clipboard/`, `idl/clipboard.wit` 1.0), written by APP on its branch; this request's own notice will name the commit.
   - It holds one text, in memory only, up to 60 KiB, and answers `set` and `get` only for the program a manager names as in front. It needs no device, no disk and no network.

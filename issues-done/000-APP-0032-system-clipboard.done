@@ -1,6 +1,6 @@
-# 000-APP-0032 — The system clipboard: text copied in one program, pasted in another
+# 000-APP-0032 — The system clipboard: text copied in one program, pasted in another — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the service and its clients written and host-tested, in `main` since round 124, 267ad266, 2026-11-12; `init` starting it and the QEMU check left) · **Blocked by:** `init` starting the service and giving the shell its client with `CAP_BADGE` ([requests-KRN.md](requests-KRN.md), APP's request of 2026-11-12); `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are in the ABI since [211-KRN-0058](../issues-done/211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-11.5, MC-12.4
 
 ## Problem
 
@@ -30,7 +30,7 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
   - a program that did not ask for the clipboard holds nothing in the slot;
   - a program in the background cannot read it (whichever rule is chosen above).
 
-## Progress (2026-11-12)
+## Resolution
 
 - **Who may read, decided:** the program in front, as the managers name it. The shell (for the console shown) and the window manager it started (for its window in front; none while its menus or Settings have the keys) hold copies badged `BADGE_MANAGER` and call `front`; a program's copy, badged `BADGE_PROGRAM`, is answered only while its PID is the one named. A badge per client, enabled by the shell, would need the shell to know each window's program in front, which only the window manager knows.
 - **`idl/clipboard.wit` 1.0:** `set-part`, `get-part`, `generation`, `front`. The text is up to 65536 bytes, carried in parts of 4000 bytes split where a character ends: the generated record holds its text inline, so a 64 KiB one would not fit a program's 64 KiB stack. `mind::clipboard` joins them (`copy`, `paste`, read again from the start when the text changes meanwhile).
@@ -45,10 +45,11 @@ Each program keeps its copied text to itself: `edit`'s Ctrl+C/X/V, `fm`'s comman
   - the `tools` suite's `clipboard_check` (11 checks): `edit` copied a line through the service (Ctrl+C, the shell naming it in front), the shell's line pasted it (Ctrl+V) and a second `edit` pasted it into its file; the service logged each set and read by its length alone;
   - the `wm` suite (17): `wm`'s programs started `WITH … clipboard` (`fm`, `console`, `edit`, `view`), through `program-client`;
   - it found the shell's manager copy without `CAP_GRANT`, which get-part and set-part need for their buffer: fixed (e18d2811).
-- **Left:**
-  - `init` starting the service (KRN's 000-KRN-0235), with `clipboard` in `BOOT_SERVICES`, and giving it its server endpoint with `CAP_BADGE` for `program-client`; then `clipboard.elf` back in `02_build.sh`'s list, left out until then since `wm`'s menu lists a program on the disk that opens no window;
-  - the same checks on `main` once 000-KRN-0235 is there; a program behind is refused in the host tests (`clipboard_host`), not yet in QEMU, as no program that is not in front calls the clipboard by itself;
+- **On `main`'s service** (000-KRN-0235 in `main` since round 127, `init` starting `clipboard` with the right to badge), x86, 4 CPUs, this branch on 1da784a9 and f98e7a17:
+  - the `tools` suite (11 checks): `clipboard_check` as above, and `tests/clip_stub` in front pasting the text, the same in the background refused (`READ REFUSED … Behind` in the service's log), and a copy whose request note asks for no clipboard holding no client;
+  - the service logs no line for each program named in front (ff15ed25; KRN's remark of 2026-11-13).
+- **Not checked on aarch64:** the gate runs the `tools` suite on x86 alone, and its monitors' checks drifted there; [000-APP-0137](../issues/000-APP-0137-the-tools-suite-on-aarch64.md) makes the suite pass on aarch64, `clipboard_check` with it (MC-12.1).
 
 ## Related
 
-[requests-KRN.md](requests-KRN.md), [docs/tools §4.2, §5](../docs/tools/README.md), [000-APP-0030](../issues-done/000-APP-0030-syntax-colours-in-edit.done).
+[requests-KRN.md](../issues/requests-KRN.md), [docs/tools §4.2, §5](../docs/tools/README.md), [000-APP-0030](000-APP-0030-syntax-colours-in-edit.done).
