@@ -3,23 +3,37 @@
 // Ring 3 USB mass storage class driver: the first mass storage interface usb_host gives it (idl/usb.wit; its client
 // with the storage badge in SLOT_DEV0 can claim only such interfaces, issue 164), Bulk-Only Transport, SCSI READ(10),
 // WRITE(10) and SYNCHRONIZE CACHE(10); MODE SENSE(6) tells a write-protected medium. Writes only for clients with the
-// write badge (mind::block_protocol). If usb_host restarts, the interface is claimed and set up again and the request
-// repeated (reads and rewrites of the same data are idempotent, MC-6.6). A refused command is explained by REQUEST SENSE
-// in the log; a lost device, its return and a reset it reports are logged (211-DRV-0019).
+// write badge (mind::block_protocol). A device that only missed a transfer is claimed again and the command repeated
+// (reads and rewrites of the same data are idempotent, MC-6.6). One that came back (enumerated again, through usb_host
+// started again, or saying its medium changed) may hold another medium: the command fails, and `returned` tells
+// block::serve, which ends this instance for a fresh one, so every client attaches again (000-DRV-0058); one of another
+// capacity is not used. A refused command is explained by REQUEST SENSE in the log; a lost device, its return and a
+// reset it reports are logged (211-DRV-0019).
+mod recovery;
+
 use mind::abi::{BootInfo, BLOCK_KIND_USB, SLOT_DEV0};
 use mind::block::{self, Driver, DriverError, Outcome};
 use mind::ipc::Endpoint;
+use mind::sys::Error;
 use mind::usb::Host;
+use recovery::{Answer, Claim, Found, Port, Verdict, Why};
 
 const CBW: usize = 0; const CSW: usize = 64; const DATA: usize = 4096; // in the buffer lent to usb_host
 const PROBE: usize = 512; // probes and sense data: never where a write's data waits for a retry
 const CLAIM_TRIES: usize = 20; // usb_host may still be setting the device up
 
-// The claimed interface and its Bulk-Only Transport state.
-struct Bot { handle: u32, number: u8, out: u8, input: u8, tag: u32, vendor: u16, product: u16 }
+// The claimed interface and its Bulk-Only Transport state. `peer`: usb_host's instance ended since the claim, so its
+// handle may name another device in the new one.
+struct Bot { handle: u32, number: u8, out: u8, input: u8, tag: u32, vendor: u16, product: u16, peer: bool }
 
-// `lost`: the device stopped answering and was not claimed again; `seen`: refusals already logged.
-struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, seen: [(u8, Sense); SEEN], seen_count: usize }
+impl Bot {
+    // A transfer that found the interface gone.
+    fn lost(&mut self, error: Error) -> Cycle { self.peer |= matches!(error, Error::Peer); Cycle::Gone }
+}
+
+// `lost`: the device stopped answering and was not claimed again; `returned`: a device came back, and no command runs
+// on it here (000-DRV-0058); `seen`: refusals already logged.
+struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, returned: bool, seen: [(u8, Sense); SEEN], seen_count: usize }
 
 // How a BOT cycle ended: done with the bytes moved, refused by the device (CHECK CONDITION), or the interface is gone.
 enum Cycle { Done(usize), Refused, Gone }
@@ -31,15 +45,15 @@ fn bot_cycle(host: &mut Host, bot: &mut Bot, command: &[u8], length: usize, send
     cbw.fill(0);
     cbw[..4].copy_from_slice(b"USBC"); cbw[4..8].copy_from_slice(&bot.tag.to_le_bytes()); cbw[8..12].copy_from_slice(&(length as u32).to_le_bytes());
     cbw[12] = if length > 0 && !send { 0x80 } else { 0 }; cbw[14] = command.len() as u8; cbw[15..15 + command.len()].copy_from_slice(command);
-    if host.bulk(bot.handle, bot.out, CBW, 31).is_err() { return Cycle::Gone; }
+    if let Err(error) = host.bulk(bot.handle, bot.out, CBW, 31) { return bot.lost(error); }
     let moved = if length == 0 { 0 } else {
         match host.bulk(bot.handle, if send { bot.out } else { bot.input }, at, length) {
             Ok(moved) => moved,
-            Err(mind::sys::Error::NotFound | mind::sys::Error::Peer) => return Cycle::Gone,
+            Err(error @ (Error::NotFound | Error::Peer)) => return bot.lost(error),
             Err(_) => 0, // a stalled data stage still ends with a CSW
         }
     };
-    if host.bulk(bot.handle, bot.input, CSW, 13).is_err() { return Cycle::Gone; }
+    if let Err(error) = host.bulk(bot.handle, bot.input, CSW, 13) { return bot.lost(error); }
     let status = &host.buffer()[CSW..CSW + 13];
     if &status[..4] != b"USBS" || status[4..8] != bot.tag.to_le_bytes() { return Cycle::Gone; }
     match status[12] { 0 => Cycle::Done(moved), 1 => Cycle::Refused, _ => Cycle::Gone } // 2, a phase error: start over
@@ -51,6 +65,7 @@ struct Sense { key: u8, asc: u8, ascq: u8 }
 impl Sense {
     fn attention(self) -> bool { self.key == 6 }
     fn reset(self) -> bool { self.key == 6 && self.asc == 0x29 }
+    fn changed(self) -> bool { self.key == 6 && self.asc == 0x28 }
     fn meaning(self) -> &'static str {
         match (self.key, self.asc) {
             (6, 0x29) => " (THE DEVICE WAS RESET)", (6, 0x28) => " (THE MEDIUM MAY HAVE CHANGED)", (6, _) => " (UNIT ATTENTION)",
@@ -71,15 +86,20 @@ fn name(operation: u8) -> &'static str {
     match operation { 0x00 => "TEST UNIT READY", 0x1A => "MODE SENSE", 0x25 => "READ CAPACITY", 0x28 => "READ", 0x2A => "WRITE", 0x35 => "SYNCHRONIZE CACHE", _ => "A COMMAND" }
 }
 
-// The next mass storage interface (SCSI over Bulk-Only: 08/06/50) and its bulk endpoints, in up to CLAIM_TRIES tries
-// 100 ms apart.
+// The interface usb_host just gave and its bulk endpoints, if it is SCSI over Bulk-Only (08/06/50).
+fn bulk_only(handle: u32, info: &mind::usb::Interface) -> Option<Bot> {
+    let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
+    let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
+    let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) else { return None };
+    Some(Bot { handle, number: info.number, out, input, tag: 0, vendor: info.vendor, product: info.product, peer: false })
+}
+
+// The next mass storage interface that is SCSI over Bulk-Only, in up to CLAIM_TRIES tries 100 ms apart.
 fn claim(host: &mut Host) -> Option<Bot> {
     for attempt in 0..CLAIM_TRIES {
         match host.claim() {
             Ok((handle, info)) => {
-                let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
-                let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
-                if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, number: info.number, out, input, tag: 0, vendor: info.vendor, product: info.product }); }
+                if let Some(bot) = bulk_only(handle, &info) { return Some(bot); }
                 let _ = host.release(handle);
             }
             Err(_) => if attempt + 1 < CLAIM_TRIES { mind::time::sleep(100); },
@@ -88,14 +108,17 @@ fn claim(host: &mut Host) -> Option<Bot> {
     None
 }
 
+// What the device said while it became ready.
+struct Capacity { sectors: u64, reset: bool, changed: bool }
+
 // TEST UNIT READY until ready (REQUEST SENSE after each refusal), then READ CAPACITY(10); 512-byte sectors required.
-// Returns the sector count and whether the device said it had been reset.
-fn capacity(host: &mut Host, bot: &mut Bot) -> Option<(u64, bool)> {
-    let mut reset = false;
+// Says too whether the device reported a reset, or that its medium may have changed.
+fn capacity(host: &mut Host, bot: &mut Bot) -> Option<Capacity> {
+    let (mut reset, mut changed) = (false, false);
     for _ in 0..5 {
         match bot_cycle(host, bot, &[0x00, 0, 0, 0, 0, 0], 0, false, PROBE) {
             Cycle::Done(_) => break,
-            Cycle::Refused => if sense(host, bot).is_some_and(Sense::reset) { reset = true; },
+            Cycle::Refused => if let Some(said) = sense(host, bot) { reset |= said.reset(); changed |= said.changed(); },
             Cycle::Gone => return None,
         }
         mind::time::sleep(50);
@@ -103,7 +126,24 @@ fn capacity(host: &mut Host, bot: &mut Bot) -> Option<(u64, bool)> {
     let Cycle::Done(_) = bot_cycle(host, bot, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8, false, PROBE) else { return None };
     let reply = &host.buffer()[PROBE..PROBE + 8];
     let last = u32::from_be_bytes(reply[..4].try_into().unwrap()) as u64; let size = u32::from_be_bytes(reply[4..8].try_into().unwrap());
-    (size == 512).then_some((last + 1, reset))
+    (size == 512).then_some(Capacity { sectors: last + 1, reset, changed })
+}
+
+// usb_host as recovery::reclaim looks through it.
+struct Claims<'a> { host: &'a mut Host }
+
+impl Port<Bot> for Claims<'_> {
+    fn claim(&mut self) -> Claim<Bot> {
+        match self.host.claim() {
+            Ok((handle, info)) => Claim::Interface(handle, bulk_only(handle, &info)),
+            // A new instance without our buffer, or none running: Host attaches the buffer at the next claim.
+            Err(Error::Invalid | Error::Peer) => Claim::NewHost,
+            Err(_) => Claim::None,
+        }
+    }
+    fn release(&mut self, handle: u32) { let _ = self.host.release(handle); }
+    fn ready(&mut self, bot: &mut Bot) -> Option<u64> { capacity(self.host, bot).map(|c| c.sectors) }
+    fn pause(&mut self) { mind::time::sleep(100); }
 }
 
 const SEEN: usize = 16;
@@ -116,14 +156,14 @@ impl Storage {
         let (mut bot, sectors) = loop {
             let mut bot = claim(&mut host)?;
             match capacity(&mut host, &mut bot) {
-                Some((sectors, _)) => break (bot, sectors), // a reset at power-on is expected
+                Some(found) => break (bot, found.sectors), // a reset at power-on is expected
                 None => mind::println!("[USB] STORAGE: {:04X}:{:04X} HAS NO MEDIUM OR IS NOT READY; THE NEXT DEVICE", bot.vendor, bot.product),
             }
         };
         // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
         // writable; a write it refuses fails anyway.
         let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false, PROBE), Cycle::Done(_)) && host.buffer()[PROBE + 2] & 0x80 != 0;
-        Some(Self { host, bot, sectors, protected, lost: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0 })
+        Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0 })
     }
 
     // A refusal in the log, each kind once (211-DRV-0019).
@@ -135,15 +175,25 @@ impl Storage {
                        if operation == 0x35 && sense.key == 5 { "; A FLUSH CANNOT EMPTY THE DEVICE'S CACHE" } else { "" });
     }
 
-    // A command. A refusal is explained in the log and, after a unit attention, the command is repeated once. If the
-    // interface was lost, it is claimed again and the command repeated; the loss, the return and a reset are logged.
-    // Err: Gone when no device or another medium answers the claim, Io for every other failure (000-KRN-0228).
+    // A device that came back: the command that found it is not run, and `returned` reports it (000-DRV-0058).
+    fn came_back(&mut self, why: Why, operation: u8) -> Result<usize, DriverError> {
+        mind::println!("[USB] STORAGE: {}: IT MAY HOLD ANOTHER MEDIUM, SO {} IS NOT RUN ON IT; A FRESH DRIVER INSTANCE CLAIMS IT", why.text(), name(operation));
+        self.returned = true;
+        Err(DriverError::Gone)
+    }
+
+    // A command. A refusal is explained in the log and, after a unit attention other than a medium change, the command is
+    // repeated once. If the interface was lost, it is claimed again: the command is repeated on a device that only missed
+    // a transfer, never on one that came back. The loss, the return and a reset are logged.
+    // Err: Gone when no device answers the claim or one came back, Io for every other failure (000-KRN-0228).
     fn run(&mut self, command: &[u8], length: usize, send: bool, at: usize) -> Result<usize, DriverError> {
+        if self.returned { return Err(DriverError::Gone); }
         match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) {
             Cycle::Done(moved) => return Ok(moved),
             Cycle::Refused => {
                 let sense = sense(&mut self.host, &mut self.bot);
                 self.refused(command[0], sense);
+                if sense.is_some_and(Sense::changed) { return self.came_back(Why::MediumChanged, command[0]); }
                 if !sense.is_some_and(Sense::attention) { return Err(DriverError::Io); }
                 return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) };
             }
@@ -152,23 +202,30 @@ impl Storage {
         if !self.lost { mind::println!("[USB] STORAGE: NO ANSWER TO {}: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN", name(command[0])); }
         // The interface is reset and given back before it is claimed again: kept, it could not be claimed, and a device
         // that only missed a transfer was lost until the next boot (211-DRV-0053). A gone device refuses both.
-        let _ = self.host.control(self.bot.handle, 0x21, 0xFF, 0, self.bot.number as u16, 0); // Bulk-Only Mass Storage Reset
-        let _ = self.host.release(self.bot.handle);
+        let reset = self.host.control(self.bot.handle, 0x21, 0xFF, 0, self.bot.number as u16, 0); // Bulk-Only Mass Storage Reset
+        let release = self.host.release(self.bot.handle);
+        self.bot.peer |= matches!(reset, Err(Error::Peer)) || matches!(release, Err(Error::Peer));
         // Every request gets the tries: a device plugged in again or reset may still be set up by usb_host (211-DRV-0021).
-        let found = claim(&mut self.host).and_then(|mut bot| capacity(&mut self.host, &mut bot).map(|c| (bot, c)));
-        let Some((bot, (sectors, reset))) = found else {
-            if !self.lost { mind::println!("[USB] STORAGE: THE DEVICE IS GONE"); self.lost = true; }
-            return Err(DriverError::Gone);
-        };
-        if sectors != self.sectors {
-            if !self.lost { mind::println!("[USB] STORAGE: ANOTHER MEDIUM ({} SECTORS) IS NOT USED", sectors); self.lost = true; }
-            let _ = self.host.release(bot.handle);
-            return Err(DriverError::Gone);
+        let old = (!self.bot.peer).then_some(self.bot.handle);
+        let (found, new_host) = recovery::reclaim(old, CLAIM_TRIES, &mut Claims { host: &mut self.host });
+        let same = if found == Found::Same { capacity(&mut self.host, &mut self.bot) } else { None };
+        match recovery::verdict(found, new_host || self.bot.peer, self.sectors, same.as_ref().map(|c| Answer { sectors: c.sectors, changed: c.changed })) {
+            Verdict::Gone => {
+                if !self.lost { mind::println!("[USB] STORAGE: THE DEVICE IS GONE"); self.lost = true; }
+                Err(DriverError::Gone)
+            }
+            Verdict::Returned(why) => self.came_back(why, command[0]),
+            Verdict::Unused(sectors) => {
+                if !self.lost { mind::println!("[USB] STORAGE: ANOTHER MEDIUM ({} SECTORS) IS NOT USED", sectors); self.lost = true; }
+                Err(DriverError::Gone)
+            }
+            Verdict::Back => {
+                let reset = same.is_some_and(|c| c.reset);
+                mind::println!("[USB] STORAGE: THE DEVICE IS BACK, NOT ENUMERATED AGAIN, THE SAME CAPACITY{}", if reset { "; IT WAS RESET: WRITES IT HAD NOT MADE DURABLE MAY BE LOST" } else { "" });
+                self.lost = false;
+                match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) }
+            }
         }
-        mind::println!("[USB] STORAGE: THE DEVICE IS BACK, THE SAME CAPACITY{}", if reset { "; IT WAS RESET: WRITES IT HAD NOT MADE DURABLE MAY BE LOST" } else { "" });
-        self.lost = false;
-        self.bot = bot;
-        match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) }
     }
 }
 
@@ -192,6 +249,7 @@ impl Driver for Storage {
     }
     fn flush(&mut self) -> Outcome { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE).map(|_| ()) } // SYNCHRONIZE CACHE(10)
     fn read_only(&self) -> bool { self.protected }
+    fn returned(&mut self) -> bool { self.returned }
 }
 
 mind::entry!(main);

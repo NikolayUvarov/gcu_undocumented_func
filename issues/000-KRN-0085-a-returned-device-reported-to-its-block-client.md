@@ -59,6 +59,25 @@
 
 **Landed** in round 113 (`main` d8d52c57, 2026-11-10): step 1, every group of the gate passed with it. **Left:** `usb_storage`'s `returned` (the request in `requests-DRV.md`) and the QEMU check that swaps a stick.
 
+## Progress (2026-11-12): steps 2 and 3
+
+**Made** on `claude/000-KRN-0085-returns-checked`, on DRV's `claude/000-DRV-0058-a-returned-usb-disk` (f7090144), whose `usb_storage` reports a return (plan step 4):
+- **`block::Device`** (`libmind/src/block.rs`):
+  - `check_returns()`: after "not found" or "peer" the request is not repeated; the device is marked returned and refuses every request until `reattach()`;
+  - `returned()`, and `reattach()`, which lends the buffer to the driver's current instance;
+  - a client that does not ask for it re-attaches and repeats, as before (MC-6.4).
+- **`vfs_server`** (`vfs_server/src/disk.rs`) asks for it on every disk. On a return, or when a drive that did not answer is asked again (`back`):
+  - it re-attaches every window's client and compares sector 0, the identity and the cached sectors (000-KRN-0079);
+  - nothing waits: a comparison that meets "not found" (a fresh instance serves sectors only once `init` has set its windows again, 6 s after the old one ended in QEMU; `usb_storage` finds a device that came back only when a read asks for it) fails the request at once and is tried again with a later one, 0.5 s on;
+  - the same medium: `THE … DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM`, and the request is repeated;
+  - another one: its volumes close, nothing cached is written (`CAME BACK WITH ANOTHER MEDIUM`);
+  - neither within 10 s of the first "not found", or a request that took 1 s or more: `DOES NOT ANSWER`, and it is asked again every 10 s.
+- **`tests/usb_image_smoke.py`:** the longer copy's step and 000-KRN-0079's step ask for the program until the copy is met, or the drive is said not to answer, as `vfs_server` asks a drive again only after its wait.
+- **Tested** (x32, "x86: USB image", two runs of ae04efa1; this container, the whole `run()` boot of 07002540 and the store's and slots' boots): every step of `run()` passed: the unplug and the stick again (`DOES NOT ANSWER`, then `ANSWERS AGAIN WITH THE SAME MEDIUM`), the same stick out and in while unused (a return: `ANSWERED NOT FOUND`, the old instance ending at the re-attach, the same medium, the file read back), the longer copy not used, 0079's other medium (`CAME BACK WITH ANOTHER MEDIUM`, the copy unchanged). "aarch64: files and the block store" passed on acc-1 (d0ce309c).
+- **The criterion's swap** (a copy with another manifest while `vfs_server` asks nothing) takes the paths those steps take: an unasked return, as the same stick's, then 0079's comparison finding another medium. A boot of its own for it failed twice for another reason: `usb_host` did not see the boot stick go, in the slots boot and in a fresh boot (its `DISCONNECTED` came from the boot's own empty ports). DRV adds the swap to `run()` itself (its message of 2026-11-12, 1908Z); the usb_host observation is in KRN's answer to DRV.
+- **Run again** at 38cb3ed4 (`main` 23f1f33e merged in; `scripts/host_tests.sh` taken as `main` has it, which finds `tests/usb_storage_host.rs` by name), on the maintainer's machines (QEMU under TCG): "x86: USB image" (166 s) and "x86: files and block writes" (989 s) on acc-1, "aarch64: files and the block store" (919 s) on acc-2, "host tests" (1849 s) on x32-128. Every one passed.
+- **Left:** the gate; the criterion's swap in `run()` (DRV); a driver killed and restarted (`run usb_storage` after `stop`), and the block store's window after a swap (plan step 5's criterion).
+
 ## Related
 
 [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).
