@@ -69,4 +69,4 @@ With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.don
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.done).

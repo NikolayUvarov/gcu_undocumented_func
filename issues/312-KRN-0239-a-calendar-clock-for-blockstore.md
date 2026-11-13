@@ -1,12 +1,12 @@
 # 312-KRN-0239 — A calendar clock for `blockstore`: an `rtc` client that only reads
 
-**Type:** kernel track (`init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([312-STO-0050](312-STO-0050-a-memory-domains-term.md)) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
+**Type:** kernel track (`init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** — ([312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done)) · **Roadmap:** track B · **Constitution:** MC-4.11, Appendix B.3
 
 ## Problem and plan
 
-STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](312-STO-0050-a-memory-domains-term.md), a memory domain's term. The request as it was written, kept whole:
+STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done), a memory domain's term. The request as it was written, kept whole:
 
-**Asked by** STO on 2026-11-13, for [312-STO-0050](312-STO-0050-a-memory-domains-term.md), a memory domain's term, as the maintainer chose it that day.
+**Asked by** STO on 2026-11-13, for [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done), a memory domain's term, as the maintainer chose it that day.
 
 - **What there is:**
   - `blockstore` keeps the monotonic time of its boot only (`mind::time::monotonic_ns`), for leases;
@@ -19,7 +19,7 @@ STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](312-STO
 ## Acceptance criteria
 
 - `blockstore` holds an `rtc` client without the setting badge in slot 5 when `rtc` runs, and starts without it, slot 5 empty, when `rtc` does not.
-- STO's check named above, run by STO once this is in.
+- STO's check named above ([312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.md)), run by STO once this is in.
 - The tests the change touches pass on x86 and aarch64 in QEMU; `docs/profile/bootstrap.md` names the slot.
 
 ## Progress
@@ -29,8 +29,9 @@ STO's request of 2026-11-13 (from `requests-KRN.md`), for [312-STO-0050](312-STO
 - **Docs:** `docs/profile/bootstrap.md`, `blockstore`'s row.
 - **Tested** (this container): `init` builds for x86 and aarch64 with no warning.
 - **Run on the maintainer's machines** at a6adff27 (Effector, QEMU under TCG): "x86: files and block writes" on i9 (1452 s) and "aarch64: files and the block store" on PCU (1122 s) passed, the store's suites among them.
-- **Left:** the gate; STO's reading of it.
+- **Landed** in round 130 (`main` c3a2c7d8, gate `land-r130` green), with STO's reading of the clock in `blockstore` (312-STO-0050, done: the store's part). STO's check on the platform, a term's end across a reboot in QEMU, is [312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.md).
+- **Left:** STO's check above; then this closes.
 
 ## Related
 
-[requests-KRN.md](requests-KRN.md), [312-STO-0050](312-STO-0050-a-memory-domains-term.md), [309-KRN-0209](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done) (slot 4).
+[requests-KRN.md](requests-KRN.md), [312-STO-0050](../issues-done/312-STO-0050-a-memory-domains-term.done), [309-KRN-0209](../issues-done/309-KRN-0209-a-second-store-disk-for-the-block-stores-copy.done) (slot 4).

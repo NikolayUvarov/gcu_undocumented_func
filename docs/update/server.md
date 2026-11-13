@@ -28,7 +28,7 @@ target/release/httpd /srv/mind --cert chain.pem --key key.pem --listen 0.0.0.0:4
 - **The pin.** At start the server prints `HTTPD: TLS 1.3, THE KEY'S SPKI SHA-256 <hex>`. That value is what `update.txt`'s `pin` takes ([updater.md](updater.md)).
 - **Renewals keep the key.** The server reads the certificate and key again when their files change, checked every 10 s. Connections already open keep the old certificate.
   - A new certificate over the same key: `HTTPD: THE CERTIFICATE RELOADED, THE SAME KEY`.
-  - A new key: the server says so, since a device that pins only the old key refuses it. A new key is published as a second pin before it is used ([351-UPD-0031](../../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md)).
+  - A new key: the server says so, since a device that pins only the old key refuses it. A new key is published as a second pin before it is used ([351-UPD-0031](../../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done)).
   - A pair that does not load, or a key that is not the certificate's: the last pair stays, and the server says why.
 
 ## Limits

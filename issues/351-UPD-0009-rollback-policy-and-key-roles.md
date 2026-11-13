@@ -1,6 +1,6 @@
 # 351-UPD-0009 — Rollback policy, metadata expiry, key roles and rotation
 
-**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open (split into 351-UPD-0024 to 0031) · **Blocked by:** its parts, [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](../issues-done/351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
+**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open (split into 351-UPD-0024 to 0031) · **Blocked by:** its parts, [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done), [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done), [351-UPD-0029](../issues-done/351-UPD-0029-the-boot-key-under-the-root.done), [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done), [351-UPD-0031](../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -54,7 +54,7 @@ What is done already (351-UPD-0007, 351-UPD-0013):
 | A short-lived timestamp key for the channel | [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done) | — (freezes, Appendix B.5) |
 | The boot key under the root, in the bootloader | [351-UPD-0029](../issues-done/351-UPD-0029-the-boot-key-under-the-root.done) | — (the boot key's rotation) |
 | A separate recovery authority | [351-UPD-0030](../issues-done/351-UPD-0030-a-separate-recovery-authority.done) | — (separate recovery authorities, MC-9.4) |
-| The key lifecycle and the compromise protocol, written down | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | the procedures, now in `docs/update/keys.md` |
+| The key lifecycle and the compromise protocol, written down | [351-UPD-0031](../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done) | the procedures, now in `docs/update/keys.md` |
 
 ## Related
 

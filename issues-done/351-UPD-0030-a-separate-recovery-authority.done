@@ -62,4 +62,4 @@ Landed in round 130 (`main` c3a2c7d8, gate `land-r130` green):
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [305](305-recovery-without-the-store.done).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.done), [305](305-recovery-without-the-store.done).

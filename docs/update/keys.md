@@ -1,6 +1,6 @@
 # Update keys: their lifecycle and the compromise protocol
 
-**Version:** 0.1 (2026-11-13) · **Track:** `UPD`, task [351-UPD-0031](../../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md) · **Constitution:** MC-9.4, 9.5, 9.6, 11.9 · Russian: [keys_RU.md](keys_RU.md)
+**Version:** 0.1 (2026-11-13) · **Track:** `UPD`, task [351-UPD-0031](../../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done) · **Constitution:** MC-9.4, 9.5, 9.6, 11.9 · Russian: [keys_RU.md](keys_RU.md)
 
 This document gives each key that vouches for an update:
 - its lifecycle: creation, assignment, storage, use, rotation, revocation and destruction (MC-9.6);
