@@ -28,7 +28,7 @@ use mind::{cid, dag, journal, sha256, tree};
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use cid::Cid;
-use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_SERVICE};
+use mind::abi::{BootInfo, BLOCK_MAX_SECTORS, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_WRITE, SLOT_RTC, SLOT_SERVICE};
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, recovery_parse, recovery_text, Operation, FIRST_DOMAIN_CLIENT, OWNER_BITS, OWNER_UPDATER};
 use copies::{Copies, Event, Gate, Medium as Side, Standing, Step};
@@ -59,6 +59,8 @@ const DOMAIN_CLIENTS: usize = 64;
 /// after a pause this long without a request, and a pass this long after the last one ended (the mount counts as one).
 const SCRUB_STEP: u64 = 256;
 const SCRUB_PAUSE_MS: u32 = 20;
+// How often the calendar time is read and the terms acted on (312-STO-0050).
+const TERMS_EVERY_NS: u64 = 60 * 1_000_000_000;
 const SCRUB_EVERY_NS: u64 = 24 * 3600 * 1_000_000_000;
 
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
@@ -269,6 +271,53 @@ fn domain_made(made: Result<u16, Error>, owner: u16, pid: u64, kib: u32) {
         Err(Error::NoRandom) => mind::println!("[BLOCKSTORE] NO DOMAIN FOR PID {}: NO {}, AND A KEY DERIVED FROM ANYTHING KEPT COULD NOT BE DESTROYED", pid, mind::random::SOURCE),
         Err(_) => {}
     }
+}
+
+// The calendar time (seconds since 1970 UTC) from `rtc`, where init gave a client of it in SLOT_RTC; none without one,
+// or if it does not answer (312-STO-0050).
+fn calendar() -> Option<u64> {
+    if mind::dev::cap_info(SLOT_RTC).0 != CAP_KIND_ENDPOINT { return None; }
+    let (days, seconds) = mind::rtc::local_now_in(mind::rtc::Zone::UTC)?;
+    Some((days as u64 + 10957) * 86_400 + seconds as u64)
+}
+
+// A term's mode as the wire carries it, and as the store keeps it (the maintainer's numbers).
+fn mode_in(mode: blockstore::TermMode) -> store::TermMode {
+    match mode { blockstore::TermMode::Forget => store::TermMode::Forget, blockstore::TermMode::Release => store::TermMode::Release, blockstore::TermMode::Report => store::TermMode::Report }
+}
+fn mode_out(mode: store::TermMode) -> blockstore::TermMode {
+    match mode { store::TermMode::Forget => blockstore::TermMode::Forget, store::TermMode::Release => blockstore::TermMode::Release, store::TermMode::Report => blockstore::TermMode::Report }
+}
+fn mode_name(mode: store::TermMode) -> &'static str { match mode { store::TermMode::Forget => "FORGET", store::TermMode::Release => "RELEASE", store::TermMode::Report => "REPORT" } }
+
+// The terms acted on at the calendar time heard: a domain past its term in mode forget forgotten and its clients
+// revoked; one in release or report told once. Without a clock, once, why none acts (312-STO-0050).
+fn act_on_terms(s: &mut Store<'static, Medium>, clients: &mut DomainClients, told: &mut [u16; DOMAINS], clock: &mut Option<bool>) {
+    let now = calendar();
+    s.set_calendar(now);
+    if clock.replace(now.is_some()) != Some(now.is_some()) {
+        match now {
+            Some(t) => mind::println!("[BLOCKSTORE] CALENDAR TIME {} FROM RTC: TERMS ACT", t),
+            None => mind::println!("[BLOCKSTORE] NO CALENDAR CLOCK (NO RTC CLIENT, OR IT DOES NOT ANSWER): NO TERM ACTS, EVERY DOMAIN AS IN REPORT"),
+        }
+    }
+    loop {
+        match s.expire() {
+            Ok(Some(id)) => {
+                clients.forget(id);
+                mind::println!("[BLOCKSTORE] DOMAIN {} FORGOTTEN: ITS TERM PASSED (MODE FORGET); ITS KEY DESTROYED, ITS RECORDS LEFT FOR THE NEXT COLLECTION", id);
+            }
+            Ok(None) => break,
+            Err(e) => { mind::println!("[BLOCKSTORE] A DOMAIN PAST ITS TERM NOT FORGOTTEN: {:?}", e); break }
+        }
+    }
+    for d in s.past_terms() {
+        if told.contains(&d.id) { continue; }
+        if let Some(slot) = told.iter_mut().find(|t| **t == 0) { *slot = d.id; }
+        mind::println!("[BLOCKSTORE] DOMAIN {}'S TERM {} PASSED (MODE {})", d.id, d.until, mode_name(d.mode));
+    }
+    // A domain no longer past its term may be told again later.
+    for t in told.iter_mut() { if *t != 0 && !s.past_terms().any(|d| d.id == *t) { *t = 0; } }
 }
 
 // A client of the owner's live domain `id` with `rights`: not-found for none, rights for another owner's (308-STO-0023).
@@ -491,10 +540,16 @@ fn main(_info: &'static BootInfo) {
     let mut retry = 0u64;
     let mut clients = DomainClients([None; DOMAIN_CLIENTS]);
     let mut scrubs = Scrubs { passes: 0, last: store::Scrubbed::default(), ended: 0, next: mind::time::monotonic_ns() + SCRUB_EVERY_NS };
+    // When the terms are next acted on, the domains past theirs told already, and whether a clock was heard (312-STO-0050).
+    let (mut terms_next, mut told_terms, mut clock) = (0u64, [0u16; DOMAINS], None::<bool>);
     loop {
         // A pass under way, or a name behind on the copy, goes on after a pause without requests; the next pass starts
         // when it is due.
         let now = mind::time::monotonic_ns();
+        if now >= terms_next {
+            if let Ok(s) = store.as_mut() { act_on_terms(s, &mut clients, &mut told_terms, &mut clock); }
+            terms_next = now + TERMS_EVERY_NS;
+        }
         let wait = match store.as_ref() {
             Ok(s) if copies.as_ref().map_or(s.scrubbing(), |c| c.scrubbing(s) || c.behind() > 0 && now >= retry) => SCRUB_PAUSE_MS,
             Ok(_) => {
@@ -503,6 +558,7 @@ fn main(_info: &'static BootInfo) {
             }
             Err(_) => 0,
         };
+        let wait = if store.is_ok() { wait.min((terms_next.saturating_sub(now) / 1_000_000).clamp(1, u32::MAX as u64) as u32) } else { wait };
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else {
             let now = mind::time::monotonic_ns();
             match (store.as_mut(), copies.as_mut()) {
@@ -582,6 +638,9 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::DomainCreate, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create(call, Err(Error::Rights)),
             Ok((Request::DomainClient { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client(call, Err(Error::Rights)),
             Ok((Request::DomainClientWith { .. }, call)) if refused(Operation::DomainClient) || through_domain(Operation::DomainClient) => blockstore::reply_domain_client_with(call, Err(Error::Rights)),
+            // A term is retention, as forgetting is; reading it is the owner's, as `domains` is (312-STO-0050).
+            Ok((Request::DomainSetTerm { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_set_term(call, Err(Error::Rights)),
+            Ok((Request::DomainTerm { .. }, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domain_term(call, Err(Error::Rights)),
             Ok((Request::DomainForget { .. }, call)) if refused(Operation::DomainForget) || through_domain(Operation::DomainForget) => blockstore::reply_domain_forget(call, Err(Error::Rights)),
             Ok((Request::Domains, call)) if refused(Operation::Domains) || through_domain(Operation::Domains) => blockstore::reply_domains(call, Err(Error::Rights)),
             Ok((Request::DomainCreateLimited { .. }, call)) if refused(Operation::DomainCreate) || through_domain(Operation::DomainCreate) => blockstore::reply_domain_create_limited(call, Err(Error::Rights)),
@@ -781,6 +840,21 @@ fn main(_info: &'static BootInfo) {
                 let cap = narrowed.ok_or(Error::Invalid).and_then(|r| lend_domain(&store, &mut clients, id, r, owner));
                 if cap.is_ok() { mind::println!("[BLOCKSTORE] DOMAIN {}'S CLIENT LENT TO PID {} (BADGE {}) WITH RIGHTS {}", id, pid, badge, narrowed.unwrap_or(0)); }
                 blockstore::reply_domain_client_with(call, cap)
+            }
+            Ok((Request::DomainSetTerm { id, mode, until }, call)) => {
+                let done = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_set_term(id, owner, until, mode_in(mode)).map_err(error));
+                if done.is_ok() {
+                    let heard = if clock == Some(true) { "" } else { "; NO CALENDAR CLOCK, SO NONE ACTS UNTIL ONE IS HEARD" };
+                    mind::println!("[BLOCKSTORE] DOMAIN {}'S TERM SET BY PID {}: UNTIL {}, MODE {}{}", id, pid, until, mode_name(mode_in(mode)), heard);
+                    // Acted on at once, with the calendar time heard last.
+                    terms_next = 0;
+                }
+                blockstore::reply_domain_set_term(call, done)
+            }
+            Ok((Request::DomainTerm { id }, call)) => {
+                let term = store.as_ref().map_err(|e| *e).and_then(|s| s.domain_term(id, owner).map_err(error))
+                    .map(|t| blockstore::Term { until: t.until, mode: mode_out(t.mode), clock: t.clock, passed: t.passed });
+                blockstore::reply_domain_term(call, term.as_ref().map_err(|e| *e))
             }
             Ok((Request::DomainForget { id }, call)) => {
                 let done = store.as_mut().map_err(|e| *e).and_then(|s| s.domain_forget(id, owner).map_err(error));

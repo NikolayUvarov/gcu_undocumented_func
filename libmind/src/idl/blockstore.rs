@@ -18,6 +18,7 @@
 //! each stands against the store, and a name only the copy holds is brought back into the store from it (309-STO-0041, 2.6).
 //! A memory domain may be made with a limit of its own on what it retains, beside its owner's quota (312-STO-0046, 2.7).
 //! An owner may lend a client of its domain with fewer rights than its own, one that only reads (312-STO-0049, 2.8).
+//! A memory domain has a term and a mode: past it, the store forgets it, releases it or only reports it (312-STO-0050, 2.9).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -27,7 +28,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (2, 8, 0);
+pub const VERSION: (u8, u8, u8) = (2, 9, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -274,6 +275,32 @@ impl Wire for Rebuilt {
     const MAX: usize = <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <Durability as Wire>::MAX + <Walked as Wire>::MAX + <List<u8, 36> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.visited.encode(w)?; self.lacked.encode(w)?; self.put.encode(w)?; self.durability.encode(w)?; self.walked.encode(w)?; self.at.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, visited: Wire::decode(r)?, lacked: Wire::decode(r)?, put: Wire::decode(r)?, durability: Wire::decode(r)?, walked: Wire::decode(r)?, at: Wire::decode(r)? }) }
+}
+
+/// What the store does with a memory domain past its term (2.9, 312-STO-0050): forget it, as `domain-forget` does;
+/// release it, its names and pins retaining nothing, so a collection frees its records, writes through it refused
+/// (`read-only`) and its key kept; or only report it. A domain is in `report` until its owner sets another.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TermMode { #[default] Forget = 0, Release = 1, Report = 2 }
+impl TermMode {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Forget), 1 => Some(Self::Release), 2 => Some(Self::Report), _ => None } }
+}
+impl Wire for TermMode {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A domain's term (seconds since 1970 UTC; 0, none) and mode, whether the store hears a calendar clock, and whether
+/// the term has passed by it: without a clock no term acts, and every domain is as in `report` (2.9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Term { pub until: u64, pub mode: TermMode, pub clock: bool, pub passed: bool }
+impl Wire for Term {
+    const MAX: usize = <u64 as Wire>::MAX + <TermMode as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.until.encode(w)?; self.mode.encode(w)?; self.clock.encode(w)?; self.passed.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { until: Wire::decode(r)?, mode: Wire::decode(r)?, clock: Wire::decode(r)?, passed: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -571,12 +598,39 @@ pub fn domain_client_with(endpoint: Endpoint, id: u16, rights: u16, receive: usi
     }
 }
 
+/// Sets domain `id`'s mode and term (seconds since 1970 UTC; 0, none), its owner's, at any time and either way: a
+/// term record written, then the one before erased. The store acts on it from the next calendar time it hears, at
+/// most a minute later. Errors: not-found (no such live domain), rights (another owner's, or asked through a domain's
+/// client), full, read-only, device (2.9, 312-STO-0050).
+pub fn domain_set_term(endpoint: Endpoint, id: u16, mode: TermMode, until: u64) -> Result<core::result::Result<(), Error>> {
+    let words = [20 | MAJOR << 8 | ((id) as usize) << 16 | ((mode) as usize) << 32, ((until) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// Domain `id`'s term, as its owner set it, and whether it has passed. Errors as `domain-usage`'s (2.9).
+pub fn domain_term(endpoint: Endpoint, id: u16) -> Result<core::result::Result<Term, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        id.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 21 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 11, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Term as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Forgets domain `id` of the caller's owner (MC-4.8): a tombstone is written, then its key record erased. Its
 /// names, pins and blocks are gone at once and its clients revoked; its records never open again, and the next
 /// collection frees them. Copies already read, and a flash medium's spare blocks, are outside this. Errors:
 /// not-found, rights, full, read-only, device (2.2).
 pub fn domain_forget(endpoint: Endpoint, id: u16) -> Result<core::result::Result<(), Error>> {
-    let words = [20 | MAJOR << 8 | ((id) as usize) << 16, 0];
+    let words = [22 | MAJOR << 8 | ((id) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     wire::check_reply(&reply, [0, 0], false)?;
@@ -590,7 +644,7 @@ pub fn domains(endpoint: Endpoint) -> Result<core::result::Result<List<Domain, 3
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 21 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 23 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 98, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -602,7 +656,7 @@ pub fn domains(endpoint: Endpoint) -> Result<core::result::Result<List<Domain, 3
 /// key and does not change while it lives. A `publish`, `commit` or `pin` through its client past it is `quota`.
 /// Errors as `domain-create`'s (2.7, 312-STO-0046).
 pub fn domain_create_limited(endpoint: Endpoint, kib: u32) -> Result<core::result::Result<u16, Error>> {
-    let words = [22 | MAJOR << 8 | ((kib) as usize) << 16, 0];
+    let words = [24 | MAJOR << 8 | ((kib) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffff0000, 0x0], false)?;
@@ -618,7 +672,7 @@ pub fn domain_usage(endpoint: Endpoint, id: u16) -> Result<core::result::Result<
         id.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 23 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 25 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 24, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -637,7 +691,7 @@ pub fn scrub(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Error>
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 24 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 26 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 28, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -651,7 +705,7 @@ pub fn scrubbed(endpoint: Endpoint) -> Result<core::result::Result<Scrubbed, Err
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 25 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 27 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 28, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -669,7 +723,7 @@ pub fn recovery_new(endpoint: Endpoint) -> Result<core::result::Result<Text<39>,
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 26 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 28 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 41, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -686,7 +740,7 @@ pub fn recovery_keep(endpoint: Endpoint, key: &str) -> Result<core::result::Resu
         codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 27 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 29 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 4, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -696,7 +750,7 @@ pub fn recovery_keep(endpoint: Endpoint, key: &str) -> Result<core::result::Resu
 /// Erases every recovery record, and returns how many: no recovery key opens the medium after it. Errors:
 /// read-only, device (2.4).
 pub fn recovery_forget(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
-    let words = [28 | MAJOR << 8, 0];
+    let words = [30 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -705,7 +759,7 @@ pub fn recovery_forget(endpoint: Endpoint) -> Result<core::result::Result<u32, E
 
 /// The recovery records on the medium: more than one between `recovery-new` and `recovery-keep` (2.4).
 pub fn recoveries(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
-    let words = [29 | MAJOR << 8, 0];
+    let words = [31 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -724,7 +778,7 @@ pub fn recover(endpoint: Endpoint, key: &str) -> Result<core::result::Result<(),
         codec::encode_str::<39>(key, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 30 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 32 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 0, false, false)?;
     if length != Some(0) { return Err(SysError::Invalid); }
@@ -747,7 +801,7 @@ pub fn copy(endpoint: Endpoint, name: &str, on: bool) -> Result<core::result::Re
         on.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 31 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 33 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -762,7 +816,7 @@ pub fn copy_stat(endpoint: Endpoint) -> Result<core::result::Result<CopyStats, E
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 32 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 34 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 36, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -781,7 +835,7 @@ pub fn copy_names(endpoint: Endpoint, after: &str) -> Result<core::result::Resul
         codec::encode_str::<64>(after, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 33 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 35 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1810, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -812,7 +866,7 @@ pub fn rebuild(endpoint: Endpoint, name: &str, check: bool) -> Result<core::resu
         check.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 34 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 36 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 60, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -844,6 +898,8 @@ pub enum Request<'a> {
     DomainCreate,
     DomainClient { id: u16 },
     DomainClientWith { id: u16, rights: u16 },
+    DomainSetTerm { id: u16, mode: TermMode, until: u64 },
+    DomainTerm { id: u16 },
     DomainForget { id: u16 },
     Domains,
     DomainCreateLimited { kib: u32 },
@@ -1007,21 +1063,34 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::DomainClientWith { id: wire::field(&words, 0, 16, 16) as u16, rights: wire::field(&words, 0, 32, 16) as u16 }, Call::words(request, cap)))
         }
         20 => {
+            wire::body(request, cap, [0xffffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
+            let Some(mode) = TermMode::from_code(wire::field(&words, 0, 32, 8)) else { wire::discard(request, cap); return Err(Reject::Invalid) };
+            Ok((Request::DomainSetTerm { id: wire::field(&words, 0, 16, 16) as u16, mode, until: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
+        }
+        21 => {
+            let (call, length) = wire::take_buffer(request, cap, 11, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let id = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::DomainTerm { id }, call))
+        }
+        22 => {
             wire::body(request, cap, [0xffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::DomainForget { id: wire::field(&words, 0, 16, 16) as u16 }, Call::words(request, cap)))
         }
-        21 => {
+        23 => {
             let (call, length) = wire::take_buffer(request, cap, 98, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Domains, call))
         }
-        22 => {
+        24 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::DomainCreateLimited { kib: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
-        23 => {
+        25 => {
             let (call, length) = wire::take_buffer(request, cap, 24, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1029,28 +1098,28 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::DomainUsage { id }, call))
         }
-        24 => {
+        26 => {
             let (call, length) = wire::take_buffer(request, cap, 28, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Scrub, call))
         }
-        25 => {
+        27 => {
             let (call, length) = wire::take_buffer(request, cap, 28, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Scrubbed, call))
         }
-        26 => {
+        28 => {
             let (call, length) = wire::take_buffer(request, cap, 41, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::RecoveryNew, call))
         }
-        27 => {
+        29 => {
             let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1058,15 +1127,15 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::RecoveryKeep { key }, call))
         }
-        28 => {
+        30 => {
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::RecoveryForget, Call::words(request, cap)))
         }
-        29 => {
+        31 => {
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Recoveries, Call::words(request, cap)))
         }
-        30 => {
+        32 => {
             let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1074,7 +1143,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Recover { key }, call))
         }
-        31 => {
+        33 => {
             let (call, length) = wire::take_buffer(request, cap, 1, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1083,14 +1152,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Copy { name, on }, call))
         }
-        32 => {
+        34 => {
             let (call, length) = wire::take_buffer(request, cap, 36, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::CopyStat, call))
         }
-        33 => {
+        35 => {
             let (call, length) = wire::take_buffer(request, cap, 1810, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1098,7 +1167,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::CopyNames { after }, call))
         }
-        34 => {
+        36 => {
             let (call, length) = wire::take_buffer(request, cap, 60, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -1188,6 +1257,14 @@ pub fn reply_domain_client(call: Call, value: core::result::Result<usize, Error>
 pub fn reply_domain_client_with(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, false)
+}
+pub fn reply_domain_set_term(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_domain_term(call: Call, value: core::result::Result<&Term, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_domain_forget(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
