@@ -24,6 +24,8 @@ A group of its own, "aarch64: tools" (`--suites tools`), rather than a longer "a
 ## Progress
 
 **Made (2026-11-13)** on `claude/000-KRN-0240-tools-on-aarch64`: the group in `scripts/ci_local.sh` and in CI's aarch64 matrix.
+- **Run** at 94b73e41 on the maintainer's machines (QEMU under TCG): "aarch64: tools" passed on x32-128 (116 s, its 11 checks, `clipboard`'s among them) and on PCU (157 s).
+- **Left:** the gate.
 
 ## Related
 
