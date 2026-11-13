@@ -1,6 +1,6 @@
 # 312-APP-0134 — The shell starts a program in a memory domain
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` done, 2026-11-12; a read-only start waits for the store) · **Blocked by:** — (a read-only start: [requests-STO.md](requests-STO.md), a domain's client with fewer rights) · **Main task:** [312](312-the-minds-memory.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (`run -d` done, 2026-11-12; a read-only start waits for the store) · **Blocked by:** — (a read-only start: [requests-STO.md](requests-STO.md), a domain's client with fewer rights) · **Main task:** [312](../issues-done/312-the-minds-memory.done) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.11
 
 **Asked by:** STO, for 312's QEMU criterion, in [requests-APP.md](requests-APP.md), 2026-11-12. Numbered on 2026-11-12.
 
@@ -28,4 +28,4 @@ A memory domain is a set of names, pins and blocks under a key of its own (308-S
 
 ## Related
 
-[312](312-the-minds-memory.md), [requests-APP.md](requests-APP.md), 308-STO-0023 (memory domains).
+[312](../issues-done/312-the-minds-memory.done), [requests-APP.md](requests-APP.md), 308-STO-0023 (memory domains).

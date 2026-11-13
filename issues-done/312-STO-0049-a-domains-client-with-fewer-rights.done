@@ -1,6 +1,6 @@
 # 312-STO-0049 — A domain's client with fewer rights than its owner's — done
 
-**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](../issues/312-the-minds-memory.md) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.7, MC-4.11, MC-11.5
+**Type:** service (storage), interface · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-12) · **Blocked by:** — · **Main task:** [312](312-the-minds-memory.done) · **Roadmap:** track B "assertions and derived indexes" · **Constitution:** MC-4.7, MC-4.11, MC-11.5
 
 Asked by APP on 2026-11-12 in `requests-STO.md`, for [312-APP-0134](../issues/312-APP-0134-a-program-started-in-a-memory-domain.md)'s read-only start (`run -d` of a program that asks only for `REQUEST_BLOCKSTORE_READ`).
 
@@ -56,4 +56,4 @@ Done on `claude/relaxed-meitner-5bmhpz` as f469a279, with 60724959 (the check re
 
 ## Related
 
-[312](../issues/312-the-minds-memory.md), [312-APP-0134](../issues/312-APP-0134-a-program-started-in-a-memory-domain.md), [308-STO-0023](308-STO-0023-memory-domains.done), [300-STO-0004](300-STO-0004-rights-by-badge.done).
+[312](312-the-minds-memory.done), [312-APP-0134](../issues/312-APP-0134-a-program-started-in-a-memory-domain.md), [308-STO-0023](308-STO-0023-memory-domains.done), [300-STO-0004](300-STO-0004-rights-by-badge.done).
