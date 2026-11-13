@@ -1,12 +1,12 @@
-# 351-UPD-0027 — Key rotation and revocation
+# 351-UPD-0027 — Key rotation and revocation — done
 
-**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), landed in round 127) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
+**Type:** update (keys) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), landed in round 127) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.5, MC-9.6
 
-Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
+Split from [351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
 ## Problem
 
-With a key file ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done)), a key is replaced by publishing a new file. Two gaps remain:
+With a key file ([351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done)), a key is replaced by publishing a new file. Two gaps remain:
 
 - nothing stops an old key file from being served again, which brings a revoked key back;
 - nothing says what happens to releases signed by a key the file no longer lists.
@@ -15,7 +15,7 @@ With a key file ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-sign
 
 - **The highest key-file version is kept.** The updater keeps the highest version it has accepted on the disk, in the update zone beside the boot records, and refuses a lower one.
 - **The root rotates like TUF's.** A key file that changes the root is signed by the threshold of the old root and of the new one.
-- **A key the file lists no more is revoked.** A channel signed only by it is refused, at a check and at a rollback: a slot whose kept channel carries only that key's signature is not a fallback. The boot key at boot is [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md).
+- **A key the file lists no more is revoked.** A channel signed only by it is refused, at a check and at a rollback: a slot whose kept channel carries only that key's signature is not a fallback. The boot key at boot is [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md).
 - **Commands:** `scripts/release.py keys --rotate ROLE` and `--revoke KEY`.
 
 ## Acceptance criteria
@@ -58,6 +58,15 @@ With a key file ([351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-sign
 - **On the maintainer's machines** (Effector, QEMU under TCG), at 6b96b059 (351-UPD-0028's branch with `main` 86794305 merged): "x86: the updater and an update through the link" on x32 (973 s), "aarch64: the updater and the modes" on acc-1 (862 s), "aarch64: an update through the link" on acc-2 (745 s) and "host tests" on x32-2 (1768 s) passed. `update-keys` is in the `updater` suite of both.
 - **Left:** the gate.
 
+## Resolution
+
+**Every criterion is met.**
+- **Host tests:** a lower key-file version is refused, and a root change signed by one of the two thresholds is refused, by either (`tests/release_host.rs`, `release::step`); `tests/release_test.py` for the tool's rotation, revocation and history.
+- **QEMU, x86 and aarch64** (`update-keys`, in the `updater` suite): after the release key is rotated (version 2, then the root in version 3), the channel the old key signed is refused; version 1 served again is refused, and a version 4 the rotated-away root signed; the kept version 3 holds across `svc restart updater` and a reboot. In the kernel session's container (x86) and on the maintainer's machines at 6b96b059 (x32, acc-1, acc-2), then in round 128's gate.
+- **Docs:** `docs/update/publishing.md` and `publishing_RU.md` give the procedure (0.5).
+- **Beside the plan:** the highest version is kept in `system/updater`, a private directory of the updater's badge, not beside the boot records, which are written only in place; and the commands are `keys rotate` and `keys revoke`.
+- **Landed** in round 128 (`main` ada2b041): every group of scripts/ci_local.sh --list passed on acc-2, PCU, x32-128 and its second lane, "x86: services, storage, audio" on its second run alone (a check's race in 000-KRN-0235's field, not these tasks'). Tests are evidence, not proofs (MC-12.2).
+
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](../issues-done/351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.done), [351-UPD-0029](../issues/351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0031](../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md).
