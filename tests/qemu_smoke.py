@@ -2483,8 +2483,11 @@ def monitors_check(vm):
     else:
         names = (f"{vm.cpus} CPUs online, APIC IDs", "+NX", "TSC", "MHz (calibrated)", "00:01.1  010180  IDE controller")
         line = r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"
-    for text in ("Processor", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}", "Interrupt lines", "kernel arena 64.0M") + names:
+    for text in ("Processor", "Interrupt lines", "kernel arena 64.0M") + names:
         assert table_row(screen, re.escape(canon(text))), (text, screen)
+    # The framebuffer holds the screen's cells, 8 by 16 pixels each; its height need not be a whole row (aarch64's 600).
+    frame = re.search(r"GOP framebuffer (\d+)x(\d+)", "\n".join(screen))
+    assert frame and int(frame[1]) // 8 == len(screen[0]) and int(frame[2]) // 16 == len(screen), (frame and frame[0], screen)
     # The holder of a line is the driver; init keeps a copy for restarts (issues 075, 076).
     assert table_row(screen, line), screen
     vm.send("q")
