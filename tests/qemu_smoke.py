@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -6345,7 +6345,10 @@ def dmesg_check(vm):
     assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
     # The text may claim any source; logd records the sender.
     require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
-    require(vm.command("dmesg -n 1", raw=True), f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    # The last records: clipboard may log the program the shell names in front (dmesg itself) after the forged line.
+    last = vm.command("dmesg -n 3", raw=True)
+    require(last, f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    assert len(re.findall(r"^\[\s*\d+\.\d{3}\] ", last, re.M)) <= 3, last
     only = vm.command("dmesg -s vfs_server", raw=True)
     assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
     assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
@@ -14460,7 +14463,8 @@ def wm_suite(vm):
     fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
     # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
     # lifecycle client, which wm does not hold.
-    require(out, f"STARTED fm PID {started['fm']} WITH window,files,sysinfo,shell")
+    # The clipboard's client between them where the service mints programs' copies (000-KRN-0235, 000-APP-0032).
+    assert re.search(rf"STARTED fm PID {started['fm']} WITH window,files,sysinfo,(clipboard,)?shell\b", out), out[-3000:]
     require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
     assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
     time.sleep(1.5)  # the text programs drew at the size of their frames
@@ -15270,7 +15274,7 @@ def wm_suite(vm):
         # no leaves it.
         run_line("fm ram:fmrun.msh", "STARTED fm")
         started_fm = re.findall(r"\[WM\] STARTED fm PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
-        assert "shell" in started_fm[1].split(","), started_fm
+        assert "shell" in started_fm[1].split(" WITHOUT ")[0].split(","), started_fm  # what it lacks follows WITHOUT
         while not any(m[1] == started_fm[0] for m in windows_re.findall("".join(seen))):
             wait("[WM] WINDOW", lines=0)
         files = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == started_fm[0])
