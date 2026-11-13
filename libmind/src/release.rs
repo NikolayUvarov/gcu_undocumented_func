@@ -1,6 +1,6 @@
 //! Release metadata (351-UPD-0013, docs/update/publishing.md): a channel file, a key file (351-UPD-0026), a timestamp
-//! file (351-UPD-0028) and a boot manifest. The parser service reads them (`parse_channel`, `parse_keys`,
-//! `parse_timestamp`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
+//! file (351-UPD-0028), a recovery order (351-UPD-0030) and a boot manifest. The parser service reads them
+//! (`parse_channel`, `parse_keys`, `parse_timestamp`, `parse_order`, `Manifest`); the updater, which holds the update zone, parses none of it and accepts
 //! what the parser says only if it encodes again to exactly the signed bytes (`encode_channel`, `encode_line`,
 //! `encode_file`), so a parser that lies is caught (MC-11.5, 11.11). Both formats have one encoding, which `parse_*`
 //! demands: anything else is malformed.
@@ -9,6 +9,7 @@
 pub const CHANNEL_MAX: usize = 2560;
 pub const KEYS_MAX: usize = 4096;
 pub const TIMESTAMP_MAX: usize = 2048;
+pub const ORDER_MAX: usize = 2048;
 pub const MANIFEST_MAX: usize = 32768;
 /// Signature lines a channel or a key file carries, at most; public keys a role names, at most.
 pub const SIGNATURES_MAX: usize = 8;
@@ -431,6 +432,49 @@ pub fn encode_timestamp(stamp: &Timestamp, out: &mut [u8]) -> Option<usize> {
 
 /// Whether a timestamp's fields and signatures are exactly `file`, as `channel_is` for a channel.
 pub fn timestamp_is(file: &[u8], stamp: &Timestamp, signed: &Signed) -> bool { file_is(file, signed, |out| encode_timestamp(stamp, out)) }
+
+/// What a recovery order says (351-UPD-0030): the channel it applies to, when it expires, the floor it lowers the boot
+/// records' to, its own sequence number, which each order raises, and the version to go back to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Order { pub channel: Text<NAME_MAX>, pub expires: [u8; 20], pub floor: u64, pub sequence: u64, pub version: u64 }
+
+/// A recovery order: `{"channel":…,"expires":…,"floor":…,"sequence":…,"version":…}`, no spaces, with 1 ≤ floor ≤
+/// version and a sequence from 1, then its recovery keys' signature lines, as a channel's.
+pub fn parse_order(file: &[u8]) -> Result<(Order, Signed), Malformed> {
+    if file.len() > ORDER_MAX { return Err(Malformed); }
+    let (body, signed) = split_signed(file)?;
+    let mut s = Scan { text: &file[..body], at: 0 };
+    let parsed = (|| {
+        s.literal(b"{\"channel\":")?;
+        let channel = s.string::<NAME_MAX>()?;
+        s.literal(b",\"expires\":\"")?;
+        let expires = timestamp(s.until(b'"')?)?;
+        s.literal(b"\",\"floor\":")?;
+        let floor = s.digits()?;
+        s.literal(b",\"sequence\":")?;
+        let sequence = s.digits()?;
+        s.literal(b",\"version\":")?;
+        let version = s.digits()?;
+        s.literal(b"}\n")?;
+        (s.at == body && 1 <= floor && floor <= version && sequence >= 1).then_some(Order { channel, expires, floor, sequence, version })
+    })();
+    parsed.map(|order| (order, signed)).ok_or(Malformed)
+}
+
+/// The first line of a recovery order, with its newline, in its one encoding: what the recovery keys sign.
+pub fn encode_order(order: &Order, out: &mut [u8]) -> Option<usize> {
+    let mut o = Out { buf: out, len: 0 };
+    o.put(b"{\"channel\":\"")?; o.put(order.channel.as_bytes())?;
+    o.put(b"\",\"expires\":\"")?; o.put(&order.expires)?;
+    o.put(b"\",\"floor\":")?; o.decimal(order.floor)?;
+    o.put(b",\"sequence\":")?; o.decimal(order.sequence)?;
+    o.put(b",\"version\":")?; o.decimal(order.version)?;
+    o.put(b"}\n")?;
+    Some(o.len)
+}
+
+/// Whether a recovery order's fields and signatures are exactly `file`, as `channel_is` for a channel.
+pub fn order_is(file: &[u8], order: &Order, signed: &Signed) -> bool { file_is(file, signed, |out| encode_order(order, out)) }
 
 /// A file line of a boot manifest: `file <path> <size> <sha256> <flags in 8 hex digits> <MiB>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

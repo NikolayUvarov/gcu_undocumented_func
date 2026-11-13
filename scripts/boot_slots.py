@@ -17,10 +17,11 @@ Usage:
     boot_slots.py floor IMAGE [N]              the version floor the records hold (351-UPD-0024), or a record one past
                                                the newer that sets it to N, as the recovery authority would
 
-The record is the one in bootloader/src/slots.rs: magic "MINDBOOT", format 2, sequence (u64), slot, fallback (or 0),
-tries left, flags (bit 0: confirmed), the version floor (u64), zeros, and a CRC-32 of the first 508 bytes; all
-little-endian. A record of format 1 is not read: the disk is written again. The manifest in a
-slot is the build's own: the bootloader checks the slot's kernel and services against it by name.
+The record is the one in bootloader/src/slots.rs: magic "MINDBOOT", format 3, sequence (u64), slot, fallback (or 0),
+tries left, flags (bit 0: confirmed), the version floor (u64), the key file version (u64, 351-UPD-0029), zeros, and a
+CRC-32 of the first 508 bytes; all little-endian. A record of another format is not read: the disk is written again.
+The manifest in a slot is the build's own: the bootloader checks the slot's key file under the root keys built in, the
+manifest against the boot keys it names, and the slot's kernel and services against the manifest by name.
 """
 import os
 import re
@@ -34,12 +35,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = 512
 MAGIC = b"MINDBOOT"
-FORMAT = 2  # format 2 adds the version floor (351-UPD-0024)
+FORMAT = 3  # format 2 adds the version floor (351-UPD-0024), format 3 the key file version (351-UPD-0029)
 FILES = ("MIND/BOOT0", "MIND/BOOT1")
 SEQUENCE_LAST = 2**64 - 3  # the largest sequence a record may hold, as bootloader/src/slots.rs
 # The kernel and the services the bootloader loads (BOOT_FILES in the ABI), and the manifest it checks them against.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
-SIGNED = ("MANIFEST", "MANIFEST.SIG")
+# The manifest and its signature, and the key file whose boot role signed it with the files of its root changes.
+SIGNED = ("MANIFEST", "MANIFEST.SIG", "KEYS", *(f"KEYS.{i}" for i in range(1, 9)))
 # The loader as a volume and its manifest hold it, and its name in a slot (351-UPD-0010).
 LOADERS = {"EFI/BOOT/BOOTX64.EFI": "BOOTX64.EFI", "EFI/BOOT/BOOTAA64.EFI": "BOOTAA64.EFI"}
 # A release's period for the updater, which its slot carries (351-UPD-0036, updater/src/plan.rs).
@@ -47,14 +49,14 @@ PERIOD = "period.txt"
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
 
 
-def record(sequence, slot, fallback=None, tries=0, confirmed=False, floor=0):
-    data = struct.pack("<8sIQ4BQ", MAGIC, FORMAT, sequence, ord(slot), ord(fallback) if fallback else 0, tries, 1 if confirmed else 0, floor)
+def record(sequence, slot, fallback=None, tries=0, confirmed=False, floor=0, keys=0):
+    data = struct.pack("<8sIQ4BQQ", MAGIC, FORMAT, sequence, ord(slot), ord(fallback) if fallback else 0, tries, 1 if confirmed else 0, floor, keys)
     data = data.ljust(RECORD - 4, b"\0")
     return data + struct.pack("<I", zlib.crc32(data))
 
 
 def other_format(data):
-    """The format of a record of ours that is not format 2 (format 1), which nothing reads; None otherwise."""
+    """The format of a record of ours that is not format 3 (format 1 or 2), which nothing reads; None otherwise."""
     if data is None or len(data) != RECORD or data[:8] != MAGIC:
         return None
     version = struct.unpack_from("<I", data, 8)[0]
@@ -65,17 +67,17 @@ def parse(data):
     """The record as a dict, or None where the bootloader would ignore it."""
     if len(data) != RECORD or data[:8] != MAGIC or struct.unpack_from("<I", data, RECORD - 4)[0] != zlib.crc32(data[:RECORD - 4]):
         return None
-    _, version, sequence, slot, fallback, tries, flags, floor = struct.unpack_from("<8sIQ4BQ", data)
-    if version != FORMAT or chr(slot) not in "AB" or (fallback and chr(fallback) not in "AB") or flags & ~1 or any(data[32:RECORD - 4]):
+    _, version, sequence, slot, fallback, tries, flags, floor, keys = struct.unpack_from("<8sIQ4BQQ", data)
+    if version != FORMAT or chr(slot) not in "AB" or (fallback and chr(fallback) not in "AB") or flags & ~1 or any(data[40:RECORD - 4]):
         return None
     if sequence > SEQUENCE_LAST:  # a trial writes one more, and its failure one more again (351-UPD-0015)
         return None
     return {"sequence": sequence, "slot": chr(slot), "fallback": chr(fallback) if fallback else None, "tries": tries, "confirmed": bool(flags & 1),
-            "floor": floor}
+            "floor": floor, "keys": keys}
 
 
 def boot_set(volume):
-    """The files of a volume that go into a slot: the kernel, the boot services it has, the manifest."""
+    """The files of a volume that go into a slot: the kernel, the boot services it has, the manifest, the key files."""
     return [name for name in ("kernel.elf", *BOOT_FILES, *SIGNED) if (Path(volume) / name).is_file()]
 
 
@@ -175,12 +177,13 @@ def newest(found):
 
 
 def write_next(image, **fields):
-    """Writes a record one past the newer valid one into the other file, as the updater will, carrying its floor
-    unless `floor` is given; returns it."""
+    """Writes a record one past the newer valid one into the other file, as the updater will, carrying its floor and
+    key file version unless `floor` or `keys` is given; returns it."""
     found_all = records(image.path)
     found = newest(found_all)
     k, sequence = (found[0], found[1]["sequence"]) if found else (1, 0)
     fields.setdefault("floor", floor_of(found_all))
+    fields.setdefault("keys", found[1]["keys"] if found else 0)
     image.write(FILES[1 - k], record(sequence + 1, **fields))
     return parse(image.read(FILES[1 - k]))
 
@@ -197,6 +200,7 @@ def main(argv):
         chosen = newest(found)
         print(f"NEWER: {FILES[chosen[0]]}" if chosen else "NO VALID RECORD")
         print(f"VERSION FLOOR: {floor_of(found)}")
+        print(f"KEY FILE VERSION: {chosen[1]['keys'] if chosen else 0} OR ABOVE")
     elif argv[:1] == ["stage"] and len(argv) in (3, 5) and argv[2] in ("A", "B") and argv[3:4] in ([], ["--tries"]):
         image = Image(argv[1])
         current = newest(records(image.path))

@@ -17,6 +17,8 @@ Server layout:
                                                  by its own (351-UPD-0027)
     timestamps/<channel>                    the channel file's SHA-256, a short expiry and its own version, signed by
                                                  the timestamp keys (351-UPD-0028); renewed without the release key
+    recovery/<channel>                      a recovery order, when one is given: the version to go back to and the
+                                                 floor to lower to, signed by the recovery keys (351-UPD-0030)
 
 Usage:
     release.py stage VERSION OUT [--arch x86_64=usb_root] [--arch aarch64=aarch64_root]
@@ -25,6 +27,8 @@ Usage:
     release.py check DEST [--channel stable] [--now ISO-8601]
     release.py timestamp DEST [--channel stable] [--hours 24]   the channel's timestamp renewed, its version one more
                                                  (351-UPD-0028): the timestamp keys alone, not the release key
+    release.py recover DEST --version V --floor F [--channel stable] [--days 7]   a recovery order, its sequence one
+                                                 more (351-UPD-0030): signed by the recovery keys alone
     release.py bundle DEST OUT [--channel stable] [--arch x86_64]   one ZIP of what a device needs of the channel
                                                  (751-UPD-0032), checked first: for the Effector gateway's install
     release.py --public                     the public test release key
@@ -41,7 +45,7 @@ Usage:
 
 Keys: the release seeds from $MIND_RELEASE_KEY (files of 64 hex digits outside the repository, separated by the path
 separator) or the public test release key; the timestamp seeds from $MIND_TIMESTAMP_KEY in the same form, or the test
-timestamp key; the boot key as sign_manifest.py reads it; the root set's public keys and
+timestamp key; the recovery seeds from $MIND_RECOVERY_KEY, or the test recovery key; the boot key as sign_manifest.py reads it; the root set's public keys and
 threshold from $MIND_ROOT_KEYS (`threshold T`, then a public key a line) or the test set, three keys of which two sign.
 `publish` with the test release key puts the test key file on a server that has none. With the test keys a layout is
 checked for accident, not attack.
@@ -99,6 +103,12 @@ def release_seeds():
 
 def release_seed():
     return release_seeds()[0]
+
+
+def recovery_seeds():
+    """The seeds that sign a recovery order (351-UPD-0030): $MIND_RECOVERY_KEY's files, else the test recovery key."""
+    paths = [p for p in os.environ.get("MIND_RECOVERY_KEY", "").split(os.pathsep) if p]
+    return [read_seed(p) for p in paths] or [TEST_RECOVERY_SEED]
 
 
 def timestamp_seeds():
@@ -240,17 +250,50 @@ def check_keys(whole, root=None, now=None):
     return k, None
 
 
+# The test key file's start when none is given: fixed, so that every image and test server holds the same bytes.
+TEST_KEYS_SINCE = datetime.datetime(2026, 11, 1, tzinfo=datetime.timezone.utc)
+
+
 def test_keys_file(now=None, days=3650, version=1, roots=TEST_ROOT_SEEDS[:TEST_ROOT_THRESHOLD], release=(TEST_RELEASE_SEED,),
-                   root=(TEST_ROOT_SEEDS, TEST_ROOT_THRESHOLD)):
-    """The test key file: the test boot, recovery and timestamp keys, the `release` seeds' keys, the `root` set (the
-    test one), one of each other signing, signed by `roots`."""
-    now = now or datetime.datetime.now(datetime.timezone.utc)
+                   root=(TEST_ROOT_SEEDS, TEST_ROOT_THRESHOLD), boot=(sm.TEST_SEED,)):
+    """The test key file: the test recovery and timestamp keys, the `boot` and `release` seeds' keys (the test ones),
+    the `root` set (the test one), one of each other signing, signed by `roots`; expiring `days` after `now`
+    (TEST_KEYS_SINCE)."""
+    now = now or TEST_KEYS_SINCE
     expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    roles = {"boot": ([sm.public_key(sm.TEST_SEED)], 1), "recovery": ([sm.public_key(TEST_RECOVERY_SEED)], 1),
+    roles = {"boot": ([sm.public_key(seed) for seed in boot], 1), "recovery": ([sm.public_key(TEST_RECOVERY_SEED)], 1),
              "release": ([sm.public_key(seed) for seed in release], 1), "root": ([sm.public_key(seed) for seed in root[0]], root[1]),
              "timestamp": ([sm.public_key(TEST_TIMESTAMP_SEED)], 1)}
     body = keys_bytes(version, expires, roles)
     return body + signature_lines(body, roots)
+
+
+def volume_keys(history=None, now=None):
+    """The key files a boot volume holds (351-UPD-0029) as [(name, bytes)]: `KEYS`, the last version of the key history
+    in the directory `history` or $MIND_KEYS (`1`, `2`, … as a server's keys/ holds them), and `KEYS.1`, `KEYS.2`, …
+    the versions before it at which the root changed. Each is checked against the root before it, the root set first;
+    the last must not have expired. Without a history, the test key file alone."""
+    history = history or os.environ.get("MIND_KEYS")
+    if not history:
+        return [("KEYS", test_keys_file())]
+    files, v = [], 1
+    while (Path(history) / str(v)).is_file():
+        files.append((Path(history) / str(v)).read_bytes())
+        v += 1
+    if not files:
+        raise ReleaseError(f"{history}: no key file 1 there")
+    trusted, out, long_ago = root_set(), [], datetime.datetime(1970, 1, 2, tzinfo=datetime.timezone.utc)
+    for v, whole in enumerate(files, 1):
+        k, why = check_keys(whole, trusted, now if v == len(files) else long_ago)
+        if k is None:
+            raise ReleaseError(f"{history}/{v}: {why}")
+        own = (sorted(k["roles"]["root"][0]), k["roles"]["root"][1])
+        if v < len(files) and own != (sorted(trusted[0]), trusted[1]):
+            out.append((f"KEYS.{len(out) + 1}", whole))
+        trusted = own
+    if len(out) > 8:
+        raise ReleaseError(f"{history}: more than 8 root changes, more than a boot volume holds")
+    return out + [("KEYS", files[-1])]
 
 
 def key_versions(target):
@@ -425,7 +468,7 @@ def server_keys(target, root=None, now=None, seeds=None):
     if whole is None:
         if (seeds or release_seeds()) != [TEST_RELEASE_SEED] or root is not None or os.environ.get("MIND_ROOT_KEYS"):
             raise ReleaseError("keys/current: missing: publish a key file first (release.py keys publish)")
-        whole = test_keys_file(now)
+        whole = test_keys_file()
         target.put_file(whole, "keys/1")
         target.put_file(whole, "keys/current")
     k, why = check_chain(target, root, now)
@@ -473,14 +516,16 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
     return body
 
 
-def check(dest, channel="stable", boot_public=None, now=None, root=None):
-    """None if the key file's root signatures, the channel's release signatures, every manifest it names and every blob
-    they list verify; else the reason."""
+def check(dest, channel="stable", now=None, root=None):
+    """None if the key file's root signatures, the channel's release signatures, every manifest it names (signed by a
+    boot key of the key file, 351-UPD-0029) and every blob they list verify; else the reason."""
     target = destination(dest)
-    boot_public = boot_public or sm.public_key(sm.signing_seed())
     k, why = check_chain(target, root, now)
     if k is None:
         return why
+    boot_keys, boot_threshold = k["roles"]["boot"]
+    if boot_threshold != 1:
+        return f"keys/current: its boot role asks for {boot_threshold} signatures; a manifest carries one"
     whole = target.read(f"channels/{channel}")
     if whole is None:
         return f"channels/{channel}: missing"
@@ -508,8 +553,8 @@ def check(dest, channel="stable", boot_public=None, now=None, root=None):
         sig = target.read(f"releases/{c['version']}/{arch}/MANIFEST.SIG")
         if text is None or hashlib.sha256(text).hexdigest() != digest:
             return f"releases/{c['version']}/{arch}/MANIFEST: not the one the channel names"
-        if sig is None or not sm.verify(boot_public, text, sig):
-            return f"releases/{c['version']}/{arch}/MANIFEST: bad signature"
+        if sig is None or not any(sm.verify(key, text, sig) for key in boot_keys):
+            return f"releases/{c['version']}/{arch}/MANIFEST: signed by no boot key keys/current names"
         for name, size, blob in manifest_files(text):
             data = target.read(f"blobs/{blob}")
             if data is None or len(data) != size or hashlib.sha256(data).hexdigest() != blob:
@@ -707,6 +752,36 @@ def stamp(target, channel, k, hours=TIMESTAMP_HOURS, seeds=None, now=None):
     return body
 
 
+def order_bytes(channel, expires, floor, sequence, version):
+    """A recovery order's body in its one encoding (351-UPD-0030): sorted keys, no spaces, a final newline."""
+    if not 1 <= floor <= version or sequence < 1:
+        raise ReleaseError("a recovery order has 1 <= floor <= version and a sequence from 1")
+    body = {"channel": channel, "expires": expires, "floor": floor, "sequence": sequence, "version": version}
+    return (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def order(target, channel, k, version, floor, days=7, seeds=None, now=None):
+    """Writes `recovery/<channel>` (351-UPD-0030): go back to `version`, the floor lowered to `floor`, its sequence one
+    above the server's order, `days` of life, signed by the recovery seeds, which the key file `k` must name to its
+    threshold. Returns the body."""
+    seeds = seeds or recovery_seeds()
+    keys, threshold = k["roles"]["recovery"]
+    named = [s for s in seeds if sm.public_key(s) in keys]
+    if len(named) < len(seeds) or len(set(map(sm.public_key, named))) < threshold:
+        raise ReleaseError(f"keys/current names {len(named)} of the {len(seeds)} recovery keys given, and its recovery role needs {threshold}")
+    sequence, held = 1, target.read(f"recovery/{channel}")
+    if held is not None:
+        try:
+            sequence = json.loads(held.split(b"\n")[0])["sequence"] + 1
+        except (ValueError, KeyError, TypeError):
+            raise ReleaseError(f"recovery/{channel} on the server: not a recovery order")
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = order_bytes(channel, expires, floor, sequence, version)
+    target.put_file(body + signature_lines(body, seeds), f"recovery/{channel}")
+    return body
+
+
 def check_timestamp(target, channel, k, now=None):
     """None if `timestamps/<channel>` names the channel file the server holds, the timestamp keys of `k` signed it to
     their threshold and it has not expired; else the reason."""
@@ -758,6 +833,13 @@ def main(argv):
                 raise ReleaseError(f"the server's key files: {why}")
             body = stamp(target, channel, k, int(option("--hours", str(TIMESTAMP_HOURS))))
             print(f"TIMESTAMPED {body.decode().strip()}" + (" (THE TEST TIMESTAMP KEY)" if timestamp_seeds() == [TEST_TIMESTAMP_SEED] else ""))
+        elif argv[:1] == ["recover"] and len(argv) >= 2 and option("--version") and option("--floor"):
+            target, channel = destination(argv[1]), option("--channel", "stable")
+            k, why = check_chain(target)
+            if k is None:
+                raise ReleaseError(f"the server's key files: {why}")
+            body = order(target, channel, k, int(option("--version")), int(option("--floor")), int(option("--days", "7")))
+            print(f"RECOVERY ORDER {body.decode().strip()}" + (" (THE TEST RECOVERY KEY)" if recovery_seeds() == [TEST_RECOVERY_SEED] else ""))
         elif argv[:1] == ["bundle"] and len(argv) >= 3:
             paths = bundle(argv[1], argv[2], option("--channel", "stable"), option("--arch", many=True) or None)
             print(f"BUNDLED {len(paths)} FILES OF channels/{option('--channel', 'stable')} INTO {argv[2]} ({Path(argv[2]).stat().st_size} BYTES)")

@@ -1,6 +1,6 @@
 # Publishing releases
 
-**Version:** 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.8 (2026-11-13): the boot keys are the key file's `boot` role, at boot too; the bootloader is built with the root set (351-UPD-0029); 0.7 (2026-11-13): recovery orders (351-UPD-0030); 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
 How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side is the updater ([updater.md](updater.md)): it checks a channel and stages its release in a slot with the same checks as `check` below.
 
@@ -40,6 +40,7 @@ channels/<channel>                          the signed channel file (the release
 keys/current                                the key file (the root keys)
 keys/<version>                              every version of it, from 1: each signed by the root of the one before and its own
 timestamps/<channel>                        the channel's timestamp (the timestamp keys)
+recovery/<channel>                          a recovery order, when one is given (the recovery keys)
 ```
 
 ## Making and publishing a release
@@ -51,7 +52,10 @@ python3 scripts/release.py publish /tmp/release-7 updates@example.org:/srv/mind 
 python3 scripts/release.py check /srv/mind --channel stable   # on the server, or on a copy
 python3 scripts/release.py bundle /srv/mind /tmp/mind-7.zip --arch x86_64   # one file for the Effector gateway
 python3 scripts/release.py timestamp updates@example.org:/srv/mind --channel stable   # on the server, at least daily
+python3 scripts/release.py recover updates@example.org:/srv/mind --version 5 --floor 5 --days 7   # a recovery order
 ```
+
+A **recovery order** (351-UPD-0030) sends devices of the channel back to `--version`, held by their other slot, with the floor lowered to `--floor`; only the recovery keys sign it (`$MIND_RECOVERY_KEY`), and its sequence is one above the server's last. Each device applies it once and keeps it in its account ([updater.md](updater.md#recovery-orders-351-upd-0030)). Change the channel next, or devices back on the old version keep seeing the newer one offered.
 
 The timestamp is renewed with the timestamp key alone (`$MIND_TIMESTAMP_KEY`), which is kept on the publishing server; the release key is not needed there. Renew it well within its life, from a timer on that server: a device that cannot read a current one holds what it has, as past a channel's expiry ([updater.md](updater.md#metadata-past-its-expiry)).
 
@@ -115,15 +119,15 @@ python3 scripts/release.py publish /tmp/release-8 updates@example.org:/srv/mind 
 
 | Key | Signs | Held by | In this repository |
 |---|---|---|---|
-| Boot key | boot manifests (`MANIFEST.SIG`) | whoever builds a release; its public half is built into the bootloader | only the **test** key, derived from public text (`scripts/sign_manifest.py`) |
-| Root keys | key files (`keys/<version>`), at least the root threshold of them: of the version before and of its own `root` role | each one apart from the others, offline; the first set's public halves and threshold are built into the updater, the key file's `root` role names the current ones | only the **test** set: three keys from fixed text, two of which sign (`scripts/release.py`) |
+| Boot key | boot manifests (`MANIFEST.SIG`) | whoever builds a release; the key file's `boot` role names it, of threshold 1: a manifest carries one signature (351-UPD-0029) | only the **test** key, derived from public text (`scripts/sign_manifest.py`) |
+| Root keys | key files (`keys/<version>`), at least the root threshold of them: of the version before and of its own `root` role | each one apart from the others, offline; the first set's public halves and threshold are built into the bootloader and the updater, the key file's `root` role names the current ones | only the **test** set: three keys from fixed text, two of which sign (`scripts/release.py`) |
 | Release keys | channel files, at least the release threshold of them | whoever publishes; the key file names them | only the **test** key (`scripts/release.py`) |
 | Timestamp keys | timestamp files, at least the timestamp threshold of them (351-UPD-0028) | the publishing server, which renews the timestamp; the key file names them | only the **test** key (`scripts/release.py`) |
 | SSH login | nothing: it lets the uploader write the server | the uploader's own SSH key | none |
 
-- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY`, `$MIND_RELEASE_KEY` and `$MIND_TIMESTAMP_KEY` (several release or timestamp keys separated by the path separator); a root key is given to `keys sign` alone. The bootloader is built with the boot key's public half (`$MIND_BOOT_PUBLIC_KEY`). The updater is built with it and with the root set's public file, `$MIND_ROOT_KEYS` (`threshold T`, then a key a line, as `keys root` prints it); no release key is built in, the key file names them (`release.py --public` prints the test release key's).
+- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY`, `$MIND_RELEASE_KEY` and `$MIND_TIMESTAMP_KEY` (several release or timestamp keys separated by the path separator); a root key is given to `keys sign` alone. The bootloader and the updater are built with the root set's public file, `$MIND_ROOT_KEYS` (`threshold T`, then a key a line, as `keys root` prints it), and with no other key: the key file names the boot, release, timestamp and recovery keys (`release.py --public` prints the test release key's). A build signed with a real boot key carries the key file of the history in `$MIND_KEYS` (a directory of `1`, `2`, … as the server's `keys/`), whose `boot` role must name that key (351-UPD-0029, [README.md](README.md)); `release.py check` checks each manifest against the `boot` role of `keys/current`.
 - The test keys are public. A release signed with them is checked for accidents, not against an attacker, and the tools say `THE TEST KEY` / `THE TEST RELEASE KEY` / `THE TEST ROOT KEYS`.
-- Rotation and revocation are above (351-UPD-0027). The boot key at boot is not under the key file yet ([351-UPD-0029](../../issues/351-UPD-0029-the-boot-key-under-the-root.md)), and the compromise protocol, who rotates what and when, is not defined yet ([351-UPD-0031](../../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md)).
+- Rotation and revocation are above (351-UPD-0027). A boot key is rotated or revoked the same way: the bootloader takes the boot keys of the slot's key file, checked under the root set built in, and refuses a slot whose key file is below the version the boot records name (351-UPD-0029, [slots.md](slots.md)). The compromise protocol, who rotates what and when, is not defined yet ([351-UPD-0031](../../issues/351-UPD-0031-key-lifecycle-and-compromise-protocol.md)).
 - A device whose image was written when the key file was above version 1 takes none from its slots at its first start, and its first check reads the versions from 1 from the server.
 
 ## Setting up a server
