@@ -63,7 +63,8 @@ The bootloader checks the manifest with one boot key built into it. Changing tha
 - **The check:** the suite's signed-volume cases are now a suite of their own, `bootkeys` (`tests/qemu_smoke.py`, `signed_volume_check`), which `boot` still runs. "aarch64: the updater and the modes" runs it too (`scripts/ci_local.sh`, `.github/workflows/ci.yml`).
 - **Docs:** docs/update/slots.md, slots_RU.md and the profile's Article 9 row name it.
 - **Tested** in this container: `bootkeys` passed on aarch64 and on x86.
-- **Left:** its run on the maintainer's machines, and the gate.
+- **Run on the maintainer's machines** at d161203f, on x32-128 (Effector, QEMU under TCG): "x86: boot, display, shell, memory, clock" (733 s) and "aarch64: the updater and the modes" (873 s) passed, the latter with `bootkeys`' line (`PASS: signed boot volume: … no key file and a key file short of the root threshold …`) beside `update-bootkey`'s and `update-recovery`'s.
+- **Left:** the gate.
 
 ## Related
 
