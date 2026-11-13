@@ -199,8 +199,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol: split into 351-UPD-0024 to 0031 | `UPD` | P2 | its parts | track C |
-| [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | Key rotation and revocation (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | — | track C |
-| [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | A short-lived timestamp key for the channel (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0027 | track C |
 | [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | The boot key under the root, in the bootloader (from 351-UPD-0009) | `UPD`, with `KRN`/`PRT` | P2 | 0026 | track C |
 | [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | A separate recovery authority (from 351-UPD-0009): made, the machines' runs next | `UPD` | P2 | 0028 | track C |
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | The key lifecycle and the compromise protocol, written down (from 351-UPD-0009) | `UPD` | P2 | 0026–0030 (for the procedures) | track C |
@@ -348,6 +346,8 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [351-UPD-0027](../issues-done/351-UPD-0027-key-rotation-and-revocation.done) | Key rotation and revocation | The key file's `root` role; a device takes only the next version, signed by the root before and its own, keeps the highest in `system/updater` and refuses a lower one; channels and slots only a revoked key signed refused; `release.py keys rotate|revoke`; round 128 (ada2b041) |
+| [351-UPD-0028](../issues-done/351-UPD-0028-a-short-lived-timestamp-key.done) | A short-lived timestamp key for the channel | A channel's timestamp (`timestamps/<channel>`), a day by default, renewed with the timestamp key alone; read before the channel, the channel current no longer than it; round 128 (ada2b041) |
 | [112-NET-0071](../issues-done/112-NET-0071-the-ssh-servers-role-in-ssh.done) | The SSH server's role in `ssh/`, host-tested against OpenSSH's client | The server's role in `ssh/` (`Transport::accept`, `server::serve`), host-tested against OpenSSH's client and fuzzed; round 127 (86794305) |
 | [112-NET-0072](../issues-done/112-NET-0072-sshd-as-a-mind-core-service.done) | `sshd` as a MIND Core service: logins with the owner's keys, SFTP into `data/`, the host key in `keystore` | `sshd`, the SSH server as a service: the owner's keys, SFTP into `data/`, the device key as host key (`keystore` 1.8), the shell's console (`BADGE_SHELL_REMOTE`); handoff 34; round 127 (86794305) |
 | [111-NET-0073](../issues-done/111-NET-0073-tls-alpn-and-the-exporter.done) | The TLS service offers an application protocol and derives keying material: `tls.wit` 1.4 for NTS-KE | `tls.wit` 1.4 `connect-alpn` and `export` (RFC 8446's exporter), for NTS-KE; round 127 (86794305) |
