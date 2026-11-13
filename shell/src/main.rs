@@ -909,8 +909,6 @@ impl Shell {
         // `run -d` (312-APP-0134): a memory domain's client in place of the one above, minted after the others are lent.
         if domain.is_some() && requests & (mind::process::REQUEST_BLOCKSTORE | mind::process::REQUEST_BLOCKSTORE_READ) == 0 { return Err(Error::Other(domainrun::NOT_ASKED)); }
         if domain.is_some() && !blockstore && !blockstore_read { return Err(Error::Other(domainrun::NOT_LENT)); }
-        // Not yet for one that only reads: the shell's domains are its writing client's, the owner the store reads in a badge.
-        if domain.is_some() && !blockstore { return Err(Error::Other(domainrun::READ_ONLY)); }
         // The parser service's client (109-APP-0016): it holds nothing, so lending it gives a program no authority.
         let parse = requests & mind::process::REQUEST_PARSE != 0 && mind::dev::cap_info(SLOT_PARSE).0 != 0 && granted("parse");
         // The battery service's client (211-APP-0070): it only reads.
@@ -981,9 +979,12 @@ impl Shell {
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
-        // The domain's client, asked for through the shell's client, which the program would have had.
+        // The domain's client, asked for through the shell's writing client, the domains' owner: for a program that only
+        // reads, with the get badge's rights alone (blockstore.wit 2.8 domain-client-with, 312-STO-0049).
         if let Some(id) = domain {
-            let minted = match mind::idl::wire::with_timeout(DOMAIN_MS, || mind::idl::blockstore::domain_client(Endpoint(SLOT_BLOCKSTORE), id, SCOPE_RECEIVE)) {
+            let store = Endpoint(SLOT_BLOCKSTORE);
+            let minted = match mind::idl::wire::with_timeout(DOMAIN_MS, || if blockstore { mind::idl::blockstore::domain_client(store, id, SCOPE_RECEIVE) }
+                                                              else { mind::idl::blockstore::domain_client_with(store, id, mind::blockstore::BADGE_GET, SCOPE_RECEIVE) }) {
                 Ok(Ok(())) => {
                     let lent = lend(SLOT_BLOCKSTORE, SCOPE_RECEIVE);
                     let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); // the loader holds its copy
@@ -995,7 +996,7 @@ impl Shell {
                 Ok(Err(_)) | Err(_) => Err(Error::Other(domainrun::NO_CLIENT)),
             };
             if let Err(error) = minted { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
-            mind::println!("[SHELL] {} STARTS IN MEMORY DOMAIN {}", name.to_ascii_uppercase(), id);
+            mind::println!("[SHELL] {} STARTS IN MEMORY DOMAIN {}{}", name.to_ascii_uppercase(), id, if blockstore { "" } else { ", READ ONLY" });
         }
         // Not needed to start: without them the program finds no store volume, as before.
         // The clipboard's client for a program that asks (000-APP-0032): a program's copy, or for a window manager one
