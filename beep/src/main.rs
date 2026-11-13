@@ -2,14 +2,15 @@
 #![no_main]
 // beep (issue u005): tones through the audio gateway, and nothing on the screen. `beep 440` sounds 440 Hz for 500 ms;
 // `beep 440 200 660 300` a series of notes, frequency and duration each (0 Hz: a pause). Without arguments, the
-// gateway demo: a chord of tones and a PCM sweep. It ends when the sound has played.
+// gateway demo: a chord of tones and a PCM sweep. `beep left …` and `beep right …` play on that channel alone
+// (551-APP-0138). It ends when the sound has played.
 mod notes;
 
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::mem::Pages;
 use mind::util::FixedBuf;
-use notes::{Note, MAX_NOTES};
+use notes::{Channel, Note, DEFAULT_HZ, DEFAULT_MS, MAX_NOTES};
 
 mind::request!(REQUEST_CONSOLE);
 
@@ -34,7 +35,7 @@ fn demo(rate: usize) {
     match mind::audio::play_all(samples) { Ok(()) => mind::println!("[BEEP] PCM QUEUED {} FRAMES", frames), Err(error) => mind::println!("[BEEP] PLAY ERROR: {:?}", error) }
 }
 
-fn play(notes: &[Note], rate: usize) -> bool {
+fn play(notes: &[Note], rate: usize, channel: Channel) -> bool {
     let Some(mut pcm) = Pages::new(CHUNK_FRAMES * 4) else { mind::println!("[BEEP] NO MEMORY"); return false };
     let chunk = unsafe { core::slice::from_raw_parts_mut(pcm.as_mut_slice().as_mut_ptr() as *mut i16, CHUNK_FRAMES * 2) };
     for note in notes {
@@ -42,7 +43,7 @@ fn play(notes: &[Note], rate: usize) -> bool {
         let (mut at, mut phase) = (0, 0u32);
         while at < total {
             let frames = (total - at).min(CHUNK_FRAMES);
-            phase = notes::fill(&mut chunk[..frames * 2], note.hz, rate as u32, phase, at, total);
+            phase = notes::fill(&mut chunk[..frames * 2], note.hz, rate as u32, phase, at, total, channel);
             if let Err(error) = mind::audio::play_all(&chunk[..frames * 2]) { mind::println!("[BEEP] PLAY ERROR: {:?}", error); return false; }
             at += frames;
         }
@@ -52,10 +53,11 @@ fn play(notes: &[Note], rate: usize) -> bool {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("beep — tones through the audio gateway (no screen).\nUsage: beep [hz] | beep hz ms [hz ms ...]\nOne frequency sounds 500 ms; pairs of frequency and duration (ms) play one after the other, 0 Hz is a pause\n(20-20000 Hz, up to 10000 ms each, 64 notes). Without arguments: a chord and a sweep.");
-    let args = mind::process::args_str().trim();
+    mind::about!("beep — tones through the audio gateway (no screen).\nUsage: beep [left | right] [hz] | beep [left | right] hz ms [hz ms ...]\nOne frequency sounds 500 ms; pairs of frequency and duration (ms) play one after the other, 0 Hz is a pause\n(20-20000 Hz, up to 10000 ms each, 64 notes). Without arguments: a chord and a sweep.\nleft or right first: the notes on that channel alone, the other silent; the word alone sounds 440 Hz for 500 ms.");
+    let (channel, args) = notes::channel(mind::process::args_str().trim());
     let mut notes = [Note::default(); MAX_NOTES];
     let count = match notes::parse(args, &mut notes) {
+        Ok(0) if channel != Channel::Both => { notes[0] = Note { hz: DEFAULT_HZ, ms: DEFAULT_MS }; 1 }
         Ok(count) => count,
         Err(error) => { let mut text = FixedBuf::<96>::new(); let _ = error.describe(&mut text); mind::println!("BEEP: {}", text.as_str()); return; }
     };
@@ -67,10 +69,10 @@ fn main(_info: &'static BootInfo) {
     if !info.present { return; }
     let start = mind::time::uptime_ms();
     let total: usize = if count == 0 { demo(info.rate); 950 } else {
-        if !play(&notes[..count], info.rate) { return; }
-        let mut line = FixedBuf::<64>::new();
+        if !play(&notes[..count], info.rate, channel) { return; }
+        let mut line = FixedBuf::<80>::new();
         let total = notes[..count].iter().map(|n| n.ms as usize).sum();
-        let _ = write!(line, "[BEEP] PLAYED {} NOTES, {} MS", count, total);
+        let _ = write!(line, "[BEEP] PLAYED {} NOTES, {} MS{}", count, total, channel.words());
         mind::println!("{}", line.as_str());
         total
     };
