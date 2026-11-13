@@ -33,6 +33,11 @@ APP's request of 2026-11-12 (from `requests-KRN.md`), for [000-APP-0032](000-APP
 - **On the maintainer's machines** (Effector, QEMU under TCG) at f3405836: "x86: boot, display, shell, memory, clock" (713 s) and "x86: keys, shell, tools" (455 s) on x32, "aarch64: boot and fault containment" (164 s) on acc-1 passed; each boot's service list holds `clipboard`.
 - **Left:** APP's `tools` checks of its own (text copied in `edit`, pasted into the shell and another `edit`); the gate.
 
+**Returned by round 125's gate (2026-11-13)** in two groups, both where `clipboard` now runs:
+- **"x86: the window manager":** `wm` logs `STARTED fm PID … WITH window,files,sysinfo,shell WITHOUT clipboard`, and the suite's check split that whole line. It now reads the lent list before `WITHOUT` (a4217c78).
+- **"x86: one CPU":** `clipboard` logs each program the shell names in front, `dmesg` itself among them, and that record may follow the forged line `dmesg -n 1` looked for. The check now looks in the last three records (a4217c78).
+- **A gap this shows, not closed here:** `wm` lends its programs no clipboard copy. The shell lends it one that may badge, through the loader's `grant`. But the IDL runtime passes no capability with the right to badge (`idl::wire::PASSED`, [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done)), so `wm`'s own mints are refused. Read from the code and `wm`'s log; no trace was taken. Its programs keep their own copy buffers, the fallback 000-APP-0032 names. The shell's console and the programs the shell starts are not affected. Recorded for APP in [requests-APP.md](requests-APP.md), with two ways out.
+
 ## Related
 
 - [requests-KRN.md](requests-KRN.md), where it was asked.
