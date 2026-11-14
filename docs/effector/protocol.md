@@ -56,6 +56,10 @@ Everything 1.1 did stays.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).
+- **The agent stays reachable (801-EFF-0028).**
+  - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it a new flow grant, so one whose term or volume ran out does not lose the server, and new clients of `tls` and `parse`. It does not end while a measurement runs or the machine restarts on purpose.
+  - Meanwhile the gateway's mark stays grey on the screen. The log says each try and why, and `THE SERVER ANSWERS AGAIN, AFTER N S` once it does.
+  - A start that fails waits 31 s before it ends, so `init`'s restart budget (3 in 60 s) never quarantines the agent. Only a deliberate switch-off stops it (801, S5).
 - **The server's rules for reservations and runtime** (its `ahelp`, build 229, 2026-10-23):
   - a command's `expires_at` is its term in the server's queue, not a deadline for its run or its report: once delivered,
     its answer is sent until the server takes it or refuses it for good, and the server keeps a late one
