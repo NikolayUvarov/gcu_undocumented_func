@@ -99,7 +99,7 @@ The maintainer (2026-11-14): «Каждая перезапись должна с
   - an unknown option is refused by name.
 - The keep and machines tests: passed.
 
-## Progress (2026-11-14, later still): the old disk may stay in
+## Progress (2026-11-14, later still): the old disk may stay in (taken back, below)
 
 **The maintainer, on the first real run** (MacBook Pro, `--old-disk 5 2`): «Почему это я должен вынимать диск?!» The script had read the old disk and kept the Mac's settings. Then it waited for disk 5 to be taken out, and showed nothing while it waited.
 
@@ -115,6 +115,19 @@ The maintainer (2026-11-14): «Каждая перезапись должна с
 - The args and keep tests: passed.
 - PowerShell's parser: no errors in the four snippets.
 - **The new lookup run on this PC, read-only,** against the real old disk 5 (volume `P:`): it named `P` for that disk's `MIND\A\MANIFEST` hash, and nothing for a wrong one.
+
+## Progress (2026-11-14, last): the old disk is taken out after all; the MBR signature stays one
+
+**What the first real run showed.** With both disks in, Windows took the new disk 2 offline right after the write: `OfflineReason Collision`. Every disk MIND Core writes has the same MBR signature, `BE1AFDFA`, and so did the old disk 5. The steps after the write then found no volume, and nothing was put on the new disk: no settings, no firmware, no pictures.
+
+**The maintainer's decision:**
+- «пусть MBR будет одинаковая, это правильно»: the MacBook Pro boots the disk by that signature;
+- «Давай вариант с выниманием первого диска вернем»: the old disk is taken out again.
+
+**Now:**
+- **The swap waits for the old device to be out** and disk N to be there. It says why, and shows its state every 15 s.
+- **The steps after the write** still pick the volume holding this build's MANIFEST among all volumes MIND CORE.
+- **A different signature per disk** was considered and dropped.
 
 ## Related
 
