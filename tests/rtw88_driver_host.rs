@@ -96,6 +96,38 @@ fn the_power_differences_are_signed_nibbles() {
     assert_eq!(phy::indices(6, &blank).0, [0x20 - 4; 4]);
 }
 
+// 801-DRV-0071: with the country unknown every index is held at the channel's highest less 3 (1.5 dB, 70.8 %).
+#[test]
+fn an_unknown_country_caps_the_indices_three_steps_below_the_highest() {
+    assert_eq!(phy::UNKNOWN_COUNTRY_STEPS, 3, "75 % is -1.249 dB: 2 steps of 0.5 dB (79.4 %) would pass it");
+    let mut log = [0xffu8; efuse::LOGICAL];
+    log[0xca] = 0;
+    log[0x10..0x16].copy_from_slice(&[0x2a, 0x2a, 0x2b, 0x2b, 0x2c, 0x2d]);
+    log[0x16..0x1b].copy_from_slice(&[0x28, 0x29, 0x2a, 0x2b, 0x2c]);
+    log[0x1b] = 0xf2;
+    let b = efuse::Board::from(&log);
+    // Channel 1: OFDM 6-48 Mb/s at 0x2c are the highest, so the cap is 0x29; CCK's 0x26 and 54 Mb/s's 0x2a below or at it.
+    let (cck, ofdm, top, cap) = phy::capped(1, &b);
+    assert_eq!((top, cap), (0x2c, 0x29));
+    assert_eq!(cck, [0x26; 4]);
+    assert_eq!(ofdm, [0x29, 0x29, 0x29, 0x29, 0x29, 0x29, 0x29, 0x29]);
+    for ch in 1..=13 {
+        let (cck, ofdm) = phy::indices(ch, &b);
+        let (ccap, ocap, top, cap) = phy::capped(ch, &b);
+        assert_eq!(top, *cck.iter().chain(&ofdm).max().unwrap());
+        assert_eq!(cap, top - 3);
+        assert_eq!(*ccap.iter().chain(&ocap).max().unwrap(), cap, "channel {ch}: the highest is the cap");
+        assert!(cck.iter().zip(&ccap).chain(ofdm.iter().zip(&ocap)).all(|(&plain, &held)| held == plain.min(cap)));
+    }
+    // The registers: a known country writes the plain indices, an unknown one the capped.
+    for (unknown, cck, ofdm) in [(false, [0x26u8; 4], [0x2cu8, 0x2c, 0x2c, 0x2c, 0x2c, 0x2c, 0x2c, 0x2a]), (true, [0x26; 4], [0x29; 8])] {
+        let mut r = Fake::default();
+        phy::power(&mut r, 1, &b, unknown);
+        assert_eq!(io::Regs::r32(&mut r, 0x1d00).to_le_bytes(), cck);
+        assert_eq!([io::Regs::r32(&mut r, 0x1d04).to_le_bytes(), io::Regs::r32(&mut r, 0x1d08).to_le_bytes()].concat(), ofdm);
+    }
+}
+
 #[test]
 fn the_firmwares_header_is_read_and_its_sizes_checked() {
     let mut f = vec![0u8; 64 + 100 + 8 + 200 + 8];

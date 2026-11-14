@@ -249,12 +249,27 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] RECEIVE-ONLY CHANNEL {}: SCHEDULER ZERO, DATA DMA STOPPED", channel);
             mind::println!("[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED");
         }
+        receive_service::Event::CountryTaken { code: [b'0', b'0'], channels, listen_only, applied: true } =>
+            mind::println!("[RTW89] COUNTRY 00: {} CHANNELS, {} LISTEN ONLY; APPLIED: A CHANNEL IS CALIBRATED WHEN THE STATION FIRST SENDS THERE; COUNTRY UNKNOWN: POWER CAPPED AT 75 % (801-DRV-0071)",
+                channels, listen_only),
         receive_service::Event::CountryTaken { code, channels, listen_only, applied: true } =>
             mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; APPLIED: A CHANNEL IS CALIBRATED WHEN THE STATION FIRST SENDS THERE",
                 code[0] as char, code[1] as char, channels, listen_only),
         receive_service::Event::CountryTaken { code, channels, listen_only, applied: false } =>
             mind::println!("[RTW89] COUNTRY {}{}: {} CHANNELS, {} LISTEN ONLY; NOT APPLIED: THE PLATFORM'S POWER POLICY IS UNKNOWN, RECEIVE ONLY",
                 code[0] as char, code[1] as char, channels, listen_only),
+        receive_service::Event::NoCountry { channels, listen_only } =>
+            mind::println!("[RTW89] NO COUNTRY FROM THE STATION BEFORE ITS FIRST SEND: THE WORLD RULES (00), {} CHANNELS, {} LISTEN ONLY; POWER CAPPED AT 75 % OF THE MAXIMUM (801-DRV-0071)",
+                channels, listen_only),
+        receive_service::Event::Capped { channel, maximum, limit } =>
+            mind::println!("[RTW89] COUNTRY 00, UNKNOWN: POWER CAPPED AT 75 % OF THE MAXIMUM ON CHANNEL {} (-1.25 DB ROUNDED DOWN TO THE MAC'S HALF-DB STEP): 1 TX AT MOST {} HALF-DBM OF ITS {}, 2 TX {} OF {}",
+                channel, limit[0], maximum[0], limit[1], maximum[1]),
+        receive_service::Event::Stalled { channel, quiet_ms, frames, sent, acked } =>
+            mind::println!("[RTW89] RECEIVE STALLED ON CHANNEL {}: NO FRAME FOR {} MS ({} BEFORE; {} SENT, {} ACKNOWLEDGED SINCE THE LAST): THE DATA MODE STOPS (801-DRV-0071)",
+                channel, quiet_ms, frames, sent, acked),
+        receive_service::Event::Unheard { channel, count, ms, heard_ms } =>
+            mind::println!("[RTW89] {} UNICAST SENDS IN A ROW NOT ACKNOWLEDGED ON CHANNEL {} OVER {} MS; THE LAST FRAME HEARD {} MS AGO (801-DRV-0071)",
+                count, channel, ms, heard_ms),
         receive_service::Event::Admitted { channel, registers } => {
             mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel);
             mind::println!("[RTW89] REGISTERS AT ADMISSION: {:?}", registers);
@@ -268,6 +283,8 @@ fn served(event: receive_service::Event) {
         receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
             mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 1 S MORE (DEBUG)",
                 count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
+        receive_service::Event::DataCountry { code: [b'0', b'0'], channel, kept: true, .. } =>
+            mind::println!("[RTW89] COUNTRY 00 IN DATA MODE: CHANNEL {} KEPT AT THE POWER IT WAS ADMITTED AT (AN UNKNOWN COUNTRY'S 75 % CAP IS SET AT ADMISSION)", channel),
         receive_service::Event::DataCountry { code, channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY {}{} IN DATA MODE: CHANNEL {} KEPT", code[0] as char, code[1] as char, channel),
         receive_service::Event::DataCountry { code, channel, kept: false, enforced: true } =>
@@ -329,11 +346,12 @@ fn main(_info: &'static BootInfo) {
         idle();
     }
     let Some((index, platform)) = args::parse(mind::process::args_str()) else { mind::println!("[RTW89] NO PCI DEVICE INDEX"); idle(); };
-    // 213-KRN-0122's word: Unknown forbids any transmission, so a country is then taken but never applied.
+    // 213-KRN-0122's word: Unknown, or none, is held back (801 S5): the country's limits alone, as with no platform limit.
     match platform {
         args::Platform::Absent => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: ABSENT"),
         args::Platform::Limits { per_ntx, per_path } => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: LIMITS NTX {:?}, PATH {:?} HALF-DBM", per_ntx, per_path),
-        args::Platform::Unknown(reason) => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: UNKNOWN ({}): NO TRANSMISSION", reason.unwrap_or("none given")),
+        args::Platform::Unknown(reason) => mind::println!("[RTW89] PLATFORM POWER POLICY FROM INIT: UNKNOWN ({}): HELD BACK, NOT ENFORCED: SENDING UNDER THE COUNTRY'S LIMITS ALONE (801)",
+            reason.unwrap_or("none given")),
     }
     let bytes = match firmware_file() {
         Ok(bytes) => bytes,

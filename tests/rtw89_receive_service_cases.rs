@@ -113,11 +113,34 @@ fn every_channel_is_tuned_passively_before_a_country() { serve(true, Vec::new(),
     assert!(events.is_empty());
 });}
 
+// 801-DRV-0071: a station that sends before it gives a country gets the world rules (00), not silence; a probe still admits nothing.
 #[test]
-fn nothing_is_sent_before_a_country() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+fn before_a_country_the_first_send_takes_the_world_rules() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+    let mut probe = management(4); probe[4..10].fill(0xff); probe[16..22].fill(0xff);
+    let id = ipc::buffer(4, &send_frame(&probe)); step(service, phy, events);
+    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none()); assert!(service.limits().is_none());
     let id = ipc::buffer(4, &send_body()); step(service, phy, events);
-    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none());
+    error(id, wlanhw::Error::Busy); assert!(matches!(service.take_ask(), Some(Ask::Admit(1))));
+    assert_eq!(events.as_slice(), &[Event::NoCountry { channels: 13, listen_only: 2 }]);
+    let world = service.limits().unwrap(); assert_eq!(world.code(), *b"00"); assert_eq!(world.version(), 1);
+    assert_eq!(world.applied(1).unwrap().eirp_half_dbm, 40); assert!(world.applied(12).unwrap().listen);
+    // A country given later replaces it and is numbered after it.
+    let id = ipc::buffer(9, &country("UZ", &all(20))); step(service, phy, events); info(id);
+    assert_eq!((service.limits().unwrap().code(), service.settings()), (*b"UZ", 2));
 });}
+
+// 801 S5: init's unknown word, or none, is held back: the country's limits alone, as with no platform limit.
+#[test]
+fn an_unknown_platform_word_is_held_back() {
+    use crate::{args::{self, Platform}, phy::channel::calibration_policy::PlatformInput, receive_service::platform_input};
+    for words in ["2", "2 platform=unknown:WRDS-in-DSDT", "2 platform=unknown:", "2 platform=absent platform=absent"] {
+        let (_, platform) = args::parse(words).unwrap(); assert!(matches!(platform, Platform::Unknown(_)), "{words}");
+        assert_eq!(platform_input(platform), PlatformInput::HeldBack, "{words}");
+    }
+    assert_eq!(platform_input(Platform::Absent), PlatformInput::CheckedAbsent);
+    let limits = Platform::Limits { per_ntx: [30, 24], per_path: [30, 30] };
+    assert!(matches!(platform_input(limits), PlatformInput::Limits(_)), "limits stay obeyed");
+}
 
 #[test]
 fn a_country_is_applied_unless_the_platforms_power_policy_is_unknown() {

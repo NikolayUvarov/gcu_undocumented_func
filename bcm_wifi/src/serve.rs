@@ -251,6 +251,11 @@ pub fn run(radio: &mut Radio) -> ! {
                     let list = limits.as_slice();
                     mind::println!("[BCM] COUNTRY {}: {} CHANNELS, {} TO LISTEN ON ONLY; EIRP NOT APPLIED (THE TRANSMIT GAIN IS FIXED, NOT CALIBRATED IN DBM)",
                                    code.as_str(), list.len(), list.iter().filter(|l| l.listen).count());
+                    // 801-DRV-0071's 75 % cap needs a power in dBm, which this driver does not set (550-DRV-0028).
+                    if code.as_str() == "00" {
+                        mind::println!("[BCM] COUNTRY UNKNOWN (00): THE 75 % POWER CAP IS NOT APPLIED: THE TRANSMIT GAIN IS A FIXED TABLE ENTRY ({}), ITS POWER IN DBM NOT KNOWN (550-DRV-0028)",
+                                       crate::radio::TX_GAIN);
+                    }
                     // Off a channel the country does not allow, to its first one.
                     if !Country::allows(country, radio.channel()) {
                         if let Some(&first) = channel_list(country).as_slice().first() { let _ = radio.set_channel(first); }
