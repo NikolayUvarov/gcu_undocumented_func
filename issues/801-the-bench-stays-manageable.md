@@ -10,6 +10,7 @@ In the maintainer's words, with an English rendering:
 - «если ранее работало, то должно и работать. Система должна поддерживать связь с сервером эффектора … потеря расценивается как полный провал»: if it worked before, it must work. Losing the server counts as a complete failure.
 - «Эффектор 485 будет использоваться только в критических случаях, и надо учитывать, что он не всегда доступен»: the RS-485 cable is for critical cases only, and may be absent.
 - «Следующий критический этап - достигнуть состояния, когда никакое обновление не ломает наличие связи и приводит к откату к предыдущему состоянию, когда связь была с репортом причин»: the next critical stage is that no update breaks the connection. One that would is rolled back to the state that had it, with a report of the reasons.
+- «потеря связи, которая работала ранее под предлогом "ой я не знаю мощности" и прочее - не оправдание. Приоритет - работоспособность. Это критический параметр для субстрата разума»: losing a connection that worked before is not excused by "the power is not known" or the like. Operability comes first; it is a critical parameter for the Mind's substrate.
 - «Каждая перезапись должна сохранять локально настройки»: every disk rewrite keeps each machine's settings, and puts them on a new disk too. The MacBook Pro's USB disk is to be replaced by a stick for the testing period.
 
 ## Problem: what 2026-11-13 and 14 showed on the bench
@@ -51,7 +52,7 @@ In the maintainer's words, with an English rendering:
    - A QEMU check on every landing round updates the previous round's release to the new one.
 5. **S5, only a deliberate switch-off stops the agent.** None of these may stop it:
    - **the device clock wrong by hours:** an RTC in local time, a flat battery. Commands are judged by time relative to the server (MC-7.5's replay protection kept), and the clock is set from the network;
-   - **a platform table the release cannot read:** the radio keeps the behaviour the previous release had on that machine, until the table is read there;
+   - **a platform table the release cannot read:** the radio keeps the behaviour the previous release had on that machine, until the table is read there. An unknown limit is no reason to stop a radio that worked (the maintainer's word above); a rule that would silence it is held back on that machine and logged, not enforced;
    - **Wi-Fi lost:** the wired card is used, and the network path is restarted. An agent that cannot reach its server says so on the screen and in the log, and keeps trying.
 6. **S6, the cable recovers everything with no permissions** (the maintainer's word).
    - With the RS-485 converter attached, `effector485` can update every component and restart the machine, whatever `link.conf`, `mode.conf` and the owner's policy say. Every component means the loader, kernel, `init`, services and applications.
