@@ -1,6 +1,6 @@
 # Requests for the drivers track (DRV), not numbered yet
 
-**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** empty (2026-11-10: STO's `ahci` request is 307-DRV-0068) · **Recorded by:** the kernel track (KRN), 2026-10-09
+**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** one request (2026-11-14, KRN's, for 801-KRN-0243) · **Recorded by:** the kernel track (KRN), 2026-10-09
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below the list.
 
@@ -30,3 +30,18 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - the AC97 capture ring's overflow: [000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done).
 - **2026-11-10:**
   - `ahci` on a controller the firmware left untouched (STO's, for 307-STO-0044): [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).
+
+## Requests
+
+### 1. `rtw89_wifi` sends under an `unknown` platform word, as it did before 213-KRN-0122 (KRN, 2026-11-14, for 801-KRN-0243, 801 S5)
+
+- **Why.** The maintainer (801 S5): a rule that would silence a radio that worked is held back on that machine and logged, not enforced.
+  - `init` now logs an unknown platform power policy as `HELD BACK, NOT ENFORCED`.
+  - It still gives `rtw89_wifi` the word `platform=unknown:<why>`, which is the truth.
+  - `rtw89_wifi` takes `Unknown`, and no word at all, as no transmission (`main.rs`, `receive_service.rs`).
+- **The request.** Under `Unknown`, transmit as the driver would with no platform limits: within the country's regulatory limits and calibration, as before 213-KRN-0122. Log it as held back.
+- **What stays.**
+  - `Limits` stays obeyed.
+  - `Absent` stays as it is.
+  - A second `platform=` word stays `Unknown`.
+- **Not affected:** `rtw88_wifi` (the DEXP) is given no word and reads none, so 213-KRN-0122 never silenced it.

@@ -2310,10 +2310,11 @@ fn boot(info: &'static BootInfo) {
                          power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
-    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
+    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
+    // back and not enforced (801-KRN-0243, 801 S5): it silences no radio; only rtw89_wifi is given the word.
     match init.power {
         mind::platform_power::Policy::Absent { tables } => mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT ({} AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)", tables),
-        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): A RADIO SENDS NOTHING", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
+        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): HELD BACK, NOT ENFORCED; ONLY rtw89_wifi IS GIVEN THE WORD", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
     }
     // The devices outside PCI init may lend, by their compatible strings (100000-KRN-0171).
     init.nodes = hardware::platform_nodes();

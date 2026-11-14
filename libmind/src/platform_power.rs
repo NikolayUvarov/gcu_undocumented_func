@@ -1,7 +1,8 @@
 //! The platform's transmit power policy for a WLAN device (213-KRN-0122): whether the ACPI tables hold the SAR and
 //! antenna-gain objects a radio must obey (`WRDS`, `RWRD`, `RWSI`, `RWGS`, `RTAG`). No AML is run: every DSDT and SSDT is
 //! read whole and checked, and the five names are searched for as bytes. None anywhere is `Absent`; one anywhere, or a
-//! table not read whole, is `Unknown`, which a radio takes as no transmission. No limits are read yet.
+//! table not read whole, is `Unknown`: a finding held back and not enforced, which silences no radio that sent before
+//! (801-KRN-0243, 801 S5). No limits are read yet.
 
 /// The objects that would carry a policy, as their ACPI names.
 pub const NAMES: [&[u8; 4]; 5] = [b"WRDS", b"RWRD", b"RWSI", b"RWGS", b"RTAG"];
