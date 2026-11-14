@@ -9784,7 +9784,10 @@ def install_suite(args, stub_elf):
     for name in size:
         shutil.copyfile(bundles / name, gateway / name)
     (gateway / "install.txt").write_text("".join(f"{line.split()[0]} {sha[line.split()[0]]} {' '.join(line.split()[1:])}\n" for line in listed))
+    # No server for the agent: the trial is not held for its word (801-KRN-0242); the gateway's stand-in is what is tested.
     for name, data in {**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"}.items():
+        if name == "data/effector/effector.conf":
+            continue
         (layout / name).parent.mkdir(parents=True, exist_ok=True)
         (layout / name).write_bytes(data)
     # Room for both slots, the bundles and the one being staged.
@@ -13254,6 +13257,7 @@ def effector_suite(args, disk):
     (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
                                                        "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
     (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "machine").mkdir(parents=True, exist_ok=True)  # where the shell's `hostname` keeps the name
     report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
     (disk / "data" / "reports").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "reports" / "r.bin").write_bytes(report)
@@ -13265,7 +13269,9 @@ def effector_suite(args, disk):
     # stays the agent the server knows.
     (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+    # The guest's clock 3 h ahead, as the DEXP's RTC was after Windows (801, S5): commands are judged by the server's time.
+    ahead = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + 3 * 3600))
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc=ahead, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
     def session():
         return vm.command("dmesg -s effector", raw=True)
@@ -13336,15 +13342,40 @@ def effector_suite(args, disk):
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
+        # 801-EFF-0027: a command with a 10-minute term by the server's clock is run, not `command_expired`, though the
+        # device's clock is 3 h past it; the log names the offset.
+        term_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
+        until(f"EFFECTOR: ACK {term_id} completed WITH ITS RESULT ACCEPTED")
+        offset = re.search(r"THE DEVICE CLOCK IS (-?\d+) S OFF THE SERVER'S", session())
+        assert offset and -10900 <= int(offset[1]) <= -10700, (offset, session()[-1500:])
+        assert server.operation(term_id)["status"] == "completed", server.operation(term_id)
+        print(f"PASS: the device clock {offset[1]} s off the server's: a command with a 10-minute term run and answered "
+              "completed, judged by the server's time", flush=True)
+        # 750-EFF-0018: the machine's name set by the shell's `hostname` is what the heartbeats report from the next sample
+        # on, with no restart; once removed, the agent's own name stands again.
+        def reported(name, seconds=75):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                if any(b.get("agent_id") == agent and b.get("hostname") == name for b in list(server.beats)[-5:]):
+                    return
+                time.sleep(1)
+            raise AssertionError((name, [b.get("hostname") for b in list(server.beats)[-5:]], session()[-1500:]))
+        require(vm.command("hostname mind-bench-1"), "THE MACHINE'S NAME: mind-bench-1, KEPT IN data/machine/name")
+        reported("mind-bench-1")
+        require(session(), "EFFECTOR: HOSTNAME mind-bench-1 (THE MACHINE'S NAME)")
+        require(vm.command("rm data/machine/name"), "OK")
+        reported("mind-qemu")
+        print("PASS: the machine's name set by `hostname` reached the heartbeats within a sample, no restart; removed, the "
+              "agent's own name stood again", flush=True)
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(15 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(16 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (15 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (16 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
         # starts it again with a new flow grant, and it is back once the server is; it is never quarantined.
@@ -13368,6 +13399,57 @@ def effector_suite(args, disk):
         assert len(server.beats) > beats_then, "the agent is back once the server is"
         print("PASS: the server out of reach for 75 s: after 40 s with no answer the agent ended itself, init started it "
               "again with a new grant, not quarantined, and its heartbeats came back with the server", flush=True)
+        # 750-EFF-0006 with 750-KRN-0194: stopped by init, the agent hears its stop notice on a worker, sends its last
+        # heartbeat, shutting_down, and ends within the notice; started again, it is back.
+        require(session(), "EFFECTOR: init'S STOP NOTICE AWAITED (WORKER PID=")
+        time.sleep(2)  # the worker's call reaches init, or init's answer reaches the log
+        current = session().rpartition("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")[2]
+        if "EFFECTOR: init ANSWERED THE STOP NOTICE'S WORKER Denied" in current:
+            # init takes stop-notice only from the service's own PID, so the agent's worker is refused; asked of KRN on
+            # 2026-11-14 (EFF's message). Until init takes it from the agent's notice client, a stop is not checked here.
+            print("SKIP: init's stop notice to the agent (750-EFF-0006): init refuses the call from the agent's worker "
+                  "(asked of KRN)", flush=True)
+        else:
+            beats_then = len(server.beats)
+            require(vm.command("svc stop effector"), "effector")
+            init_log = ""
+            deadline = time.monotonic() + 30
+            while "effector ENDED WITHIN THE NOTICE" not in init_log and time.monotonic() < deadline:
+                time.sleep(1)
+                init_log = vm.command("dmesg -s init", raw=True)
+            require(init_log, "[INIT] STOP NOTICE TO effector")
+            require(init_log, "[INIT] effector ENDED WITHIN THE NOTICE")
+            assert any(b.get("agent_id") == agent and b.get("system_state") == "shutting_down" for b in list(server.beats)[beats_then:]), \
+                [b.get("system_state") for b in list(server.beats)[beats_then:]]
+            starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
+            require(vm.command("svc start effector"), "effector")
+            deadline = time.monotonic() + 60
+            while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
+                time.sleep(1)
+            until("EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", 60)
+            print("PASS: stopped by init, the agent heard the stop notice on its worker, sent shutting_down and ended within "
+                  "the notice; started again, it is back", flush=True)
+        # 801-EFF-0032: vfs_server restarted under the agent and the gateway, whose file clients of the old instance answer
+        # no more. A journal or audit line not written ends the service, init starts it again with new clients, and the
+        # commands after it are done; the agent never stays busy for good (the MacBook Pro, 2026-11-14).
+        old_vfs = vm.services()["vfs_server"]
+        require(vm.command("svc restart vfs_server", timeout=60), "vfs_server restarted: PID")
+        for _ in range(50):
+            if vm.services().get("vfs_server", old_vfs) != old_vfs:
+                break
+            time.sleep(.2)
+        first = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            out = session()
+            if f"EFFECTOR: ACK {first} completed WITH ITS RESULT ACCEPTED" in out or "THE JOURNAL WAS NOT WRITTEN" in out:
+                break
+            time.sleep(1)
+        restarted = "THE JOURNAL WAS NOT WRITTEN" in session()
+        after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
+        until(f"EFFECTOR: ACK {after} completed WITH ring.log", 180)
+        print(f"PASS: vfs_server restarted under the agent: {'its journal not written, it ended and init started it again' if restarted else 'its journal written as before'}; "
+              "a log collected through the gateway's audit after it", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
@@ -13407,6 +13489,18 @@ def effector_suite(args, disk):
         until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)")
         print(f"PASS: a kept identity recorded on another machine: a new agent ID {new[1]}, not the owner's {agent}, its journal set "
               "aside", flush=True)
+        # 801-EFF-0027 with NET's 801-NET-0081: the clock at 2000-01-01, as after a flat battery. The pinned server is
+        # reached, its certificate's start logged and not enforced, and a command with a term is run.
+        # The disk is served as a snapshot: the planted identity is taken away, so the owner's agent ID stands again.
+        vm.close()
+        shutil.rmtree(kept)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2000-01-01T00:00:00", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+        until(f"EFFECTOR: AGENT {agent} TO 10.0.2.2/effector", 120)
+        old_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
+        until(f"EFFECTOR: ACK {old_id} completed WITH ITS RESULT ACCEPTED", 180)
+        require(vm.command("dmesg -s tls", raw=True), "NOT ENFORCED, THE PIN BINDS THE KEY")
+        print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command "
+              "with a 10-minute term run, judged by the server's time", flush=True)
     finally:
         stop_watch.set()
         vm.close()
@@ -13624,7 +13718,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
     assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
     assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
-    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r, r
+    assert 0 < r["total_duration_seconds"] <= 360, r
+    # Every CPU at once (750-EFF-0016 with 750-KRN-0159): workers and the session, as many as the CPUs, at most.
+    if r["logical_processors"] >= 2:
+        p = r["cpu_parallel"]
+        assert p["benchmark"] == "effector_bogomips_v1" and 2 <= p["worker_threads"] <= r["logical_processors"], p
+        assert p["iterations"] > 0 and 0 < p["duration_seconds"] <= 300 and p["bogomips"] > 0, p
     # The chase over exactly 16 MiB, in the session's 48 MiB quota (750-KRN-0158), as the server's check wants it.
     m = r["memory_latency"]
     assert m["benchmark"] == "effector_pointer_chase_v1" and m["working_set_bytes"] == 16 << 20 and m["accesses"] > 0, m
@@ -17785,8 +17884,8 @@ def bar_move_check(args, disk):
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
-    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the kernel restarts the
-    machine at the deadline, and the next boot falls back to slot A."""
+    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the machine restarts (the
+    updater asks, or the kernel at the deadline), and the next boot falls back to slot A."""
     with tempfile.TemporaryDirectory(prefix="mind-trial-") as temp:
         temp = Path(temp)
         volume = temp / "volume"
@@ -17827,22 +17926,50 @@ def trial_check(args, disk):
             vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
             try:
                 require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
-                # init's verdict may come after the shell's prompt; `logs` drains, so the readings add up.
-                verdict = ""
-                for _ in range(60):
-                    verdict += vm.command("logs 1", raw=True)
-                    if "[INIT] TRIAL BOOT" in verdict:
-                        break
-                    time.sleep(.25)
-                require(verdict, "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
-                vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
-                out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
+                # 801-UPD-0037: the updater asks for the restart once init refused the trial, so it may come before the
+                # kernel's deadline; either way the next boot falls back to slot A.
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=150)
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+                assert "init (PID 1) ASKED TO RESTART THE MACHINE" in out or "THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING" in out, out[-3000:]
             finally:
                 vm.close()
+        # 801-KRN-0242, 801-UPD-0037: the development mode on and a server configured, but an agent that cannot read its
+        # configuration, so it never connects. Since 801-EFF-0028 it waits 31 s before it ends and is never quarantined,
+        # so init lifts the kernel's deadline, holds the trial for the server's word for the whole bound (600 s), and then
+        # refuses it; the updater keeps the reason, spends the trial's second try and asks for the restart, so the next
+        # boot is slot A's, which says why.
+        volume = temp / "agent"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+            (volume / name).parent.mkdir(parents=True, exist_ok=True)
+            (volume / name).write_bytes(data)
+        image = boot_slots.Image.create(temp / "agent.img", boot_slots.layout(volume, temp / "agent-slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "agent-slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=2)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=600 + 300)
+            assert "WAS NOT CONFIRMED IN 15 S" not in out and out.count("BOOT: SLOT B LOADED ON TRIAL") == 0, out[-3000:]
+            require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("updater", "A TRIAL REFUSED BEFORE")
+            require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+            require(log, "in slot B, falling back to slot A; NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING")
+        finally:
+            vm.close()
+        refused = (image.read("system/updater/refused") or b"").decode()
+        # This image has no log volume, so the trial's log is `none`; one with it names `log:bootNNNN.log`.
+        assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING\nlog (none|log:boot\d{4}\.log)\n", refused), refused
+        chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+        assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts at the deadline, and the next boot falls back to slot A; on the trial, keystore took a key for that boot "
-          "alone and left the damaged one on the disk as it was (801-NET-0079)", flush=True)
+          "restarts, and the next boot falls back to slot A; on the trial, keystore took a key for that boot alone and left "
+          "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent never connects "
+          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 
 def loader_error(vm, name, reason):

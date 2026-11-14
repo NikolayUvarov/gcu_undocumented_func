@@ -56,3 +56,14 @@
 - **Checked on the host** (`tests/effector_bench_host.rs`). The permutation's first entries, and the index after 4 096 and after 40 960 steps, equal what the Linux agent's own code gives (run in Go 1.23 without its clock). A sliced run gives `memory_latency` as the server's `validPerformanceExtras` wants it.
 - **The `effector` QEMU suite** checks the field. Not run yet.
 - **`cpu_parallel` (all cores) waits for KRN.** `init` starts `effector` without `SPAWN_WORKERS`; asked on internal-dev-messages, 2026-11-05.
+
+## Progress (2026-11-14): every CPU at once
+
+- **`cpu_parallel`, as the Linux agent's.** `init` lets `effector` start workers since 750-KRN-0159: up to 32, one live worker a CPU.
+  - The phase runs after the single thread, for duration/3, ending by the wall clock.
+  - The session starts one worker fewer than the CPUs; the stop notice's worker counts as one of them. Each runs `effector_bogomips_v1` until the shared deadline and writes its count in a page the session shares.
+  - The session's own thread batches in its slices beside them.
+  - The rate is the total over the phase's wall time. `worker_threads` is the workers and the session, at most the logical processors.
+  - With no worker started the phase is left out, as before. A worker that never ends leaves it out 10 s past its deadline.
+- **Host tests:** three fake workers give `cpu_parallel` with `worker_threads` 4; a stuck one leaves it out.
+- **The `effector` suite** checks `cpu_parallel` on 2 CPUs or more. Not run yet.

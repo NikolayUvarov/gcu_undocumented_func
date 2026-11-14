@@ -34,6 +34,22 @@ pub struct Heartbeat<'a> {
     pub busy: Option<Busy<'a>>,
     /// The one-minute load, for the server's load gate.
     pub load: Option<Load>,
+    /// A fallback's report (801's S2, 801-EFF-0029): the server's `update` field.
+    pub update: Option<Fallback<'a>>,
+}
+
+/// A trial the updater refused and fell back from (801-UPD-0037): the refused version and the updater's line, kept
+/// until a trial is confirmed. Sent as `update: {state: "rolled_back", build_number, result}`, the field the server
+/// keeps for its other agents' updates (`UpdateStatus`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fallback<'a> { pub version: Option<u64>, pub result: &'a str }
+
+/// The fallback in the updater's `failure`, `version V in slot S, falling back to slot T: WHY`; None for any other.
+pub fn fallback(failure: &str) -> Option<Fallback<'_>> {
+    let rest = failure.strip_prefix("version ")?;
+    if !failure.contains("falling back to slot") { return None; }
+    let version = rest.split(' ').next().and_then(|v| v.parse().ok());
+    Some(Fallback { version, result: failure })
 }
 
 /// The command held: since when (RFC 3339), its ID and action.
@@ -82,6 +98,13 @@ pub fn heartbeat<'b>(buf: &'b mut [u8], h: &Heartbeat<'_>) -> Result<&'b [u8], E
     // Its actions run within their fixed budget: no reservation extends one (Effector ahelp, build 232, the fixed mode).
     w.field_bool("renewable_execution_timeout", false)?;
     if let Some(t) = h.agent_time { w.field_str("agent_time", t)?; }
+    if let Some(f) = h.update {
+        w.key("update")?; w.object()?;
+        w.field_str("state", "rolled_back")?;
+        if let Some(v) = f.version { w.field_u64("build_number", v)?; }
+        w.field_str("result", f.result)?;
+        w.end()?;
+    }
     if let Some(l) = h.load {
         w.key("load")?; w.object()?;
         w.field_decimal("load_percent", l.percent)?; w.field_decimal("load_average", l.average)?; w.field_u64("cpu_cores", l.cores as u64)?;

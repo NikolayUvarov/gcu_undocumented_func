@@ -5,8 +5,8 @@
 //! the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 //! may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 //! Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-//! A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice` and what any client
-//! may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
+//! A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice`, say `agent-step`
+//! (1.13) and ask what any client may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -16,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 12, 0);
+pub const VERSION: (u8, u8, u8) = (1, 13, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -46,14 +46,16 @@ impl Wire for Service {
 }
 
 /// How this boot went (1.4, 000-KRN-0102): the slot it came from (`BOOT_SLOT_*`: 0 the volume's root, 1 A, 2 B),
-/// whether it was on trial, and whether init confirmed it (`BOOT_CONFIRM`). init answers once it has decided, so a
-/// trial boot not confirmed is one it refused: the kernel restarts the machine at the deadline. Any client may ask.
+/// whether it was on trial, and whether init confirmed it. Since 1.13 (801-KRN-0242) init answers at once:
+/// `deciding` while a trial waits for the Effector agent's word (`agent-step`); a trial neither confirmed nor
+/// deciding is one init refused, `why` saying why, and the machine restarts into the slot before. `log` is this
+/// boot's log on the log volume (`log:bootNNNN.log`), 0 if none. Any client may ask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Boot { pub slot: u8, pub trial: bool, pub confirmed: bool }
+pub struct Boot { pub slot: u8, pub trial: bool, pub confirmed: bool, pub deciding: bool, pub why: Text<96>, pub log: u32 }
 impl Wire for Boot {
-    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.confirmed.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, confirmed: Wire::decode(r)? }) }
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<96> as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.confirmed.encode(w)?; self.deciding.encode(w)?; self.why.encode(w)?; self.log.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, confirmed: Wire::decode(r)?, deciding: Wire::decode(r)?, why: Wire::decode(r)?, log: Wire::decode(r)? }) }
 }
 
 /// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
@@ -126,6 +128,22 @@ impl StopReason {
     pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Stop), 1 => Some(Self::Restart), 2 => Some(Self::PowerOff), _ => None } }
 }
 impl Wire for StopReason {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// How far the Effector agent got towards its server (1.13, 801-KRN-0242): `started` (its configuration read),
+/// `no-network` (no flow, address or route to the server), `no-tls` (no TLS session with the pinned server),
+/// `refused` (the server answered, but did not accept the heartbeat) or `accepted` (it accepted one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AgentStep { #[default] Started = 0, NoNetwork = 1, NoTls = 2, Refused = 3, Accepted = 4 }
+impl AgentStep {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Started), 1 => Some(Self::NoNetwork), 2 => Some(Self::NoTls), 3 => Some(Self::Refused), 4 => Some(Self::Accepted), _ => None } }
+}
+impl Wire for AgentStep {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
@@ -220,7 +238,7 @@ pub fn boot(endpoint: Endpoint) -> Result<core::result::Result<Boot, Error>> {
     };
     let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 3, false, false)?;
+    let length = wire::buffer_reply(&reply, 106, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Boot as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -323,6 +341,25 @@ pub fn stop_notice(endpoint: Endpoint) -> Result<core::result::Result<StopReason
     Ok(Ok(StopReason::from_code(wire::field(&reply, 0, 16, 8)).ok_or(SysError::Invalid)?))
 }
 
+/// The Effector agent's word on its way to the server (1.13, 801-KRN-0242), `detail` saying more (a status, an
+/// error). Where the agent runs with a server configured (`data/effector/effector.conf`), a trial boot is confirmed
+/// on `accepted` within 10 min of init's READY and refused otherwise, the last word said being its `why` (MC-9.4,
+/// 9.9). Only the agent's own client (`BADGE_NOTICE`, from the running agent) may say it; others get `denied`.
+pub fn agent_step(endpoint: Endpoint, step: AgentStep, detail: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        step.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<64>(detail, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 15 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -340,6 +377,7 @@ pub enum Request {
     BootPlan,
     Configuration,
     StopNotice,
+    AgentStep { step: AgentStep, detail: Text<64> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -390,7 +428,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         }
         7 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 3, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 106, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Boot, call))
@@ -439,6 +477,15 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         14 => {
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::StopNotice, Call::words(request, cap)))
+        }
+        15 => {
+            let mut copy = [0u8; 67];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let step = <AgentStep as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let detail = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::AgentStep { step, detail }, call))
         }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
@@ -499,4 +546,8 @@ pub fn reply_configuration(call: Call, value: core::result::Result<Configuration
 pub fn reply_stop_notice(call: Call, value: core::result::Result<StopReason, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_agent_step(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

@@ -45,7 +45,7 @@ fn a_run_in_slices_gives_a_result_the_server_takes() {
     let mut b = Bench::new(3); // 1000 ms of CPU, 250 of copying, 200 of the chase, 250 each of writing and reading
     let mut disk = File::default();
     let mut slices = 0;
-    while !b.step(&mut now, 50, &mut disk) { slices += 1; assert!(slices < 10_000); }
+    while !b.step(&mut now, 50, &mut disk, &mut NoWorkers) { slices += 1; assert!(slices < 10_000); }
     assert!(slices > 20, "run in slices, the heartbeat between them");
     assert!(b.iterations > 0 && b.copied > 0 && b.accesses > 0 && b.written > 0 && b.read > 0 && disk.flushed);
     assert!(b.copied % (8 << 20) == 0, "8 MiB a copy: {}", b.copied);
@@ -69,7 +69,7 @@ fn a_run_in_slices_gives_a_result_the_server_takes() {
     let checksum: u64 = body.split(r#""working_set_bytes":16777216"#).nth(1).unwrap().split(r#""checksum":"#).nth(1).unwrap()
         .split('}').next().unwrap().parse().unwrap();
     assert!(checksum < 4 << 20, "an index of the 16 MiB set: {checksum}");
-    assert!(!body.contains("cpu_parallel"), "left out: no workers yet");
+    assert!(!body.contains("cpu_parallel"), "left out: no workers started");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn a_disk_that_fails_leaves_the_disk_numbers_out() {
     let mut now = || { t += 1; t };
     let mut b = Bench::new(1);
     let mut disk = File { fail: true, ..File::default() };
-    while !b.step(&mut now, 100, &mut disk) {}
+    while !b.step(&mut now, 100, &mut disk, &mut NoWorkers) {}
     let mut buf = vec![0u8; 4096];
     let body = String::from_utf8(b.result(&mut buf, 1, "", "arm64", "0.1.0", None).unwrap().to_vec()).unwrap();
     assert!(!body.contains("disk_benchmark") && body.contains("memory_benchmark"), "{body}");
@@ -98,4 +98,42 @@ fn the_pointer_chase_is_the_linux_agents() {
         if round == 1 { assert_eq!(index, 2314532); }
     }
     assert_eq!(index, 3744278);
+}
+
+/// Three workers that each count 1000 batches once their deadline has passed.
+struct Three { deadline: Option<u64>, clock: std::rc::Rc<std::cell::Cell<u64>> }
+impl Parallel for Three {
+    fn start(&mut self, ms: u64) -> u16 { self.deadline = Some(self.clock.get() + ms); 3 }
+    fn collect(&mut self) -> Option<u64> { (self.clock.get() >= self.deadline?).then_some(3 * 1000 * BATCH) }
+}
+
+#[test]
+fn every_cpu_at_once_gives_cpu_parallel() {
+    // 750-EFF-0016 with 750-KRN-0159: three workers and the session's own thread, over the phase's wall time.
+    let clock = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let c = clock.clone();
+    let mut now = move || { c.set(c.get() + 1); c.get() };
+    let mut workers = Three { deadline: None, clock: clock.clone() };
+    let mut b = Bench::new(3); // 1000 ms on one thread, then 1000 ms on every CPU
+    let mut disk = File::default();
+    let mut slices = 0;
+    while !b.step(&mut now, 50, &mut disk, &mut workers) { slices += 1; assert!(slices < 10_000); }
+    let mut buf = vec![0u8; 4096];
+    let body = String::from_utf8(b.result(&mut buf, 4, "", "x64", "0.1.0", None).unwrap().to_vec()).unwrap();
+    reader::walk(body.as_bytes(), &mut |_, _| Ok(())).expect("valid JSON");
+    assert!(body.contains(r#""cpu_parallel":{"benchmark":"effector_bogomips_v1","bogomips":"#), "{body}");
+    assert!(body.contains(r#""worker_threads":4,"#), "three workers and the session: {body}");
+    let iterations: u64 = body.split(r#""cpu_parallel":"#).nth(1).unwrap().split(r#""iterations":"#).nth(1).unwrap()
+        .split(',').next().unwrap().parse().unwrap();
+    assert!(iterations > 3 * 1000 * BATCH, "the workers' and the session's: {iterations}");
+    // A worker that never ends leaves the phase out, and the run still ends.
+    struct Stuck;
+    impl Parallel for Stuck { fn start(&mut self, _: u64) -> u16 { 1 } fn collect(&mut self) -> Option<u64> { None } }
+    let mut b = Bench::new(1);
+    let mut t = 0u64;
+    let mut now = || { t += 1; t };
+    let mut slices = 0;
+    while !b.step(&mut now, 100, &mut File::default(), &mut Stuck) { slices += 1; assert!(slices < 100_000); }
+    let body = String::from_utf8(b.result(&mut buf, 4, "", "x64", "0.1.0", None).unwrap().to_vec()).unwrap();
+    assert!(!body.contains("cpu_parallel"), "{body}");
 }

@@ -508,7 +508,7 @@ class EffectorFixture:
     def __exit__(self, *_):
         self.close()
 
-    def queue(self, agent, action, payload="", program="", command_id=None):
+    def queue(self, agent, action, payload="", program="", command_id=None, expires_in=None):
         with self.changed:
             if len(self.commands) >= MAX_COMMANDS:
                 raise ValueError("fixture command limit")
@@ -517,6 +517,9 @@ class EffectorFixture:
                 raise ValueError("invalid or reused command id")
             command = {"id": command_id, "agent_id": agent, "action": action, "program_name": program,
                        "new_hostport": payload if isinstance(payload, str) else encoded(payload).decode(), "status": "pending"}
+            if expires_in is not None:
+                # A term in the server's queue by this fixture's clock, as the server's own `expires_at` (801-EFF-0027).
+                command["expires_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + expires_in))
             if len(encoded(command)) > 16384:
                 raise ValueError("fixture command size limit")
             self.commands[command_id] = command

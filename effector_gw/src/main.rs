@@ -33,6 +33,14 @@ const SCREEN_HEIGHT: usize = 800;
 static mut SCRATCH: [u8; wit::REQUEST_MAX] = [0; wit::REQUEST_MAX];
 static mut OUT: [u8; 32768] = [0; 32768];
 
+// A list of services longer than effector.wit's 64 is cut; the log says so, once (effector.wit 1.6).
+fn cut_said(what: &str, kept: usize, all: usize) {
+    static SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if kept < all && !SAID.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        mind::println!("[EFFECTOR_GW] {}: {} OF {} SERVICES KEPT, effector.wit HOLDS NO MORE", what, kept, all);
+    }
+}
+
 fn present(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
 
 fn vfs_fail(e: vfs::Error) -> Fail {
@@ -154,7 +162,7 @@ impl Client {
 
 /// The machine as `init`'s grants show it to the gateway. `writer` is the scope `init` made of the policy's `deliver`
 /// root at this start (750-KRN-0120): its root is that directory, so paths are named below it.
-struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String> }
+struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String>, audit_failed: bool }
 
 fn temporary(path: &str) -> String { format!("{}.part", path) }
 
@@ -288,7 +296,9 @@ impl Machine for Host {
         let at = self.private.size(&file).unwrap_or(0);
         let mut text = String::from(line);
         text.push('\n');
-        self.private.write_at(&file, at, text.as_bytes(), mind::fs::MODE_WRITE | mind::fs::MODE_CREATE).is_ok()
+        let written = self.private.write_at(&file, at, text.as_bytes(), mind::fs::MODE_WRITE | mind::fs::MODE_CREATE);
+        if let Err(e) = &written { mind::println!("[EFFECTOR_GW] THE AUDIT LINE WAS NOT WRITTEN: {:?}", e); self.audit_failed = true; }
+        written.is_ok()
     }
 
     fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.reader.read_whole(POLICY_FILE, policy::FILE_MAX + 1) }
@@ -363,6 +373,8 @@ impl Machine for Host {
         s.services = self.boot_services().into_iter().map(|(name, state, pid)| Load { name, state: Some(state), pid, ..Load::default() }).collect();
         if present(SLOT_SYSINFO) {
             let info = Endpoint(SLOT_SYSINFO);
+            // The machine's name (750-EFF-0018), read again for each sample so a change shows within one.
+            if let Ok(Ok(name)) = sysinfo::hostname(info) { s.hostname = String::from(name.as_str()); }
             let mut start = 0;
             while let Ok(Ok(cpus)) = sysinfo::cpus(info, start) {
                 for c in cpus.as_slice().iter().filter(|c| c.online) { s.cpus += 1; s.busy_ns += c.busy_ns; s.idle_ns += c.idle_ns; }
@@ -423,7 +435,7 @@ fn main(_info: &'static BootInfo) {
     // init starts it with `--service` in a mode (750-KRN-0119, 0143); started any other way it serves nothing.
     let service = mind::process::args_str().split_whitespace().any(|a| a == "--service");
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
-    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None };
+    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None, audit_failed: false };
     // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
@@ -444,6 +456,12 @@ fn main(_info: &'static BootInfo) {
             let _ = display::remote(Endpoint(SLOT_DISPLAY), state);
             mark_at = mind::time::uptime_ms() + MARK_MS;
         }
+        // An audit not written refuses its request (MC-10.6); once answered, the gateway ends, so that init starts it again
+        // with new clients: a file client of a restarted vfs_server answers no more (801-EFF-0032).
+        if host.audit_failed {
+            mind::println!("[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN: ENDING, SO THAT init STARTS IT AGAIN WITH A NEW FILE CLIENT");
+            mind::process::exit_with(0);
+        }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, MARK_MS as u32) else { continue };
         if !request.is_call { continue; }
         let badge = match request.badge { BADGE_SESSION => Badge::Session, BADGE_OWNER => Badge::Owner, _ => Badge::Other };
@@ -457,6 +475,7 @@ fn main(_info: &'static BootInfo) {
                 let s = gw.status(m);
                 let mut services = List::default();
                 for (name, st) in s.services.iter() { if !services.push(wit::Service { name: Text::new(name).unwrap_or_default(), state: state(*st) }) { break; } }
+                cut_said("STATUS", services.len(), s.services.len());
                 let status = wit::Status { release: Text::default(), uptime_ms: s.uptime_ms, memory_used: s.memory_used, memory_total: s.memory_total, services, policy: s.policy, busy: s.busy, journal_free: 0 };
                 if badge == Badge::Other { wit::reply_status(reply, &wit::Status::default()) } else { wit::reply_status(reply, &status) }
             }
@@ -485,9 +504,11 @@ fn main(_info: &'static BootInfo) {
                     let load = wit::Load { name: Text::new(&l.name).unwrap_or_default(), state: state(l.state.unwrap_or(ServiceState::Absent)), pid: l.pid, run_ns: l.run_ns, started_ns: l.started_ns, memory: l.memory };
                     if !services.push(load) { break; }
                 }
+                cut_said("SAMPLE", services.len(), s.services.len());
                 let mut volumes = List::default();
                 for (name, bytes, free) in s.volumes.iter() { if !volumes.push(wit::Space { name: Text::new(name).unwrap_or_default(), bytes: *bytes, free: *free }) { break; } }
-                let sample = wit::Sample { cpus: s.cpus, busy_ns: s.busy_ns, idle_ns: s.idle_ns, uptime_ms: s.uptime_ms, memory_total: s.memory_total, memory_free: s.memory_free, services, volumes };
+                let sample = wit::Sample { cpus: s.cpus, busy_ns: s.busy_ns, idle_ns: s.idle_ns, uptime_ms: s.uptime_ms, memory_total: s.memory_total, memory_free: s.memory_free, services, volumes,
+                    hostname: Text::new(&s.hostname).unwrap_or_default() };
                 wit::reply_sample(reply, &sample)
             }
             wit::Request::Read { handle, offset } => match gw.read(m, badge, handle, offset, out) {

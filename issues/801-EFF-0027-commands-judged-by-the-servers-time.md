@@ -1,6 +1,6 @@
 # 801-EFF-0027 — Commands judged by the server's time, so a device clock off by hours loses nothing
 
-**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** `NET`: `http::Head` gains the server's `Date`, and pinned TLS survives a clock years off (asked on internal-dev-messages, `KRN/2026-11-14T…-EFF-801-net-the-servers-date-…`) · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Constitution:** MC-7.5, MC-12.1
+**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** in progress (2026-11-14) · **Blocked by:** — (NET's 801-NET-0080 and 0081, which land with it) · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Constitution:** MC-7.5, MC-12.1
 
 ## Problem
 
@@ -32,3 +32,19 @@
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-EFF-0028](801-EFF-0028-the-agent-comes-back-by-itself.md), [750-EFF-0006](750-EFF-0006-session-service.md).
+
+## Progress (2026-11-14)
+
+- **NET made both parts the same day:**
+  - 801-NET-0080: `Head.date`, `parse.wit` 5.0;
+  - 801-NET-0081: a pinned server whose certificate starts after the clock is logged, not refused.
+- **Done in `effector/src/main.rs`.**
+  - `clock_from` keeps the offset from each answer's `Date`, counting less than 2 s as none.
+  - `server_unix()` gives the device's clock plus the offset. It is what judges a command's term, the ACK's retries and the journal's eviction, and it stamps `busy_since`, a late answer's run time, the update's receipt and the telemetry sample.
+  - The heartbeat's `agent_time` and the restart's own detection keep the device's clock.
+  - The log says `THE DEVICE CLOCK IS N S OFF THE SERVER'S` when the offset moves by more than 60 s.
+- **The `effector` suite.** It now runs with the guest's clock 3 h ahead, so every check in it runs under that offset. Two checks are added:
+  - a command with a 10-minute term by the fixture's clock is answered `completed`, and the log names an offset of about −10 800 s;
+  - one boot with the clock at 2000-01-01 reaches the pinned server, the certificate's start logged as not enforced, and runs a command with a term.
+
+  Not run yet.
