@@ -1,7 +1,7 @@
 // A server known by a pin instead of the root store. connect-pinned (idl/tls.wit 1.1, 351-NET-0002): the SHA-256 of
 // its certificate's SubjectPublicKeyInfo, nothing else checked but the handshake's signature. connect-pins (1.2,
 // 750-NET-0020): one of two pins, of the leaf (its DER) or of its SPKI, and the certificate still checked as webpki
-// checks one (name, validity, purpose, CA:false, issuer's signature).
+// checks one (name, validity, purpose, CA:false, issuer's signature); since 1.5 a start after the clock only logged.
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use pki_types::{CertificateDer, ServerName, UnixTime};
@@ -44,7 +44,10 @@ impl Pinned {
         let certificate = x509_cert::Certificate::from_der(end_entity.as_ref()).map_err(|_| bad(CertificateError::BadEncoding))?;
         let validity = &certificate.tbs_certificate.validity;
         let now = now.as_secs();
-        if now < validity.not_before.to_unix_duration().as_secs() { return Err(bad(CertificateError::NotValidYet)); }
+        // A clock before a pinned certificate's start is taken as a wrong clock (a flat battery, an unset RTC): the pin
+        // binds the key, so it is logged and not enforced (801-NET-0081, 801 S5). An expired one is still refused.
+        let start = validity.not_before.to_unix_duration().as_secs();
+        if now < start { mind::println!("[TLS] PINNED SERVER {:?}: ITS CERTIFICATE STARTS AT {} BUT THE CLOCK READS {}: NOT ENFORCED, THE PIN BINDS THE KEY", name, start, now); }
         if now > validity.not_after.to_unix_duration().as_secs() { return Err(bad(CertificateError::Expired)); }
         for extension in certificate.tbs_certificate.extensions.iter().flatten() {
             let value = extension.extn_value.as_bytes();
