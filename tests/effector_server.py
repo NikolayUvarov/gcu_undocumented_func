@@ -14,6 +14,7 @@ import pathlib
 import re
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -24,6 +25,7 @@ CONTRACT = "effector-agent 1.0"
 JSON_LIMIT = 64 * 1024
 ACK_LIMIT = 4 * 1024 * 1024  # a result with an artifact inline (a 2 MiB PNG as base64); the server takes 12 MiB
 FILE_LIMIT = 1024 * 1024
+DRAIN_LIMIT = 2 * 1024 * 1024  # a refused body up to this size is read before its 413
 BUNDLE_LIMIT = 64 * 1024 * 1024  # a release bundle for update_agent (751-EFF-0023): a whole release's boot files and applications
 MAX_SAMPLES = 64
 MAX_COMMANDS = 128
@@ -98,6 +100,9 @@ class _Server(http.server.ThreadingHTTPServer):
             self.slots.release()
 
     def handle_error(self, request, address):
+        # A peer that went away (a TLS client that closed before its request, as on Python 3.13) is no handler failure.
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
         self.fixture.errors.append("request handler failed")
 
 
@@ -131,6 +136,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             raise ValueError("invalid Content-Length")
         length = int(lengths[0])
         if length > (FILE_LIMIT if binary else ACK_LIMIT if self.route == "/api/commands/ack" else JSON_LIMIT):
+            # Read a body of a bounded size before refusing it, so the client's send ends and it reads the 413, rather
+            # than an EOF while it still sends.
+            if length <= DRAIN_LIMIT:
+                self.rfile.read(length)
             raise OverflowError("fixture body limit exceeded")
         data = self.rfile.read(length)
         if len(data) != length:
@@ -152,6 +161,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.record = {"method": self.command, "path": self.path[:4096], "status": 0}
         with fixture.lock:
             fixture.requests.append(self.record)
+            down = time.monotonic() < fixture.down_until
+        # A server out of reach (801-EFF-0028): the connection ends with no answer.
+        if down:
+            self.record["fault"] = "outage"
+            self.close_connection = True
+            return
         try:
             parts = urllib.parse.urlsplit(self.path)
             if len(self.path) > 4096 or not parts.path.startswith(fixture.prefix + "/"):
@@ -442,6 +457,7 @@ class EffectorFixture:
         self.telemetry = collections.deque()
         self.beats = collections.deque(maxlen=MAX_REQUESTS)
         self.activated = True
+        self.down_until = 0.0
         self.server = self.thread = self.directory = None
 
     def start(self):
@@ -529,6 +545,13 @@ class EffectorFixture:
                 raise ValueError("fixture file limit")
             self.files[key] = data
         return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+    def outage(self, seconds):
+        """Every request ends unanswered for `seconds`, as a server out of reach (801-EFF-0028)."""
+        if not 0 < seconds <= 600:
+            raise ValueError("fixture outage limit")
+        with self.lock:
+            self.down_until = time.monotonic() + seconds
 
     def inject(self, route, kind, value=None):
         kinds = {"delay", "drop", "redirect", "ack_500", "unknown_fields", "cut_stream", "cut_download"}
