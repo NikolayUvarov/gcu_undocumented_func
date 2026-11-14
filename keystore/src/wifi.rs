@@ -70,11 +70,17 @@ impl Wifi {
     pub fn load(seed: &[u8; 32], writes: Writes, release: &[u8; 32]) -> Self {
         let kek = derive(LABEL, seed, &[]);
         let trial_kek = derive(TRIAL_LABEL, seed, release);
-        // A file that does not open is left as it is: the slot before, or a later key, may open it.
-        let left = match writes { Writes::Kept => "FORGOTTEN, THE FILE REPLACED ON THE NEXT CHANGE", _ => "NOT USED THIS BOOT, THE FILE LEFT AS IT IS" };
+        // A file that does not open is never written over: off trial it is set aside, else left as it is for the slot
+        // before, or a later key, to open; if it cannot be moved, nothing is written this boot.
+        let mut writes = writes;
         let kept = match read(FILE, &kek) {
             Ok(kept) => kept,
-            Err(why) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS {}: {}", why, left); None }
+            Err(why) if writes == Writes::Kept => {
+                mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS {}: NOT USED", why);
+                if !stored::set_aside(FILE) { writes = Writes::None; }
+                None
+            }
+            Err(why) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS {}: NOT USED THIS BOOT, THE FILE LEFT AS IT IS", why); None }
         };
         // The trial's own file, written by this release on trial: the networks as it left them, newer than wifi.kept.
         let trial = if writes == Writes::None { None } else { read(TRIAL, &trial_kek).ok().flatten() };
@@ -100,7 +106,7 @@ impl Wifi {
         let (path, kek) = match self.writes {
             Writes::Kept => (FILE, &self.kek),
             Writes::Trial => (TRIAL, &self.trial_kek),
-            Writes::None => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS NOT WRITTEN: THE DEVICE KEY IS ONE FOR THIS BOOT ONLY (THIS BOOT ONLY)"); return Err(Error::NoKey); }
+            Writes::None => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS NOT WRITTEN: A DEVICE KEY FOR THIS BOOT ONLY, OR A FILE NOT SET ASIDE (THIS BOOT ONLY)"); return Err(Error::NoKey); }
         };
         let mut data = [0u8; kept::FILE_MAX];
         let len = self.kept.encode(kek, &mut data);
