@@ -197,8 +197,9 @@ def sourceless(log):
     return None
 
 
-def update(link, server, manifest, arch, version, timeout, say=print, channel="stable"):
-    """Puts release `version` of `channel` from `server` and follows the log to its end."""
+def update(link, server, manifest, arch, version, timeout, say=print, channel="stable", sent=None):
+    """Puts release `version` of `channel` from `server` and follows the log to its end; `sent` is called once the channel
+    and its timestamp are put (scripts/rollout.py's bound starts there, 801-LNK-0045)."""
     why = sourceless(link.log())
     if why:
         raise RuntimeError(why)
@@ -215,6 +216,8 @@ def update(link, server, manifest, arch, version, timeout, say=print, channel="s
     link.put(Path(server) / f"channels/{channel}", f"channels/{channel}")
     # Then the timestamp naming it (351-UPD-0028): until it is there the updater holds the channel it had.
     link.put(Path(server) / f"timestamps/{channel}", f"timestamps/{channel}")
+    if sent:
+        sent()
     return follow(link, timeout, say, before=before, version=version)
 
 
