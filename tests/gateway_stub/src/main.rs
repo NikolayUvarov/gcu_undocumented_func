@@ -3,7 +3,7 @@
 //! Test-only stand-in for the Effector gateway (QEMU `modes` suite, 750-KRN-0120, 0121, 0154): reports this boot's
 //! plan (173-KRN-0035), what init's lifecycle client badged BADGE_NAMED lets it do under the owner's policy, what its
 //! writable scope of the delivery root lets it write, at each start, what its scope of data/apps/ lets it write
-//! (750-KRN-0169), and whether a reboot it asks is served. Never
+//! (750-KRN-0169), and whether a reboot it asks is served, also once the boot disk is gone (801-KRN-0251). Never
 //! packaged into the normal OS; the real gateway is 750-EFF-0007.
 use mind::abi::*;
 use mind::idl::{display, init, vfs};
@@ -92,6 +92,18 @@ fn write(files: Endpoint, root: u32, path: &str, data: &[u8]) -> bool {
     written
 }
 
+// 801-KRN-0251: when the suite left `reboot-when-gone` in the delivery root, the stub waits until a file can no longer be
+// written there (the boot disk's driver stopped under it), then asks a reboot once: the owner's policy read before decides.
+fn reboot_when_gone() {
+    let files = Endpoint(SLOT_FILE);
+    let Ok(Ok(root)) = vfs::root(files, "") else { return };
+    let marked = match vfs::open(files, root, "reboot-when-gone", 0) { Ok(Ok(file)) => { let _ = vfs::close(files, file); true } _ => false };
+    if !marked { let _ = vfs::close(files, root); return; }
+    mind::println!("[GATEWAY-STUB] WAITING FOR THE DISK TO GO");
+    while write(files, root, "probe", b"here") { mind::time::sleep(1000); }
+    mind::println!("[GATEWAY-STUB] THE DISK IS GONE: REBOOT {}", said(init::reboot(Endpoint(SLOT_LIFECYCLE))));
+}
+
 // The Effector agent's mark (800-KRN-0156) through the screen's client, badged for it: each state for 6 s, a call a
 // second, then no more calls, so the mark goes 3 s later.
 fn remote_mark() {
@@ -133,5 +145,6 @@ fn main(_info: &'static BootInfo) {
     apps();
     reboot();
     remote_mark();
+    reboot_when_gone();
     loop { mind::time::sleep(1000); }
 }
