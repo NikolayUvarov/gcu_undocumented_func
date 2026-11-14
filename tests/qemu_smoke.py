@@ -17395,8 +17395,8 @@ def bar_move_check(args, disk):
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
-    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the kernel restarts the
-    machine at the deadline, and the next boot falls back to slot A."""
+    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the machine restarts (the
+    updater asks, or the kernel at the deadline), and the next boot falls back to slot A."""
     with tempfile.TemporaryDirectory(prefix="mind-trial-") as temp:
         temp = Path(temp)
         volume = temp / "volume"
@@ -17426,17 +17426,11 @@ def trial_check(args, disk):
             vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
             try:
                 require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
-                # init's verdict may come after the shell's prompt; `logs` drains, so the readings add up.
-                verdict = ""
-                for _ in range(60):
-                    verdict += vm.command("logs 1", raw=True)
-                    if "[INIT] TRIAL BOOT" in verdict:
-                        break
-                    time.sleep(.25)
-                require(verdict, "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
-                vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
-                out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
+                # 801-UPD-0037: the updater asks for the restart once init refused the trial, so it may come before the
+                # kernel's deadline; either way the next boot falls back to slot A.
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=150)
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+                assert "init (PID 1) ASKED TO RESTART THE MACHINE" in out or "THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING" in out, out[-3000:]
             finally:
                 vm.close()
         # 801-KRN-0242, 801-UPD-0037: the development mode on and a server configured, but an agent that cannot read its
@@ -17471,7 +17465,7 @@ def trial_check(args, disk):
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts at the deadline, and the next boot falls back to slot A; one held for the Effector server whose agent "
+          "restarts, and the next boot falls back to slot A; one held for the Effector server whose agent "
           "is quarantined is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 

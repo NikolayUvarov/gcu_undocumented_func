@@ -2469,7 +2469,9 @@ fn boot(info: &'static BootInfo) {
             }
         }
     } else if info.boot_slot.trial != 0 {
-        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
+        let why = if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" };
+        init.boot.why = wire_text(why); // the reason the updater keeps (801-UPD-0037)
+        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", why);
     }
     // The power button (000-KRN-0216): its ports and the SCI taken while the platform privilege allows it.
     let button = power_button();
