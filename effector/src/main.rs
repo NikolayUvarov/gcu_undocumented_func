@@ -211,6 +211,14 @@ fn failure(e: gateway::Error) -> session::Failure {
     }
 }
 
+/// vfs_server's PID as init lists it; 0 when init does not say.
+fn vfs_pid() -> u64 {
+    match init::list(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(list)) => list.as_slice().iter().find(|s| s.name.as_str() == "vfs_server" && s.running).map_or(0, |s| s.pid),
+        _ => 0,
+    }
+}
+
 /// A gateway's error by its IDL name, for an update's answer (`signature`, `older` and `expired` among them).
 fn reason(e: gateway::Error) -> &'static str {
     match e { gateway::Error::Signature => "signature", gateway::Error::Older => "older", gateway::Error::Exists => "exists", gateway::Error::Cancelled => "cancelled", e => failure(e).name() }
@@ -258,6 +266,9 @@ struct Agent {
     pool: Box<workers::Pool>, // the session's workers: the benchmark's on every CPU, and init's stop notice
     fallback: String, // the updater's line of a refused trial it fell back from, reported in each heartbeat (801-EFF-0029)
     journal_problem: String, // why the journal was not written, once it was not (801-EFF-0032)
+    vfs_pid: u64, // vfs_server's PID at this start, as init lists it (0: not said)
+    degraded: bool, // the journal cannot be written and vfs_server is the same: commands answered unjournaled
+    vfs_checked_at: usize, // when vfs_server's PID is asked again, while the journal cannot be written
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
@@ -577,6 +588,8 @@ impl Agent {
                     took_command = count > 0;
                     for (id, agent_id, action, program, payload, expires_unix, initiator, reason) in list.iter().take(count).flatten() {
                         let command = session::Command { id, agent_id, action, program, payload, expires_unix: *expires_unix };
+                        // With the journal not written, nothing is stored: each command is answered at once (801-EFF-0032).
+                        if session.journal_failed() { self.unjournaled(id, action, payload, initiator, reason); continue; }
                         // An action the gateway serves runs once, for a new command in time whose answer the journal
                         // has room for; any other is denied.
                         let gateway_ok = mind::dev::cap_info(SLOT_GATEWAY).0 == CAP_KIND_ENDPOINT;
@@ -597,6 +610,30 @@ impl Agent {
             Some(status) => { mind::println!("EFFECTOR: POLL ANSWERED {}", status); session::outcome(status, false) }
         };
         (outcome, took_command)
+    }
+
+    /// A command while the journal cannot be written (801-EFF-0032): `reboot` answered and done, as the owner's `reboot on`
+    /// lets the gateway and init; any other refused `journal`, not run. Neither is journaled: nothing ran but the restart,
+    /// and a second delivery of it only restarts the machine again (MC-6.6).
+    #[inline(never)]
+    fn unjournaled(&mut self, id: &str, action: &str, payload: &str, initiator: &str, reason: &str) {
+        use session::{Failure, Final};
+        let reboot = action == "exec_v1" && self.parsed(payload.as_bytes(), |v| wire::exec_command(v).map(String::from)).ok().is_some_and(|c| c.trim() == "reboot");
+        let answer = if !reboot { Final::Failed(Failure::Journal) } else {
+            match gateway::reboot(GATEWAY, &origin(id, initiator, reason, ACTION_S), REBOOT_DELAY_MS) {
+                Ok(Ok(())) => { self.restart_at = Some(now() + REBOOT_DELAY_MS as usize); Final::Completed }
+                Ok(Err(e)) => Final::Failed(failure(e)),
+                Err(_) => Final::Failed(Failure::Unsupported),
+            }
+        };
+        let mut buf = [0u8; 1024];
+        let status = match wire::ack(&mut buf, id, answer.result_json()) {
+            Ok(body) => { let body = body.to_vec(); self.request(Method::Post, "/api/commands/ack", "", Some(&body)) }
+            Err(_) => None,
+        };
+        let taken = if status == Some(200) && self.answer(wire::ok_answer).is_ok() { "ACCEPTED" } else { "NOT ACCEPTED" };
+        if reboot { mind::println!("EFFECTOR: THE JOURNAL CANNOT BE WRITTEN: reboot {} ANSWERED {} WITHOUT IT, {}", id, answer.status(), taken); }
+        else { mind::println!("EFFECTOR: {} {} REFUSED UNJOURNALED (journal), {}", id, action, taken); }
     }
 
     /// `collect_file` through the gateway (750-EFF-0007): opened there (the owner's policy decides, the gateway audits),
@@ -1211,7 +1248,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
-        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new(), journal_problem: String::new() });
+        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new(), journal_problem: String::new(), vfs_pid: vfs_pid(), degraded: false, vfs_checked_at: 0 });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1295,11 +1332,22 @@ fn main(_info: &'static BootInfo) {
             mind::println!("EFFECTOR: init STOPS IT ({:?}): SHUTTING_DOWN SENT ({:?}), ENDING", reason, outcome);
             mind::process::exit_with(0);
         }
-        // A journal not written stops answers and new commands (MC-6.6): the agent ends, so that init starts it again with
-        // a new file client, the likely cause being a restarted vfs_server; never a session left busy for good (801-EFF-0032).
-        if session.journal_failed() && SERVICE.load(core::sync::atomic::Ordering::Relaxed) {
-            mind::println!("EFFECTOR: THE JOURNAL WAS NOT WRITTEN ({}): ENDING, SO THAT init STARTS IT AGAIN WITH A NEW FILE CLIENT", agent.journal_problem);
-            mind::process::exit_with(0);
+        // A journal not written (801-EFF-0032). With vfs_server started again since this start, the agent's file clients
+        // answer no more: it ends, so that init starts it with new ones. With the same vfs_server the medium is gone or
+        // full, and a restart could not even read the configuration: the agent goes on, its heartbeats too, answering
+        // every command unjournaled, `reboot` alone done (MC-10.6's mode for a record that cannot be written; MC-6.6).
+        if session.journal_failed() && now() >= agent.vfs_checked_at {
+            agent.vfs_checked_at = now() + 10_000;
+            let pid = vfs_pid();
+            if SERVICE.load(core::sync::atomic::Ordering::Relaxed) && pid != 0 && agent.vfs_pid != 0 && pid != agent.vfs_pid {
+                mind::println!("EFFECTOR: THE JOURNAL WAS NOT WRITTEN ({}); vfs_server STARTED AGAIN (PID {}, NOW {}): ENDING, SO THAT init STARTS IT AGAIN WITH NEW FILE CLIENTS",
+                    agent.journal_problem, agent.vfs_pid, pid);
+                mind::process::exit_with(0);
+            }
+            if !core::mem::replace(&mut agent.degraded, true) {
+                mind::println!("EFFECTOR: THE JOURNAL CANNOT BE WRITTEN ({}), vfs_server THE SAME (PID {}): EVERY COMMAND IS REFUSED UNJOURNALED, reboot ALONE IS DONE, UNTIL THE MACHINE RESTARTS",
+                    agent.journal_problem, pid);
+            }
         }
         // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
         if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }

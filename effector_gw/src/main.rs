@@ -160,6 +160,9 @@ impl Client {
     }
 }
 
+// vfs_server's PID as init lists it; 0 when init does not say.
+fn vfs_pid(host: &mut Host) -> u64 { host.boot_services().iter().find(|(n, s, _)| n == "vfs_server" && *s == ServiceState::Running).map_or(0, |(_, _, p)| *p) }
+
 /// The machine as `init`'s grants show it to the gateway. `writer` is the scope `init` made of the policy's `deliver`
 /// root at this start (750-KRN-0120): its root is that directory, so paths are named below it.
 struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String>, audit_failed: bool }
@@ -436,6 +439,7 @@ fn main(_info: &'static BootInfo) {
     let service = mind::process::args_str().split_whitespace().any(|a| a == "--service");
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
     let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None, audit_failed: false };
+    let (vfs_at_start, mut degraded) = (vfs_pid(&mut host), false);
     // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
@@ -458,9 +462,17 @@ fn main(_info: &'static BootInfo) {
         }
         // An audit not written refuses its request (MC-10.6); once answered, the gateway ends, so that init starts it again
         // with new clients: a file client of a restarted vfs_server answers no more (801-EFF-0032).
-        if host.audit_failed {
-            mind::println!("[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN: ENDING, SO THAT init STARTS IT AGAIN WITH A NEW FILE CLIENT");
-            mind::process::exit_with(0);
+        // An audit line not written (801-EFF-0032): with vfs_server started again since this start, the gateway's file
+        // clients answer no more, and it ends so that init starts it with new ones; with the same vfs_server the medium is
+        // gone or full, and it goes on, refusing every audited request but the restart (MC-10.6).
+        if host.audit_failed && !degraded {
+            let pid = vfs_pid(&mut host);
+            if pid != 0 && vfs_at_start != 0 && pid != vfs_at_start {
+                mind::println!("[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN; vfs_server STARTED AGAIN (PID {}, NOW {}): ENDING, SO THAT init STARTS IT AGAIN WITH NEW FILE CLIENTS", vfs_at_start, pid);
+                mind::process::exit_with(0);
+            }
+            degraded = true;
+            mind::println!("[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN, vfs_server THE SAME (PID {}): EVERY AUDITED REQUEST IS REFUSED BUT reboot, ITS LINE IN THE SYSTEM LOG ALONE", pid);
         }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, MARK_MS as u32) else { continue };
         if !request.is_call { continue; }

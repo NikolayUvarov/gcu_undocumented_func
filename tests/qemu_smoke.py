@@ -13304,6 +13304,9 @@ def effector_suite(args, disk):
         # The disk is served as a snapshot: the planted identity is taken away, so the owner's agent ID stands again.
         vm.close()
         shutil.rmtree(kept)
+        # For this boot's last check (801-EFF-0032), the owner's `reboot on`.
+        owner_policy = disk / "data" / "effector" / "policy"
+        owner_policy.write_text(owner_policy.read_text() + "reboot on\n")
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2000-01-01T00:00:00", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
         until(f"EFFECTOR: AGENT {agent} TO 10.0.2.2/effector", 120)
         old_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
@@ -13311,6 +13314,37 @@ def effector_suite(args, disk):
         require(vm.command("dmesg -s tls", raw=True), "NOT ENFORCED, THE PIN BINDS THE KEY")
         print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command "
               "with a 10-minute term run, judged by the server's time", flush=True)
+        # 801-EFF-0032 (LNK's report of the bench, 2026-11-14): the boot disk taken out while the system runs, its driver
+        # stopped here with vfs_server the same. The agent and the gateway go on, the heartbeats too; a command is refused
+        # `journal`, not run; `reboot`, under the owner's `reboot on`, is answered and asked of init. Seen at the fixture:
+        # `dmesg` and `svc` are programs on that disk.
+        driver = re.search(r"\[INIT\] (\S+) PARTITION 1: WINDOW \d+ FOR VFS_SERVER", vm.command("dmesg -s init", raw=True))[1]
+        require(vm.command(f"svc stop {driver}", timeout=60), driver)
+        first = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+        refused = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline and not (server.operation(refused) or {}).get("status"):
+            time.sleep(1)
+        answer = server.operation(refused)
+        assert answer and answer["status"] == "failed" and answer["result"].get("error") == "journal", (answer, server.operation(first))
+        beats_then = len(server.beats)
+        time.sleep(6)
+        assert len(server.beats) > beats_then, "the heartbeats go on with the disk gone"
+        boot_line = vm.log.count("MIND CORE BOOT: STARTED")
+        restart = server.queue(agent, "exec_v1", {"command": "reboot", "run_as": "service", "session": "service", "timeout_seconds": 60})
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and not (server.operation(restart) or {}).get("status"):
+            time.sleep(1)
+        answer = server.operation(restart)
+        assert answer and answer["status"] == "completed", answer
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and vm.process.poll() is None and vm.log.count("MIND CORE BOOT: STARTED") == boot_line:
+            time.sleep(1)
+            vm.collect()
+        restarted = vm.process.poll() is not None or vm.log.count("MIND CORE BOOT: STARTED") > boot_line
+        print(f"PASS: the boot disk gone under the agent ({driver} stopped, vfs_server the same): heartbeats went on, a "
+              f"collect_logs was refused `journal` and not run, a reboot was answered completed; init "
+              f"{'restarted the machine' if restarted else 'did not restart it (it reads the owner policy from the disk: asked of KRN)'}", flush=True)
     finally:
         stop_watch.set()
         vm.close()

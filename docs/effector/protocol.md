@@ -64,6 +64,14 @@ Everything 1.1 did stays.
   - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it a new flow grant, so one whose term or volume ran out does not lose the server, and new clients of `tls` and `parse`. It does not end while a measurement runs or the machine restarts on purpose.
   - Meanwhile the gateway's mark stays grey on the screen. The log says each try and why, and `THE SERVER ANSWERS AGAIN, AFTER N S` once it does.
   - A start that fails waits 31 s before it ends, so `init`'s restart budget (3 in 60 s) never quarantines the agent. Only a deliberate switch-off stops it (801, S5).
+- **When the journal or the audit cannot be written (801-EFF-0032; MC-6.6, MC-10.6).** This mode is stated here before it is needed.
+  - **If `vfs_server` was started again since the agent's start** (its PID in `init`'s list differs), the file clients answer no more. The agent ends, or the gateway for its audit, and `init` starts it with new ones.
+  - **If it is the same `vfs_server`,** the medium is gone or full. A restart could not even read `effector.conf`, so both go on and the heartbeats too:
+    - every command is answered at once, `failed` with `journal`, neither journaled nor run, so a delivery after the restart runs it once;
+    - `reboot` alone, under the owner's `reboot on`, is answered `completed` and asked of `init`. Its record is the system log's line and the server's ACK; a second delivery only restarts the machine again;
+    - the gateway refuses every audited request but that restart, whose audit line is in the system log alone;
+    - the answer the journal failed to keep is still sent.
+  - **The agent logs** `EFFECTOR: THE JOURNAL CANNOT BE WRITTEN (…), vfs_server THE SAME (PID n): …` once, and each answer it gives so.
 - **The server's rules for reservations and runtime** (its `ahelp`, build 229, 2026-10-23):
   - a command's `expires_at` is its term in the server's queue, not a deadline for its run or its report: once delivered,
     its answer is sent until the server takes it or refuses it for good, and the server keeps a late one
