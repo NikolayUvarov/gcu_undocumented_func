@@ -39,3 +39,16 @@ APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](801-APP-0140
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.md), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`SLOT_MODE`), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) (`SLOT_PASSPHRASE`, ABI 31).
+
+## Progress (2026-11-14)
+
+Every group the change touches passed on `53ca073e24`. That covers criteria 1 and 2; the documents of criterion 3 are in the same commit.
+- **x86 on x32:**
+  - services, storage and audio, with the `modes` suite and its two slot-45 checks;
+  - the host tests, with `runtime.rs`'s slot test;
+  - scheduling, isolation and heap;
+  - one CPU;
+  - boot.
+- **aarch64 on acc-1:** the build; the updater and the modes; boot and fault containment; programs, shell and four CPUs.
+
+The task closes once it lands.
