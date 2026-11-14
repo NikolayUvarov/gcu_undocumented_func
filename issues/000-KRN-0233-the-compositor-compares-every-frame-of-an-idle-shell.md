@@ -73,6 +73,13 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 - **Alone on x32-128** both groups passed again (138 s and 129 s).
 - **What else ran there:** acc-1 also runs other users' KVM guests; under TCG a guest slowed by its host halts in fewer samples. Neither the guests' load nor a cause in the candidate was measured, so this is not a cause found. If it comes back, the next step is the samples beside the host's load at that moment.
 
+**Round 134's gate (2026-11-14)** failed the idle check once more on acc-1: "x86: AVX state, one CPU" at 02:11 UTC (57 s), CPU 0 halted in 20 of 50 samples. The candidate was a change to `timed_check` alone. The same group passed alone on x32-128 (55 s); on acc-1 the groups before it passed, "x86: scheduling, isolation, heap" among them.
+- **The host's load, read 44 s after the failure** (`/proc/loadavg`, `ps`): 0.94 0.90 0.93 on 8 CPUs. The other users' four KVM guests averaged 0.2 % to 3.4 % of a CPU over their 17 days. The host was not loaded, so round 130's guess, a guest slowed by a loaded host, does not fit this one.
+- **The failures on acc-1 so far are all on one CPU, or on groups run after one** ("x86: one CPU" and "x86: padded vector area" in round 130, this one now). With one CPU, every service's work at idle falls on CPU 0.
+- **At the end of the samples** CPU 0 was halted, at CPL 0.
+- **Ten runs alone** (2026-11-14, `main` dc9ce196, operations `KRN-k233-ten-acc1-01` to `-10` and `KRN-k233-ten-x32-01` to `-10`): "x86: AVX state, one CPU" ten times in turn on acc-1, nothing else of ours there, and ten times on x32-128. **Ten of ten passed on each,** 56 s to 57 s on acc-1 and 54 s to 55 s on x32-128. On acc-1 the check fails only inside a gate, three times in rounds 130 and 134, never alone. What a gate adds there was not found: its lane runs one group at a time, as these runs did. This is evidence for those runs, not a proof (MC-12.1, MC-12.2).
+- **Next, if it comes back in a gate:** at the failure, read the host's `/proc/stat` and the guest's `stat` beside the samples, so that a CPU taken from the guest and a guest kept busy can be told apart.
+
 **Left:** the compositor's share of one CPU at idle, before and after, on one real machine. It needs a machine with a screen that runs MIND Core: the maintainer's, or DRV's DEXP or Ryzen.
 
 ## Related

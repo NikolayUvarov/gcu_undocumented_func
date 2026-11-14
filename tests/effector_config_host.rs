@@ -120,3 +120,16 @@ fn a_hostname_of_the_machines_own() {
     assert_eq!(own_hostname("", &mut out), "mindcore");
     assert_eq!(own_hostname("Intel(R) CPU", &mut out), "mindcore");
 }
+
+#[test]
+fn restart_after_is_bounded_with_a_default() {
+    // How long with no answer before the agent ends itself so that init starts it again (801-EFF-0028).
+    let base = "effector-config 1\nserver https://10.0.2.2/effector\npin leaf:0000000000000000000000000000000000000000000000000000000000000000\n";
+    assert_eq!(Config::parse(base.as_bytes()).unwrap().restart_after_s(), 300);
+    assert_eq!(Config::parse(format!("{base}restart-after 40\n").as_bytes()).unwrap().restart_after_s(), 40);
+    assert_eq!(Config::parse(format!("{base}restart-after 3600\n").as_bytes()).unwrap().restart_after_s(), 3600);
+    for bad in ["29", "3601", "0", "-1", "5m"] {
+        assert_eq!(kind(&format!("{base}restart-after {bad}\n")), (4, ErrorKind::Malformed), "{bad}");
+    }
+    assert_eq!(kind(&format!("{base}restart-after 40\nrestart-after 50\n")), (5, ErrorKind::Duplicate));
+}

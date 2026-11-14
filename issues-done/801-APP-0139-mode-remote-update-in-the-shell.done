@@ -1,0 +1,46 @@
+# 801-APP-0139 — `mode remote-update` and `mode link-remote-update` in the shell, and the link's console taking the first only with the second — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — (`init.wit` 1.11's words are in `main`, 751-KRN-0185) · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S7), for [751](../issues/751-system-updates-at-a-developers-request.md) · **Roadmap:** the development of MIND Core on real hardware; stage V · **Constitution:** MC-3.4, MC-9.3, MC-12.6
+
+**Asked by:** EFF on 2026-10-29 (`APP/2026-10-29T0959Z-EFF-a-request-mode-remote-update-in-the-shell.md` on `internal-dev-messages`), and LNK for 801's S7 on 2026-11-14 (`ALL/2026-11-14T0847Z-LNK-801-the-bench-stays-manageable-your-parts.md`). EFF's request was not numbered when it came; it is numbered now, on 2026-11-14.
+
+## Problem
+
+- **`init` holds the owner's permission** for a release from the Effector server, the word `remote-update` of `data/mode.conf` (751-KRN-0185, `init.wit` 1.11), and `link-remote-update`, the owner's leave for the link's console to switch it.
+- **The shell cannot switch either.** `mode` knows only `development` and `maintenance`, so the word comes only from the disk as it was written. On the bench a disk rewrite was the only way to turn it on (801).
+- **The link's console** (800-APP-0108) is refused every `mode`, so the owner's `link-remote-update` gives the cable nothing.
+
+## Plan
+
+- **At the console:** `mode remote-update on|off [reason]` and `mode link-remote-update on|off [reason]`, through `set-mode` with the shell's `BADGE_MODE`.
+  - **On** asks at the local console first, naming what it allows: a release sent through the Effector server may be installed on this machine and the machine restarted into it.
+  - **Off** does not ask.
+  - `init` refuses `remote-update` on without a mode, and `link-remote-update` on without the link's console; the shell says why.
+- **`mode` alone** shows both words beside the modes, and whether each counts now.
+- **The link's console** (`Client::LinkConsole`):
+  - `mode remote-update on|off` is taken while `init` reports `link-remote-update`; the shell asks `init` with its own badge and names the link as the source;
+  - without that word it is refused, as every `mode` from the link is today;
+  - `mode link-remote-update …` from the link is always refused, and so is every other `mode`.
+- **The notice** above the first prompt and in the system log while `remote-update` counts: `REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED`, and whether the link may switch it.
+
+## Acceptance criteria
+
+- **Host tests (`tests/shell_host.rs`):** the command line and its limits, the state line, the question and the notice, and the link console's rule both ways.
+- **QEMU (`modes` suite, x86):** `mode remote-update on` asked and answered N changes nothing, answered Y `init` counts it; `mode` shows it; the notice after a restart; `mode remote-update off`; refused without a mode.
+- **Docs:** `docs/tools/README.md` (both languages) and the help line.
+
+## Resolution
+
+- **The code** (60275130, on the tools branch):
+  - `shell/src/modes.rs`: the words `remote-update` and `link-remote-update`, the state line `REMOTE UPDATE: ON|OFF; THE LINK'S CONSOLE MAY SWITCH IT: YES|NO`, each one's question, the notice, and `link_may`, the link console's rule;
+  - `shell/src/modectl.rs`: `set-mode` with the two words; init's refusals named; the link's console checked against `mode-state`'s `link-remote-update` before the call, with `the link's console` in the reason; the notice with the test keys from the launch record;
+  - `shell/src/clients.rs`: the link's console's `mode remote-update on|off` taken, every other `mode` refused.
+- **Tested** in this container, x86, 4 CPUs:
+  - `tests/shell_host.rs`: `mode_switches_the_owners_remote_update_permissions` and `the_links_console_switches_remote_update_only_with_the_owners_leave` (41 tests);
+  - the `modes` suite's `remote_update_check`: the notice at boot; `mode remote-update off` at once; `on` answered N unchanged and Y counted, which `init` logs with the shell's badge; `link-remote-update` refused without the link's console; `remote-update` refused without a mode; over QEMU's USB serial link with `dev` and `link-console`, `sh mode remote-update on` and `off` taken with `link-remote-update` (init's line names the link's console) and refused without it, `mode link-remote-update` and `mode development` from the link refused. The rest of the suite passes with it.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`, the shell's help line.
+- **Not done here:** `wm`'s Settings switches (EFF's item 4), which wait for a page of their own; the bench machines' runs (801 S8).
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md), [751](../issues/751-system-updates-at-a-developers-request.md), [751-KRN-0185](../issues/751-KRN-0185-the-remote-update-permission-in-init.md), [751-LNK-0030](../issues/751-LNK-0030-the-remote-update-words-on-the-disk-and-over-the-cable.md), [750-APP-0105](750-APP-0105-the-mode-command.done), [800-APP-0108](800-APP-0108-the-links-lines-as-the-consoles.done).

@@ -52,8 +52,18 @@ fn now() -> usize { mind::time::uptime_ms() }
 fn time() -> Time { Time { monotonic_ms: now() as u64, unix_seconds: mind::rtc::unix_time() } }
 fn jitter() -> u32 { mind::random::u64().unwrap_or(0) as u32 }
 
+// Started by init with `--service`: a failure then waits before it ends the process (801-EFF-0028).
+static SERVICE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+// Longer than init's restart window over its budget (3 in 60 s), so a failing start is restarted for ever, never
+// quarantined: only a deliberate switch-off stops the agent (801, S5).
+const FAIL_PAUSE_MS: usize = 31_000;
+
 fn fail(what: core::fmt::Arguments) -> ! {
     mind::println!("EFFECTOR: {}", what);
+    if SERVICE.load(core::sync::atomic::Ordering::Relaxed) {
+        mind::println!("EFFECTOR: ENDING IN {} S, SO THAT init STARTS IT AGAIN", FAIL_PAUSE_MS / 1000);
+        mind::time::sleep(FAIL_PAUSE_MS);
+    }
     mind::process::exit_with(1)
 }
 
@@ -217,6 +227,8 @@ struct Agent {
     running: Option<Box<Running>>,
     update: Option<Box<UpdateWait>>,
     restart_at: Option<usize>, // a restart the gateway admitted: once its answer is sent, the last heartbeat (750-EFF-0006)
+    answered_at: usize, // when the server last answered, whatever the status (801-EFF-0028)
+    problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
 
@@ -232,10 +244,17 @@ impl Agent {
             pins.push(tls::Pin { kind: match p.kind { config::PinKind::Leaf => tls::PinKind::Leaf, config::PinKind::Spki => tls::PinKind::Spki }, digest });
         }
         let address = self.config.address().unwrap_or(0);
-        let attempt = tls::attach(TLS, SLOT_NETWORK).ok().and_then(|r| r.ok()).ok_or("attach").and_then(|session| {
+        let attached = tls::attach(TLS, SLOT_NETWORK);
+        if !matches!(attached, Ok(Ok(_))) { self.problem = alloc::format!("TLS ATTACH {:?}", attached); }
+        let attempt = attached.ok().and_then(|r| r.ok()).ok_or("attach").and_then(|session| {
             match tls::connect_pins(TLS, session, self.config.tls_name(), address, self.config.port(), pins.as_slice(), CONNECT_MS) {
                 Ok(Ok(_)) => Ok(session),
-                other => { let _ = tls::close(TLS, session); mind::println!("EFFECTOR: TLS CONNECT REFUSED: {:?}", other.map_err(|_| ())); Err("connect") }
+                other => {
+                    let _ = tls::close(TLS, session);
+                    mind::println!("EFFECTOR: TLS CONNECT REFUSED: {:?}", other.map_err(|_| ()));
+                    self.problem = alloc::format!("TLS CONNECT {:?}", other.map_err(|_| ()));
+                    Err("connect")
+                }
             }
         });
         match attempt {
@@ -299,6 +318,16 @@ impl Agent {
             Some(status)
         })();
         self.body = buffer;
+        // Any answer shows the path to the server works; after a long silence the log says it is back (801-EFF-0028).
+        match result {
+            Some(_) => {
+                let silent_s = (now() - self.answered_at) / 1000;
+                if silent_s >= 60 { mind::println!("EFFECTOR: THE SERVER ANSWERS AGAIN, AFTER {} S ({})", silent_s, self.problem); }
+                self.answered_at = now();
+            }
+            None if self.connection.is_some() => self.problem = alloc::format!("{} {}: NO ANSWER", method.name(), route),
+            None => {}
+        }
         if result.is_none() { self.connection = None; }
         if self.connection.as_ref().is_some_and(|c| !c.open()) { self.connection = None; }
         result
@@ -1066,6 +1095,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
         Some(c) => (false, c),
         None => fail(format_args!("USAGE: effector CONFIG [--for SECONDS]")),
     };
+    SERVICE.store(service, core::sync::atomic::Ordering::Relaxed);
     if service && mind::dev::cap_info(SLOT_VFS).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PRIVATE DIRECTORY ({})", SESSION_DIR)); }
     let mut run_for = None;
     while let Some(w) = words.next() {
@@ -1097,7 +1127,8 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let hostname = String::from(config.hostname());
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
-        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0 });
+        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
+        answered_at: now(), problem: String::from("NOT CONNECTED YET") });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1172,6 +1203,15 @@ fn main(_info: &'static BootInfo) {
         // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
         if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }
         let quiet = now() < agent.quiet_until;
+        // No answer from the server for `restart-after`: the agent ends itself, and init starts it again with a new flow
+        // grant and new clients of tls and parse, so a spent grant or a restarted service never loses the server. Not
+        // while the machine restarts on purpose or a measurement runs (801-EFF-0028).
+        let silent = now() - agent.answered_at;
+        if SERVICE.load(core::sync::atomic::Ordering::Relaxed) && !quiet && agent.running.is_none()
+            && silent >= agent.config.restart_after_s() as usize * 1000 {
+            mind::println!("EFFECTOR: NO ANSWER FROM THE SERVER FOR {} S ({}): ENDING, SO THAT init STARTS IT AGAIN WITH A NEW GRANT", silent / 1000, agent.problem);
+            mind::process::exit_with(0);
+        }
         match if quiet { Ok(None) } else { session.heartbeat(ms) } {
             Ok(Some(attempt)) => {
                 let outcome = agent.heartbeat(session.stopping(), session.waiting());

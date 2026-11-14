@@ -69,7 +69,7 @@ Done on `claude/relaxed-meitner-5bmhpz` as 2a63ae54 and 72ce0f6d (the IDL fuzzer
   - on 2a63ae54, in this session's container: the `store` suite on aarch64 (38 checks; a term set and read, refused through a domain's client, the log saying no clock); the `boot` suite on x86 (25; the store disk's term and mode the same after a reboot, and nothing acting without a clock); `blockstore_host.rs` (103), `idl_host.rs` (8), `mind_idl.py --check`; both images built, x86 with no warning;
   - `idl_fuzz_host.rs` failed there on the two types the fuzzer did not list; with 72ce0f6d, all three pass.
 - **docs/storage 0.34** ("Memory domains"), docs/idl.
-- **Split off:** a term acting on the platform, which needs the calendar clock `init` does not give `blockstore` yet: [312-STO-0051](../issues/312-STO-0051-a-domains-term-acting-on-the-platform.md).
+- **Split off:** a term acting on the platform, which needs the calendar clock `init` does not give `blockstore` yet: [312-STO-0051](312-STO-0051-a-domains-term-acting-on-the-platform.done).
 
 ## Related
 

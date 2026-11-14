@@ -39,7 +39,7 @@ const RADIO_HEADER: usize = 8;
 // The radio is asked with a deadline, and again every RADIO_MS until it answers; meanwhile the station serves its
 // clients as a card without a radio (550-NET-0030), so the stack does not wait on it.
 const RADIO_MS: u32 = 2000;
-// How often, while not joined, the station asks a radio it tuned whether it still has a channel (550-NET-0061).
+// How often, while not joined, the station asks a radio it tuned whether it still has a channel; also before each tune (550-NET-0061).
 const RESTART_CHECK_MS: u64 = 10_000;
 
 fn mac(value: u64) -> [u8; 6] { let b = value.to_be_bytes(); [b[2], b[3], b[4], b[5], b[6], b[7]] }
@@ -119,9 +119,10 @@ struct Wlan {
     first: bool,
     // A client that only reads (BADGE_WIFI alone), minted once from the station's endpoint for `reader` (550-NET-0058).
     reader: Option<usize>,
-    // Whether the radio took a channel since it answered, and when the station last asked whether it restarted (550-NET-0061).
+    // Whether the radio took a channel since it answered, the last restart check, and a restart found before a tune (550-NET-0061).
     tuned: bool,
     checked: u64,
+    restarted: Option<wlanhw::Info>,
 }
 
 impl Wlan {
@@ -152,17 +153,45 @@ impl Wlan {
     // one has no channel and no country, so it sends nothing. Its `info` says so: no channel set, though the station tuned
     // it. The station starts anew, the radio gets the country the station ran under, and the automatic join joins again.
     fn radio_restarted(&mut self, now: u64) {
-        if !self.radio || !self.tuned || now.saturating_sub(self.checked) < RESTART_CHECK_MS || matches!(self.station.state(), State::Joined) { return; }
-        self.checked = now;
-        let Ok(Ok(info)) = self.deadline.call(|| wlanhw::info(RADIO)) else { return };
-        if info.channel != 0 { return; }
+        let asked = self.restarted.is_some();
+        let info = match self.restarted.take() {
+            Some(info) => info,
+            None => {
+                if !self.radio || !self.tuned || now.saturating_sub(self.checked) < RESTART_CHECK_MS || matches!(self.station.state(), State::Joined) { return; }
+                self.checked = now;
+                let Ok(Ok(info)) = self.deadline.call(|| wlanhw::info(RADIO)) else { return };
+                if info.channel != 0 { return; }
+                info
+            }
+        };
         let running = self.running;
         match running {
-            Some((code, _)) => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY {} AGAIN", core::str::from_utf8(&code).unwrap_or("??")),
-            None => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY CHOSEN AGAIN"),
+            Some((code, _)) => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY {} AGAIN", if asked { ", ASKED BEFORE A TUNE" } else { "" }, core::str::from_utf8(&code).unwrap_or("??")),
+            None => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY CHOSEN AGAIN", if asked { ", ASKED BEFORE A TUNE" } else { "" }),
         }
         self.station_up(&info);
         match running { Some((code, source)) => self.run_under(code, source), None => self.country_start() }
+        // A try under way was the old station's: the next one begins at once.
+        if let Some(Try::Scanning(number) | Try::Joining(_, _, number)) = self.trying.take() {
+            mind::println!("[WLAN] AUTO-JOIN: TRY {} ENDED BY THE RADIO'S RESTART, AGAIN AT ONCE", number);
+            self.auto.next = now;
+        }
+        // A client's scan the old station took is scanned again by the new one.
+        if self.scans.iter().any(Option::is_some) && !self.first {
+            let mut out = Out::default();
+            let _ = self.station.scan(now, &mut out, &mut self.tx);
+            self.apply(out);
+        }
+    }
+
+    // Before a tune of a radio the station tuned: whether it restarted, as a tune would set a channel and hide it.
+    fn restarted_before_tune(&mut self) -> bool {
+        if self.restarted.is_some() { return true; }
+        if !self.tuned { return false; }
+        let Ok(Ok(info)) = self.deadline.call(|| wlanhw::info(RADIO)) else { return false };
+        if info.channel != 0 { return false; }
+        self.restarted = Some(info);
+        true
     }
 
     fn radio_channels(&self) -> &[u8] { &self.channels.0[..self.channels.1] }
@@ -293,6 +322,8 @@ impl Wlan {
 
     // What the station asked of the radio: tune, filter, send; a received Ethernet frame for the stack.
     fn apply(&mut self, out: Out) {
+        // A radio found restarted gets nothing of the old station's: the next turn starts a new one (550-NET-0061).
+        if self.restarted.is_some() || (out.channel.is_some() && self.restarted_before_tune()) { return; }
         if let Some(channel) = out.channel { if let Ok(Ok(())) = self.deadline.call(|| wlanhw::set_channel(RADIO, channel)) { self.tuned = true; } }
         if let Some(f) = out.filter {
             let _ = self.deadline.call(|| wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 }));
@@ -651,7 +682,7 @@ fn main(_info: &'static BootInfo) {
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
                           channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false,
-                          reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok(), tuned: false, checked: 0 };
+                          reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok(), tuned: false, checked: 0, restarted: None };
     if wlan.reader.is_none() { mind::println!("[WLAN] NO READING CLIENT: THE STATION'S ENDPOINT HAS NO RIGHT TO BADGE (wifi.wit's reader answers unsupported)"); }
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;

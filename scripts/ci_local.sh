@@ -107,6 +107,8 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd"
+    # The tools as aarch64's virt shows them: a 37-row screen, a VirtIO tablet, BOOTAA64.EFI (000-APP-0137, 000-KRN-0240).
+    "aarch64: tools|$A64 --suites tools"
     "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
     "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"

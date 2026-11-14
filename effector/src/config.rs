@@ -6,6 +6,8 @@ pub const FILE_MAX: usize = 2048;
 pub const URL_MAX: usize = 200;
 pub const NAME_MAX: usize = 64;
 pub const TOKEN_MAX: usize = 256;
+/// `restart-after`'s bounds and default, in seconds (801-EFF-0028).
+pub const RESTART_AFTER: (u32, u32, u32) = (30, 3600, 300);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind { TooLarge, NotText, Version, UnknownKey, Malformed, Duplicate, Missing }
@@ -43,6 +45,7 @@ pub struct Config {
     address: Option<u32>,
     hostname: Text<NAME_MAX>,
     no_token: bool,
+    restart_after_s: u32,
 }
 
 fn hex32(s: &str) -> Option<[u8; 32]> {
@@ -93,6 +96,7 @@ impl Config {
         if bytes.len() > FILE_MAX { return Err(Error { line: 0, kind: ErrorKind::TooLarge }); }
         let text = core::str::from_utf8(bytes).map_err(|_| Error { line: 0, kind: ErrorKind::NotText })?;
         let (mut version, mut url, mut pins, mut name, mut address, mut hostname, mut no_token) = (false, None, [None; 2], None, None, None, None);
+        let mut restart_after = None;
         let mut parts = None;
         for (i, raw) in text.split('\n').enumerate() {
             let line_no = (i + 1).min(u16::MAX as usize) as u16;
@@ -143,13 +147,21 @@ impl Config {
                     if value != "none" { return Err(err(ErrorKind::Malformed)); }
                     no_token = Some(true);
                 }
+                // How long with no answer from the server before the agent ends itself, so that init starts it again with
+                // a new flow grant and new clients (801-EFF-0028).
+                "restart-after" => {
+                    if restart_after.is_some() { return Err(err(ErrorKind::Duplicate)); }
+                    let s = value.parse::<u32>().ok().filter(|s| (RESTART_AFTER.0..=RESTART_AFTER.1).contains(s)).ok_or(err(ErrorKind::Malformed))?;
+                    restart_after = Some(s);
+                }
                 _ => return Err(err(ErrorKind::UnknownKey)),
             }
         }
         if !version { return Err(Error { line: 0, kind: ErrorKind::Version }); }
         let (url, (host, port, path)) = match (url, parts) { (Some(u), Some(p)) => (u, p), _ => return Err(Error { line: 0, kind: ErrorKind::Missing }) };
         if pins[0].is_none() { return Err(Error { line: 0, kind: ErrorKind::Missing }); }
-        let config = Config { url, host, port, path, pins, name, address, hostname: hostname.unwrap_or(Text::new("mindcore").unwrap()), no_token: no_token.unwrap_or(false) };
+        let config = Config { url, host, port, path, pins, name, address, hostname: hostname.unwrap_or(Text::new("mindcore").unwrap()), no_token: no_token.unwrap_or(false),
+            restart_after_s: restart_after.unwrap_or(RESTART_AFTER.2) };
         // A host name needs an address to reach it: `address`, or the host is itself one.
         if config.address().is_none() { return Err(Error { line: 0, kind: ErrorKind::Missing }); }
         Ok(config)
@@ -168,6 +180,7 @@ impl Config {
     /// The IPv4 address connected to: `address`, or the URL's host when it is one.
     pub fn address(&self) -> Option<u32> { self.address.or_else(|| ipv4(self.host())) }
     pub fn hostname(&self) -> &str { self.hostname.as_str() }
+    pub fn restart_after_s(&self) -> u32 { self.restart_after_s }
 }
 
 /// The token file: one line of visible ASCII, at most 256 bytes; returned without its line end.

@@ -99,7 +99,7 @@ Asked by DRV for the maintainer on 2026-11-08, in `APP/2026-11-08T1210Z-DRV-…`
 
 Numbered on 2026-11-10 as [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done).
 
-**Asked by** NET (made by STO) on 2026-11-09, for [550-NET-0062](550-NET-0062-the-card-chosen-in-software.md).
+**Asked by** NET (made by STO) on 2026-11-09, for [550-NET-0062](../issues-done/550-NET-0062-the-card-chosen-in-software.done).
 
 - **What the stack gives** with `idl/socket.wit` 2.11:
   - `withdrawn` returns the cards that are out of use, a bit each, by the policy's line `card N off`;

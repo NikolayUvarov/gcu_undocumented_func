@@ -8,7 +8,8 @@
 //! `http-request`, a request head as a server reads it. 3.0 (351-UPD-0026): a channel's signatures name their keys, one
 //! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
 //! that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
-//! 4.2 (351-UPD-0030): `order`, a recovery order.
+//! 4.2 (351-UPD-0030): `order`, a recovery order. 5.0 (801-NET-0080): `http-response` also gives the server's `Date`;
+//! 4.x's response without it is gone.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -18,8 +19,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (4, 2, 0);
-const MAJOR: usize = 4;
+pub const VERSION: (u8, u8, u8) = (5, 0, 0);
+const MAJOR: usize = 5;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -184,13 +185,14 @@ impl Wire for RetryKind {
 /// `range-unsatisfied` (`bytes */total`). `chunked`: a transfer coding other than identity. `close`: whether the
 /// connection ends after the response (`Connection: close`, or HTTP/1.0 without `keep-alive`) (1.3, 750-NET-0019).
 /// 2.0 (000-NET-0047): `encoding` (`Content-Encoding`), `media` (`Content-Type`'s media type in lower case, without
-/// parameters), `location` as the server wrote it, and `retry` with `retry-after`.
+/// parameters), `location` as the server wrote it, and `retry` with `retry-after`. 5.0 (801-NET-0080): `date`, the
+/// server's `Date` as seconds since 1970-01-01 UTC, when `has-date` (a valid HTTP-date).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HttpResponse { pub status: u16, pub has_length: bool, pub length: u64, pub has_range: bool, pub range_unsatisfied: bool, pub range_start: u64, pub range_end: u64, pub range_total: u64, pub chunked: bool, pub close: bool, pub encoding: ContentCoding, pub media: Text<64>, pub location: Text<1024>, pub retry: RetryKind, pub retry_after: u64 }
+pub struct HttpResponse { pub status: u16, pub has_length: bool, pub length: u64, pub has_range: bool, pub range_unsatisfied: bool, pub range_start: u64, pub range_end: u64, pub range_total: u64, pub chunked: bool, pub close: bool, pub encoding: ContentCoding, pub media: Text<64>, pub location: Text<1024>, pub retry: RetryKind, pub retry_after: u64, pub has_date: bool, pub date: u64 }
 impl Wire for HttpResponse {
-    const MAX: usize = <u16 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <ContentCoding as Wire>::MAX + <Text<64> as Wire>::MAX + <Text<1024> as Wire>::MAX + <RetryKind as Wire>::MAX + <u64 as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.status.encode(w)?; self.has_length.encode(w)?; self.length.encode(w)?; self.has_range.encode(w)?; self.range_unsatisfied.encode(w)?; self.range_start.encode(w)?; self.range_end.encode(w)?; self.range_total.encode(w)?; self.chunked.encode(w)?; self.close.encode(w)?; self.encoding.encode(w)?; self.media.encode(w)?; self.location.encode(w)?; self.retry.encode(w)?; self.retry_after.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { status: Wire::decode(r)?, has_length: Wire::decode(r)?, length: Wire::decode(r)?, has_range: Wire::decode(r)?, range_unsatisfied: Wire::decode(r)?, range_start: Wire::decode(r)?, range_end: Wire::decode(r)?, range_total: Wire::decode(r)?, chunked: Wire::decode(r)?, close: Wire::decode(r)?, encoding: Wire::decode(r)?, media: Wire::decode(r)?, location: Wire::decode(r)?, retry: Wire::decode(r)?, retry_after: Wire::decode(r)? }) }
+    const MAX: usize = <u16 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <ContentCoding as Wire>::MAX + <Text<64> as Wire>::MAX + <Text<1024> as Wire>::MAX + <RetryKind as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.status.encode(w)?; self.has_length.encode(w)?; self.length.encode(w)?; self.has_range.encode(w)?; self.range_unsatisfied.encode(w)?; self.range_start.encode(w)?; self.range_end.encode(w)?; self.range_total.encode(w)?; self.chunked.encode(w)?; self.close.encode(w)?; self.encoding.encode(w)?; self.media.encode(w)?; self.location.encode(w)?; self.retry.encode(w)?; self.retry_after.encode(w)?; self.has_date.encode(w)?; self.date.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { status: Wire::decode(r)?, has_length: Wire::decode(r)?, length: Wire::decode(r)?, has_range: Wire::decode(r)?, range_unsatisfied: Wire::decode(r)?, range_start: Wire::decode(r)?, range_end: Wire::decode(r)?, range_total: Wire::decode(r)?, chunked: Wire::decode(r)?, close: Wire::decode(r)?, encoding: Wire::decode(r)?, media: Wire::decode(r)?, location: Wire::decode(r)?, retry: Wire::decode(r)?, retry_after: Wire::decode(r)?, has_date: Wire::decode(r)?, date: Wire::decode(r)? }) }
 }
 
 /// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
@@ -371,7 +373,7 @@ pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Re
     };
     let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 1141, false, false)?;
+    let length = wire::buffer_reply(&reply, 1150, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <HttpResponse as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -483,7 +485,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Model { text, index, start }, call))
         }
         7 => {
-            let (call, length) = wire::take_buffer(request, cap, 1141, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 1150, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let head = codec::decode_bytes::<8192>(&mut r).ok_or(Reject::Invalid)?;

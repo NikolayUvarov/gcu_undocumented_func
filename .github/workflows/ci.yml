@@ -177,6 +177,9 @@ jobs:
           - group: programs, shell and four CPUs
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd
+          - group: tools
+            # the tools as virt shows them (000-APP-0137, 000-KRN-0240)
+            suites: tools
           - group: files and the block store
             suites: vfs,store,storefaults
           - group: network, TLS and Effector

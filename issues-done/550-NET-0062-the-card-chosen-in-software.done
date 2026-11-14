@@ -1,6 +1,6 @@
-# 550-NET-0062 — The card a machine's traffic takes, chosen in software: the preferred card within its network, and a card out of use
+# 550-NET-0062 — The card a machine's traffic takes, chosen in software: the preferred card within its network, and a card out of use — done
 
-**Type:** network (service, interface) · **Owner:** `NET` track, made by STO by agreement with the track's owner (the kernel session, 2026-11-09) · **Priority:** P1 · **Status:** in progress (landed in round 102, `main` c6931ded; DRV's Ryzen check left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track, made by STO by agreement with the track's owner (the kernel session, 2026-11-09) · **Priority:** P1 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
 
 Numbered by the network track's owner on 2026-11-09 (`STO/2026-11-09T0744Z-KRN-the-card-chosen-in-software-is-550-net-0062-yours-to-make.md`) from STO's request in `requests-NET.md`, which came from DRV's message of 2026-11-08 for the maintainer.
 
@@ -8,7 +8,7 @@ Numbered by the network track's owner on 2026-11-09 (`STO/2026-11-09T0744Z-KRN-t
 
 - **The maintainer's word, 2026-11-08:** switching between the channels should be done in software, not by pulling the cable.
 - **On the Ryzen** the wired card 0 and the Wi-Fi card 2 had addresses on one network, 192.168.2.0/24. `route()` took the first card whose network held the destination, so the LAN went out through card 0 whatever the policy's `default card` said. Only pulling the cable moved it.
-- **What existed** ([550-NET-0025](../issues-done/550-NET-0025-the-default-card.done)): `default card N` moved only the destinations no card's network holds, and nothing took a card out of use.
+- **What existed** ([550-NET-0025](550-NET-0025-the-default-card.done)): `default card N` moved only the destinations no card's network holds, and nothing took a card out of use.
 
 ## Plan
 
@@ -77,6 +77,25 @@ Numbered by the network track's owner on 2026-11-09 (`STO/2026-11-09T0744Z-KRN-t
 
 Round 102 (`main` c6931ded, STO's request d4b16f6b): the gate was green on every group, the `net` suite on x86 and aarch64 among them. One group failed once and passed alone: "x86: RAM above 4 GiB", in the Wi-Fi country check's `dmesg` (000-NET-0063), not in this task's checks. Left: DRV's check on the Ryzen.
 
+## Resolution
+
+Done by STO for the network track. It landed in round 102 (`main` c6931ded) with the QEMU checks above, and `ip` names a card out of use since APP's [550-APP-0129](550-APP-0129-ip-names-a-card-out-of-use.done).
+
+**DRV's check on the Ryzen,** 2026-11-13, 19:57–19:58 UTC (`STO/2026-11-13T2011Z-DRV-550-net-0062-passed-on-the-ryzen.md` on `internal-dev-messages`). This is DRV's run, not this session's:
+- **The machine:** release 202611131315 (`main` 20fba2c5). Card 0 is the RTL8168 (Ethernet, 192.168.2.241); card 2 is the RTL8852BE (CoolNet2, 192.168.2.169).
+- **How:** the lines were typed in the shell's window over the link, each `Y` answered.
+- **`netpolicy add card 0 off`:**
+  - all traffic moved to card 2, the LAN with the default route;
+  - `ip` showed `CARD 0 … WIRED OFF` and card 2 `DEFAULT`;
+  - card 0's sent count stayed at 1666 while card 2's rose 191 → 220;
+  - `netcheck cards`: `CARD 0 Wired PRESENT UP OFF`, `cards OK`.
+- **`netpolicy remove card 0 off`:**
+  - card 0 was leased 192.168.2.241 again by DHCP and is `DEFAULT`;
+  - its sent count rose 1697 → 1765 while card 2's stayed at 225;
+  - `netcheck cards`: `CARD 0 Wired PRESENT UP CONFIGURED DEFAULT`, `cards OK`.
+
+**Not shown:** a card's own address taken first. In QEMU both cards hold 10.0.2.15, and the Ryzen's check did not try it.
+
 ## Related
 
-[550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (the default card), [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done) (a link going down), [docs/network/policy.md](../docs/network/policy.md#a-card-out-of-use-550-net-0062).
+[550-NET-0025](550-NET-0025-the-default-card.done) (the default card), [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.done) (a link going down), [docs/network/policy.md](../docs/network/policy.md#a-card-out-of-use-550-net-0062).
