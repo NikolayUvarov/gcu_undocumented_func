@@ -1,6 +1,6 @@
-# Application packages over Effector: contract 1.5, draft 1 (not built)
+# Application packages over Effector: contract 1.5, draft 2 (not built)
 
-**Status:** a draft for the Effector server project's review, 2026-10-30. Nothing here is built or claimed (MC-12.3). It
+**Status:** a draft for the Effector server project's review, 2026-10-30; draft 2, 2026-11-14: the run time fixed at 600 s, as its review chose. Nothing here is built or claimed (MC-12.3). It
 answers points 1 and 2 of the package contract (`ALL/2026-10-24T0904Z-EFF-server-accepts-package-draft-0-2-point-3.md`),
 which native EFF took on 2026-10-24. The package itself, the signature and the key role are UPD's contract draft 0.2
 ([750-UPD-0019](../../issues/750-UPD-0019-signed-application-packages.md)). Its point 3 is accepted by the server. This
@@ -31,8 +31,11 @@ mind-package-1:<operation>:<package_id>:<size>:<sha256>
   refused. A future field is a new version (`mind-package-2`), with its own transition.
 - **The host form `operation:package_id`**, which Windows and Linux agents keep, is refused on a mindcore endpoint
   (`unsupported`), as both sides refuse it today. Nothing changes for other platforms.
-- **The command's `timeout_seconds`** is the run time for the download, the checks and the install. Its default for
-  `deploy` is 600 s. An answer later than it follows contract 1.4's rule for late answers (750-EFF-0025).
+- **The run time is fixed at 600 s** for `mind-package-1`: the download, the checks and the install. The command
+  carries no `timeout_seconds`, and the server refuses a request that names another (draft 2, 2026-11-14: the Effector
+  project's choice in its review, `docs/mindcore-application-package-review.md`, and EFF's).
+  - A run time the operator sets would be `mind-package-2`, with its transition.
+  - An answer later than the 600 s follows contract 1.4's rule for late answers (750-EFF-0025).
 
 ### The archive's `manifest.json`
 
@@ -114,7 +117,7 @@ Both carry the same outcome.
 ## 4. What the server is asked to confirm
 
 1. The command's form, field order and bounds above, and that `deploy` keeps its action name.
-2. The default `timeout_seconds` of 600 for a mindcore `deploy`.
+2. ~~The default `timeout_seconds` of 600~~ Settled in draft 2: a fixed 600 s, with no field and overrides refused.
 3. `script: "mind-package-1"` in `DeploymentResult`, and the `stdout` lines and codes as above. Or the server's own
    field for a code, if it has one.
 4. That `GET /api/deployment/download/{package_id}` is the only route, with the bytes it serves bound to the command's
