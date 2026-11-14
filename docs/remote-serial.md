@@ -154,7 +154,7 @@ This is the part `EFF` hands over to the Effector project. The server's agents a
   - the console session's output and input still pass, as channel 1.
 - **Two locks:**
   - **On the host:** the agent refuses a kind its owner's policy does not list (`denied`, with the reason), before effector485 sees it.
-  - **On the machine:** MIND Core's own `link.conf` (`run`, `dev`) still decides what runs there.
+  - **On the machine:** what MIND Core's `init` grants `link` decides what runs there. `link` asks no word of `link.conf` (801-LNK-0044); `init` grants the shell's, the lifecycle and the input clients today only with `dev` in it (800-KRN-0139).
 
 ### 4.5 Safety
 
