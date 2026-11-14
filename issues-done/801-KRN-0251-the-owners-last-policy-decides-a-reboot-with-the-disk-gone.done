@@ -1,6 +1,6 @@
-# 801-KRN-0251 — The owner's last policy read decides the gateway's reboot when the boot disk is gone
+# 801-KRN-0251 — The owner's last policy read decides the gateway's reboot when the boot disk is gone — done
 
-**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-3.4, MC-6.8
+**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-3.4, MC-6.8
 
 ## Problem
 
@@ -28,6 +28,18 @@ LNK found that the bench's agents stopped taking commands when the boot disk was
 2. **`gateway_stub_check` still passes:** its refusals without `reboot on` are unchanged.
 3. **EFF's check in the effector suite** (801-EFF-0032, the disk gone under the agent) sees the machine restart.
 
+## Resolution
+
+Landed in round 137 (`main` e7580978da), from `claude/801-KRN-0250-a-network-grant-from-a-line-added-later` de456a8114, with 801-KRN-0250.
+
+- **`init`:** `owner_kept` keeps the owner's policy last read whole and parsed. `owner_policy` lets it decide `BADGE_NAMED`'s lifecycle requests and reboot when the file cannot be read, and logs `THE OWNER'S POLICY CANNOT BE READ NOW: THE ONE READ AT <s> S DECIDES`. An absent or unparsable file drops it.
+- **Criteria:**
+  1. `reboot_disk_gone_check`, with `tests/gateway_stub` asking its reboot once its scope cannot be written:
+     - passed on x86 (locally, then x32) and aarch64 (acc-1) on `de456a8114`, and in round 137's gate;
+     - with the kept copy turned off it failed, as before 0251;
+  2. `gateway_stub_check` passed in the same groups;
+  3. EFF's check (801-EFF-0032) is left to EFF's own request: it should then print that `init` restarted the machine.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), 801-EFF-0032, 750-KRN-0121, 750-KRN-0154.
+[801](../issues/801-the-bench-stays-manageable.md), 801-EFF-0032, 750-KRN-0121, 750-KRN-0154.
