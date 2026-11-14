@@ -34,7 +34,7 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 - marks `lost` any other operation that was running when it stopped.
 
 **Local, by design** (the maintainer, 2026-10-30):
-- **What it is:** the daemon is the local way into the machine on the cable, with raised rights. In the developer mode it does what the machine's Effector agent may not do through the server: it writes `data/`, starts programs, and restarts the machine.
+- **What it is:** the daemon is the local way into the machine on the cable, with raised rights. With what `init` grants the machine's `link` it does what the machine's Effector agent may not do through the server: it writes `data/link/`, starts programs, puts a release for the updater, and restarts the machine. On MIND Core no word in `link.conf` narrows it (801-LNK-0044): the cable is physical access.
 - **It is not opened** to sessions on other machines, through the Effector server or otherwise.
 - **A session elsewhere** that needs a run on the cable asks the `LNK` track on `internal-dev-messages`. LNK runs it and posts the output.
 - **`--key-file`** is for the maintainer's own other machines.
@@ -93,17 +93,16 @@ Each operation has:
 | `install` | `file`, `name` | puts a program into `apps/`, replacing one of the same name |
 | `uninstall` | `name` | deletes `apps/<name>` |
 | `log` | `from`, `max_bytes` | the other end's log from a cursor (default 0, 64 KiB); `next` in the result |
-| `reboot` | — | restarts the other end (MIND Core: `dev` in `link.conf`); the daemon says hello again when it is back |
-| `shell` | `line`, `timeout_seconds` | one line for the other end's shell (800-LNK-0015). Its output becomes the operation's; it fails when the shell refused or failed the line |
-| `replace` | `unit`; `file` (put first, as `replace/<its name>`) or `name` (one the other end holds); or `back`: true | starts the other end's service again from that file, unverified, or from its boot image (800-LNK-0016; MIND Core: `dev` in `link.conf`) |
-| `key` | `names` (chords separated by spaces, QEMU's `sendkey` names: `ctrl-alt-f6 alt-0`), `pace_ms` (20) | presses the keys on the other end's machine as its keyboard would, a chord every `pace_ms` (800-LNK-0032; MIND Core: `dev` in `link.conf` and the input capability from `init`). `events` in the result |
+| `reboot` | — | restarts the other end (MIND Core: `init`'s lifecycle client for `link`); the daemon says hello again when it is back |
+| `shell` | `line`, `timeout_seconds` | one line for the other end's shell (800-LNK-0015; MIND Core: the shell's client from `init`). Its output becomes the operation's; it fails when the shell refused or failed the line |
+| `replace` | `unit`; `file` (put first, as `replace/<its name>`) or `name` (one the other end holds); or `back`: true | starts the other end's service again from that file, unverified, or from its boot image (800-LNK-0016; MIND Core: `init`'s lifecycle client for `link`) |
+| `key` | `names` (chords separated by spaces, QEMU's `sendkey` names: `ctrl-alt-f6 alt-0`), `pace_ms` (20) | presses the keys on the other end's machine as its keyboard would, a chord every `pace_ms` (800-LNK-0032; MIND Core: the input capability from `init`). `events` in the result |
 | `type` | `text`, `pace_ms` (20) | types the text there, a character every `pace_ms`; a cancel stops it between characters |
 
 **Names on the other end** are paths below its directory: on MIND Core, `data/link/` (protocol, section 5).
 
 **What the other end allows** decides the rest:
-- MIND Core starts programs only with the word `run` in `link.conf`;
-- with `dev`, the developer mode (800-LNK-0012), it also runs the built-in programs by name (`netcheck`, `wifi`), lends them the network, the Wi-Fi station and the system monitor that `init` grants it, and restarts on `reboot`;
+- MIND Core asks no word of `link.conf` (801-LNK-0044). It starts programs from `data/link/` and built-in ones by name (`netcheck`, `wifi`), and lends them the network, the Wi-Fi station and the system monitor. It takes shell lines, `reboot`, `replace` and keys. Each needs the client `init` grants `link` for it, which `init` gives today only with `dev` in `link.conf` (800-KRN-0139). A request without its client fails DENIED, and the machine's log names the client ([mindlink, "What the cable may do on MIND Core"](mindlink.md#what-the-cable-may-do-on-mind-core));
 - `mindlink serve` only with `--run`.
 
 ## The API
