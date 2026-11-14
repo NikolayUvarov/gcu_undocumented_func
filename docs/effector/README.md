@@ -161,7 +161,10 @@ its private `system/effector`:
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
 a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
-- **The grant lasts until the next boot.** `init` takes the grant once at the first start and keeps it for every restart (MC-3.13). When its term or volume runs out, the session is refused (`Denied`) until the machine restarts. So the line's term and volume must cover the whole time the mode is on.
+- **The grant lasts until the next boot.** `init` takes the grant once at the first start and keeps it for every restart (MC-3.13).
+  - **A line added later:** if the policy named nothing for `effector` at the first start, `init` looks at each later start whether a line names it now, and then takes the grant and keeps it as if given at the first (801-KRN-0250: `[INIT] effector: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST`). As the agent without a grant ends itself every 31 s for `init` to start it again, a line added while the system runs reaches it within about 31 s, with no restart of the machine. The updater is treated the same at its next start.
+  - **A spent grant** is not renewed at a restart: renewing it would multiply the line's budget (MC-3.13).
+- **When its term or volume runs out,** the session is refused (`Denied`) until the machine restarts. So the line's term and volume must cover the whole time the mode is on.
 - **Several lines for `effector` share the smallest term and volume of them** (`docs/network/policy.md`).
 
 **Run.** The owner writes `development` or `maintenance` in `data/mode.conf` and restarts the machine; `init` starts

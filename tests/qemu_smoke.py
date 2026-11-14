@@ -7140,6 +7140,7 @@ def modes_suite(args):
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
     effector_policy_recovery_check(args)
+    late_grant_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -7206,6 +7207,56 @@ def effector_policy_recovery_check(args):
             vm.close()
     print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
           "the old file removed", flush=True)
+
+
+def late_grant_check(args):
+    """801-KRN-0250: a policy line added while the system runs reaches the program it names with no restart of the
+    machine. The Effector agent, started without a grant, gets one at its next start and keeps it for the starts after;
+    timed, not started for want of a line, starts within init's next look (30 s). Before the line, init asks the broker
+    nothing at the agent's restarts, so the broker logs one refusal, not one a restart."""
+    if not raw_tools():
+        print("SKIP: late grant check needs mkfs.fat and mtools", flush=True)
+        return
+    agent_line, time_line = "effector 10.0.2.2 tcp 9 600 1000", "timed 10.0.2.2 udp 123 600 100000"
+    with tempfile.TemporaryDirectory(prefix="smoke-late-grant-", dir=ROOT / IMAGE) as temp:
+        files = {**MODES_EFFECTOR_FILES, "netpolicy.txt": b"# no line for the agent or timed until the test adds one\n", "data/mode.conf": b"development\n",
+                 # Its server never answers: with a grant the agent ends after 30 s of silence, so init starts it again.
+                 "data/effector/effector.conf": MODES_EFFECTOR_FILES["data/effector/effector.conf"] + b"restart-after 30\n"}
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+
+        def init_log(lines, seconds=120):
+            deadline = time.monotonic() + seconds
+            while True:
+                log = vm.command("dmesg -s init", raw=True)
+                if all(re.search(line, log) for line in lines):
+                    return log
+                if time.monotonic() > deadline:
+                    raise AssertionError((lines, log[-2500:], vm.command("dmesg -s netpolicy", raw=True)[-1500:]))
+                time.sleep(2)
+        try:
+            init_log([re.escape("[INIT] effector: NO NETWORK GRANT"), re.escape("[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")])
+            # A restart of the agent with no line yet: init does not ask the broker.
+            require(vm.command("dmesg -s effector", raw=True), "EFFECTOR: ENDING IN 31 S, SO THAT init STARTS IT AGAIN")
+            init_log([r"\[INIT\] effector RESTARTED PID=\d+"], 60)
+            for line in (agent_line, time_line):
+                require(policy_answer(vm, f"netpolicy add {line}", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+            given = re.escape("[INIT] effector: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST")
+            log = init_log([given, r"\[INIT\] timed STARTED PID=\d+: THE POLICY NAMES IT NOW"], 90)
+            policy = vm.command("dmesg -s netpolicy", raw=True)
+            assert re.search(r"\[NETPOLICY\] GRANT \d+ TO effector:", policy) and re.search(r"\[NETPOLICY\] GRANT \d+ TO timed:", policy), policy[-2000:]
+            assert policy.count("REFUSED effector") == 1, policy[-2000:]
+            assert "timed" in vm.services(), vm.services()
+            # The grant is kept: the agent ends again (its server does not answer) and starts with it, asked for once.
+            restarts = len(re.findall(r"\[INIT\] effector RESTARTED PID=", log))
+            log = init_log([r"(?s)" + given + r".*\[INIT\] effector RESTARTED PID=\d+.*\[INIT\] effector RESTARTED PID=\d+"], 120)
+            assert len(re.findall(r"\[INIT\] effector RESTARTED PID=", log)) >= restarts + 1 and len(re.findall(given, log)) == 1, log[-2500:]
+            assert vm.command("dmesg -s netpolicy", raw=True).count("GRANT") == policy.count("GRANT"), "no grant asked for again"
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    print("PASS: late grant (801-KRN-0250): a line added while the system runs gave the agent its grant at its next start, "
+          "kept for the starts after, and started timed; no refusal logged at the restarts before the line", flush=True)
 
 
 def remote_update_check(args):
