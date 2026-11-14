@@ -160,12 +160,10 @@ impl Keys {
                 mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED)", stored::FILE);
                 true
             }
-            stored::Loaded::Missing if stored::trial() => this_boot(seed, "NO DEVICE KEY IS STORED"),
             stored::Loaded::Missing => anew(made(seed, "")),
-            // A damaged file is set aside, never written over (801-NET-0079): servers that knew the old key must be told the new one.
-            stored::Loaded::Damaged if stored::set_aside(stored::FILE) => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
-            stored::Loaded::Damaged => this_boot(seed, "THE STORED DEVICE KEY IS DAMAGED"),
-            stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); this_boot(seed, "THE STORED DEVICE KEY IS UNREADABLE") }
+            // A damaged file is replaced: servers that knew the old key must be told the new one.
+            stored::Loaded::Damaged => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
+            stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
         }
     }
 
@@ -193,7 +191,6 @@ impl Keys {
                 stored::Loaded::Seed(mut plain) => {
                     seed.copy_from_slice(&plain);
                     stored::wipe(&mut plain);
-                    if stored::trial() { mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK: SEALED BY THE TPM AT A BOOT NOT ON TRIAL)", stored::FILE); return true; }
                     match stored::seal(seed) {
                         Ok(()) => {
                             let removed = stored::remove_plain().is_ok();
@@ -203,18 +200,11 @@ impl Keys {
                     }
                     true
                 }
-                _ if stored::trial() => this_boot(seed, "NO DEVICE KEY IS STORED"),
-                stored::Loaded::Missing => anew(made(seed, "")),
-                stored::Loaded::Damaged if stored::set_aside(stored::FILE) => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
-                stored::Loaded::Damaged => this_boot(seed, "THE STORED DEVICE KEY IS DAMAGED"),
-                stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); this_boot(seed, "THE STORED DEVICE KEY IS UNREADABLE") }
+                _ => anew(made(seed, "")),
             },
-            // A sealed key that does not open is set aside, never written over (801-NET-0079): the TPM may open it again.
-            stored::Unsealed::Refused if stored::set_aside(stored::SEALED) => anew(made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
-            stored::Unsealed::Refused => this_boot(seed, "THE SEALED DEVICE KEY DOES NOT OPEN ON THIS TPM"),
-            stored::Unsealed::Damaged if stored::set_aside(stored::SEALED) => anew(made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
-            stored::Unsealed::Damaged => this_boot(seed, "THE SEALED DEVICE KEY IS DAMAGED"),
-            stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}", error); this_boot(seed, "THE SEALED DEVICE KEY IS UNREADABLE") }
+            stored::Unsealed::Refused => anew(made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
+            stored::Unsealed::Damaged => anew(made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
+            stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
             // The sealed key is kept for the next boot: a key for this boot only.
             stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); random(seed) }
         }
@@ -286,12 +276,6 @@ fn anew(made: bool) -> bool {
     made
 }
 
-// A key for this boot only, nothing written (801-NET-0079): a trial that needs the stored one fails, and its slot falls back.
-fn this_boot(seed: &mut [u8; 32], why: &str) -> bool {
-    mind::println!("[KEYSTORE] {}: A DEVICE KEY FOR THIS BOOT ONLY, NOTHING WRITTEN", why);
-    random(seed)
-}
-
 fn random(bytes: &mut [u8]) -> bool {
     let filled = mind::random::fill(bytes);
     if !filled { mind::println!("[KEYSTORE] NO {}: NO DEVICE KEY", mind::random::SOURCE); }
@@ -299,9 +283,7 @@ fn random(bytes: &mut [u8]) -> bool {
 }
 
 mind::entry!(main);
-fn main(info: &'static BootInfo) {
-    stored::set_trial(info.boot_slot.trial != 0);
-    if stored::trial() { mind::println!("[KEYSTORE] THE BOOT IS ON TRIAL: NO KEY OR NETWORKS FILE IS WRITTEN OVER, SET ASIDE OR REMOVED"); }
+fn main(_info: &'static BootInfo) {
     let mut keys = Keys::new();
     // A secret's value passes through here: the copy is wiped after each request that carried one.
     let mut scratch = alloc::boxed::Box::new([0u8; keystore::REQUEST_MAX]);

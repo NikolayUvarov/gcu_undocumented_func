@@ -14,7 +14,7 @@ The Effector agent is off by default, and only the owner may turn it on and say 
   - writes the server's address and certificate pins to `data/effector/`;
   - reads the token from the console without echoing it;
   - asks for confirmation and shows what it wrote, except the token.
-- **`effector policy show | edit | allow <line> | deny <line>`:** the policy of 750-EFF-0003, with confirmation for anything that widens it. `show`, `allow` and `deny` are [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.md) (2026-11-14).
+- **`effector policy show | edit | allow <line> | deny <line>`:** the policy of 750-EFF-0003, with confirmation for anything that widens it.
 - **`effector enable | disable`:** through `svc enable`/`disable` for both services; disabling also revokes the session.
 - **`effector status`:** connected or not, the server and its pin, the last heartbeat accepted, the operations in flight, the last audit lines.
 - **The same commands in `msh`** under `requires: lifecycle`, and help in `docs/tools/`.

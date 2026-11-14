@@ -16,8 +16,7 @@ const BUDGET: u32 = 60; // handshakes' keys a minute
 const MINUTE_MS: usize = 60_000;
 const LABEL: &[u8] = b"MIND keystore: remembered Wi-Fi networks\0";
 
-// `held`: a file that did not open stays as it is (801-NET-0079), so none is written this boot.
-pub struct Wifi { kept: Kept, kek: [u8; 32], minute: usize, used: u32, held: bool }
+pub struct Wifi { kept: Kept, kek: [u8; 32], minute: usize, used: u32 }
 
 // An SSID as the log shows it: printable ASCII as it is, any other byte as a dot.
 struct Shown<'a>(&'a [u8]);
@@ -38,24 +37,22 @@ impl Wifi {
         wipe(&mut material);
         let mut data = [0u8; kept::FILE_MAX + 1];
         let read = File::open(FILE).and_then(|file| file.read_at(0, &mut data));
-        let (kept, held) = match read {
-            Err(fs::Error::NotFound) => (Kept::default(), false),
-            Err(error) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS UNREADABLE: {:?}: THE FILE KEPT, NONE WRITTEN THIS BOOT", error); (Kept::default(), true) }
+        let kept = match read {
+            Err(fs::Error::NotFound) => Kept::default(),
+            Err(error) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS UNREADABLE: {:?}", error); Kept::default() }
             Ok(n) => match Kept::decode(&data[..n], &kek) {
-                Ok(kept) => { mind::println!("[KEYSTORE] WI-FI: {} REMEMBERED NETWORKS", kept.names().count()); (kept, false) }
-                // Another device key, or a changed file: never written over (801-NET-0079). Set aside, so that the key they
-                // open under brings them back; on a trial boot left where it is, for the previous slot.
-                Err(wpa::Error::KeyData) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS DO NOT OPEN UNDER THIS DEVICE KEY: NOT USED THIS BOOT"); (Kept::default(), !stored::set_aside(FILE)) }
-                Err(_) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS DAMAGED: NOT USED THIS BOOT"); (Kept::default(), !stored::set_aside(FILE)) }
+                Ok(kept) => { mind::println!("[KEYSTORE] WI-FI: {} REMEMBERED NETWORKS", kept.names().count()); kept }
+                // Another device key (or a changed file): the networks are forgotten, and the file is replaced on the next change.
+                Err(wpa::Error::KeyData) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS DO NOT OPEN UNDER THIS DEVICE KEY: FORGOTTEN"); Kept::default() }
+                Err(_) => { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS DAMAGED: FORGOTTEN"); Kept::default() }
             },
         };
         wipe(&mut data);
-        Wifi { kept, kek, minute: mind::time::uptime_ms(), used: 0, held }
+        Wifi { kept, kek, minute: mind::time::uptime_ms(), used: 0 }
     }
 
     // Writes the networks kept, then flushes the volume.
     fn save(&self) -> Result<(), Error> {
-        if self.held { mind::println!("[KEYSTORE] REMEMBERED WI-FI NETWORKS NOT WRITTEN: {} DID NOT OPEN AND IS KEPT AS IT IS", FILE); return Err(Error::NoKey); }
         let mut data = [0u8; kept::FILE_MAX];
         let len = self.kept.encode(&self.kek, &mut data);
         let result = fs::mkdir(stored::DIR).and_then(|_| File::create(FILE)).and_then(|mut file| { file.write_at(0, &data[..len])?; file.flush() });
