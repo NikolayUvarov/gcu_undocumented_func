@@ -144,3 +144,12 @@ fn the_table_reads_back_as_handed_out() {
     assert!(nodes::read(&bytes[..bytes.len() - 1]).is_none());
     assert!(nodes::read(&bytes[..4]).is_none());
 }
+
+// 801-KRN-0244: memory a node's registers may not be lent over, by UEFI memory type. Firmware lists a device's
+// registers as reserved or as memory-mapped I/O (the DEXP's CRB TPM as reserved), which are lent.
+#[test]
+fn registers_listed_as_reserved_or_io_are_not_ram() {
+    for kind in [0, 11, 12, 13] { assert!(!nodes::holds_ram(kind), "kind {}", kind); }
+    for kind in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15] { assert!(nodes::holds_ram(kind), "kind {}", kind); }
+    assert!(!nodes::holds_ram(16) && !nodes::holds_ram(0x7000_0000), "an unknown or OEM type is not memory the system uses");
+}
