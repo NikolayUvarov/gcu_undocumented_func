@@ -54,6 +54,25 @@ const TPM: Endpoint = Endpoint(4); // the TPM service's client with the seal bad
 
 pub enum Unsealed { Seed([u8; 32]), Missing, Damaged, Refused, Failed, Unreadable(fs::Error) }
 
+/// Moves a key or networks file that does not open to `<path>.before` (one set aside before goes), so that nothing is
+/// written over it: it is the evidence, and may be the only copy (801-NET-0079). Never called on a boot on trial.
+/// Whether it was moved.
+pub fn set_aside(path: &str) -> bool {
+    let mut to = alloc::string::String::from(path);
+    to.push_str(".before");
+    let replaced = fs::remove(to.as_str()).is_ok();
+    let moved = fs::rename(path, to.as_str()).is_ok() && flush();
+    if moved { mind::println!("[KEYSTORE] {} SET ASIDE AS {}{}", path, to, if replaced { ", IN PLACE OF ONE SET ASIDE BEFORE" } else { "" }); }
+    else { mind::println!("[KEYSTORE] {} NOT SET ASIDE, SO NOTHING IS WRITTEN IN ITS PLACE", path); }
+    moved
+}
+
+/// Whether a key sealed by a TPM is there, or may be: any answer but not-found (801-NET-0079).
+pub fn sealed_present() -> bool { !matches!(File::open(SEALED), Err(fs::Error::NotFound)) }
+
+/// Whether an unencrypted copy is there, or may be: any answer but not-found.
+pub fn plain_present() -> bool { !matches!(File::open(FILE), Err(fs::Error::NotFound)) }
+
 /// Whether the machine has a TPM the key service may seal with.
 pub fn tpm() -> bool { matches!(tpm::info(TPM), Ok(Ok(_))) }
 

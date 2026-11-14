@@ -149,7 +149,7 @@ its private `system/effector`:
 
 | File | Written by | Contents |
 |---|---|---|
-| `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), and `token none` for a server that asks no agent token. Any other line refuses the file (`effector/src/config.rs`) |
+| `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), `token none` for a server that asks no agent token, and `restart-after S` (30–3600 s, default 300: with no answer from the server for that long the agent ends itself, so that `init` starts it again with a new flow grant, 801-EFF-0028). Any other line refuses the file (`effector/src/config.rs`) |
 | `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
 | `token` → `system/effector/token` | the agent | moved from `data/effector/token` at the first start; the owner may then remove the copy |
 | `agent_id` | the owner (optional), in `data/effector` | the agent's ID the server knows (1–64 of `[A-Za-z0-9_-]`): taken at a start that finds none in `system/effector`, so a disk written afresh keeps it |

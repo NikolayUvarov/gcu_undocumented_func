@@ -1258,9 +1258,9 @@ def normal_suite(vm):
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
     # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked. Without ACPI (a device
-    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
+    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, a finding held back (801-KRN-0243).
     if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
-        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): HELD BACK, NOT ENFORCED; ONLY rtw89_wifi IS GIVEN THE WORD")
         # 100000-KRN-0171: U-Boot's tree keeps the PL031 enabled, and rtc gets it through its node.
         if getattr(vm.args, "uboot", None):
             assert re.search(r"\[INIT\] PLATFORM NODES: \d+; CONSOLE \d+, RTC \d+, PL061 \d+", log), log[-1500:]
@@ -6371,7 +6371,8 @@ def services_suite(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
     # Supervision: init restarts a killed service from the endpoint it keeps, so a client started before the failure
-    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it.
+    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it, or
+    # init after its cool-down (801-KRN-0245).
     require(vm.command("run hello &"), "PID=6 NAME=hello BACKGROUND")
 
     def clock_resumes():
@@ -6397,11 +6398,22 @@ def services_suite(vm):
     require(vm.service_logs("init", f"rtc PID={first} KILLED"), "RESTARTED PID=")
     clock_resumes()
     kill_rtc(); kill_rtc(); kill_rtc()
-    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S")
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S; STARTED AGAIN IN 60 S")
     assert "rtc" not in vm.services(), "a quarantined service stays down"
     # Its client is not left waiting in a send to the dead endpoint (init keeps no receive right).
     time.sleep(.5)
     assert not re.search(r" hello WAIT=1:", vm.command("stat tasks", raw=True)), "client blocked on a quarantined service"
+    # 801-KRN-0245: started again by init after its cool-down, with no hand; quarantined again, the cool-down doubles, and
+    # `run` lifts it at once.
+    deadline, said = time.monotonic() + 100, ""
+    while "rtc STARTED AGAIN PID=" not in said and time.monotonic() < deadline:
+        said += vm.command("logs 1", raw=True)
+        time.sleep(2)
+    require(said, "rtc STARTED AGAIN PID=")
+    require(said, " AFTER 60 S IN QUARANTINE")
+    clock_resumes()
+    kill_rtc(); kill_rtc(); kill_rtc(); kill_rtc()
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S; STARTED AGAIN IN 120 S")
     require(vm.command("run rtc &"), "NAME=rtc")
     clock_resumes()
     vm.command("kill 6")
@@ -7068,6 +7080,7 @@ def modes_suite(args):
                     require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
                     print("PASS: modes: the shell's mode shows the mode set by disk, turns one on after the operator agrees "
                           "and off at once; init logs the change with the shell's badge (750-EFF-0013)", flush=True)
+                    effector_policy_edits(vm)
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
@@ -7090,6 +7103,7 @@ def modes_suite(args):
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
+    effector_policy_recovery_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -7102,6 +7116,60 @@ def modes_suite(args):
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
+
+
+def effector_policy_edits(vm):
+    """801-APP-0140: `effector policy` shows the owner's policy and whether it parses; `allow` asks and adds a rule or puts
+    it in place of the one with its key, `deny` takes one out at once; a rule that would make the policy refused is not
+    written; no temporary file is left."""
+    shown = vm.command("effector policy", raw=True)
+    require_all(shown, "  effector-policy 1", "  service sysmon restart", "THE POLICY PARSES: ")
+    for answer, said in ((b"n", "EFFECTOR POLICY: NOT CHANGED"), (b"y", "EFFECTOR POLICY: + update apply; ")):
+        vm.send("effector policy allow update apply\n")
+        require(vm.expect("(Y/N)", timeout=10), "ALLOW `update apply` IN THE EFFECTOR POLICY?")
+        vm.send_bytes(answer)
+        require(vm.expect("MIND> ", timeout=30), said)
+    require(vm.command("cat data/effector/policy", raw=True), "update apply")
+    vm.send("effector policy allow reboot on\n")
+    vm.expect("(Y/N)", timeout=10)
+    vm.send_bytes(b"y")
+    require(vm.expect("MIND> ", timeout=30), "EFFECTOR POLICY: + reboot on; ")
+    require(vm.command("effector policy allow update everything", raw=True), "EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE ")
+    require(vm.command("effector policy deny reboot", raw=True), "EFFECTOR POLICY: - reboot on; ")
+    require(vm.command("effector policy deny screen", raw=True), "NO RULE screen TO DENY")
+    policy = vm.command("cat data/effector/policy", raw=True)
+    assert "update apply" in policy and "reboot on" not in policy and "update everything" not in policy, policy
+    listed = vm.command("ls data/effector", raw=True)
+    assert "policy.new" not in listed and "policy.old" not in listed, listed
+    require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] EFFECTOR POLICY: + update apply; ")
+    require(vm.command("effector policy edit", raw=True), "USAGE: EFFECTOR POLICY")
+    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written; deny at "
+          "once; a rule the gateway would refuse not written; no temporary file left", flush=True)
+
+
+def effector_policy_recovery_check(args):
+    """801-APP-0140: an edit a restart cut, with no data/effector/policy, its new file whole beside the old one: the shell
+    gives the new one its name at its start and removes the old one."""
+    if not raw_tools():
+        print("SKIP: effector policy recovery needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-policy-cut-", dir=ROOT / IMAGE) as temp:
+        files = {k: v for k, v in MODES_EFFECTOR_FILES.items() if k != "data/effector/policy"}
+        files.update({"data/effector/policy.new": GATEWAY_POLICY + b"update apply\n", "data/effector/policy.old": GATEWAY_POLICY})
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            log = vm.command("dmesg -s shell", raw=True)
+            require_all(log, "[SHELL] EFFECTOR POLICY: AN EDIT WAS CUT BY A RESTART: THE NEW ONE TOOK ITS NAME", "[SHELL] EFFECTOR POLICY: data/effector/policy.old LEFT BY A CUT EDIT, REMOVED")
+            require(vm.command("cat data/effector/policy", raw=True), "update apply")
+            listed = vm.command("ls data/effector", raw=True)
+            assert "policy.new" not in listed and "policy.old" not in listed, listed
+            require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+        finally:
+            vm.close()
+    print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
+          "the old file removed", flush=True)
 
 
 def remote_update_check(args):
@@ -7130,6 +7198,23 @@ def remote_update_check(args):
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
                     held = re.search(r"^SLOT=35 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pids['effector_gw']}", raw=True), re.M)
                     assert held and held[1] == "1" and servers.get(int(held[2])) == pids["updater"], held
+                    # 801-APP-0139: the shell's notice and `mode` show the permission; off at once, on after the operator
+                    # agrees, which init logs with the shell's badge; the link's leave refused without the link's console.
+                    require(vm.command("dmesg -s shell", raw=True), "[SHELL] REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED")
+                    require(vm.command("mode", raw=True), "REMOTE UPDATE: ON (A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED); THE LINK'S CONSOLE MAY SWITCH IT: NO")
+                    require_all(vm.command("mode remote-update off bench check", raw=True), "MODE REMOTE-UPDATE OFF", "REMOTE UPDATE: OFF;")
+                    assert "remote-update" not in vm.command("cat data/mode.conf", raw=True)
+                    for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "REMOTE UPDATE: ON (")):
+                        vm.send("mode remote-update on the modes suite\n")
+                        require(vm.expect("(Y/N)", timeout=10), "TURN REMOTE-UPDATE ON?")
+                        vm.send_bytes(answer)
+                        require(vm.expect("MIND> ", timeout=30), said)
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE REMOTE-UPDATE ON BY operator (PID ")
+                    require(vm.command("cat data/mode.conf", raw=True), "remote-update")
+                    vm.send("mode link-remote-update on\n")
+                    require(vm.expect("(Y/N)", timeout=10), "TURN LINK-REMOTE-UPDATE ON?")
+                    vm.send_bytes(b"y")
+                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WITH THE LINK'S CONSOLE")
                     # The last mode turned off takes the permission with it: a mode turned on again does not bring it back.
                     require(vm.command("mode development off", raw=True), "MODE: NORMAL")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE")
@@ -7138,13 +7223,55 @@ def remote_update_check(args):
                     require(log, "[INIT] MODE: NORMAL (data/mode.conf)")
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)")
                     assert "REMOTE UPDATE ON" not in log, log[-2000:]
+                    # 801-APP-0139: without a mode init refuses the permission, and the shell says why.
+                    assert "REMOTE UPDATE ON" not in vm.command("dmesg -s shell", raw=True)
+                    vm.send("mode remote-update on\n")
+                    vm.expect("(Y/N)", timeout=10)
+                    vm.send_bytes(b"y")
+                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: REMOTE-UPDATE COUNTS ONLY WITH THE DEVELOPMENT OR MAINTENANCE MODE ON")
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-remote-update-{args.cpus}cpu.log").write_text(vm.log)
+    # 801-APP-0139: the link's console switches remote-update only with the owner's link-remote-update; never that word.
+    mindlink = mindlink_tool()
+
+    def link(port, *command, ok=True):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command], capture_output=True, text=True, timeout=120)
+        out = r.stdout + r.stderr
+        assert ok is None or (r.returncode == 0) == ok, (command, r.returncode, out)
+        return out
+    for words in (b"development\nlink-console\nlink-remote-update\n", b"development\nlink-console\n"):
+        with tempfile.TemporaryDirectory(prefix="smoke-remote-link-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "link.conf": b"baud=115200 dev\n", "data/mode.conf": words})
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False,
+                    extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand",
+                           "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
+            try:
+                port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+                require(link(port, "hello"), '"MIND Core link"')
+                leave = b"link-remote-update" in words
+                require(vm.command("mode", raw=True), f"THE LINK'S CONSOLE MAY SWITCH IT: {'YES' if leave else 'NO'}")
+                if leave:
+                    require(link(port, "sh", "mode", "remote-update", "on"), "MODE REMOTE-UPDATE ON")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE REMOTE-UPDATE ON BY operator (PID ")
+                    require(vm.command("dmesg -s init", raw=True), ": the link's console")
+                    require(link(port, "sh", "mode", "remote-update", "off"), "MODE REMOTE-UPDATE OFF")
+                else:
+                    require(link(port, "sh", "mode", "remote-update", "on", ok=None), "THE OWNER'S LINK-REMOTE-UPDATE IS OFF")
+                    assert "MODE REMOTE-UPDATE ON BY" not in vm.command("dmesg -s init", raw=True)
+                for line in (("mode", "link-remote-update", "off"), ("mode", "development", "off")):
+                    require(link(port, "sh", *line, ok=False), "refused")
+                require(vm.command("mode", raw=True), "MODE: DEVELOPMENT")
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-remote-link-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: remote-update (751-KRN-0185): counted with the development mode, left out without a mode, its link switch "
           "left out without the link's console, the test keys' warning, the gateway's updater client badged 1 in slot 35, "
-          "dropped with the last mode", flush=True)
+          "dropped with the last mode; the shell's mode remote-update off at once and on after the operator agrees, its notice, "
+          "refused without a mode, link-remote-update refused without the link's console; the link's console switched "
+          "remote-update with the owner's link-remote-update and not without it, and never the other words (801-APP-0139)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
@@ -8906,6 +9033,8 @@ def update_suite(args):
         log = logged("[UPDATER] FETCH: REFUSED: Digest", 300)
         require(log, f"[UPDATER] FETCH: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT")
         assert "[UPDATER] RECORD" not in log, log
+        # 801-NET-0079: the device key before the update, to be the same one on trial (none without a random source).
+        before = re.search(r"\[KEYSTORE\] DEVICE KEY READY: (MIND [0-9A-F]{8}) ", vm.command("dmesg -s keystore", raw=True))
         # As published, the largest boot file cut midway: fetched, checked, applied, and the machine restarted. The
         # updater's lines of this boot go with it: the serial line, the server and the records show what it did.
         blob.write_bytes(original)
@@ -8966,6 +9095,11 @@ def update_suite(args):
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        # 801-NET-0079: keystore on the trial boot changes nothing the slot before reads, and holds the same device key.
+        keys = vm.command("dmesg -s keystore", raw=True)
+        require(keys, "[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN system/keystore THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL")
+        if before:
+            require(keys, f"[KEYSTORE] DEVICE KEY READY: {before[1]} ")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         # 351-UPD-0036: release 6's period, 7 s, in place of update.txt's 20 s: three checks after it, each ending within
         # 18 s of the one before by the log's clock (7 s and a check's own time; update.txt's would be 20 s and that).
@@ -10950,14 +11084,15 @@ def download_check(args, disk):
     api_asked = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # not in get's lines: asked at run time
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
-    service_port, expired_port = service.server_address[1], expired.server_address[1]
+    future, _ = _https_server(certificates, "future")
+    service_port, expired_port, future_port = service.server_address[1], expired.server_address[1], future.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data" / "chat.json").write_text('{"model":"f","messages":[{"content":"from a file"}]}')  # get's JSON POST from a file
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
                                         + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
-                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port, future_port))
                                         + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
                                         + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
@@ -10985,14 +11120,14 @@ def download_check(args, disk):
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
         get_runs(vm, api_stub.server_address[1], api_other.server_address[1], api_asked.server_address[1], secure, tls_port, rogue_port, port, files)
-        pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
+        pinned_runs(vm, certificates, service_port, rogue_port, expired_port, future_port)
     finally:
         vm.close()
         held.go.set()
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired):
+        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired, future):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -11240,9 +11375,10 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
           "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
 
-def pinned_runs(vm, certificates, port, rogue_port, expired_port):
+def pinned_runs(vm, certificates, port, rogue_port, expired_port, future_port):
     """750-NET-0020: a server trusted by one of two pins (its leaf or its SPKI, tls.wit 1.2), its certificate's name,
-    validity and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused."""
+    end and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused.
+    801-NET-0081 (tls.wit 1.5): one whose certificate starts after the clock reached and the start logged."""
     leaf, spki = _leaf_pin(certificates / "server.pem"), _spki_pin(certificates / "server.pem")
     url = f"https://10.0.2.2:{port}/pinned"
 
@@ -11256,11 +11392,15 @@ def pinned_runs(vm, certificates, port, rogue_port, expired_port):
     for arguments in (f"https://10.0.2.2:{rogue_port}/small.bin --pin leaf:{leaf} --pin spki:{spki}", f"{url} --pin leaf:{leaf} --name other.test",
                       f"https://10.0.2.2:{expired_port}/x --pin leaf:{_leaf_pin(certificates / 'expired.pem')}"):
         require(run(arguments, "WEBCHECK: TLS CONNECT"), "Certificate")
+    require(run(f"https://10.0.2.2:{future_port}/future --pin leaf:{_leaf_pin(certificates / 'future.pem')}", "WEBCHECK DONE"), "WEBCHECK GET 200")
     log = vm.command("dmesg -s tls")
-    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired"):
+    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired",
+                 "ITS CERTIFICATE STARTS AT 3786912000 BUT THE CLOCK READS ", ": NOT ENFORCED, THE PIN BINDS THE KEY"):
         require(log, line)
+    assert "NotValidYet" not in log, log[-2000:]
     print("PASS: pinned servers: trusted by a leaf or an SPKI pin, the second pin of two accepted (rotation); a server matching "
-          "neither, a wrong name and an expired certificate refused", flush=True)
+          "neither, a wrong name and an expired certificate refused; one whose certificate starts in 2090 reached, the start "
+          "logged and not enforced (801-NET-0081)", flush=True)
 
 
 def download_runs(vm, release, port, big, small, cut, rules):
@@ -12754,6 +12894,10 @@ def _expired_certificate(directory):
     run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "expired.key", "-out", "expired.csr", "-subj", "/CN=mind.test")
     run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "expired.csr", "-out", "expired.pem", "-notext",
         "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-extfile", "names.cnf")
+    # 801-NET-0081: one that starts in 2090, as a pinned server's certificate looks to a clock far behind (a flat battery).
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "future.key", "-out", "future.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "future.csr", "-out", "future.pem", "-notext",
+        "-startdate", "20900101000000Z", "-enddate", "20910101000000Z", "-extfile", "names.cnf")
 
 
 def _leaf_pin(pem):
@@ -12915,7 +13059,7 @@ def effector_suite(args, disk):
     (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 86400 1000000000\n")
     (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "mode.conf").write_text("development\n")
-    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
+    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\nrestart-after 40\n"
     (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
     (disk / "data" / "effector" / "token").write_text(token + "\n")
     # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
@@ -13015,6 +13159,28 @@ def effector_suite(args, disk):
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
         print("PASS: restarted by svc, the agent reads its journal back (15 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
+        # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
+        # starts it again with a new flow grant, and it is back once the server is; it is never quarantined.
+        starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
+        server.outage(75)
+        ends = time.monotonic() + 75
+        out = until("NO ANSWER FROM THE SERVER FOR ", 120)
+        assert "ENDING, SO THAT init STARTS IT AGAIN WITH A NEW GRANT" in out, out[-2000:]
+        deadline = time.monotonic() + 60
+        while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
+            time.sleep(1)
+        assert session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") > starts, session()[-2000:]
+        init_log = vm.command("dmesg -s init", raw=True)
+        require(init_log, "[INIT] effector RESTARTED PID=")
+        assert "effector QUARANTINED" not in init_log, init_log[-2000:]
+        time.sleep(max(0, ends - time.monotonic()))
+        beats_then = len(server.beats)
+        deadline = time.monotonic() + 60
+        while len(server.beats) <= beats_then and time.monotonic() < deadline:
+            time.sleep(1)
+        assert len(server.beats) > beats_then, "the agent is back once the server is"
+        print("PASS: the server out of reach for 75 s: after 40 s with no answer the agent ended itself, init started it "
+              "again with a new grant, not quarantined, and its heartbeats came back with the server", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
@@ -14213,6 +14379,9 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        # 801-NET-0079: the damaged key set aside whole, never written over.
+        require(log, "[KEYSTORE] system/keystore/device.key SET ASIDE AS system/keystore/device.key.before")
+        assert keystore_file(part, Path(temp), "device.key.before") == damaged.read_bytes(), "the damaged key was not kept whole"
         # The earlier files kept whole beside the new ones, for an owner who restores the earlier key by hand.
         for name, data in copies.items():
             assert keystore_file(part, Path(temp), name + ".before") == data, name
@@ -14554,6 +14723,26 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert again == plain, (plain, again)
+        # 801-NET-0079: the sealed key while no TPM answers (a release that does not reach it): no key is made or stored,
+        # nothing in system/keystore changes, and the store's secret is not set aside; TPM A back, the same key and store.
+        vm, log, lost = boot()
+        try:
+            require(log, "[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN system/keystore/device.sealed, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY, NOTHING IN system/keystore CHANGED")
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED"), f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}")
+            kept = vm.command("dmesg -s keystore", raw=True)
+            require(kept, "[KEYSTORE] SECRETS REFUSED FOR PID")
+            assert "SET ASIDE" not in kept and "DEVICE KEY MADE" not in kept, kept
+        finally:
+            close(vm)
+        assert lost != plain, (plain, lost)
+        assert stored("device.sealed") and not stored("device.key") and stored("services/blockstore.kept") and not stored("services/blockstore.kept.before")
+        vm, log, back = boot("a")
+        try:
+            store_opens(vm, root)
+        finally:
+            close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
+        assert back == plain, (plain, back)
         # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
         try:
@@ -14566,9 +14755,13 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
         assert other != plain, (plain, other)
+        # 801-NET-0079: TPM A's blob set aside whole, never written over, so that A could open it again.
+        require(log, "[KEYSTORE] system/keystore/device.sealed SET ASIDE AS system/keystore/device.sealed.before")
+        assert keystore_file(part, temp, "device.sealed.before")[:8] == b"MINDSEL1", "TPM A's sealed key was not kept"
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
-          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
+          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal; "
+          "a boot where no TPM answers makes no key and changes nothing, and the same TPM then opens the same key and store (801-NET-0079)", flush=True)
     print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
           f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
           "TPM B's new device key it is not mounted and the object is not read", flush=True)
@@ -17407,18 +17600,29 @@ def trial_check(args, disk):
         shutil.rmtree(volume)
         shutil.rmtree(temp / "slots")
         boot_slots.write_next(image, slot="B", fallback="A", tries=1)
-        vm = VM(args, str(image.path), raw=True, prompt=False)
+        # 801-NET-0079 (the check KRN wrote for it): a damaged device key on the disk the trial boots from is kept whole.
+        for directory in ("system", "system/keystore"):
+            subprocess.run(["mmd", "-i", image.drive, f"::{directory}"], env=MTOOLS_ENV, capture_output=True)
+        damaged = b"MINDKEY1" + bytes(64)
+        image.write("system/keystore/device.key", damaged)
+        # RDRAND, so that keystore reaches the key at all (without it there is no key, and nothing to keep); the boot's
+        # writes reach the image, so that what keystore left there is read back.
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, extra=["-cpu", "qemu64,+rdrand"])
         try:
             out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
             for line in ("BOOT: SLOT B LOADED ON TRIAL", "MIND CORE KERNEL: SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT"):
                 require(out, line)
             # init's lines go to the system log, not COM1; logs 1 is the shell's own command (init is PID 1).
             require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED")
+            keys = vm.service_logs("keystore", "FOR THIS BOOT ONLY")
+            require_all(keys, "[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN system/keystore THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL",
+                        "[KEYSTORE] THE BOOT IS ON TRIAL AND THE STORED KEY IS DAMAGED: A KEY FOR THIS BOOT ONLY, THE KEY FILES LEFT AS THEY ARE FOR THE SLOT BEFORE")
             time.sleep(18)
             vm.collect()
             assert vm.process.poll() is None and "RESTARTING" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
+        assert image.read("system/keystore/device.key") == damaged and image.read("system/keystore/device.key.before") is None, "keystore wrote on a trial boot"
         boot_slots.write_next(image, slot="B", fallback="A", tries=1)
         with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
             ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
@@ -17466,8 +17670,9 @@ def trial_check(args, disk):
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts, and the next boot falls back to slot A; one held for the Effector server whose agent "
-          "is quarantined is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
+          "restarts, and the next boot falls back to slot A; on the trial, keystore took a key for that boot alone and left "
+          "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent is quarantined "
+          "is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 
 def loader_error(vm, name, reason):

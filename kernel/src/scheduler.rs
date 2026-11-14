@@ -843,7 +843,7 @@ impl Scheduler {
                     return Err(ERR_RIGHTS);
                 }
                 let ram = (0..self.boot.memory_map_len).map(|i| unsafe { *self.boot.memory_map.add(i) })
-                    .any(|r| !matches!(r.kind, 11 | 12) && r.start < end && r.start + r.pages * 4096 > base);
+                    .any(|r| crate::nodes::holds_ram(r.kind) && r.start < end && r.start + r.pages * 4096 > base);
                 if ram || platform::kernel_owns(base, end) {
                     let name = nodes.get(a).map_or(&[][..], |n| n.compatible());
                     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PLATFORM NODE {} ({}) NOT LENT: ITS PAGES AT {:#X} HOLD {}\n",
