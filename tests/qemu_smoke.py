@@ -7162,12 +7162,14 @@ def modes_suite(args):
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
     effector_policy_recovery_check(args)
+    late_grant_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
         svc_boot_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
+        reboot_disk_gone_check(args)
         services_config_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
@@ -7232,6 +7234,56 @@ def effector_policy_recovery_check(args):
             vm.close()
     print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
           "the old file removed", flush=True)
+
+
+def late_grant_check(args):
+    """801-KRN-0250: a policy line added while the system runs reaches the program it names with no restart of the
+    machine. The Effector agent, started without a grant, gets one at its next start and keeps it for the starts after;
+    timed, not started for want of a line, starts within init's next look (30 s). Before the line, init asks the broker
+    nothing at the agent's restarts, so the broker logs one refusal, not one a restart."""
+    if not raw_tools():
+        print("SKIP: late grant check needs mkfs.fat and mtools", flush=True)
+        return
+    agent_line, time_line = "effector 10.0.2.2 tcp 9 600 1000", "timed 10.0.2.2 udp 123 600 100000"
+    with tempfile.TemporaryDirectory(prefix="smoke-late-grant-", dir=ROOT / IMAGE) as temp:
+        files = {**MODES_EFFECTOR_FILES, "netpolicy.txt": b"# no line for the agent or timed until the test adds one\n", "data/mode.conf": b"development\n",
+                 # Its server never answers: with a grant the agent ends after 30 s of silence, so init starts it again.
+                 "data/effector/effector.conf": MODES_EFFECTOR_FILES["data/effector/effector.conf"] + b"restart-after 30\n"}
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+
+        def init_log(lines, seconds=120):
+            deadline = time.monotonic() + seconds
+            while True:
+                log = vm.command("dmesg -s init", raw=True)
+                if all(re.search(line, log) for line in lines):
+                    return log
+                if time.monotonic() > deadline:
+                    raise AssertionError((lines, log[-2500:], vm.command("dmesg -s netpolicy", raw=True)[-1500:]))
+                time.sleep(2)
+        try:
+            init_log([re.escape("[INIT] effector: NO NETWORK GRANT"), re.escape("[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")])
+            # A restart of the agent with no line yet: init does not ask the broker.
+            require(vm.command("dmesg -s effector", raw=True), "EFFECTOR: ENDING IN 31 S, SO THAT init STARTS IT AGAIN")
+            init_log([r"\[INIT\] effector RESTARTED PID=\d+"], 60)
+            for line in (agent_line, time_line):
+                require(policy_answer(vm, f"netpolicy add {line}", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+            given = re.escape("[INIT] effector: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST")
+            log = init_log([given, r"\[INIT\] timed STARTED PID=\d+: THE POLICY NAMES IT NOW"], 90)
+            policy = vm.command("dmesg -s netpolicy", raw=True)
+            assert re.search(r"\[NETPOLICY\] GRANT \d+ TO effector:", policy) and re.search(r"\[NETPOLICY\] GRANT \d+ TO timed:", policy), policy[-2000:]
+            assert policy.count("REFUSED effector") == 1, policy[-2000:]
+            assert "timed" in vm.services(), vm.services()
+            # The grant is kept: the agent ends again (its server does not answer) and starts with it, asked for once.
+            restarts = len(re.findall(r"\[INIT\] effector RESTARTED PID=", log))
+            log = init_log([r"(?s)" + given + r".*\[INIT\] effector RESTARTED PID=\d+.*\[INIT\] effector RESTARTED PID=\d+"], 120)
+            assert len(re.findall(r"\[INIT\] effector RESTARTED PID=", log)) >= restarts + 1 and len(re.findall(given, log)) == 1, log[-2500:]
+            assert vm.command("dmesg -s netpolicy", raw=True).count("GRANT") == policy.count("GRANT"), "no grant asked for again"
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    print("PASS: late grant (801-KRN-0250): a line added while the system runs gave the agent its grant at its next start, "
+          "kept for the starts after, and started timed; no refusal logged at the restarts before the line", flush=True)
 
 
 def remote_update_check(args):
@@ -7681,6 +7733,49 @@ def services_config_check(args):
           "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
           "boots as without it, each line named in the log; with S typed at the bootloader the file is ignored, every service "
           "starts in its order, and init says so (173-KRN-0036)", flush=True)
+
+
+def reboot_disk_gone_check(args):
+    """801-KRN-0251 (EFF's request): the boot disk's driver stopped under the gateway, whose files then cannot be written;
+    its reboot is still decided by the owner's `reboot on`, from the policy init read whole before, and the machine
+    restarts (QEMU exits: -no-reboot). Before 0251 init refused it, finding no policy on the disk. The log of that boot is
+    in logd's ring alone, gone with the restart: the serial line carries the kernel's word that init asked."""
+    if not raw_tools():
+        print("SKIP: reboot with the disk gone needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-gone-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-when-gone": b"1\n"}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            for _ in range(90):
+                if "[GATEWAY-STUB] WAITING FOR THE DISK TO GO" in vm.command("dmesg -s effector_gw", raw=True, timeout=60):
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(vm.command("dmesg -s effector_gw", raw=True, timeout=60)[-1500:])
+            log = vm.command("dmesg -s init", raw=True, timeout=60)
+            window = re.search(r"\[INIT\] (\S+) PARTITION 1: WINDOW \d+ FOR VFS_SERVER", log)
+            stopped = re.search(r"\[INIT\] STARTED (virtio_blk|ata|ahci|nvme) PID", log)
+            driver = window[1] if window else stopped[1] if stopped else "virtio_blk"
+            vm.collect()
+            mark = len(vm.log)
+            vm.send(f"svc stop {driver}\n")
+            asked = "MIND CORE KERNEL: init (PID 1) ASKED TO RESTART THE MACHINE"
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline and asked not in vm.log[mark:] and vm.process.poll() is None:
+                time.sleep(1)
+                vm.collect()
+            time.sleep(1)
+            vm.collect()
+            assert asked in vm.log[mark:], vm.log[-3000:]
+            assert f"{driver} stopped" in vm.log[mark:], vm.log[-3000:]
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-disk-gone-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: a reboot with the boot disk gone (801-KRN-0251): {driver} stopped under the gateway, the owner's `reboot on` "
+          "read before decided, and init restarted the machine", flush=True)
 
 
 def svc_boot_check(args):
