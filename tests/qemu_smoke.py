@@ -17443,7 +17443,9 @@ def trial_check(args, disk):
             subprocess.run(["mmd", "-i", image.drive, f"::{directory}"], env=MTOOLS_ENV, capture_output=True)
         damaged = b"MINDKEY1" + bytes(64)
         image.write("system/keystore/device.key", damaged)
-        vm = VM(args, str(image.path), raw=True, prompt=False)
+        # RDRAND, so that keystore reaches the key at all (without it there is no key, and nothing to keep); the boot's
+        # writes reach the image, so that what keystore left there is read back.
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, extra=["-cpu", "qemu64,+rdrand"])
         try:
             out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
             for line in ("BOOT: SLOT B LOADED ON TRIAL", "MIND CORE KERNEL: SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT"):
