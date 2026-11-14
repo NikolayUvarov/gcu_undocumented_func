@@ -13388,8 +13388,12 @@ def effector_suite(args, disk):
     (disk / "data" / "effector" / "token").write_text(token + "\n")
     # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
     # the screen; deliveries go to data/inbox/; sysmon may be restarted. Nothing else.
+    # 750-EFF-0008: packages, of `memtest` under the public test key only.
+    import app_package
+    package_key = sign_manifest.public_key(app_package.TEST_SEED).hex()
     (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
-                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
+                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n"
+                                                       f"packages on\npackage-key memtest {package_key}\n")
     (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "machine").mkdir(parents=True, exist_ok=True)  # where the shell's `hostname` keeps the name
     report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
@@ -13476,6 +13480,7 @@ def effector_suite(args, disk):
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
+        effector_packages_check(vm, server, agent, until, args)
         # 801-EFF-0027: a command with a 10-minute term by the server's clock is run, not `command_expired`, though the
         # device's clock is 3 h past it; the log names the offset.
         term_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
@@ -13504,12 +13509,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(16 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(22 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (16 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (22 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # 750-EFF-0033 (the Effector project's 81-01): redelivered commands answered before. The last measured result is
         # kept and sent again the same, which the server takes; an older one's is not kept, so it is answered completed
@@ -13851,6 +13856,80 @@ def effector_update_suite(args):
           "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
           "init confirms it on the agent's accepted (its steps logged as they changed, 801-KRN-0242), and once it is confirmed the "
           "agent answers the command it kept across the restart: completed, updated 6, slot B confirmed", flush=True)
+
+
+def effector_packages_check(vm, server, agent, until, args):
+    """750-EFF-0008 (contract 1.5 `mind-package-1`): signed application packages through the server's `deploy`, the owner's
+    policy holding `packages on` and the public test key for `memtest`. An install puts it under data/apps/memtest/1/ and
+    it runs from there; version 2 takes its place, 1 staying; one signed by another key, an older version and one whose
+    program differs from its MANIFEST are refused with their codes and change nothing; a deinstall removes it. Each command
+    gets the server's DeploymentResult with the line its ACK carries."""
+    import app_package
+    import io
+    import zipfile
+    arch = "aarch64" if args.arch == "aarch64" else "x86_64"
+    beat_arch = "arm64" if args.arch == "aarch64" else "x64"
+    program = (ROOT / IMAGE / "memtest.elf").read_bytes()
+
+    def archive(version, seed=app_package.TEST_SEED, change=None):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "m").write_bytes(program)
+            text = app_package.manifest(Path(temp), "memtest", version, arch, 0, sign_manifest.public_key(seed))
+        signature = sign_manifest.sign(seed, app_package.PREFIX + text)
+        data = bytearray(program)
+        if change == "byte":
+            data[-1] ^= 1
+        entry = {"when": {"os": "mindcore", "arch": beat_arch}, "package": f"mindcore/{arch}"}
+        manifest = {"manifest_version": 1, "package": {"name": "memtest", "version": str(version)},
+                    "entrypoints": {"install": [{"when": {"os": "windows", "arch": "x64"}, "cmd": "setup.exe"}, entry], "deinstall": [entry]}}
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("manifest.json", json.dumps(manifest))
+            z.writestr(f"mindcore/{arch}/MANIFEST", text)
+            z.writestr(f"mindcore/{arch}/MANIFEST.SIG", signature)
+            z.writestr(f"mindcore/{arch}/m", bytes(data))
+        return out.getvalue()
+
+    def deploy(operation, data, package_id):
+        server.publish(data, package_id=package_id)
+        command = server.queue(agent, "deploy", f"mind-package-1:{operation}:{package_id}:{len(data)}:{hashlib.sha256(data).hexdigest()}")
+        out = until(f"EFFECTOR: DEPLOY {command} {operation} {package_id}: ", 180)
+        line = re.search(rf"EFFECTOR: DEPLOY {command} {operation} {re.escape(package_id)}: ([^\r\n]*)", out)[1]
+        until(f"EFFECTOR: ACK {command} ", 60)
+        results = [r for r in list(server.deployment_results) if r.get("package_id") == package_id and r.get("operation") == operation]
+        assert results and results[-1]["stdout"] == line and results[-1]["script"] == "mind-package-1" \
+            and results[-1]["success"] == line.startswith(("installed ", "removed ")) and results[-1]["exit_code"] == (0 if results[-1]["success"] else 1), (results, line)
+        answer = server.operation(command)
+        assert answer and answer["status"] == ("completed" if results[-1]["success"] else "failed"), answer
+        return line
+
+    def runs(path):
+        started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
+        assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
+        require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
+
+    line = deploy("install", archive(1), "memtest-1.zip")
+    assert line.startswith(f"installed memtest 1 {arch} 1 "), line
+    runs("data/apps/memtest/m")
+    line = deploy("reinstall", archive(2), "memtest-2.zip")
+    assert line.startswith(f"installed memtest 2 {arch} 1 "), line
+    runs("data/apps/memtest/2/m")
+    assert "STARTED PID=" not in vm.command("run data/apps/memtest/1/m naps 300 &")
+    require(vm.command("dmesg -s loader", raw=True), "[LOADER] data/apps/memtest/1/m: NOT RUN: NOT THE CURRENT VERSION")
+    refused = {"signature": archive(3, seed=hashlib.sha256(b"another key").digest()), "older": archive(1), "digest": archive(3, change="byte")}
+    for code, data in refused.items():
+        line = deploy("install", data, f"memtest-{code}.zip")
+        assert line.startswith(f"refused {code}: "), (code, line)
+    runs("data/apps/memtest/m")  # version 2 still
+    line = deploy("deinstall", archive(2), "memtest-2-off.zip")
+    assert line == "removed memtest 2", line
+    assert "STARTED PID=" not in vm.command("run data/apps/memtest/m naps 300 &")
+    audit = vm.command("dmesg -s effector_gw", raw=True)
+    assert "package-install" in audit and "package-deinstall" in audit, audit[-2000:]
+    print(f"PASS: packages through deploy (750-EFF-0008, mind-package-1): memtest 1 installed and run from data/apps/, 2 in "
+          "its place with 1 kept beside it, a package signed by another key, an older one and one whose program differs "
+          "from its MANIFEST refused as signature, older and digest with nothing changed, then removed; each with its "
+          "DeploymentResult and ACK, each in the gateway's audit", flush=True)
 
 
 def effector_actions_check(vm, server, agent, until, beats):

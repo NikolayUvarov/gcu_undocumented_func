@@ -30,6 +30,11 @@
 //! the machine's name as `sysmon` answers it (`sysinfo.wit` 4.2, 750-EFF-0018), so a name set by the shell's
 //! `hostname` reaches the server within a sample. Both ends are built together; a 1.5 decoder refuses a list longer
 //! than 48, and the new field, rather than reading them short.
+//!
+//! 1.7 (750-EFF-0008): `package-begin`, `write` and `package-commit` install, update and remove a signed application
+//! under `data/apps/` (contract 1.5 `mind-package-1`). `error` gains `format`, `arch`, `system` and `space`, the
+//! refusals the contract names, and `package-report` the architecture, the number of files and the SHA-256 of the
+//! package's MANIFEST. A 1.6 decoder refuses the new cases and fields rather than reading them short.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -39,7 +44,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 6, 0);
+pub const VERSION: (u8, u8, u8) = (1, 7, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -50,13 +55,15 @@ const MAJOR: usize = 1;
 /// nothing was done; `io`: a file or service call failed; `signature`: a package not signed by a key the policy
 /// trusts for its name; `older`: a package not above the installed version; `malformed`: a field the gateway
 /// refuses (a path with `..`, an unknown action); `cancelled`: cancelled before it ended; `unsupported`: this build
-/// does not do it yet; `no-policy`: no valid policy is loaded, so everything is denied.
+/// does not do it yet; `no-policy`: no valid policy is loaded, so everything is denied; `format`: a package's ZIP,
+/// `manifest.json` or MANIFEST breaks a rule (1.7); `arch`: a package for another architecture; `system`: a package
+/// for a newer release than this one; `space`: `data/apps/` has no room.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] Denied = 0, NotFound = 1, Busy = 2, Bounds = 3, Digest = 4, Exists = 5, Expired = 6, Audit = 7, Io = 8, Signature = 9, Older = 10, Malformed = 11, Cancelled = 12, Unsupported = 13, NoPolicy = 14 }
+pub enum Error { #[default] Denied = 0, NotFound = 1, Busy = 2, Bounds = 3, Digest = 4, Exists = 5, Expired = 6, Audit = 7, Io = 8, Signature = 9, Older = 10, Malformed = 11, Cancelled = 12, Unsupported = 13, NoPolicy = 14, Format = 15, Arch = 16, System = 17, Space = 18 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Denied), 1 => Some(Self::NotFound), 2 => Some(Self::Busy), 3 => Some(Self::Bounds), 4 => Some(Self::Digest), 5 => Some(Self::Exists), 6 => Some(Self::Expired), 7 => Some(Self::Audit), 8 => Some(Self::Io), 9 => Some(Self::Signature), 10 => Some(Self::Older), 11 => Some(Self::Malformed), 12 => Some(Self::Cancelled), 13 => Some(Self::Unsupported), 14 => Some(Self::NoPolicy), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Denied), 1 => Some(Self::NotFound), 2 => Some(Self::Busy), 3 => Some(Self::Bounds), 4 => Some(Self::Digest), 5 => Some(Self::Exists), 6 => Some(Self::Expired), 7 => Some(Self::Audit), 8 => Some(Self::Io), 9 => Some(Self::Signature), 10 => Some(Self::Older), 11 => Some(Self::Malformed), 12 => Some(Self::Cancelled), 13 => Some(Self::Unsupported), 14 => Some(Self::NoPolicy), 15 => Some(Self::Format), 16 => Some(Self::Arch), 17 => Some(Self::System), 18 => Some(Self::Space), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -149,13 +156,14 @@ impl Wire for PackageAction {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// A package's result: the application's name and version, and the version it replaced (empty: none).
+/// A package's result: the application's name and version, the version it replaced or removed (empty: none), its
+/// architecture, how many files it holds, and the SHA-256 of its MANIFEST (64 hex digits; 1.7).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PackageReport { pub name: Text<32>, pub version: Text<32>, pub previous: Text<32> }
+pub struct PackageReport { pub name: Text<32>, pub version: Text<32>, pub previous: Text<32>, pub arch: Text<8>, pub files: u32, pub manifest: Text<64> }
 impl Wire for PackageReport {
-    const MAX: usize = <Text<32> as Wire>::MAX + <Text<32> as Wire>::MAX + <Text<32> as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.previous.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, previous: Wire::decode(r)? }) }
+    const MAX: usize = <Text<32> as Wire>::MAX + <Text<32> as Wire>::MAX + <Text<32> as Wire>::MAX + <Text<8> as Wire>::MAX + <u32 as Wire>::MAX + <Text<64> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.previous.encode(w)?; self.arch.encode(w)?; self.files.encode(w)?; self.manifest.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, previous: Wire::decode(r)?, arch: Wire::decode(r)?, files: Wire::decode(r)?, manifest: Wire::decode(r)? }) }
 }
 
 /// What `update-check` found: the version offered (0: none newer), the running version, whether it was fetched
@@ -421,7 +429,7 @@ pub fn package_commit(endpoint: Endpoint, handle: u32) -> Result<core::result::R
     };
     let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 102, false, false)?;
+    let length = wire::buffer_reply(&reply, 182, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <PackageReport as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -747,7 +755,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::DeliverCommit { handle }, call))
         }
         12 => {
-            let (call, length) = wire::take_buffer(request, cap, 102, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 182, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;

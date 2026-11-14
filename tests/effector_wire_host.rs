@@ -272,3 +272,33 @@ fn a_fallback_is_reported_in_the_heartbeats_update() {
     let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
     assert!(body.contains(r#""update":{"state":"rolled_back","build_number":6,"result":"version 6 in slot B, falling back to slot A: no-tls: TLS CONNECT"}"#), "{body}");
 }
+
+#[test]
+fn a_deploy_command_is_read_only_in_its_mind_package_1_form() {
+    let sha = "ab".repeat(32);
+    assert_eq!(package(&format!("mind-package-1:install:pkg-1.zip:1000:{sha}")),
+               Some(Package { operation: "install", id: "pkg-1.zip", size: 1000, sha256: &sha }));
+    assert_eq!(package(&format!("mind-package-1:deinstall:p:67108864:{sha}")).map(|p| p.size), Some(64 << 20));
+    for bad in [
+        "install:pkg-1".to_string(),                                   // the host form
+        format!("mind-package-2:install:p:1000:{sha}"),                // another version
+        format!("mind-package-1:distribute:p:1000:{sha}"),            // an operation the form has not
+        format!("mind-package-1:install:p:1000:{sha}:more"),           // an extra field
+        format!("mind-package-1:install::1000:{sha}"),                 // an empty one
+        format!("mind-package-1:install:p/q:1000:{sha}"),              // a character the ID may not hold
+        format!("mind-package-1:install:{}:1000:{sha}", "p".repeat(129)),
+        format!("mind-package-1:install:p:0:{sha}"), format!("mind-package-1:install:p:67108865:{sha}"),
+        format!("mind-package-1:install:p:0100:{sha}"), format!("mind-package-1:install:p:+100:{sha}"),
+        format!("mind-package-1:install:p:1000:{}", "AB".repeat(32)), format!("mind-package-1:install:p:1000:{}", "ab".repeat(31)),
+    ] {
+        assert_eq!(package(&bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn the_deployment_result_has_the_servers_fields() {
+    let mut buf = [0u8; 1024];
+    let d = Deployed { agent_id: "mind-1", package_id: "p", operation: "install", success: false, stdout: "refused older: the version", started: 1_700_000_000, finished: 1_700_000_005 };
+    let json = std::str::from_utf8(deployment_result(&mut buf, &d).unwrap()).unwrap().to_string();
+    assert_eq!(json, r#"{"agent_id":"mind-1","package_id":"p","operation":"install","script":"mind-package-1","exit_code":1,"stdout":"refused older: the version","stderr":"","started_at":"2023-11-14T22:13:20Z","finished_at":"2023-11-14T22:13:25Z","success":false}"#);
+}

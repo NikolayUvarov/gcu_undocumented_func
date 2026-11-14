@@ -36,6 +36,7 @@ const BENCH_SLICE_MS: u64 = 200; // performance_measure runs this long between h
 const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
 const QUIET_MS: usize = 40_000; // after the last heartbeat, how long the agent waits for the restart before it goes on
 const UPDATE_S: u64 = 1800; // an update's budget when the command names none: the download, the staging and the apply
+const PACKAGE_S: u64 = 600; // a package's fixed budget: the download, the checks and the install (contract 1.5)
 const RESTART_WAIT_MS: usize = 60_000; // after an apply the updater accepted, the restart comes within this or not at all
 const UPDATE_LOOK_MS: usize = 2000; // after the restart, the updater's view is read this often until it answers
 const BODY_MAX: usize = 16384;
@@ -216,6 +217,37 @@ fn vfs_pid() -> u64 {
     match init::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => list.as_slice().iter().find(|s| s.name.as_str() == "vfs_server" && s.running).map_or(0, |s| s.pid),
         _ => 0,
+    }
+}
+
+/// A gateway's error for a package, as contract 1.5 names its refusals.
+fn package_failure(e: gateway::Error) -> session::Failure {
+    use session::Failure as F;
+    match e {
+        gateway::Error::Signature => F::Signature, gateway::Error::Older => F::Older, gateway::Error::Format => F::Format,
+        gateway::Error::Arch => F::Arch, gateway::Error::System => F::System, gateway::Error::Space => F::Space,
+        gateway::Error::Denied | gateway::Error::NoPolicy => F::Denied, gateway::Error::Bounds => F::Denied,
+        gateway::Error::Digest => F::Digest, gateway::Error::Busy => F::Busy, gateway::Error::Unsupported => F::Unsupported,
+        _ => F::Io,
+    }
+}
+
+/// What each refusal checked, for the result's `refused CODE: …` line; the gateway's audit holds the particulars.
+fn refusal_text(f: session::Failure) -> &'static str {
+    use session::Failure as F;
+    match f {
+        F::Unsupported => "the command or the archive is not one this build takes (mind-package-1, at most 8 MiB)",
+        F::Denied => "the owner's policy has no packages on, no package-key for the application, or a lower max-bytes",
+        F::Digest => "the archive's size or SHA-256, or a file's, is not what was announced",
+        F::Format => "the ZIP, manifest.json or MANIFEST breaks contract 1.5",
+        F::Signature => "MANIFEST.SIG does not verify under a key the owner's policy trusts for the name",
+        F::Arch => "the package is not for this machine's architecture",
+        F::System => "the package needs a newer release than this one",
+        F::Older => "the version is not above the installed one",
+        F::Space => "data/apps/ has no room; the installed version stays",
+        F::Busy => "another transfer is open in the gateway",
+        F::Upload => "the archive was not downloaded",
+        _ => "the disk or the gateway failed; the installed version stays",
     }
 }
 
@@ -752,7 +784,8 @@ impl Agent {
     fn act(&mut self, id: &str, action: &str, program: &str, payload: &str, expires_unix: Option<u64>, initiator: &str, reason: &str) -> Option<session::Final> {
         use session::{Failure, Final};
         // The command's own budget, else the server's default for its kind (services 180 s, screenshots 30 s).
-        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, "update_agent" => UPDATE_S, _ => ACTION_S };
+        // `deploy` in its MIND form: a fixed 600 s (contract 1.5, `mind-package-1`).
+        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, "update_agent" => UPDATE_S, "deploy" => PACKAGE_S, _ => ACTION_S };
         let budget = if payload.trim_start().starts_with('{') { self.parsed(payload.as_bytes(), wire::timeout_seconds).ok().flatten() } else { None }.unwrap_or(default);
         let o = origin(id, initiator, reason, budget);
         let service = |a| {
@@ -763,6 +796,7 @@ impl Agent {
         Some(match action {
             "collect_file" => self.collect_file(id, payload, &o),
             "deliver_file" => self.deliver_file(id, payload, &o),
+            "deploy" => self.deploy(id, payload, &o),
             "update_agent" => self.update_agent(id, program, payload, expires_unix, &o),
             "collect_logs" => self.collect_logs(id, payload, &o),
             "screenshot" => {
@@ -901,8 +935,14 @@ impl Agent {
     /// in order; more than `size` bytes is `digest`.
     #[inline(never)]
     fn download(&mut self, id: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
-        use session::Failure;
         let query = alloc::format!("?agent_id={}&command_id={}", self.agent_id, id);
+        self.fetch_into("/api/commands/file", &query, size, handle)
+    }
+
+    /// `route`'s body into the gateway's incoming transfer `handle` in its pieces, in order; more than `size` is `digest`.
+    #[inline(never)]
+    fn fetch_into(&mut self, route: &str, query: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
+        use session::Failure;
         let (mut piece, mut offset, mut failed) = (Vec::with_capacity(PIECE), 0u64, None);
         let status = {
             let mut sink = |data: &[u8]| -> bool {
@@ -919,13 +959,61 @@ impl Agent {
                 }
                 true
             };
-            self.send(Method::Get, "/api/commands/file", &query, "application/json", None, Some(&mut sink))
+            self.send(Method::Get, route, query, "application/json", None, Some(&mut sink))
         };
         match (status, failed) {
             (_, Some(f)) => Err(f),
             (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) },
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
+        }
+    }
+
+    /// `deploy` in its MIND form (750-EFF-0008, contract 1.5 `mind-package-1`): the archive from
+    /// `/api/deployment/download/{id}` straight into the gateway, which checks its size and SHA-256, then the package's
+    /// signature, version and files, and installs or removes it under `data/apps/`. The outcome goes to the server's
+    /// `/api/deployment/result` first, then in the ACK; both say the same.
+    #[inline(never)]
+    fn deploy(&mut self, id: &str, payload: &str, o: &gateway::Origin) -> session::Final {
+        use session::{Failure, Final};
+        let started = server_unix().unwrap_or(0);
+        let Some(p) = wire::package(payload) else {
+            mind::println!("EFFECTOR: DEPLOY {} REFUSED: NOT mind-package-1", id);
+            return Final::Failed(Failure::Unsupported);
+        };
+        let action = match p.operation { "install" => gateway::PackageAction::Install, "reinstall" => gateway::PackageAction::Reinstall, _ => gateway::PackageAction::Uninstall };
+        let (package_id, operation) = (String::from(p.id), String::from(p.operation));
+        let done = (|| {
+            let handle = match gateway::package_begin(GATEWAY, o, action, p.size, p.sha256) {
+                Ok(Ok(h)) => h, Ok(Err(e)) => return Err(package_failure(e)), Err(_) => return Err(Failure::Unsupported),
+            };
+            let route = alloc::format!("/api/deployment/download/{}", package_id);
+            if let Err(f) = self.fetch_into(&route, "", p.size, handle) { let _ = gateway::close(GATEWAY, handle); return Err(f); }
+            match gateway::package_commit(GATEWAY, handle) { Ok(Ok(r)) => Ok(r), Ok(Err(e)) => Err(package_failure(e)), Err(_) => Err(Failure::Io) }
+        })();
+        let line = match &done {
+            Ok(r) if operation == "deinstall" => alloc::format!("removed {} {}", r.name.as_str(), if r.previous.as_str().is_empty() { "none" } else { r.previous.as_str() }),
+            Ok(r) => alloc::format!("installed {} {} {} {} {}", r.name.as_str(), r.version.as_str(), r.arch.as_str(), r.files, r.manifest.as_str()),
+            Err(f) => alloc::format!("refused {}: {}", f.name(), refusal_text(*f)),
+        };
+        mind::println!("EFFECTOR: DEPLOY {} {} {}: {}", id, operation, package_id, line);
+        // The server's DeploymentResult, then the ACK (contract 1.5, section 3).
+        let mut buf = [0u8; 2048];
+        let d = wire::Deployed { agent_id: &self.agent_id, package_id: &package_id, operation: &operation, success: done.is_ok(), stdout: &line, started, finished: server_unix().unwrap_or(0) };
+        match wire::deployment_result(&mut buf, &d).map(|b| b.to_vec()) {
+            Ok(body) => match self.request(Method::Post, "/api/deployment/result", "", Some(&body)) {
+                Some(200) if self.answer(wire::ok_answer).is_ok() => {}
+                status => mind::println!("EFFECTOR: DEPLOYMENT RESULT OF {} ANSWERED {:?}", id, status),
+            },
+            Err(e) => mind::println!("EFFECTOR: DEPLOYMENT RESULT OF {} NOT WRITTEN: {:?}", id, e),
+        }
+        match done {
+            Ok(_) => {
+                let mut buf = [0u8; 1024];
+                let kept = wire::completed_result(&mut buf, &line).ok().is_some_and(|json| self.keep_result(id, json));
+                if kept { Final::Reported } else { Final::Completed }
+            }
+            Err(f) => Final::Failed(f),
         }
     }
 

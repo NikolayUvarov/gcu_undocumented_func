@@ -412,6 +412,48 @@ pub fn rfc3339(t: &str) -> Option<Option<u64>> {
     if secs < 0 { None } else { Some(Some(secs as u64)) }
 }
 
+/// A `deploy` command's MIND form (750-EFF-0008, contract 1.5): `mind-package-1:<operation>:<package_id>:<size>:<sha256>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Package<'a> { pub operation: &'a str, pub id: &'a str, pub size: u64, pub sha256: &'a str }
+
+/// The largest archive the form allows.
+pub const PACKAGE_MAX: u64 = 64 << 20;
+
+/// Reads `new_hostport` as `mind-package-1`: five fields, each in its range, or `None` (the host form `operation:id`,
+/// another version, an extra or empty field: all `unsupported`).
+pub fn package(text: &str) -> Option<Package<'_>> {
+    let mut fields = text.split(':');
+    let (version, operation, id, size, sha256) = (fields.next()?, fields.next()?, fields.next()?, fields.next()?, fields.next()?);
+    if fields.next().is_some() || version != "mind-package-1" || !matches!(operation, "install" | "deinstall" | "reinstall") { return None; }
+    if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) { return None; }
+    if size.is_empty() || size.len() > 8 || !size.bytes().all(|b| b.is_ascii_digit()) || size.starts_with('0') { return None; }
+    let size: u64 = size.parse().ok().filter(|&n| (1..=PACKAGE_MAX).contains(&n))?;
+    if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) { return None; }
+    Some(Package { operation, id, size, sha256 })
+}
+
+/// The server's `DeploymentResult` for a `mind-package-1` command: one `stdout` line, the times the agent's clock in UTC.
+#[derive(Clone, Copy, Debug)]
+pub struct Deployed<'a> { pub agent_id: &'a str, pub package_id: &'a str, pub operation: &'a str, pub success: bool, pub stdout: &'a str, pub started: u64, pub finished: u64 }
+
+pub fn deployment_result<'b>(buf: &'b mut [u8], d: &Deployed<'_>) -> Result<&'b [u8], Error> {
+    let (mut a, mut b) = ([0u8; 20], [0u8; 20]);
+    let mut w = Writer::new(buf);
+    w.object()?;
+    w.field_str("agent_id", d.agent_id)?;
+    w.field_str("package_id", d.package_id)?;
+    w.field_str("operation", d.operation)?;
+    w.field_str("script", "mind-package-1")?;
+    w.field_u64("exit_code", if d.success { 0 } else { 1 })?;
+    w.field_str("stdout", d.stdout)?;
+    w.field_str("stderr", "")?;
+    w.field_str("started_at", rfc3339_utc(d.started, &mut a))?;
+    w.field_str("finished_at", rfc3339_utc(d.finished, &mut b))?;
+    w.field_bool("success", d.success)?;
+    w.end()?;
+    Ok(w.finish()?)
+}
+
 /// Unix seconds to `YYYY-MM-DDTHH:MM:SSZ`, for `agent_time`.
 pub fn rfc3339_utc(unix: u64, out: &mut [u8; 20]) -> &str {
     let days = (unix / 86400) as i64;

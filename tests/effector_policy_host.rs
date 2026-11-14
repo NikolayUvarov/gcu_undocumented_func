@@ -159,6 +159,9 @@ fn the_decision_table() {
     assert_eq!(p.decide(Ask::Package("demo", 100)), Ok(()));
     assert_eq!(p.decide(Ask::Package("other", 100)), Err(Deny::NotNamed));
     assert_eq!(p.decide(Ask::Package("demo", 2 << 20)), Err(Deny::TooLarge));
+    // A package's archive before its name is read (750-EFF-0008): `packages on` and `max-bytes` alone.
+    assert_eq!(p.decide(Ask::Packages(100)), Ok(()));
+    assert_eq!(p.decide(Ask::Packages(2 << 20)), Err(Deny::TooLarge));
     // Updates: up to the named step.
     assert_eq!(p.decide(Ask::Update(Update::Check)), Ok(()));
     assert_eq!(p.decide(Ask::Update(Update::Fetch)), Ok(()));

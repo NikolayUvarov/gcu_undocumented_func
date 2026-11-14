@@ -56,10 +56,11 @@ impl Command<'_> {
 
 /// Why an action the agent handed to its gateway failed: the gateway's errors (`idl/effector.wit`) and the agent's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload, Journal }
+pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload, Journal, Signature, Older, Format, Arch, System, Space }
 impl Failure {
-    pub const ALL: [Failure; 13] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
-                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload, Self::Journal];
+    pub const ALL: [Failure; 19] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
+                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload, Self::Journal,
+                                    Self::Signature, Self::Older, Self::Format, Self::Arch, Self::System, Self::Space];
     pub fn name(self) -> &'static str {
         match self {
             Self::Denied => "denied", Self::NoPolicy => "no-policy", Self::NotFound => "not-found", Self::Bounds => "bounds",
@@ -67,6 +68,9 @@ impl Failure {
             Self::Malformed => "malformed", Self::Unsupported => "unsupported", Self::Upload => "upload",
             // Refused, not run, while the journal cannot be written (801-EFF-0032).
             Self::Journal => "journal",
+            // A package's refusals (750-EFF-0008, contract 1.5).
+            Self::Signature => "signature", Self::Older => "older", Self::Format => "format", Self::Arch => "arch",
+            Self::System => "system", Self::Space => "space",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> { Self::ALL.iter().copied().find(|f| f.name() == name) }
@@ -107,6 +111,8 @@ impl Final {
                 Failure::Expired => failed!("expired"), Failure::Audit => failed!("audit"), Failure::Io => failed!("io"),
                 Failure::Malformed => failed!("malformed"), Failure::Unsupported => failed!("unsupported"), Failure::Upload => failed!("upload"),
                 Failure::Journal => failed!("journal"),
+                Failure::Signature => failed!("signature"), Failure::Older => failed!("older"), Failure::Format => failed!("format"),
+                Failure::Arch => failed!("arch"), Failure::System => failed!("system"), Failure::Space => failed!("space"),
             },
         }
     }
