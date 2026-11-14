@@ -17,6 +17,7 @@ const NOTICE: u64 = 2;
 const PAGE_SLOT: usize = 9; // a benchmark worker's slot for the shared page
 const BACK_SLOT: usize = 9; // the notice worker's slot for the session's endpoint
 const NOTICE_TAG: usize = 0x4E4F_5449; // a stop notice's first word ("NOTI"); the second is the reason
+const REFUSED_TAG: usize = 0x5245_4655; // init's refusal of the notice's call ("REFU"); the second word is its error
 const MAX: usize = 32; // workers, at most: init's task quota for `effector`
 const GO: usize = 0; // the page's words: the start, the deadline in monotonic ns, then a count and a state each
 const DEADLINE: usize = 1;
@@ -57,7 +58,8 @@ fn notice_worker() {
         match mind::idl::init::stop_notice(lifecycle) {
             Ok(Ok(reason)) => { let _ = back.send(&Message::new(NOTICE_TAG, reason as usize)); return; }
             // Replaced by a later call, or refused: this worker has nothing more to wait for.
-            Ok(Err(e)) => { mind::println!("EFFECTOR: init ANSWERED THE STOP NOTICE'S WORKER {:?}: NO NOTICE AWAITED", e); return }
+            // A worker has no log of its own: the session says it.
+            Ok(Err(e)) => { let _ = back.send(&Message::new(REFUSED_TAG, e as usize)); return }
             // The call itself failed (init restarting): again a second later.
             Err(_) => { mind::time::sleep(1000); }
         }
@@ -112,6 +114,12 @@ impl Pool {
             }
             if received.data[0] == NOTICE_TAG {
                 if let Some(reason) = mind::idl::init::StopReason::from_code(received.data[1]) { return Event::Stop(reason); }
+            }
+            if received.data[0] == REFUSED_TAG {
+                match mind::idl::init::Error::from_code(received.data[1]) {
+                    Some(e) => mind::println!("EFFECTOR: init ANSWERED THE STOP NOTICE'S WORKER {:?}: NO NOTICE AWAITED", e),
+                    None => mind::println!("EFFECTOR: init ANSWERED THE STOP NOTICE'S WORKER WITH CODE {}: NO NOTICE AWAITED", received.data[1]),
+                }
             }
         }
         Event::None
