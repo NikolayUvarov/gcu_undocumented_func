@@ -240,6 +240,19 @@ class EffectorServerTests(unittest.TestCase):
             self.fixture.publish(b"x" * (FILE_LIMIT + 1), package_id="large")
         self.assertEqual(self.request("GET", "/api/commands/poll?agent_id=x&agent_id=y")[0], 400)
 
+    def test_an_outage_ends_requests_unanswered_and_passes(self):
+        # 801-EFF-0028: a server out of reach for a while, then back; each answer carries the server's Date.
+        self.fixture.outage(1.5)
+        with self.assertRaises((http.client.RemoteDisconnected, ConnectionError, ssl.SSLError)):
+            self.request("POST", "/api/heartbeat", {"agent_id": "a1", "hostname": "h"})
+        self.assertEqual(self.fixture.requests[-1].get("fault"), "outage")
+        time.sleep(1.6)
+        status, _, headers = self.request("POST", "/api/heartbeat", {"agent_id": "a1", "hostname": "h", "arch": "x64"})
+        self.assertNotEqual(status, 0)
+        self.assertIn("Date", headers)
+        with self.assertRaises(ValueError):
+            self.fixture.outage(601)
+
     def test_telemetry_is_checked_as_the_server_checks_it(self):
         sample = {"schema": 1, "sample_id": "s1792566386-65200", "sampled_at": "2026-10-22T18:06:26Z", "interval_seconds": 30.0,
                   "system": {"logical_cpus": 2, "cpu_percent": 12.5}, "disks": [],
