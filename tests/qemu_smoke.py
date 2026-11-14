@@ -7147,6 +7147,7 @@ def modes_suite(args):
         svc_boot_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
+        reboot_disk_gone_check(args)
         services_config_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
@@ -7706,6 +7707,49 @@ def services_config_check(args):
           "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
           "boots as without it, each line named in the log; with S typed at the bootloader the file is ignored, every service "
           "starts in its order, and init says so (173-KRN-0036)", flush=True)
+
+
+def reboot_disk_gone_check(args):
+    """801-KRN-0251 (EFF's request): the boot disk's driver stopped under the gateway, whose files then cannot be written;
+    its reboot is still decided by the owner's `reboot on`, from the policy init read whole before, and the machine
+    restarts (QEMU exits: -no-reboot). Before 0251 init refused it, finding no policy on the disk. The log of that boot is
+    in logd's ring alone, gone with the restart: the serial line carries the kernel's word that init asked."""
+    if not raw_tools():
+        print("SKIP: reboot with the disk gone needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-gone-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-when-gone": b"1\n"}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            for _ in range(90):
+                if "[GATEWAY-STUB] WAITING FOR THE DISK TO GO" in vm.command("dmesg -s effector_gw", raw=True, timeout=60):
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(vm.command("dmesg -s effector_gw", raw=True, timeout=60)[-1500:])
+            log = vm.command("dmesg -s init", raw=True, timeout=60)
+            window = re.search(r"\[INIT\] (\S+) PARTITION 1: WINDOW \d+ FOR VFS_SERVER", log)
+            stopped = re.search(r"\[INIT\] STARTED (virtio_blk|ata|ahci|nvme) PID", log)
+            driver = window[1] if window else stopped[1] if stopped else "virtio_blk"
+            vm.collect()
+            mark = len(vm.log)
+            vm.send(f"svc stop {driver}\n")
+            asked = "MIND CORE KERNEL: init (PID 1) ASKED TO RESTART THE MACHINE"
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline and asked not in vm.log[mark:] and vm.process.poll() is None:
+                time.sleep(1)
+                vm.collect()
+            time.sleep(1)
+            vm.collect()
+            assert asked in vm.log[mark:], vm.log[-3000:]
+            assert f"{driver} stopped" in vm.log[mark:], vm.log[-3000:]
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-disk-gone-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: a reboot with the boot disk gone (801-KRN-0251): {driver} stopped under the gateway, the owner's `reboot on` "
+          "read before decided, and init restarted the machine", flush=True)
 
 
 def svc_boot_check(args):

@@ -191,6 +191,9 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               safe: bool,
               // When init last looked for a policy line naming a unit it did not start for want of one (801-KRN-0250).
               flow_looked: usize,
+              // The owner's Effector policy last read whole and parsed, and when: it decides the gateway's lifecycle
+              // requests and reboot while the file cannot be read (801-KRN-0251).
+              owner_kept: Option<(Policy, usize)>,
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
               notices: [Option<wire::Call>; UNITS],
               // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
@@ -1897,26 +1900,38 @@ impl Init {
     }
 
     // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
-    // too large or refused, which allows nothing.
-    fn effector_policy(&mut self) -> Option<Policy> {
-        let mut text = [0u8; mind::effector::policy::FILE_MAX + 1];
-        let mut length = 0;
-        let client = self.user_files().ok()?;
-        let files = Endpoint(client);
-        if let Ok(Ok(root)) = vfs::root(files, "") {
-            if let Ok(Ok(file)) = vfs::open(files, root, mind::effector::POLICY_FILE, 0) {
-                while length < text.len() {
-                    match vfs::read(files, file, length as u32, (text.len() - length) as u32, &mut text[length..]) {
-                        Ok(Ok(n)) if n > 0 => length += n,
-                        _ => break,
-                    }
-                }
-                let _ = vfs::close(files, file);
+    // too large, refused or cannot be read now, which allows nothing. One read whole and parsed is kept, and an absent or
+    // unparsable file drops it (801-KRN-0251).
+    fn effector_policy(&mut self) -> Option<Policy> { let read = self.read_effector_policy(); self.decided_by(read, false) }
+    // The same for the gateway's lifecycle requests and its reboot (801-KRN-0251): when the file cannot be read now (the
+    // boot disk gone, an I/O error, vfs_server not answering), the last one read whole and parsed decides, and the log says
+    // so. So the owner's `reboot on` still restarts a machine whose disk was taken out, and nothing the owner removed
+    // from a file that reads is allowed by an older copy.
+    fn owner_policy(&mut self) -> Option<Policy> { let read = self.read_effector_policy(); self.decided_by(read, true) }
+    fn decided_by(&mut self, read: Owner, kept: bool) -> Option<Policy> {
+        match read {
+            Owner::Policy(policy) => { self.owner_kept = Some((policy, mind::time::uptime_ms())); Some(policy) }
+            Owner::None => { self.owner_kept = None; None }
+            Owner::Unreadable if kept => {
+                let (policy, at) = self.owner_kept?;
+                mind::println!("[INIT] THE OWNER'S POLICY CANNOT BE READ NOW: THE ONE READ AT {} S DECIDES", at / 1000);
+                Some(policy)
             }
-            let _ = vfs::close(files, root);
+            Owner::Unreadable => None,
         }
+    }
+    #[inline(never)]
+    fn read_effector_policy(&mut self) -> Owner {
+        let mut text = [0u8; mind::effector::policy::FILE_MAX + 1];
+        let Ok(client) = self.user_files() else { return Owner::Unreadable };
+        let files = Endpoint(client);
+        let read = read_policy_file(files, &mut text);
         let _ = ipc::drop_cap(client);
-        Policy::parse(&text[..length]).ok()
+        match read {
+            Some(Some(length)) => Policy::parse(&text[..length]).map_or(Owner::None, Owner::Policy),
+            Some(None) => Owner::None,
+            None => Owner::Unreadable,
+        }
     }
 
     // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
@@ -1929,7 +1944,7 @@ impl Init {
         }
         if badge != mind::process::BADGE_NAMED { return true; }
         let name = unit_name(index);
-        let why = match self.effector_policy() {
+        let why = match if Self::kept(index) { None } else { self.owner_policy() } {
             _ if Self::kept(index) => Some("KEPT BY INIT"),
             None => Some("NO OWNER'S POLICY"),
             Some(policy) => match policy.decide(Ask::Service(name, action)) {
@@ -1948,7 +1963,7 @@ impl Init {
     // The gateway's named client restarts the machine only when the owner's policy says `reboot on`, read at the request.
     fn named_reboot(&mut self, sender: u64) -> bool {
         let badge = mind::process::BADGE_NAMED;
-        let why = match self.effector_policy() {
+        let why = match self.owner_policy() {
             None => Some("NO OWNER'S POLICY"),
             Some(policy) => policy.decide(Ask::Reboot).err().map(|_| "NOT IN THE OWNER'S POLICY"),
         };
@@ -2219,6 +2234,29 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 }
 
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
+// What reading data/effector/policy gave (801-KRN-0251): a policy, no policy (absent or unparsable), or no answer now.
+enum Owner { Policy(Policy), None, Unreadable }
+
+// The policy file read whole into `text` through `files`: Some(Some(length)), Some(None) when it is absent, None when the
+// volume, the file or a read fails otherwise (801-KRN-0251).
+fn read_policy_file(files: Endpoint, text: &mut [u8]) -> Option<Option<usize>> {
+    let root = match vfs::root(files, "") { Ok(Ok(root)) => root, _ => return None };
+    let opened = vfs::open(files, root, mind::effector::POLICY_FILE, 0);
+    let _ = vfs::close(files, root);
+    let file = match opened { Ok(Ok(file)) => file, Ok(Err(vfs::Error::NotFound)) => return Some(None), _ => return None };
+    let mut length = 0;
+    let mut failed = false;
+    while length < text.len() {
+        match vfs::read(files, file, length as u32, (text.len() - length) as u32, &mut text[length..]) {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => length += n,
+            _ => { failed = true; break; }
+        }
+    }
+    let _ = vfs::close(files, file);
+    (!failed).then_some(Some(length))
+}
+
 fn not_found(name: &str) -> &'static str {
     match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
 }
@@ -2401,7 +2439,7 @@ fn boot(info: &'static BootInfo) {
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, notices: [const { None }; UNITS],
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, owner_kept: None, notices: [const { None }; UNITS],
                          power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));

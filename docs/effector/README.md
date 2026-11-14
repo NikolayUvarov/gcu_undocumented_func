@@ -253,6 +253,7 @@ every request (MC-10.6).
     server takes it.
 - **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
   again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart.
+  - **With the boot disk gone** (801-KRN-0251): when the file cannot be read now, the policy `init` last read whole and parsed decides the reboot and the gateway's `service` requests, and `init` logs `THE OWNER'S POLICY CANNOT BE READ NOW: THE ONE READ AT <s> S DECIDES`. A file that reads but is absent or unparsable still allows nothing.
 - **`exec` of `health`** (no policy line: it reads only the gateway's status), the server's `health_check` (750-EFF-0022):
   - `completed` while the owner's policy is loaded and no boot service is quarantined;
   - otherwise `failed`, exit status 1, naming why.
