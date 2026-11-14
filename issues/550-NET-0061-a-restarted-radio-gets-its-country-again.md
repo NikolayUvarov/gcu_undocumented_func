@@ -1,6 +1,6 @@
 # 550-NET-0061 — A restarted radio gets its country again, and the station joins by itself
 
-**Type:** network (`wlan`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (the station's part done and checked on `wlansim`, below; the Ryzen's check waits for DRV's `rtw89_wifi` exit) · **Blocked by:** for the check on hardware, DRV's `rtw89_wifi` that exits after its data mode fails · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-7.6, MC-12.1
+**Type:** network (`wlan`) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (the station's part done and checked on `wlansim`, the check before a tune in `main` since round 133; the Ryzen's checks wait for DRV) · **Blocked by:** for the check on hardware, DRV's `rtw89_wifi` that exits after its data mode fails · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-7.6, MC-12.1
 
 **Asked by** DRV, 2026-11-08 (`NET/2026-11-08T1840Z-DRV-wlan-learns-a-restarted-radio-again.md` on `internal-dev-messages`), for the maintainer's word "everything runs first": on the Ryzen the Wi-Fi now carries the machine's own traffic, Effector's TLS included.
 
@@ -62,7 +62,10 @@
 - **`tests/qemu_smoke.py`** (`wifi_join_check`, the `net` suite): after the joined-kill check, the station leaves, `wlansim` is killed, and `wifi scan` runs as soon as the fresh one logs `READY`. Its scan lists MIND-TEST, the station names the restart and gives RU (the fresh `wlansim` logs `COUNTRY RU`), and `wifi join` joins again. The PASS line says which way the restart was found: the 10-s check may come first, as before.
 - **Tested** in the kernel session's container (Ubuntu 24.04.5, QEMU 8.2.2, OVMF, TCG), x86 `net` suite at a33d4012: passed, both 0061 checks among them; the new one found the restart before the scan's first tune.
   - **With `wlan` as on `main`** (the same tree, `wlan/src/main.rs` of a33d4012's parent): the new check failed. The scan tuned the fresh radio (`[WLAN] Scanning`, then `Off`), and in the 30 s after it nothing named the restart: the 10-s check saw the scan's channel.
-  - A QEMU run says nothing about the Ryzen's radio (MC-12.1).
+- **Run** at 68d32639 (`main` d35515e0 merged in) on the maintainer's machines (QEMU under TCG): "x86: network, TLS and Effector" on acc-1 (1464 s) and "aarch64: network, TLS and Effector" on acc-2 (1232 s) passed; on both the new check found the restart before the scan's first tune.
+  - A QEMU run says nothing about the Ryzen's radio (MC-12.1). **Left:** the gate; DRV's Ryzen run of the one-in-two case, and the data-mode failure with the cable out (the criterion).
+
+**Landed** in round 133 (`main` ae418d30, 2026-11-14): the check before a tune. Every group of the gate passed, both arches' "network, TLS and Effector" among them (acc-1 1462 s, PCU 1435 s); "x86: RAM above 4 GiB" failed once on i9 in `timed_check` (111-NET-0078) and passed on x32. **Left:** DRV's Ryzen runs: the one-in-two case of 2026-11-13, and the criterion's data-mode failure with the cable out.
 
 ## Related
 
