@@ -99,6 +99,23 @@ The maintainer (2026-11-14): «Каждая перезапись должна с
   - an unknown option is refused by name.
 - The keep and machines tests: passed.
 
+## Progress (2026-11-14, later still): the old disk may stay in
+
+**The maintainer, on the first real run** (MacBook Pro, `--old-disk 5 2`): «Почему это я должен вынимать диск?!» The script had read the old disk and kept the Mac's settings. Then it waited for disk 5 to be taken out, and showed nothing while it waited.
+
+**Why it waited:** after the write, the steps that put the settings and flags on the new disk took the first volume MIND CORE that Windows listed, and checked only that one for this build's MANIFEST. With the old disk still in, that could be the old volume, so the new one would not be found.
+
+**The fix:**
+- **The steps after the write** pick, among all volumes MIND CORE, the one holding this build's MANIFEST (`PS_FLAG`, `PS_LETTER`, `PS_LINK`).
+- **The swap** waits only until disk N is there and is another device than the old one. The old one may stay in.
+- **While it waits,** it shows the state every 15 s.
+
+**Tested:**
+- `tests/build_and_write_machines_test.sh`: all passed, with the new message.
+- The args and keep tests: passed.
+- PowerShell's parser: no errors in the four snippets.
+- **The new lookup run on this PC, read-only,** against the real old disk 5 (volume `P:`): it named `P` for that disk's `MIND\A\MANIFEST` hash, and nothing for a wrong one.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [800-LNK-0023](800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](800-LNK-0024-keep-the-owners-settings-across-a-write.md).

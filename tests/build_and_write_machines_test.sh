@@ -159,8 +159,8 @@ swap() {
 }
 DISK=4 OLD_DISK=4 MACHINE=$MAC OLD_IDENT="USBSTOR_old|SN1|16008609792" OLD_DISK_WAIT=600
 check "the old device still in, then out, then the new one: written" "$(swap old old absent "here USBSTOR_new|SN2|16008609792") $(cat "$work/polls")" "0 4"
-check "it asks for the swap, and says when the old one is out" "$(grep -c 'Take it out now, and insert the NEW disk to be written as disk 4' "$work/out") $(grep -c 'The old disk is out, and there is no disk 4 yet' "$work/out") $(grep -c 'is the new disk, another device' "$work/out")" "1 1 1"
-check "another device there at once: written with no question" "$(swap "here USBSTOR_new|SN2|16008609792") $(grep -c 'Take it out' "$work/out")" "0 0"
+check "it asks for the swap, and says when the old one is out" "$(grep -c 'Insert the NEW disk to be written as disk 4; the old one may stay in' "$work/out") $(grep -c 'The old disk is out, and there is no disk 4 yet' "$work/out") $(grep -c 'is the new disk, another device' "$work/out")" "1 1 1"
+check "another device there at once: written with no question" "$(swap "here USBSTOR_new|SN2|16008609792") $(grep -c 'Insert the NEW disk' "$work/out")" "0 0"
 OLD_DISK_WAIT=0
 check "the old device never taken out: nothing is written" "$(swap old) $(grep -c 'nothing is written' "$work/out")" "1 1"
 OLD_IDENT=""
