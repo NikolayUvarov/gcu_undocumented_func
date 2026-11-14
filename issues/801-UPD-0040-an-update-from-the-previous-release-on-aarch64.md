@@ -35,4 +35,6 @@ The maintainer's words for S4: «если обновление не может �
 ## Progress (2026-11-14)
 
 - **aarch64, in the kernel session's container** (QEMU 8.2 with TCG, 4 CPUs): `scripts/previous_release.sh aarch64` built `main` `d9753fc238` for aarch64 (16 min). The `previous` suite then ran on that tree with a shorter `TMPDIR`, because the container's own path made QMP's socket path longer than 108 bytes. It passed in 117 s: release 5 written by that tree's tools took this branch's release 6 from `data/link/rel/` (111 files) into slot B, booted it on trial and confirmed it.
-- **Left:** the group on a maintainer's machine, and the x86 group again under its tree's new name.
+- **aarch64, on acc-1** (`080a66cbc0`, `main` `40c761e670` merged, the group `aarch64: an update from the previous release`, 537 s): passed. The previous release was `main` `40c761e670`.
+- **x86, in the kernel session's container** (the same tree, `scripts/previous_release.sh x86_64`): passed. Release 5 from `mind-previous-x86_64-40c761e670…`, its updater took release 6 (117 files in `data/link/rel/`), under the tree's new name.
+- **Left:** none beyond the gate's own run.
