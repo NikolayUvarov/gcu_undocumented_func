@@ -3,8 +3,9 @@
 //! thread, `effector_memcpy_v1` over two 8 MiB buffers, `effector_pointer_chase_v1` over 16 MiB and `effector_seqio_v1`
 //! writes and reads. The session runs it a slice at a time between its heartbeats, so the agent stays online for its
 //! minute; each phase's rate counts the time its slices ran. The buffers need the session's 48 MiB quota (750-KRN-0158):
-//! a phase whose memory cannot be had is left out of the result, not failed. The parallel CPU phase needs workers the
-//! session may not start yet, so it is left out too.
+//! a phase whose memory cannot be had is left out of the result, not failed. `effector_bogomips_v1` also runs on every
+//! CPU at once (`cpu_parallel`), on the workers the session may start since 750-KRN-0159 and on the session's own
+//! thread; with none started that phase is left out.
 //! No system calls: the clock and the disk come from the caller; host-tested in tests/effector_bench_host.rs.
 use crate::json::Writer;
 use alloc::vec::Vec;
@@ -12,8 +13,8 @@ use alloc::vec::Vec;
 pub const CPU: &str = "effector_bogomips_v1";
 pub const MEMORY: &str = "effector_memcpy_v1";
 pub const DISK: &str = "effector_seqio_v1";
-const BATCH: u64 = 4096;
-const SEED: u64 = 0x6a09_e667_f3bc_c909;
+pub const BATCH: u64 = 4096;
+pub const SEED: u64 = 0x6a09_e667_f3bc_c909;
 const COPY_BYTES: usize = 8 << 20; // the Linux agent's: two buffers of it
 pub const CHASE: &str = "effector_pointer_chase_v1";
 pub const CHASE_COUNT: u32 = 4 << 20; // 16 MiB of u32 indices: the only working set the server takes
@@ -69,6 +70,25 @@ fn share(a: Cpu, b: Cpu) -> Option<(u64, u64)> {
     (total > 0).then(|| ((busy * 100_000 / total) as u64, ((busy - own) * 100_000 / total) as u64))
 }
 
+/// The workers of the parallel phase (750-EFF-0016): the caller's, since starting them is a system call.
+pub trait Parallel {
+    /// Starts the workers, which batch until `ms` from now; how many started (0: the phase is left out).
+    fn start(&mut self, ms: u64) -> u16;
+    /// Once every started worker has ended: the iterations they counted; None while one still runs.
+    fn collect(&mut self) -> Option<u64>;
+}
+
+/// No workers: the parallel phase is left out (a host, or a session that may not start them).
+pub struct NoWorkers;
+impl Parallel for NoWorkers {
+    fn start(&mut self, _: u64) -> u16 { 0 }
+    fn collect(&mut self) -> Option<u64> { Some(0) }
+}
+
+/// The parallel phase: when it began, its workers and the session's own share.
+#[derive(Clone, Copy, Debug, Default)]
+struct Par { started: u16, began_ms: u64, deadline_ms: u64, own: u64, state: u64, workers: Option<u64>, wall_ms: u64 }
+
 /// The machine's file for the disk phase.
 pub trait Disk {
     /// Writes `data` at `offset` (0 starts the file again); false if it failed.
@@ -80,7 +100,7 @@ pub trait Disk {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase { Cpu, Memory, Latency, Write, Read, Done }
+enum Phase { Cpu, Parallel, Memory, Latency, Write, Read, Done }
 
 /// Steps `from..to` of the Linux agent's single-cycle permutation (`runMemoryLatency`), from 1 and `CHASE_SEED`.
 pub fn chase_part(chase: &mut [u32], random: &mut u32, from: u32, to: u32) {
@@ -102,8 +122,10 @@ fn reserved<T>(n: usize) -> Option<Vec<T>> {
 /// The benchmark, run a slice at a time. Times are the caller's milliseconds.
 pub struct Bench {
     phase: Phase,
-    /// Each phase's length in ms: CPU duration/3, copying /12, the chase /15, disk /12 each, as the Linux agent's.
-    lengths: [u64; 5],
+    /// Each phase's length in ms: CPU duration/3, every CPU /3, copying /12, the chase /15, disk /12 each, as the Linux
+    /// agent's.
+    lengths: [u64; 6],
+    par: Option<Par>,
     ran_ms: u64,
     started_ms: Option<u64>,
     finished_ms: u64,
@@ -132,7 +154,7 @@ impl Bench {
     pub fn new(duration_s: u64) -> Self {
         let d = duration_s.clamp(1, 300) * 1000;
         Self {
-            phase: Phase::Cpu, lengths: [d / 3, d / 12, d / 15, d / 12, d / 12], ran_ms: 0, started_ms: None, finished_ms: 0,
+            phase: Phase::Cpu, lengths: [d / 3, d / 3, d / 12, d / 15, d / 12, d / 12], par: None, ran_ms: 0, started_ms: None, finished_ms: 0,
             state: SEED, iterations: 0, cpu_ms: 0, copy: None, copied: 0, copy_ms: 0,
             chase: Vec::new(), built: 1, random: CHASE_SEED, index: 0, accesses: 0, chase_ms: 0,
             piece: Vec::new(), written: 0, write_ms: 0, read: 0, read_ms: 0, disk_failed: false,
@@ -143,17 +165,40 @@ impl Bench {
 
     fn next(&mut self) {
         self.ran_ms = 0;
-        self.phase = match self.phase { Phase::Cpu => Phase::Memory, Phase::Memory => Phase::Latency, Phase::Latency => Phase::Write, Phase::Write => Phase::Read, _ => Phase::Done };
+        self.phase = match self.phase { Phase::Cpu => Phase::Parallel, Phase::Parallel => Phase::Memory, Phase::Memory => Phase::Latency, Phase::Latency => Phase::Write, Phase::Write => Phase::Read, _ => Phase::Done };
         if self.phase == Phase::Read && self.disk_failed { self.phase = Phase::Done; }
     }
 
     /// Runs until `now()` passes `slice_ms` from the call; true once the benchmark is done.
-    pub fn step(&mut self, now: &mut dyn FnMut() -> u64, slice_ms: u64, disk: &mut dyn Disk) -> bool {
+    pub fn step(&mut self, now: &mut dyn FnMut() -> u64, slice_ms: u64, disk: &mut dyn Disk, workers: &mut dyn Parallel) -> bool {
         let start = now();
         self.started_ms.get_or_insert(start);
         let until = start + slice_ms;
         while self.phase != Phase::Done {
             let length = self.lengths[self.phase as usize];
+            // Every CPU at once: the workers start once, and the phase ends by the wall clock, as the Linux agent's
+            // goroutines share one deadline; it is over once they have all ended (total work over wall time).
+            if self.phase == Phase::Parallel {
+                if self.par.is_none() {
+                    let started = workers.start(length);
+                    if started == 0 { self.next(); continue; }
+                    let t = now();
+                    self.par = Some(Par { started, began_ms: t, deadline_ms: t + length, state: SEED, ..Par::default() });
+                }
+                let par = self.par.as_mut().unwrap();
+                if now() >= par.deadline_ms {
+                    match workers.collect() {
+                        Some(counted) => { par.workers = Some(counted); par.wall_ms = now().saturating_sub(par.began_ms).max(1); self.next(); continue; }
+                        // A worker that never ends leaves the phase out after 10 s past its deadline.
+                        None if now() > par.deadline_ms + 10_000 => { self.next(); continue; }
+                        None => break,
+                    }
+                }
+                let end = until.min(par.deadline_ms);
+                while now() < end { par.state = batch(par.state); par.own += BATCH; }
+                if now() >= until { break; }
+                continue;
+            }
             let left = length.saturating_sub(self.ran_ms);
             if left == 0 { self.leave(disk); self.next(); continue; }
             if !self.prepare(now, until) {
@@ -166,7 +211,7 @@ impl Bench {
             self.work(now, end, disk);
             let spent = now().saturating_sub(began).max(1);
             self.ran_ms += spent;
-            match self.phase { Phase::Cpu => self.cpu_ms += spent, Phase::Memory => self.copy_ms += spent, Phase::Latency => self.chase_ms += spent, Phase::Write => self.write_ms += spent, Phase::Read => self.read_ms += spent, Phase::Done => {} }
+            match self.phase { Phase::Cpu => self.cpu_ms += spent, Phase::Memory => self.copy_ms += spent, Phase::Latency => self.chase_ms += spent, Phase::Write => self.write_ms += spent, Phase::Read => self.read_ms += spent, Phase::Parallel | Phase::Done => {} }
             if now() >= until { break; }
         }
         if self.phase == Phase::Done && self.finished_ms == 0 { self.finished_ms = now().max(1); }
@@ -232,7 +277,7 @@ impl Bench {
                     self.read += n as u64;
                 }
             }
-            Phase::Done => {}
+            Phase::Parallel | Phase::Done => {}
         }
     }
 
@@ -272,6 +317,18 @@ impl Bench {
         w.field_str("architecture", arch)?;
         w.field_str("agent_version", version)?;
         w.field_decimal("total_duration_seconds", self.finished_ms.saturating_sub(self.started_ms.unwrap_or(0)))?;
+        // Every CPU at once: the workers' and the session's batches over the phase's wall time.
+        if let Some(Par { started, workers: Some(counted), wall_ms, own, .. }) = self.par {
+            let total = counted.saturating_add(own);
+            w.key("cpu_parallel")?;
+            w.object()?;
+            w.field_str("benchmark", CPU)?;
+            w.field_decimal("bogomips", (per_s(total as u128, wall_ms) / 1_000_000).max(1))?;
+            w.field_u64("worker_threads", (started as u64 + 1).min(logical.max(1) as u64))?;
+            w.field_u64("iterations", total.max(1))?;
+            w.field_decimal("duration_seconds", wall_ms)?;
+            w.end()?;
+        }
         if self.copied > 0 {
             w.field_str("memory_benchmark", MEMORY)?;
             w.field_decimal("memory_mib_per_second", (per_s(self.copied as u128, self.copy_ms) >> 20).max(1))?;

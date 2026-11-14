@@ -13075,6 +13075,28 @@ def effector_suite(args, disk):
         assert len(server.beats) > beats_then, "the agent is back once the server is"
         print("PASS: the server out of reach for 75 s: after 40 s with no answer the agent ended itself, init started it "
               "again with a new grant, not quarantined, and its heartbeats came back with the server", flush=True)
+        # 750-EFF-0006 with 750-KRN-0194: stopped by init, the agent hears its stop notice on a worker, sends its last
+        # heartbeat, shutting_down, and ends within the notice; started again, it is back.
+        require(session(), "EFFECTOR: init'S STOP NOTICE AWAITED (WORKER PID=")
+        beats_then = len(server.beats)
+        require(vm.command("svc stop effector"), "effector")
+        init_log = ""
+        deadline = time.monotonic() + 30
+        while "effector ENDED WITHIN THE NOTICE" not in init_log and time.monotonic() < deadline:
+            time.sleep(1)
+            init_log = vm.command("dmesg -s init", raw=True)
+        require(init_log, "[INIT] STOP NOTICE TO effector")
+        require(init_log, "[INIT] effector ENDED WITHIN THE NOTICE")
+        assert any(b.get("agent_id") == agent and b.get("system_state") == "shutting_down" for b in list(server.beats)[beats_then:]), \
+            [b.get("system_state") for b in list(server.beats)[beats_then:]]
+        starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
+        require(vm.command("svc start effector"), "effector")
+        deadline = time.monotonic() + 60
+        while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
+            time.sleep(1)
+        until("EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", 60)
+        print("PASS: stopped by init, the agent heard the stop notice on its worker, sent shutting_down and ended within "
+              "the notice; started again, it is back", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
@@ -13343,7 +13365,12 @@ def effector_actions_check(vm, server, agent, until, beats):
     assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
     assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
     assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
-    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r, r
+    assert 0 < r["total_duration_seconds"] <= 360, r
+    # Every CPU at once (750-EFF-0016 with 750-KRN-0159): workers and the session, as many as the CPUs, at most.
+    if r["logical_processors"] >= 2:
+        p = r["cpu_parallel"]
+        assert p["benchmark"] == "effector_bogomips_v1" and 2 <= p["worker_threads"] <= r["logical_processors"], p
+        assert p["iterations"] > 0 and 0 < p["duration_seconds"] <= 300 and p["bogomips"] > 0, p
     # The chase over exactly 16 MiB, in the session's 48 MiB quota (750-KRN-0158), as the server's check wants it.
     m = r["memory_latency"]
     assert m["benchmark"] == "effector_pointer_chase_v1" and m["working_set_bytes"] == 16 << 20 and m["accesses"] > 0, m

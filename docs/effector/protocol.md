@@ -51,7 +51,7 @@ Everything 1.1 did stays.
   and `effector_seqio_v1`, run a slice at a time between heartbeats; the result carries the fields the server's
   `AcceptPerformance` checks. The copy moves two 8 MiB buffers and `memory_latency` chases
   `effector_pointer_chase_v1` over exactly 16 MiB, as on Linux, in the session's 48 MiB quota (750-KRN-0158); a phase
-  whose memory cannot be had is left out. No `cpu_parallel` yet: the session may not start workers. `load` gives the
+  whose memory cannot be had is left out. `cpu_parallel` runs the batch on every CPU at once, on the session's workers (750-KRN-0159) and its own thread, and reports them as `worker_threads`, at most the logical processors; without workers it is left out. `load` gives the
   conditions: a baseline second's busy share, the run's, and the run's less the agent's own, from the gateway's counters.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
@@ -59,6 +59,7 @@ Everything 1.1 did stays.
 - **The machine's name (750-EFF-0018, `effector.wit` 1.6).** The heartbeat's `hostname` is the machine's name as `sysmon` answers it (`hostname <name>` in the shell), read again with each telemetry sample. With none set, it is `effector.conf`'s `hostname`, or the machine's own (750-EFF-0017).
 - **Time by the server (801-EFF-0027).** The agent keeps the offset of each answer's `Date` from its own clock, and judges a command's term, the ACK's retries and the journal by the server's time. An RTC in local time, or one hours or years off, then runs every command. The heartbeat's `agent_time` stays the device's own.
 - **The trial's word (801-EFF-0031).** The agent tells `init` how far it got: `started`, `no-network`, `no-tls`, `refused`, then `accepted` on the first heartbeat the server accepts, which confirms a trial boot (801-KRN-0242).
+- **The last heartbeat when `init` stops it (750-EFF-0006).** A worker of the session waits for `init`'s stop notice (`init.wit` 1.12). On it, the session sends one heartbeat with `system_state` `shutting_down`, and ends within the notice's 2 s.
 - **The agent stays reachable (801-EFF-0028).**
   - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it a new flow grant, so one whose term or volume ran out does not lose the server, and new clients of `tls` and `parse`. It does not end while a measurement runs or the machine restarts on purpose.
   - Meanwhile the gateway's mark stays grey on the screen. The log says each try and why, and `THE SERVER ANSWERS AGAIN, AFTER N S` once it does.

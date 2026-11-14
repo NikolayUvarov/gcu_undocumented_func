@@ -13,6 +13,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
+mod workers;
 use effector::session::{self, Accepted, Artifact, Outcome, Session, Time};
 use effector::{bench, config, journal, telemetry, update, wire};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_LIFECYCLE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
@@ -254,6 +255,7 @@ struct Agent {
     restart_at: Option<usize>, // a restart the gateway admitted: once its answer is sent, the last heartbeat (750-EFF-0006)
     answered_at: usize, // when the server last answered, whatever the status (801-EFF-0028)
     step: Option<init::AgentStep>, // what init was last told of the way to the server (801-EFF-0031)
+    pool: Box<workers::Pool>, // the session's workers: the benchmark's on every CPU, and init's stop notice
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
@@ -639,6 +641,7 @@ impl Agent {
     /// `performance_measure` begun (750-EFF-0016): the server's `duration_seconds`, else 60.
     fn start_bench(&mut self, id: &str, agent_id: &str, action: &str, program: &str, payload: &str, expires_unix: Option<u64>) {
         let duration = self.parsed(payload.as_bytes(), wire::duration_seconds).ok().flatten().unwrap_or(60);
+        self.pool.cpus = self.last.as_ref().map_or(1, |c| c.cpus);
         let file = File::open_mode(&self.path("bench"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).ok();
         self.running = Some(Box::new(Running {
             id: String::from(id), agent_id: String::from(agent_id), action: String::from(action), program: String::from(program),
@@ -660,7 +663,7 @@ impl Agent {
             r.sample_at = now() + 1000;
         }
         let mut clock = || now() as u64;
-        let done = r.bench.step(&mut clock, BENCH_SLICE_MS, &mut BenchFile(&mut r.file));
+        let done = r.bench.step(&mut clock, BENCH_SLICE_MS, &mut BenchFile(&mut r.file), &mut *self.pool);
         if !done { return; }
         let mut r = self.running.take().unwrap();
         if let Some(c) = cpu_now() { r.conditions.sample(c); }
@@ -1189,7 +1192,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
-        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None });
+        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()) });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1250,9 +1253,13 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // A worker of the session's (750-KRN-0159): the benchmark's batch on another CPU, or init's stop notice.
+    if let Some((index, argument)) = mind::process::worker() { return workers::run(index, argument); }
     mind::about!("effector — the Effector agent's session (750-EFF-0006): heartbeat, poll, the gateway's actions and telemetry with a pinned Effector server.\nUsage: effector data/effector/effector.conf [--for SECONDS]");
     let (mut agent, mut session, run_for) = start();
     agent.tell_init(init::AgentStep::Started, "");
+    // init's stop notice, awaited on a worker of its own: the session's loop never blocks (750-EFF-0006).
+    if SERVICE.load(core::sync::atomic::Ordering::Relaxed) { agent.pool.start_notice(); }
     let started = now();
     let mut stopped_at = None;
     loop {
@@ -1262,6 +1269,12 @@ fn main(_info: &'static BootInfo) {
             if now() >= started + limit * 1000 { session.stop(ms); stopped_at = Some(now()); mind::println!("EFFECTOR: STOPPING"); }
         }
         if session.shutdown_done() || stopped_at.is_some_and(|s| now() > s + 10_000) { break; }
+        // init's stop notice (750-KRN-0194): one last heartbeat, at once, and the end within the notice's 2 s (750-EFF-0006).
+        if let workers::Event::Stop(reason) = agent.pool.poll() {
+            let outcome = agent.heartbeat(true, None);
+            mind::println!("EFFECTOR: init STOPS IT ({:?}): SHUTTING_DOWN SENT ({:?}), ENDING", reason, outcome);
+            mind::process::exit_with(0);
+        }
         // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
         if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }
         let quiet = now() < agent.quiet_until;
