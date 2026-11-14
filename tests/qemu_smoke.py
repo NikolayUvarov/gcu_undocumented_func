@@ -13116,10 +13116,12 @@ def effector_suite(args, disk):
               "aside", flush=True)
         # 801-EFF-0027 with NET's 801-NET-0081: the clock at 2000-01-01, as after a flat battery. The pinned server is
         # reached, its certificate's start logged and not enforced, and a command with a term is run.
+        # The disk is served as a snapshot: the planted identity is taken away, so the owner's agent ID stands again.
         vm.close()
+        shutil.rmtree(kept)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2000-01-01T00:00:00", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
-        until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector", 120)
-        old_id = server.queue(new[1], "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
+        until(f"EFFECTOR: AGENT {agent} TO 10.0.2.2/effector", 120)
+        old_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
         until(f"EFFECTOR: ACK {old_id} completed WITH ITS RESULT ACCEPTED", 180)
         require(vm.command("dmesg -s tls", raw=True), "NOT ENFORCED, THE PIN BINDS THE KEY")
         print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command "
