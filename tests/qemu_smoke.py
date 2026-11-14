@@ -1258,9 +1258,9 @@ def normal_suite(vm):
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
     # 213-KRN-0122: QEMU's DSDT and SSDTs name none of the SAR objects, read whole and checked. Without ACPI (a device
-    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, and a radio sends nothing.
+    # tree, 100000-PRT-0009) there is no DSDT to read: the policy is unknown, a finding held back (801-KRN-0243).
     if "acpi=off" in (getattr(vm.args, "machine", None) or ""):
-        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): A RADIO SENDS NOTHING")
+        require(log, "[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN (no-dsdt): HELD BACK, NOT ENFORCED; ONLY rtw89_wifi IS GIVEN THE WORD")
         # 100000-KRN-0171: U-Boot's tree keeps the PL031 enabled, and rtc gets it through its node.
         if getattr(vm.args, "uboot", None):
             assert re.search(r"\[INIT\] PLATFORM NODES: \d+; CONSOLE \d+, RTC \d+, PL061 \d+", log), log[-1500:]
