@@ -117,6 +117,7 @@ A64_GROUPS=(
     "aarch64: the updater and the modes|$A64 --suites updater,modes,bootkeys"
     "aarch64: an update through the link|$A64 --suites linkupdate"
     "aarch64: the cable with no words|$A64 --suites cable"
+    "aarch64: an update from the previous release|scripts/previous_release.sh aarch64"
     "aarch64: the link|$A64 --suites link"
     # At EL2 as well (100004-PRT-0014): AAVMF starts the loader there when the guest has it, with the GICv3 system registers.
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,fill --machine virt,gic-version=3,highmem=on,virtualization=on --memory 6G"
