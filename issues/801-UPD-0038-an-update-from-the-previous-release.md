@@ -36,3 +36,11 @@
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.md), 351-UPD-0026, 351-KRN-0141.
+
+## Progress (2026-11-14)
+
+- **x86, on i9** (`4db07a2082`, the group `x86: an update from the previous release`, 651 s): passed.
+  - The previous release was `main` `d9753fc2`, built in its own worktree.
+  - Its own tools signed and published it as release 5 and wrote the disk.
+  - Its updater took the branch's release 6 (117 files in `data/link/rel/`) into slot B, booted it on trial and confirmed it.
+- **The profile** (Article 9) names the check and what it does not cover.
