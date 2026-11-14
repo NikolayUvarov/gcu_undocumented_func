@@ -32,7 +32,7 @@ pub fn explain(e: Error) -> String {
         Error::Protocol => "the other end answered out of protocol".into(),
         Error::Refused(c) => format!("refused: {} (code {c})", match c {
             code::NOT_FOUND => "no such file, directory or run",
-            code::DENIED => "not allowed (a bad name, or on MIND Core a program without \"run\" in link.conf, keys without \"dev\" and init's input capability)",
+            code::DENIED => "not allowed (a bad name, or on MIND Core no client from init for it: the shell's, the lifecycle client, the input capability; its log names the one missing)",
             code::IO => "the other end's storage failed",
             code::MISMATCH => "SHA-256 does not match",
             code::BAD_REQUEST => "the other end did not take the request",
@@ -429,7 +429,7 @@ fn execute(c: &mut Client<BusLine>, state: &Shared, id: &str, kind: &str, p: &Va
                 for frame in group.chunks(max) {
                     let posted = match c.input(frame) {
                         Err(Error::Refused(code::DENIED)) => {
-                            with(state, id, |op| op.fail("the other end takes no keys: MIND Core needs dev in link.conf and init's input capability for link (800-LNK-0032)"));
+                            with(state, id, |op| op.fail("the other end takes no keys: MIND Core needs init's input capability for link (800-LNK-0032)"));
                             return Ok(());
                         }
                         r => r? as usize,
