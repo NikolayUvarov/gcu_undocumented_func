@@ -9599,7 +9599,10 @@ def install_suite(args, stub_elf):
     for name in size:
         shutil.copyfile(bundles / name, gateway / name)
     (gateway / "install.txt").write_text("".join(f"{line.split()[0]} {sha[line.split()[0]]} {' '.join(line.split()[1:])}\n" for line in listed))
+    # No server for the agent: the trial is not held for its word (801-KRN-0242); the gateway's stand-in is what is tested.
     for name, data in {**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"}.items():
+        if name == "data/effector/effector.conf":
+            continue
         (layout / name).parent.mkdir(parents=True, exist_ok=True)
         (layout / name).write_bytes(data)
     # Room for both slots, the bundles and the one being staged.
@@ -17414,8 +17417,8 @@ def bar_move_check(args, disk):
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
-    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the kernel restarts the
-    machine at the deadline, and the next boot falls back to slot A."""
+    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the machine restarts (the
+    updater asks, or the kernel at the deadline), and the next boot falls back to slot A."""
     with tempfile.TemporaryDirectory(prefix="mind-trial-") as temp:
         temp = Path(temp)
         volume = temp / "volume"
@@ -17445,21 +17448,48 @@ def trial_check(args, disk):
             vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
             try:
                 require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
-                # init's verdict may come after the shell's prompt; `logs` drains, so the readings add up.
-                verdict = ""
-                for _ in range(60):
-                    verdict += vm.command("logs 1", raw=True)
-                    if "[INIT] TRIAL BOOT" in verdict:
-                        break
-                    time.sleep(.25)
-                require(verdict, "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
-                vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
-                out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
+                # 801-UPD-0037: the updater asks for the restart once init refused the trial, so it may come before the
+                # kernel's deadline; either way the next boot falls back to slot A.
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=150)
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+                assert "init (PID 1) ASKED TO RESTART THE MACHINE" in out or "THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING" in out, out[-3000:]
             finally:
                 vm.close()
+        # 801-KRN-0242, 801-UPD-0037: the development mode on and a server configured, but an agent that cannot read its
+        # configuration. init lifts the kernel's deadline, holds the trial for the server's word, and refuses it once the
+        # agent is quarantined; the updater keeps the reason, spends the trial's second try and asks for the restart, so
+        # the next boot is slot A's, which says why.
+        volume = temp / "agent"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+            (volume / name).parent.mkdir(parents=True, exist_ok=True)
+            (volume / name).write_bytes(data)
+        image = boot_slots.Image.create(temp / "agent.img", boot_slots.layout(volume, temp / "agent-slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "agent-slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=2)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+            assert "WAS NOT CONFIRMED IN 15 S" not in out and out.count("BOOT: SLOT B LOADED ON TRIAL") == 0, out[-3000:]
+            require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("updater", "A TRIAL REFUSED BEFORE")
+            require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+            require(log, "in slot B, falling back to slot A; THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED")
+        finally:
+            vm.close()
+        refused = (image.read("system/updater/refused") or b"").decode()
+        # This image has no log volume, so the trial's log is `none`; one with it names `log:bootNNNN.log`.
+        assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog (none|log:boot\d{4}\.log)\n", refused), refused
+        chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+        assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts at the deadline, and the next boot falls back to slot A", flush=True)
+          "restarts, and the next boot falls back to slot A; one held for the Effector server whose agent "
+          "is quarantined is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 
 def loader_error(vm, name, reason):
