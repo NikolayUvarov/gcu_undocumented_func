@@ -1,6 +1,6 @@
-# 000-KRN-0241 — The watchdog suite reads the shell's safe-start notice across a kernel line
+# 000-KRN-0241 — The watchdog suite reads the shell's safe-start notice across a kernel line — done
 
-**Type:** kernel track (a test of the gate, `tests/qemu_smoke.py`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (made and run on the machines; the gate left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** kernel track (a test of the gate, `tests/qemu_smoke.py`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -28,6 +28,12 @@ The kernel and the shell share COM1. Other suites already read again a line that
 - **Run** at 5085be75 (`main` d35515e0 merged in) on the maintainer's machines (QEMU under TCG): "x86: the watchdog" on x32-128 passed (130 s). That run had no kernel line inside the notice; the expression's case is the one above.
 - **Left:** the gate.
 
+## Resolution
+
+`watchdog_suite` (`tests/qemu_smoke.py`) takes every `MIND CORE KERNEL: …` line, with its newline, out of what the serial line gave before it looks for the shell's safe-start notice. A kernel line landing inside the notice, as ACPI's did inside `tts` in round 132's gate on x32, no longer hides a service.
+- **Checked:** the expression on round 132's text and on a notice with no kernel line; "x86: the watchdog" on x32-128 (130 s); round 133's gate (`land-r133`, green).
+- **Landed** in round 133 (`main` ae418d30, 2026-11-14).
+
 ## Related
 
-[000-KRN-0136](../issues-done/000-KRN-0136-the-update-suite-waits-for-the-whole-confirmation.done), `watchdog_suite` in `tests/qemu_smoke.py`.
+[000-KRN-0136](000-KRN-0136-the-update-suite-waits-for-the-whole-confirmation.done), `watchdog_suite` in `tests/qemu_smoke.py`.
