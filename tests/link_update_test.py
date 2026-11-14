@@ -82,6 +82,51 @@ def test_follow():
     assert line == "5.170 [UPDATER] SLOT A CONFIRMED ON THE DISK" and said.count("5.170 [UPDATER] RECORD") == 1, (line, said)
 
 
+class Recorded:
+    """A link that answers `log` with `text` and records what is put."""
+    def __init__(self, text):
+        self.text, self.puts = text, []
+
+    def log(self):
+        return self.text
+
+    def put(self, path, name):
+        self.puts.append(name)
+
+
+def test_an_updater_with_no_source_is_refused_before_any_put():
+    # 801-LNK-0044: the old updater with no update.txt takes nothing from data/link/rel/, so nothing is put.
+    old = "1.200 [UPDATER] NO update.txt: IT ACTS ONLY WHEN ASKED, AND HAS NO SOURCE\n"
+    assert "update the updater first" in lu.sourceless(old)
+    link = Recorded(old)
+    try:
+        lu.update(link, "/nowhere", b"mind-manifest 1\n", "x86_64", 7, 1, say=lambda line: None)
+        raise AssertionError("not refused")
+    except RuntimeError as e:
+        assert "has no source" in str(e), e
+    assert link.puts == [], link.puts
+    # One that names the directory, or that read update.txt, goes on.
+    assert lu.sourceless(old + "1.300 [UPDATER] SOURCE data/link/rel: THE CABLE'S RELEASES\n") is None
+    assert lu.sourceless("1.200 [UPDATER] SLOT A, VERSION 5\n") is None
+    assert lu.sourceless(None) is None
+
+
+def test_the_channel_named_is_put_last():
+    import tempfile
+    with tempfile.TemporaryDirectory() as server:
+        root = pathlib.Path(server)
+        for name in ("keys/current", "channels/beta", "timestamps/beta"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes(b"x")
+        link = Recorded("")
+        # The source check, the log before the channel, then the confirmation at the follower's first read.
+        reads = iter(["1.000 boot\n", "1.000 boot\n", "1.000 boot\n2.000 [UPDATER] SLOT B CONFIRMED ON THE DISK\n"])
+        link.log = lambda: next(reads)
+        line = lu.update(link, root, b"mind-manifest 1\n", "x86_64", 7, 5, say=lambda line: None, channel="beta")
+        assert line.startswith("2.000 [UPDATER] SLOT B CONFIRMED"), line
+        assert link.puts[-2:] == ["channels/beta", "timestamps/beta"], link.puts
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):
