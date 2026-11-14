@@ -99,8 +99,10 @@ fn every_channel_is_tuned_passively_before_a_country() { serve(true, Vec::new(),
     let first = info(id);
     assert_eq!(first.channels.as_slice(), &(1..=13).collect::<Vec<u8>>()[..]);
     assert_eq!(first.supported.as_slice(), &(1..=13).collect::<Vec<u8>>()[..]);
-    assert_eq!((first.channel, first.bands, first.frame_max), (1, 5, 2346));
+    // Listening on channel 1, but no channel set by the client yet: 0, as a restarted radio says (550-NET-0061).
+    assert_eq!((first.channel, first.bands, first.frame_max), (0, 5, 2346));
     let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 1);
     assert!(service.take_ask().is_none());
     // Channel 6: answered after the tune the serving loop runs, which sets the RF channel field.
     let id = ipc::words(2, 6); step(service, phy, events); assert!(ipc::response(id).is_none());
