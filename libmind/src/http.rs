@@ -12,7 +12,7 @@
 //! head is still the parser's, chunk-size lines and trailers are bounded and not interpreted.
 //!
 //! For API clients (000-NET-0047): a head also says the body's content coding, its media type, a redirect's `Location`
-//! and `Retry-After`; `redirect` applies the redirect rules (the caller follows, within its own flow grant); a request
+//! and `Retry-After`, and the server's `Date` (801-NET-0080); `redirect` applies the redirect rules (the caller follows, within its own flow grant); a request
 //! body of unknown length is sent chunked. Decoding a coded body, multipart bodies and Server-Sent Events are in
 //! `http_coding`, `multipart` and `sse`.
 
@@ -67,12 +67,14 @@ pub struct Head {
     pub location: Field<LOCATION_MAX>,
     /// `Retry-After`, when it is there and valid.
     pub retry_after: Option<RetryAfter>,
+    /// `Date`, the server's time as seconds since 1970-01-01 00:00:00 UTC, when it is there and valid (801-NET-0080).
+    pub date: Option<u64>,
 }
 
 impl Head {
     /// A head with only a status: no length, range, coding, type, location or retry.
     pub const fn status(status: u16) -> Self {
-        Head { status, length: None, range: None, chunked: false, close: false, encoding: Encoding::Identity, media: Field::EMPTY, location: Field::EMPTY, retry_after: None }
+        Head { status, length: None, range: None, chunked: false, close: false, encoding: Encoding::Identity, media: Field::EMPTY, location: Field::EMPTY, retry_after: None, date: None }
     }
 }
 
@@ -203,7 +205,7 @@ pub fn parse_head(head: &[u8]) -> Result<Head, Error> {
     let version = words.next().filter(|v| *v == "HTTP/1.1" || *v == "HTTP/1.0").ok_or(Error::Head)?;
     let status = words.next().and_then(|c| (c.len() == 3).then(|| c.parse::<u16>().ok()).flatten()).ok_or(Error::Head)?;
     let (mut length, mut range, mut chunked) = (None, None, false);
-    let (mut encoding, mut media, mut location, mut retry_after) = (Encoding::Identity, Field::EMPTY, Field::EMPTY, None);
+    let (mut encoding, mut media, mut location, mut retry_after, mut date) = (Encoding::Identity, Field::EMPTY, Field::EMPTY, None, None);
     // HTTP/1.0 closes unless it says keep-alive; HTTP/1.1 keeps the connection unless it says close.
     let (mut close, mut keep) = (false, false);
     for line in lines {
@@ -217,13 +219,15 @@ pub fn parse_head(head: &[u8]) -> Result<Head, Error> {
         else if name.eq_ignore_ascii_case("location") { location = Field::new(value).ok_or(Error::Head)?; }
         // An invalid `Retry-After` is ignored, as RFC 9110 says of a field a recipient cannot use.
         else if name.eq_ignore_ascii_case("retry-after") { retry_after = number(value).map(RetryAfter::Seconds).or_else(|| http_date(value).map(RetryAfter::Date)); }
+        // So is an invalid `Date` (801-NET-0080).
+        else if name.eq_ignore_ascii_case("date") { date = http_date(value); }
         else if name.eq_ignore_ascii_case("connection") {
             for token in value.split(',').map(str::trim) {
                 if token.eq_ignore_ascii_case("close") { close = true; } else if token.eq_ignore_ascii_case("keep-alive") { keep = true; }
             }
         }
     }
-    Ok(Head { status, length, range, chunked, close: close || (version == "HTTP/1.0" && !keep), encoding, media, location, retry_after })
+    Ok(Head { status, length, range, chunked, close: close || (version == "HTTP/1.0" && !keep), encoding, media, location, retry_after, date })
 }
 
 // One coding, or none; `x-gzip` is gzip (RFC 9110 8.4.1.3).
