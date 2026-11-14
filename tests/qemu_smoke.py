@@ -222,10 +222,11 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one,
+        # and the first live row is the service: its workers (750-KRN-0159), listed after it under its name, never hide it.
         found, live = {}, set()
         for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
-            if name in SERVICES and (state != "EXITED" or name not in live):
+            if name in SERVICES and name not in live:
                 found[name] = int(pid)
                 if state != "EXITED":
                     live.add(name)
@@ -13256,7 +13257,20 @@ def effector_suite(args, disk):
                 break
             time.sleep(1)
         restarted = "THE JOURNAL WAS NOT WRITTEN" in session()
+        # The gateway's first audit line after the restart is not written: that request is refused `audit`, nothing done
+        # without its record, and the gateway ends for new clients; the next is done.
         after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline and not (server.operation(after) or {}).get("status"):
+            time.sleep(1)
+        if (server.operation(after) or {}).get("result", {}).get("error") == "audit":
+            line = "[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN; vfs_server STARTED AGAIN"
+            for _ in range(30):
+                if line in vm.command("dmesg -s effector_gw", raw=True):
+                    break
+                time.sleep(1)
+            require(vm.command("dmesg -s effector_gw", raw=True), line)
+            after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
         until(f"EFFECTOR: ACK {after} completed WITH ring.log", 180)
         print(f"PASS: vfs_server restarted under the agent: {'its journal not written, it ended and init started it again' if restarted else 'its journal written as before'}; "
               "a log collected through the gateway's audit after it", flush=True)
