@@ -17638,9 +17638,10 @@ def trial_check(args, disk):
             finally:
                 vm.close()
         # 801-KRN-0242, 801-UPD-0037: the development mode on and a server configured, but an agent that cannot read its
-        # configuration. init lifts the kernel's deadline, holds the trial for the server's word, and refuses it once the
-        # agent is quarantined; the updater keeps the reason, spends the trial's second try and asks for the restart, so
-        # the next boot is slot A's, which says why.
+        # configuration, so it never connects. Since 801-EFF-0028 it waits 31 s before it ends and is never quarantined,
+        # so init lifts the kernel's deadline, holds the trial for the server's word for the whole bound (600 s), and then
+        # refuses it; the updater keeps the reason, spends the trial's second try and asks for the restart, so the next
+        # boot is slot A's, which says why.
         volume = temp / "agent"
         shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
         (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
@@ -17655,24 +17656,24 @@ def trial_check(args, disk):
         vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
         try:
             vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
-            out = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=600 + 300)
             assert "WAS NOT CONFIRMED IN 15 S" not in out and out.count("BOOT: SLOT B LOADED ON TRIAL") == 0, out[-3000:]
             require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
             vm.expect("MIND> ", timeout=120)
             log = vm.service_logs("updater", "A TRIAL REFUSED BEFORE")
             require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
-            require(log, "in slot B, falling back to slot A; THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED")
+            require(log, "in slot B, falling back to slot A; NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING")
         finally:
             vm.close()
         refused = (image.read("system/updater/refused") or b"").decode()
         # This image has no log volume, so the trial's log is `none`; one with it names `log:bootNNNN.log`.
-        assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog (none|log:boot\d{4}\.log)\n", refused), refused
+        assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING\nlog (none|log:boot\d{4}\.log)\n", refused), refused
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
           "restarts, and the next boot falls back to slot A; on the trial, keystore took a key for that boot alone and left "
-          "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent is quarantined "
-          "is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
+          "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent never connects "
+          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 
 def loader_error(vm, name, reason):
