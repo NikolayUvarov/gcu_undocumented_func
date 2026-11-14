@@ -2,10 +2,31 @@
 // this service open: sealed by the TPM where the machine has one (351-NET-0006), so the blob opens only in that TPM;
 // else the seed itself, unencrypted (351-NET-0005), whoever has the disk reads it (docs/profile/threat-model.md), until
 // the owner sets a passphrase: then sealed under it instead (lock.rs, 308-NET-0055).
+use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use mind::fs::{self, File};
 use mind::idl::tpm;
 use mind::ipc::Endpoint;
 use mind::sha256;
+
+// A trial boot (801-NET-0079, S3): nothing the previous slot needs is replaced, set aside or removed until it is confirmed.
+static TRIAL: AtomicBool = AtomicBool::new(false);
+
+pub fn set_trial(trial: bool) { TRIAL.store(trial, Relaxed); }
+
+pub fn trial() -> bool { TRIAL.load(Relaxed) }
+
+/// Moves a file that does not open aside, to `<path>.before` (one set aside before goes), never on a trial boot: a key
+/// or the networks under it are never written over (801-NET-0079). Whether it was moved.
+pub fn set_aside(path: &str) -> bool {
+    if trial() { mind::println!("[KEYSTORE] {} KEPT AS IT IS: THE BOOT IS ON TRIAL", path); return false; }
+    let mut to = alloc::string::String::from(path);
+    to.push_str(".before");
+    let replaced = fs::remove(to.as_str()).is_ok();
+    let moved = fs::rename(path, to.as_str()).is_ok() && flush();
+    mind::println!("[KEYSTORE] {} {}{}", path, if moved { "SET ASIDE AS " } else { "NOT SET ASIDE, SO NOTHING IS WRITTEN IN ITS PLACE: " }, if moved { to.as_str() } else { "THE RENAME FAILED" });
+    if moved && replaced { mind::println!("[KEYSTORE] {} REPLACED: IT WAS SET ASIDE UNDER A KEY OLDER STILL", to); }
+    moved
+}
 
 pub const DIR: &str = "system/keystore";
 pub const FILE: &str = "system/keystore/device.key";
@@ -94,6 +115,7 @@ pub fn flush() -> bool { fs::Dir::open(DIR).and_then(|dir| dir.flush()).is_ok() 
 /// Removes the unencrypted copy, once the key is sealed: zeroed and flushed first, so its clusters do not keep the seed
 /// (a flash medium's own remapping may still), then removed and the volume flushed. NotFound when there is none.
 pub fn remove_plain() -> Result<(), fs::Error> {
+    if trial() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} KEPT: THE BOOT IS ON TRIAL", FILE); return Err(fs::Error::Denied); }
     if let Ok(mut file) = File::open_mode(FILE, fs::MODE_WRITE) { let _ = file.write_at(0, &[0u8; LEN]).and_then(|_| file.flush()); }
     fs::remove(FILE)?;
     flush();
