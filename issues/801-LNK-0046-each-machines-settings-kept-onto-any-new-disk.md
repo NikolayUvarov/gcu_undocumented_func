@@ -129,6 +129,20 @@ The maintainer (2026-11-14): «Каждая перезапись должна с
 - **The steps after the write** still pick the volume holding this build's MANIFEST among all volumes MIND CORE.
 - **A different signature per disk** was considered and dropped.
 
+## The bench (2026-11-14, 13:45–13:50 UTC): the MacBook Pro on a new stick, its settings kept
+
+- **The run:**
+  - The old disk 5 (Samsung SSD 860 PRO, USB) was read with `--old-disk 5 2`. The Mac's settings went into `~/.config/mind/machines/mind_353abc18de2dbd0e/`.
+  - That run wrote the stick, but Windows had taken it offline (MBR collision), so nothing was put on it.
+  - With disk 5 out, the stick was written again with `--machine mind_353abc18de2dbd0e 2`. The writer brought the offline stick online itself.
+- **Read back from the stick, on Windows:** signature `BE1AFDFA`; the keystore, `data/effector` and `system/effector`, `mode.conf` (`maintenance remote-update`), `wm.conf` and `clock.conf`; 10 firmware files and 4 pictures.
+- **The Mac:** restarted over the cable, it booted the stick by itself (the same MBR signature as the old disk, so no `startup-disk.sh`). It ran `fast-test` 7d747c69 from slot A:
+  - `DEVICE KEY READY: MIND 5097010F`: the same key;
+  - `WI-FI: 1 REMEMBERED NETWORKS`, then `AUTO-JOIN CoolNet2: JOINED (TRY 1)`;
+  - `MODE: MAINTENANCE; REMOTE UPDATE`;
+  - the agent the same endpoint `mind_353abc18de2dbd0e`, and a `collect_logs` from hesere completed at once.
+- **The bench criterion is met for the MacBook Pro.** The Ryzen and the DEXP are written later. The DEXP's key `MIND 5097010F`, the same as the Mac's, will stop its write (`--new-device-key`).
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [800-LNK-0023](800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](800-LNK-0024-keep-the-owners-settings-across-a-write.md).
