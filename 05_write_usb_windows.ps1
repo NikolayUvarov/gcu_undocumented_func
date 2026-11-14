@@ -63,6 +63,15 @@ function Invoke-UsbWriter {
     if ($item.PSIsContainer -or $item -isnot [System.IO.FileInfo]) { throw 'Image must be a regular file.' }
     $resolvedImage = $item.FullName
     $disk = Get-Disk -Number $DiskNumber
+    # A USB disk Windows took offline (a second disk with the same MBR signature, OfflineReason Collision) is brought
+    # online when written as administrator: it is erased anyway, and with the other disk out its signature stays.
+    if ($disk.IsOffline -and -not $Check -and $disk.BusType -eq 'USB' -and -not ($disk.IsBoot -or $disk.IsSystem) -and
+        ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Host "Disk $DiskNumber is offline ($($disk.OfflineReason)): bringing it online to write it."
+        Set-Disk -Number $DiskNumber -IsOffline $false
+        $disk = Get-Disk -Number $DiskNumber
+        if ($disk.IsOffline) { throw "Disk $DiskNumber stays offline ($($disk.OfflineReason)): is another disk with the same MBR signature still in?" }
+    }
     Assert-UsbTarget $disk $item.Length (Get-ProtectedDisks $resolvedImage)
     $identity = Get-Identity $disk
     if (-not ('UsbImageWriter' -as [type])) {
