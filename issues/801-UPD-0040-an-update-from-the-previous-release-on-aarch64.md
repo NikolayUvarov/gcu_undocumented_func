@@ -1,0 +1,38 @@
+# 801-UPD-0040 — An update from the previous release on aarch64: the gate's S4 check for the second architecture
+
+**Type:** update (tests, the gate) · **Owner:** `UPD` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S4) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-9.4, MC-12.1
+
+## Problem
+
+[801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.md) made the gate's S4 check for x86 alone. Its plan left aarch64 for later, and the profile says so: "QEMU, x86, the directory source only, not the server's and not aarch64".
+
+The maintainer's words for S4: «если обновление не может подключиться к сети и/или серверу - то это обновление не рабочее». A release is not working if the release before it cannot take it. S4 names no architecture, and the bench and the boards run aarch64 too (PinePhone, Orange Pi). So without this check, a change could land that aarch64's previous release cannot update to, and no gate would say so.
+
+## Plan
+
+- **`scripts/previous_release.sh aarch64`:**
+  - it builds the previous tree with `ARCH=aarch64 ./02_build.sh`;
+  - it runs `tests/qemu_smoke.py --arch aarch64 --suites previous`.
+
+  The `previous` suite already takes `--arch`: release 5 from `aarch64_root`, written by the previous tree's `make_usb_image.py --arch aarch64`.
+- **One previous tree for each architecture:** `$TMPDIR/mind-previous-<arch>-<commit>`, kept while the base is the same. Any other tree of that name is removed, except the other architecture's, so the two groups never remove each other's.
+- **The group `aarch64: an update from the previous release`** goes in `scripts/ci_local.sh`'s aarch64 part, with its estimate in `scripts/land.py`.
+- **Not here:**
+  - the update through the Effector server (ASR's [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), case 5);
+  - a release that cannot connect, which is S1's (801-KRN-0242).
+
+## Acceptance criteria
+
+1. **On aarch64,** the group passes on a branch whose base is `main`: the previous tree is built for aarch64, and its updater takes this tree's release from `data/link/rel/` into slot B, boots it on trial and confirms it.
+2. **The x86 group still passes,** with its tree under the new name.
+3. **The group is in the gate's list,** with its time estimated in `scripts/land.py`.
+4. **The profile** (Article 9) names the aarch64 check, and still says what neither check covers.
+
+## Related
+
+[801](801-the-bench-stays-manageable.md), [801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.md).
+
+## Progress (2026-11-14)
+
+- **aarch64, in the kernel session's container** (QEMU 8.2 with TCG, 4 CPUs): `scripts/previous_release.sh aarch64` built `main` `d9753fc238` for aarch64 (16 min). The `previous` suite then ran on that tree with a shorter `TMPDIR`, because the container's own path made QMP's socket path longer than 108 bytes. It passed in 117 s: release 5 written by that tree's tools took this branch's release 6 from `data/link/rel/` (111 files) into slot B, booted it on trial and confirmed it.
+- **Left:** the group on a maintainer's machine, and the x86 group again under its tree's new name.
