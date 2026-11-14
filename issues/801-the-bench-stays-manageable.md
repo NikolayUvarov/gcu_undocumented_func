@@ -40,16 +40,17 @@ In the maintainer's words, with an English rendering:
    - the trial boot's log lines that show it.
 
    The trial's boot log stays on `log:`.
-3. **S3, no destruction before confirmation.** What the previous slot needs stays as it was until the trial is confirmed. That covers:
+3. **S3, the old state is not touched.** What the previous slot needs stays as it was until the trial is confirmed. The maintainer: «старое состояние не трогается - это разве не очевидно?»; it is a plain requirement, not an exception to any rule. That covers:
    - `keystore`'s remembered networks and device key;
    - the agent's identity and token;
    - the network policy;
    - `link.conf`, `mode.conf` and the owner's policy.
 
    A conversion, if any, runs after confirmation.
-4. **S4, each release is installable by the one before it** on every bench machine.
-   - The running slot's updater accepts the next channel, manifest and keys. A change of signature or key format reaches the machines through a bridging release first.
-   - A QEMU check on every landing round updates the previous round's release to the new one.
+4. **S4, no bridging release; a release that cannot connect is not a working release.** The maintainer: «Не переходный релиз. А если обновление не может подключиться к сети и/или серверу - то это обновление не рабочее и должно быть откачено к предыдущему слоту».
+   - A release the running updater refuses leaves the machine on its slot, connected, and the refusal reaches the server.
+   - A release that cannot reach the network or the server is rolled back by S1, whatever the cause: a format it cannot read, a rule, a driver.
+   - The gate's check updates the previous round's release to the new one, and names a change that stops it.
 5. **S5, only a deliberate switch-off stops the agent.** None of these may stop it:
    - **the device clock wrong by hours:** an RTC in local time, a flat battery. Commands are judged by time relative to the server (MC-7.5's replay protection kept), and the clock is set from the network;
    - **a platform table the release cannot read:** the radio keeps the behaviour the previous release had on that machine, until the table is read there. An unknown limit is no reason to stop a radio that worked (the maintainer's word above); a rule that would silence it is held back on that machine and logged, not enforced;
@@ -73,7 +74,7 @@ In the maintainer's words, with an English rendering:
 
 | Track | Its part | Conditions |
 |---|---|---|
-| `UPD` | the trial's criterion and fallback with its bound; the fallback's reason record; nothing destroyed before confirmation; installable by the previous updater, a bridging release, the QEMU "update from the previous release" check | S1, S2, S3, S4 |
+| `UPD` | the trial's criterion and fallback with its bound; the fallback's reason record; the old state untouched before confirmation; a refused release leaves the machine as it was and says why; the QEMU "update from the previous release" check | S1, S2, S3, S4 |
 | `KRN` | `init` confirms on the agent's signal (an `init.wit` call); 213-KRN-0122's `Unknown` no longer silences a radio that sent before (WRDS read on the DEXP, or the previous behaviour kept); an RTC in local time; the Ryzen's loader stops at `READ` (000-KRN-0124) | S1, S5, S8 |
 | `EFF` | command expiry relative to the server; the clock from the server when far off; reconnect, and the network path restarted; the S2 report on the first connection; `update_agent` run on the bench (751-EFF-0023) | S2, S5, S7 |
 | `NET` | the network up on whichever card is there; `timed` sets the clock; the `wlan` race between the automatic join and the restart check (DRV's message of 2026-11-13) | S5 |
@@ -83,9 +84,10 @@ In the maintainer's words, with an English rendering:
 | `DRV` | [801-DRV-0071](801-DRV-0071-the-bench-radios-keep-their-network-across-releases.md) | S5 |
 | `ASR` | [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md) | S1–S5 |
 
-## A decision asked of the maintainer
+## The maintainer's answers (2026-11-14)
 
-S3 and S4 narrow the rule of 2026-10-25 ("no code that exists only so that an older version … keeps working … a machine that has it is written again by hand") for the connectivity path alone. A bridging release is allowed, and old state is kept until confirmation. Elsewhere the rule stands.
+- **No bridging release** (S4).
+- **The old state is not touched** (S3): that is plain, not an exception to the rule of 2026-10-25, which stands.
 
 ## Acceptance criteria
 
