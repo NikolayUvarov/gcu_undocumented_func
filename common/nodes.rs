@@ -7,6 +7,12 @@ use crate::abi::{PlatformNode, PlatformNodes, NODE_COMPATIBLE, NODE_LINES, NODE_
 
 const PAGE: u64 = 4096;
 
+/// Whether a UEFI memory type is memory the firmware or the system uses, which no node's registers may be lent over
+/// (801-KRN-0244): loader, boot and runtime code and data, conventional, unusable, ACPI reclaim and NVS, persistent and
+/// unaccepted memory. Reserved (0) and memory-mapped I/O (11, 12) are not: firmware lists a device's registers as
+/// either, the DEXP's Intel CRB TPM among them.
+pub fn holds_ram(kind: u32) -> bool { matches!(kind, 1..=10 | 14 | 15) }
+
 // The header right before the records, as PLATFORM_NODES hands them out.
 #[repr(C)]
 pub struct Nodes { header: PlatformNodes, list: [PlatformNode; PLATFORM_NODES_MAX] }

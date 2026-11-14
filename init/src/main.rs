@@ -1106,7 +1106,12 @@ impl Init {
             "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL | CAP_BADGE); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
-                if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
+                // A node the kernel does not lend is said: tpm then reports no TPM, and keystore keeps its sealed key (801-KRN-0244).
+                match self.nodes.tpm.map(|node| (node, minted.mint(PLATFORM_MMIO, node, 0))) {
+                    Some((_, Ok(slot))) => grants.add(SLOT_DEV0, slot, 0),
+                    Some((node, Err(error))) => mind::println!("[INIT] tpm: PLATFORM NODE {} NOT LENT: {:?}", node, error),
+                    None => {}
+                }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
             // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports; the
