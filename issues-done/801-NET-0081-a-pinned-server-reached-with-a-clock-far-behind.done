@@ -1,6 +1,6 @@
-# 801-NET-0081 — A pinned server reached with a clock far behind: a certificate's start after the clock is logged, not refused
+# 801-NET-0081 — A pinned server reached with a clock far behind: a certificate's start after the clock is logged, not refused — done
 
-**Type:** network (`tls`, `tls.wit` 1.5) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-11.5, MC-12.4
+**Type:** network (`tls`, `tls.wit` 1.5) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-11.5, MC-12.4
 
 ## Problem
 
@@ -20,6 +20,12 @@
 - **Both arches' "network, TLS and Effector" groups** pass on the maintainer's machines, then in a gate.
 - **EFF's evidence** (an RTC at 2000-01-01, the agent connects) is its own suite's, once its offset is in.
 
+## Resolution
+
+`connect-pins` logs a certificate whose start is after the system clock and does not refuse it: such a clock is taken as wrong, and the pin binds the key; an expired certificate is still refused (`tls.wit` 1.5, e5409a1220). `docs/network/services.md` says so.
+
+Evidence: the `tls` suite's pinned runs (a server whose certificate starts in 2090 reached through its leaf pin and its start logged; the expired, wrong-name and unpinned servers refused): "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector" on x32, and round 135's gate (main 01c3b5aa32), green. The agent's run with an RTC at 2000-01-01 is EFF's suite's.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-NET-0080](801-NET-0080-the-servers-date-in-a-head.md), [docs/network/services.md](../docs/network/services.md).
+[801](../issues/801-the-bench-stays-manageable.md), [801-NET-0080](801-NET-0080-the-servers-date-in-a-head.done), [docs/network/services.md](../docs/network/services.md).

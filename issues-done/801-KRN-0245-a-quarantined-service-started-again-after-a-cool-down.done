@@ -1,6 +1,6 @@
-# 801-KRN-0245 — A quarantined service started again after a cool-down, so none on the path to the server stays down for good
+# 801-KRN-0245 — A quarantined service started again after a cool-down, so none on the path to the server stays down for good — done
 
-**Type:** kernel (`init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.5, MC-6.8, MC-9.9
+**Type:** kernel (`init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.5, MC-6.8, MC-9.9
 
 ## Problem
 
@@ -30,6 +30,12 @@ The maintainer (801 S5): only a deliberate switch-off stops the agent.
   - `RUN` lifts that at once.
 - **The groups that run `services`** pass on both arches on the maintainer's machines, then in a gate.
 
+## Resolution
+
+`init` starts a service its restart budget quarantined again after a cool-down: 1 min, doubling at each quarantine up to 30 min, with a fresh budget; a failed start waits the next (53077010f7). Not for a service stopped on request, nor one quarantined because its device's DMA could not be stopped; `RUN` lifts a quarantine at once and resets the cool-down. `docs/profile` and its evidence say so.
+
+Evidence: the `services` suite (`rtc` started again 60 s after its quarantine and reached by its client, quarantined again with a 120 s cool-down, `RUN` lifting it): "x86: services, storage, audio" on acc-1, and round 135's gate (main 01c3b5aa32), green; "aarch64: boot and fault containment" on acc-1 and in the gate.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md).
+[801](../issues/801-the-bench-stays-manageable.md), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md).

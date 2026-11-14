@@ -25,6 +25,13 @@
 - **The `tls` suite with `swtpm`** (the TPM's page lent and the device key sealed) and the `normal` suite pass on both arches on the maintainer's machines, then in a gate.
 - **On the DEXP:** `[TPM] READY` and `DEVICE KEY FROM system/keystore/device.sealed` with a release from `fast-test`. That is DRV's or the maintainer's run (MC-12.1).
 
+## Progress (2026-11-14)
+
+- **In `main` since round 135** (01c3b5aa32), and gated green on the pool. On the maintainer's machines before that:
+  - x86 "network, TLS and Effector" (the TPM with `swtpm`) and "boot, display, shell, memory, clock" on x32;
+  - aarch64 "network, TLS and Effector", "the board from a device tree, under U-Boot" and "programs, shell and four CPUs" on acc-2.
+- **Left: the DEXP's run.** DRV was asked (`DRV/…-KRN-the-dexps-tpm-key-and-radio-the-three-tasks.md`) for the memory map's type at `0xFED40000`, or `[TPM] READY` with a release that has this change.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [351-KRN-0052](../issues-done/351-KRN-0052-tpm-registers-from-the-firmware.done), [801-NET-0079](801-NET-0079-keystore-keeps-the-slot-befores-keys-and-networks.md) (STO's: `keystore` keeps a sealed key while no TPM answers).

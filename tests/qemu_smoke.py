@@ -7068,7 +7068,8 @@ def modes_suite(args):
     """750-KRN-0143: the machine's modes. A raw image whose data/mode.conf names the development mode and a word init does
     not know: init reads it once the boot volume is there, says so and leaves the word out, and starts the Effector agent's
     two services with exactly their grants (750-KRN-0119). The shell holds init's mode client in SLOT_MODE (36), badged
-    BADGE_MODE (3), and no other. `check services` reads the modes through its lifecycle client and is refused a change.
+    BADGE_MODE (3), and no other, and the gateway's client badged BADGE_OWNER (2) in SLOT_EFFECTOR (45), which no other
+    process holds, its kept endpoint served by no task without a mode (801-KRN-0246). `check services` reads the modes through its lifecycle client and is refused a change.
     A second boot with no data/mode.conf is in the normal mode: neither Effector service runs, and init refuses to start
     one."""
     if not raw_tools():
@@ -7094,6 +7095,13 @@ def modes_suite(args):
                     assert held and held[1] == "3" and servers.get(int(held[2])) == 1, shell
                     badged = [s for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M) if b == "3" and servers.get(int(ep)) == 1]
                     assert badged == ["36"], (badged, shell)
+                    # 801-KRN-0246: the shell alone holds the gateway's client badged BADGE_OWNER (2), in SLOT_EFFECTOR (45).
+                    gateway = [ep for ep, server in servers.items() if server == pids["effector_gw"]]
+                    owner = [(s, b) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M) if int(ep) in gateway]
+                    assert owner == [("45", "2")], (owner, shell)
+                    others = [name for name, pid in pids.items() if name not in ("init", "shell", "effector_gw")
+                              and any(re.search(fr"BADGE=2 EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in gateway)]
+                    assert not others, others
                 vm.send("check services\n")
                 out = vm.expect("MIND> ", timeout=300, after="check services\n")
                 rows = {name: (mark, text) for mark, name, text in CHECK_ROW.findall(out)}
@@ -7118,6 +7126,9 @@ def modes_suite(args):
                         for badge, ep in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M):
                             server = servers.get(int(ep))
                             assert not (server == 1 and badge == "6") and not (server == files and badge in ("6", "7")), (name, caps)
+                    # 801-KRN-0246: the shell still holds the owner's client of the gateway's kept endpoint, which no task serves.
+                    held = re.search(r"^SLOT=45 GEN=\d+ KIND=1 .*BADGE=2 EP=(\d+)", vm.command(f"stat caps {vm.services()['shell']}", raw=True), re.M)
+                    assert held and servers.get(int(held[1]), 0) == 0, (held, servers)
                     vm.command("run effector_gw")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
                     assert "effector_gw" not in vm.services(), vm.services()
@@ -7153,7 +7164,7 @@ def modes_suite(args):
         services_config_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
-          "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
+          "session's token kept in its private directory, the shell alone holding the gateway's owner client in SLOT_EFFECTOR, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
 
