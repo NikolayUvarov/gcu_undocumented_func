@@ -256,6 +256,7 @@ struct Agent {
     answered_at: usize, // when the server last answered, whatever the status (801-EFF-0028)
     step: Option<init::AgentStep>, // what init was last told of the way to the server (801-EFF-0031)
     pool: Box<workers::Pool>, // the session's workers: the benchmark's on every CPU, and init's stop notice
+    fallback: String, // the updater's line of a refused trial it fell back from, reported in each heartbeat (801-EFF-0029)
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
@@ -426,7 +427,8 @@ impl Agent {
             _ => "",
         };
         let busy = waiting.as_ref().zip(self.busy_since.as_deref()).map(|(w, since)| wire::Busy { since, command: w.as_str(), action });
-        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: &self.hostname, arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load };
+        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: &self.hostname, arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load,
+            update: wire::fallback(&self.fallback) };
         let Ok(body) = wire::heartbeat(&mut buf, &h) else { return Outcome::Permanent };
         let body: Vec<u8> = body.to_vec();
         let Some(status) = self.request(Method::Post, "/api/heartbeat", "", Some(&body)) else { return Outcome::Retry };
@@ -918,6 +920,19 @@ impl Agent {
         self.update_answer(id, 1, &alloc::format!("the restart did not come: version {} stays staged", staged), "restart")
     }
 
+    /// The updater's word on the last trial (801-EFF-0029): a refused one it fell back from is reported in each heartbeat's
+    /// `update`, until the updater confirms a trial and forgets it.
+    fn look_at_updates(&mut self) {
+        if mind::dev::cap_info(SLOT_GATEWAY).0 != CAP_KIND_ENDPOINT { return; }
+        let Ok(u) = gateway::update_state(GATEWAY) else { return };
+        let failure = u.failure.as_str();
+        let line = if wire::fallback(failure).is_some() { String::from(failure) } else { String::new() };
+        if line != self.fallback {
+            if !line.is_empty() { mind::println!("EFFECTOR: A FALLBACK, REPORTED TO THE SERVER: {}", line); }
+            self.fallback = line;
+        }
+    }
+
     /// Tells `init` how far the way to the server got (`init.wit` 1.13 `agent-step`): a trial is confirmed on `accepted`,
     /// and any other step is its reason if refused (801's S1 and S2, 801-KRN-0242). Said only when it changes; once
     /// accepted, an update waiting for its confirmation counts from now (801-EFF-0031).
@@ -985,6 +1000,7 @@ impl Agent {
     #[inline(never)]
     fn telemetry(&mut self) {
         if mind::dev::cap_info(SLOT_GATEWAY).0 != CAP_KIND_ENDPOINT { return; }
+        self.look_at_updates();
         let s = match gateway::sample(GATEWAY) { Ok(s) => s, Err(e) => return self.no_telemetry(alloc::format!("NO SAMPLE FROM THE GATEWAY: {:?}", e)) };
         // Without the system monitor there is no processor count, which the server requires.
         // The machine's name as `sysmon` answers it (750-EFF-0018): a name set by the shell's `hostname` is reported from
@@ -1192,7 +1208,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
-        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()) });
+        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new() });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1258,6 +1274,7 @@ fn main(_info: &'static BootInfo) {
     mind::about!("effector — the Effector agent's session (750-EFF-0006): heartbeat, poll, the gateway's actions and telemetry with a pinned Effector server.\nUsage: effector data/effector/effector.conf [--for SECONDS]");
     let (mut agent, mut session, run_for) = start();
     agent.tell_init(init::AgentStep::Started, "");
+    agent.look_at_updates();
     // init's stop notice, awaited on a worker of its own: the session's loop never blocks (750-EFF-0006).
     if SERVICE.load(core::sync::atomic::Ordering::Relaxed) { agent.pool.start_notice(); }
     let started = now();

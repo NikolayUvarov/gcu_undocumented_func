@@ -30,7 +30,7 @@ fn with_values<R>(text: &str, f: impl FnOnce(&[Value<'_>]) -> R) -> R {
 #[test]
 fn the_heartbeat_is_the_contracts_minimal_one() {
     let mut buf = [0u8; 1024];
-    let h = Heartbeat { agent_id: "mind_test_0123456789abcdef", hostname: "mind-test", arch: "x64", agent_version: "0.1.0", stopping: false, agent_time: None, busy: None, load: None };
+    let h = Heartbeat { agent_id: "mind_test_0123456789abcdef", hostname: "mind-test", arch: "x64", agent_version: "0.1.0", stopping: false, agent_time: None, busy: None, load: None, update: None };
     let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
     // docs/effector/protocol.md, "A minimal heartbeat is", and 1.2's renewable_execution_timeout (the fixed mode).
     assert_eq!(body, r#"{"agent_id":"mind_test_0123456789abcdef","hostname":"mind-test","os_version":"mindcore","arch":"x64","run_mode":"service","username":"effector","agent_version":"0.1.0","programs":[],"system_state":"running","busy":false,"max_concurrent_commands":1,"occupied_queues":0,"free_slots":1,"config_auto_update_enabled":false,"transport_mode":"https_only","transport":"https","renewable_execution_timeout":false}"#);
@@ -208,7 +208,7 @@ fn a_delivery_and_a_log_source_are_read() {
 fn a_held_command_and_the_load_are_in_the_heartbeat() {
     let mut buf = [0u8; 1536];
     let h = Heartbeat { agent_id: "mind-test", hostname: "mind-test", arch: "x64", agent_version: "0.1.0", stopping: false, agent_time: None,
-                        busy: Some(Busy { since: "2026-10-23T02:28:56Z", command: "cmd-1", action: "screenshot" }), load: Load::new(150, 8) };
+                        busy: Some(Busy { since: "2026-10-23T02:28:56Z", command: "cmd-1", action: "screenshot" }), load: Load::new(150, 8), update: None };
     let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
     // While an answer waits for the server, the one slot is occupied: idle reports would close the command as unconfirmed.
     assert!(body.contains(r#""busy":true,"busy_since":"2026-10-23T02:28:56Z","executing_commands":[{"command_id":"cmd-1","action":"screenshot","started_at":"2026-10-23T02:28:56Z"}],"max_concurrent_commands":1,"occupied_queues":1,"free_slots":0,"#), "{body}");
@@ -256,4 +256,19 @@ fn an_update_names_its_bundle_and_the_trials_tries() {
                           (format!(r#"{{"size": "5", "sha256": "{sha}"}}"#), Error::Type), (format!(r#"{{"size": 5, "size": 6, "sha256": "{sha}"}}"#), Error::Duplicate)] {
         assert_eq!(with_values(&text, |v| update(v).map(|_| ())), Err(error), "{text}");
     }
+}
+
+#[test]
+fn a_fallback_is_reported_in_the_heartbeats_update() {
+    // 801's S2 (801-EFF-0029): the updater's failure after a refused trial, as 801-UPD-0037 writes it.
+    let line = "version 6 in slot B, falling back to slot A: no-tls: TLS CONNECT";
+    let f = fallback(line).expect("a fallback");
+    assert_eq!(f, Fallback { version: Some(6), result: line });
+    assert_eq!(fallback("fetch: Digest"), None, "another failure is no fallback");
+    assert_eq!(fallback("version not known in slot B, falling back to slot A: refused").map(|f| f.version), Some(None));
+    let mut buf = [0u8; 1536];
+    let h = Heartbeat { agent_id: "mind-test", hostname: "mind-test", arch: "x64", agent_version: "0.1.0", stopping: false, agent_time: None,
+                        busy: None, load: None, update: Some(f) };
+    let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
+    assert!(body.contains(r#""update":{"state":"rolled_back","build_number":6,"result":"version 6 in slot B, falling back to slot A: no-tls: TLS CONNECT"}"#), "{body}");
 }
