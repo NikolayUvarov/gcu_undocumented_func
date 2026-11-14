@@ -6393,7 +6393,8 @@ def services_suite(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
     # Supervision: init restarts a killed service from the endpoint it keeps, so a client started before the failure
-    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it.
+    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it, or
+    # init after its cool-down (801-KRN-0245).
     require(vm.command("run hello &"), "PID=6 NAME=hello BACKGROUND")
 
     def clock_resumes():
@@ -6419,11 +6420,22 @@ def services_suite(vm):
     require(vm.service_logs("init", f"rtc PID={first} KILLED"), "RESTARTED PID=")
     clock_resumes()
     kill_rtc(); kill_rtc(); kill_rtc()
-    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S")
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S; STARTED AGAIN IN 60 S")
     assert "rtc" not in vm.services(), "a quarantined service stays down"
     # Its client is not left waiting in a send to the dead endpoint (init keeps no receive right).
     time.sleep(.5)
     assert not re.search(r" hello WAIT=1:", vm.command("stat tasks", raw=True)), "client blocked on a quarantined service"
+    # 801-KRN-0245: started again by init after its cool-down, with no hand; quarantined again, the cool-down doubles, and
+    # `run` lifts it at once.
+    deadline, said = time.monotonic() + 100, ""
+    while "rtc STARTED AGAIN PID=" not in said and time.monotonic() < deadline:
+        said += vm.command("logs 1", raw=True)
+        time.sleep(2)
+    require(said, "rtc STARTED AGAIN PID=")
+    require(said, " AFTER 60 S IN QUARANTINE")
+    clock_resumes()
+    kill_rtc(); kill_rtc(); kill_rtc(); kill_rtc()
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S; STARTED AGAIN IN 120 S")
     require(vm.command("run rtc &"), "NAME=rtc")
     clock_resumes()
     vm.command("kill 6")
