@@ -16,7 +16,9 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     // `ser` begins only after this many more scheduler reads.
     pub ser_skip:usize,
     // A transient BB reset: SYS_FUNC_EN's byte reads as off after the first `.0` reads of it, for `.1` reads.
-    pub bb_off:Option<(usize,usize)>}
+    pub bb_off:Option<(usize,usize)>,
+    // Every frame released at its retry limit, unacknowledged (801-DRV-0071).
+    pub unacked:bool}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -70,11 +72,12 @@ impl Device{
         let f=self.dma(Self::word(&wd,60),length).to_vec();self.published.push(f);self.control.borrow_mut().published+=1;
         self.raw().put(INDEX[q],4,value|value<<16);
         let seq=u16::from_le_bytes(wd[48..50].try_into().unwrap())&0x7fff;
-        let ctl=Self::word(&wd,8);let rpq=u32::from(if self.control.borrow().fault==14{seq+1}else{seq})<<16|((ctl>>17)&31)<<8|(ctl>>24);
+        let unacked=u32::from(self.control.borrow().unacked);
+        let ctl=Self::word(&wd,8);let rpq=u32::from(if self.control.borrow().fault==14{seq+1}else{seq})<<16|unacked<<13|((ctl>>17)&31)<<8|(ctl>>24);
         self.raw().inject_packet(1,7,&rpq.to_le_bytes());
         if self.control.borrow().fault!=7{
             let mut c2h=[0;32];c2h[..4].copy_from_slice(&(1u32|9<<2|1<<8).to_le_bytes());c2h[4]=32;
-            c2h[8..12].copy_from_slice(&(u32::from(seq&15)<<8).to_le_bytes());c2h[20..24].copy_from_slice(&256u32.to_le_bytes());
+            c2h[8..12].copy_from_slice(&(u32::from(seq&15)<<8|unacked<<6).to_le_bytes());c2h[20..24].copy_from_slice(&256u32.to_le_bytes());
             self.raw().inject_c2h(&c2h);
         }
     }

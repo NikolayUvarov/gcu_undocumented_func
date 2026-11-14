@@ -101,12 +101,14 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
     pub owner:DataSession<'q,'memory,'p,'a,'command,'receive,B>,pub failure:Failure,
 }
 
+/// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64}
+pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
         if channel==rx::Channel::Rxq&&packet.kind==rxdesc::TYPE_WIFI{
+            self.counts.wifi=self.counts.wifi.saturating_add(1);
             let Some(filter)=self.filter else{self.counts.previous_epoch=self.counts.previous_epoch.saturating_add(1);return Ok(true)};
             let frame=match crate::frames::from_packet(packet,buffer){Ok(frame)=>frame,Err(_)=>{
                 self.counts.invalid=self.counts.invalid.saturating_add(1);return Ok(true)}};
@@ -318,6 +320,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn channel(&self)->u8{self.prepared.tuned.channel}
     pub(crate) fn mac(&self)->[u8;6]{self.prepared.board.identity.mac}
     pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}
+    /// The station's filter, None if a failed change left none (the next operation then refuses).
+    pub(crate) fn filter(&self)->Option<station::Filter>{self.prepared.station.current_filter()}
     pub(crate) fn counts(&self)->Counts{Counts{btc_events:self.counts.btc_events.saturating_add(self.session.counts.btc_events),ppdu_reports:self.session.counts.ppdu_reports,..self.counts}}
     pub(crate) fn packet(&self)->Option<inbox::Record<'_>>{self.session.packet()}
     pub(crate) fn consume_packet(&mut self){self.session.consume_packet()}

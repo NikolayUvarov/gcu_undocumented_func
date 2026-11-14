@@ -28,7 +28,10 @@ impl Rule{
     }
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) struct Policy{country:[u8;2],selected_country:[u8;2],plan:u8,version:u64,channel:u8,access:Access,eirp_half_dbm:i8,conducted_half_dbm:i8,group:defaults::Group,limits:Constraints}
+pub(crate) struct Policy{country:[u8;2],selected_country:[u8;2],plan:u8,version:u64,channel:u8,access:Access,eirp_half_dbm:i8,conducted_half_dbm:i8,group:defaults::Group,limits:Constraints,cap:Option<Cap>}
+/// The country unknown (00): the channel's maximum per NTX and the limit that holds it to 75 % (801-DRV-0071), half-dBm.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Cap{pub maximum:[i8;2],pub limit:[i8;2]}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum PolicyError{Board,Country,Frequency,Disabled,UnknownPlatform,Power}
 
@@ -52,10 +55,18 @@ impl Policy{
             return Err(PolicyError::Power);
         }
         for value in &mut limits.per_ntx{*value=(*value).min(rule.conducted_half_dbm);}
+        // The maintainer (2026-11-14): with the country unknown, at most 75 % of the maximum (801-DRV-0071).
+        let channel=(delta/5)as u8;let mut cap=None;
+        if rule.country==*b"00"{
+            let(capped,maximum)=channel_power::unknown_country(group,channel,limits).map_err(|_|PolicyError::Power)?;
+            limits=capped;cap=Some(Cap{maximum,limit:capped.per_ntx});
+        }
         // Per-path values are source SAR reference differences, already resolved for this platform and frequency.
-        Ok(Self{country:hint.raw,selected_country:rule.country,plan:hint.raw_channel_plan,version:rule.version,channel:(delta/5)as u8,
-            access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group,limits})
+        Ok(Self{country:hint.raw,selected_country:rule.country,plan:hint.raw_channel_plan,version:rule.version,channel,
+            access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group,limits,cap})
     }
+    /// The 75 % cap when the country is unknown (00), None otherwise.
+    pub(crate) fn cap(&self)->Option<Cap>{self.cap}
     /// Receive-only tuning: world group, lowest limits, version zero; PassiveOnly never admits calibration or packet TX.
     pub(crate) fn passive(board:&Board,center_mhz:u16)->Result<Self,PolicyError>{
         let hint=defaults::board_country(board).map_err(|_|PolicyError::Board)?;
@@ -63,7 +74,7 @@ impl Policy{
         if delta%5!=0||!(1..=13).contains(&(delta/5)){return Err(PolicyError::Frequency);}
         Ok(Self{country:hint.raw,selected_country:*b"00",plan:hint.raw_channel_plan,version:0,channel:(delta/5)as u8,
             access:Access::PassiveOnly,eirp_half_dbm:-64,conducted_half_dbm:-64,group:defaults::Group::WORLDWIDE,
-            limits:Constraints{per_ntx:[-64;2],per_path:[-64;2]}})
+            limits:Constraints{per_ntx:[-64;2],per_path:[-64;2]},cap:None})
     }
 }
 
@@ -79,13 +90,15 @@ pub(crate) struct Failure{pub stage:Stage,pub cause:Fault,pub scheduler_restore:
 pub(crate) struct Tuned{pub attempt:u64,pub session:u64,pub channel:u8,pub policy_version:u64,pub access:Access,
     policy:Policy,board_fingerprint:[u8;32],admission_attempted:bool}
 impl Tuned{
+    /// The 75 % cap it was tuned under, when the country was unknown (801-DRV-0071).
+    pub(crate) fn cap(&self)->Option<Cap>{self.policy.cap}
     fn policy_matches(&self,policy:&Policy)->bool{
         self.policy==*policy&&self.channel==policy.channel&&self.policy_version==policy.version&&self.access==policy.access
     }
     #[cfg(test)]
     pub(crate) fn modeled(attempt:u64,session:u64,channel:u8,policy_version:u64,access:Access)->Self{
         let policy=Policy{country:*b"US",selected_country:*b"US",plan:0,version:policy_version,channel,access,
-            eirp_half_dbm:63,conducted_half_dbm:63,group:defaults::Group::FCC,limits:Constraints{per_ntx:[63;2],per_path:[63;2]}};
+            eirp_half_dbm:63,conducted_half_dbm:63,group:defaults::Group::FCC,limits:Constraints{per_ntx:[63;2],per_path:[63;2]},cap:None};
         Self{attempt,session,channel,policy_version,access,policy,board_fingerprint:[0;32],admission_attempted:false}
     }
 }

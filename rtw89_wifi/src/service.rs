@@ -28,12 +28,22 @@ const FRAME_BYTES:usize=frames::HEADER_BYTES+frames::FRAME_MAX;
 // DEBUG (the maintainer, 2026-11-08: everything runs first, hardening later): a country that refuses the admitted
 // channel is logged as such, answered as applied, and the radio keeps sending. False is wlanhw 1.2's `failed`.
 const KEEP_SENDING:bool=true;
+// 801-DRV-0071: no Wi-Fi frame for this long while the filter lets a network's beacons in is a stalled receive, and the
+// service stops so that the driver restarts (the Ryzen, 2026-11-13: CoolNet2 lost 55 s after joining, no line from it).
+pub(crate) const QUIET_MS:u64=10_000;
+// Unicast sends in a row not acknowledged, over at least UNHEARD_MS: logged once a run, the service goes on.
+pub(crate) const UNHEARD:u32=16;
+pub(crate) const UNHEARD_MS:u64=5_000;
 
 #[derive(Debug)]
-pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error)}
+pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error),
+    ReceiveStalled(Stall)}
+/// A stalled receive (QUIET_MS): how long no frame came, the frames before, and the sends finished and acknowledged since.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Stall{pub quiet_ms:u64,pub frames:u64,pub sent:u32,pub acked:u32}
 // `grace_us`: the data mode's grace when the send began; a recovery it outlasts since moves `deadline` (OUTLAST_SER).
 // `call` is None once a late send was answered (KEEP_LATE) and only its release is awaited.
-struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64}
+struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64,unicast:bool}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -54,6 +64,9 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // DEBUG (2026-11-08): the SNAPSHOT registers at the start, and when each first changed (ms from the start, its value,
     // whether a send was pending), read once a step.
     first:data_mode::Snapshot,changes:Changes,start_ms:u64,
+    // 801-DRV-0071: the Wi-Fi frames counted and when they last moved, the sends finished and acknowledged since, and the
+    // unicast sends not acknowledged in a row (how many, since when, whether logged).
+    heard:(u64,u64),quiet:(u32,u32),unacked:(u32,u64,bool),
 }
 /// When each SNAPSHOT register first changed in data mode: (ms from the start, value, a send pending).
 #[derive(Clone,Copy)]
@@ -84,7 +97,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if RECEIVE.into_iter().any(|slot|dev::cap_info(slot).0!=mind::abi::CAP_KIND_NONE){return Err(sys::Error::NoSlot)}
         let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
-            country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms})
+            country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
+            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false)})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -148,10 +162,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let seen=self.data().transmit_seen();let pending=self.pending.as_mut().unwrap();
             pending.deadline=pending.deadline.saturating_add(LATE_MS);let call=pending.call.take().unwrap();
             let attempts=u8::try_from(seen.tries).unwrap_or(15).clamp(1,15);
+            let unicast=pending.unicast;
             let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:false,attempts}));
             self.data().extend_send(LATE_MS*1000);self.lates=self.lates.saturating_add(1);
             if self.event.is_none(){self.event=Some(Event::LateFrame{count:self.lates,finished:seen.finished,fetched:seen.fetched,
                 released:seen.released,length:seen.length,age_us:seen.age_us})}
+            self.ended(unicast,false,now);
         }
         if self.pending.is_some(){self.finish_send()?}
         for _ in 0..DRAIN{
@@ -160,6 +176,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
+        self.listened(now)?;
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
             if waiter.as_ref().is_some_and(|w|waiting!=0||now>=w.deadline){
@@ -172,8 +189,31 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if let Some(done)=self.data().advance(WORK_US).map_err(Fatal::Radio)?{
             let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
             if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
-            if let Some(call)=self.pending.take().unwrap().call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));}
+            let pending=self.pending.take().unwrap();let now=time::monotonic_ns()/1_000_000;
+            // A late send was counted when it was answered (KEEP_LATE).
+            if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));self.ended(pending.unicast,done.acked,now);}
         }Ok(())
+    }
+    // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
+    fn ended(&mut self,unicast:bool,acked:bool,now:u64){
+        self.quiet.0=self.quiet.0.saturating_add(1);if acked{self.quiet.1=self.quiet.1.saturating_add(1);}
+        if !unicast{return}
+        if acked{self.unacked=(0,0,false);return}
+        if self.unacked.0==0{self.unacked.1=now;}self.unacked.0=self.unacked.0.saturating_add(1);
+        let(count,since,logged)=self.unacked;
+        if !logged&&count>=UNHEARD&&now.saturating_sub(since)>=UNHEARD_MS&&self.event.is_none(){
+            self.unacked.2=true;let heard=now.saturating_sub(self.heard.1);
+            self.event=Some(Event::Unheard{channel:self.data().channel(),count,ms:now.saturating_sub(since),heard_ms:heard});
+        }
+    }
+    // 801-DRV-0071: a receive that gives no Wi-Fi frame for QUIET_MS, while the filter lets a network's beacons in, stops the service.
+    fn listened(&mut self,now:u64)->Result<(),Fatal>{
+        let frames=self.data().counts().wifi;let watched=self.data().filter().is_some_and(|f|f.all_beacons()||f.bssid()!=[0;6]);
+        if frames!=self.heard.0||!watched{self.heard=(frames,now);self.quiet=(0,0);return Ok(())}
+        let quiet_ms=now.saturating_sub(self.heard.1);if quiet_ms<QUIET_MS{return Ok(())}
+        let stall=Stall{quiet_ms,frames,sent:self.quiet.0,acked:self.quiet.1};
+        if self.event.is_none(){self.event=Some(Event::Stalled{channel:self.data().channel(),quiet_ms,frames,sent:stall.sent,acked:stall.acked})}
+        Err(Fatal::ReceiveStalled(stall))
     }
     // DEBUG: the first change of each SNAPSHOT register, while the data mode runs: after its shutdown they are its own
     // (BB off, DMA stopped), which the Ryzen's log of 2026-11-08 had taken for the firmware's.
@@ -226,14 +266,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                     let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));self.fail(Fatal::Clock);return};
                 let mut call=call;
                 if call.defer().is_err(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
-                let grace_us=self.data().grace_us();
+                let grace_us=self.data().grace_us();let unicast=frame.get(4).is_some_and(|byte|byte&1==0);
                 let tries=if attempts<=15{attempts.min(SEND_TRIES)}else{attempts};
                 match self.data().begin(frame,rate,tries,COMMAND_US){
                     Ok(())=>{
                         // KEEP_LATE: the queue's own budget never ends a frame first; the service's deadlines do. Within a step
                         // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).
                         if self.late{self.data().extend_send(LATE_MS*1000);}
-                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us})
+                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast})
                     },
                     Err(failure)=>{let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},

@@ -47,6 +47,8 @@ pub struct Radio<'q, R: Regs> {
     queue: &'q mut [u8], head: usize, count: usize,
     cookie: u8, report: Option<Report>,
     pub counts: Counts, pub iqk: Option<u32>,
+    // No country from the station, or the world's 00: the TX power capped at 75 % (801-DRV-0071).
+    unknown: bool,
 }
 
 /// Brings the chip up as rtw_power_on does after probe. `master` turns PCI bus mastering on, once the rings are
@@ -107,7 +109,7 @@ pub fn up<'q, R: Regs>(mut r: R, mut region: Region, file: &[u8], queue: &'q mut
     let mut radio = Radio {
         r, region, mgmt, be, h2c_ring, rx: Rx { next: 0 }, h2c, board, chip, cut, cck, mac: board.mac, channel: 0,
         all_beacons: true, bssid: [0; 6], own: board.mac, queue, head: 0, count: 0, cookie: 0, report: None,
-        counts: Counts::default(), iqk: None,
+        counts: Counts::default(), iqk: None, unknown: true,
     };
     radio.set_channel(1).map_err(|_| (Stage::Channel, Error::Chip("channel 1 was refused")))?;
     radio.h2c.packet(&mut radio.r, &mut radio.region, &mut radio.h2c_ring, 0x0e, &h2c::iqk()).map_err(|e| (Stage::Iqk, e))?;
@@ -126,9 +128,22 @@ impl<R: Regs> Radio<'_, R> {
 
     pub fn set_channel(&mut self, ch: u8) -> Result<(), Fail> {
         if !(1..=13).contains(&ch) { return Err(Fail::Invalid); }
-        phy::channel(&mut self.r, ch, &self.board, &self.cck).map_err(|_| Fail::Failed)?;
+        phy::channel(&mut self.r, ch, &self.board, &self.cck, self.unknown).map_err(|_| Fail::Failed)?;
         self.channel = ch;
         Ok(())
+    }
+
+    /// Whether the country is unknown, the TX power of the channel set written again for it; when unknown, its highest
+    /// index and the cap (801-DRV-0071).
+    pub fn country_unknown(&mut self, unknown: bool) -> Option<(u8, u8)> {
+        self.unknown = unknown;
+        if self.channel != 0 { phy::power(&mut self.r, self.channel, &self.board, unknown); }
+        self.cap()
+    }
+    /// The highest index of the channel set and its cap, while the country is unknown.
+    pub fn cap(&self) -> Option<(u8, u8)> {
+        let (_, _, top, cap) = phy::capped(self.channel.max(1), &self.board);
+        self.unknown.then_some((top, cap))
     }
 
     /// The receive filter: the hardware's by BSSID for beacons when a BSSID is set and no scan runs; the rest in
