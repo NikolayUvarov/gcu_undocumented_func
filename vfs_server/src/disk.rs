@@ -17,6 +17,10 @@ const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, befor
 const BACK_MS: u64 = 10_000; // a driver that answered "not found" is tried this long before it is said not to answer (a fresh
 // instance and init's windows: 6 s in QEMU)
 const RETRY_MS: u64 = 500; // meanwhile, between tries
+// The request that found a fresh instance waits this long, in steps, for init to set its windows again a few milliseconds
+// after its start, before it fails (000-KRN-0253: DRV's `run files &` just after `ahci` restarted, on a loaded machine).
+const RETURN_WAIT_MS: u64 = 2000;
+const RETURN_STEP_MS: usize = 20;
 const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
 // `silent_until`: until when the drive is not asked, after it did not answer; `missing_since`: when it answered "not
@@ -73,7 +77,9 @@ impl Disk {
     // RETRY_MS later, and after BACK_MS of that the drive is said not to answer.
     fn ask<T>(&mut self, mut request: impl FnMut(&mut Io) -> Option<T>) -> Option<T> {
         if self.quiet() || self.replaced { return None; }
-        if self.silent_until != 0 || self.device.returned() {
+        if self.device.returned() {
+            if !self.back_waiting() { return None; }
+        } else if self.silent_until != 0 {
             if !self.back() { return None; }
         }
         let start = mind::time::uptime_ms() as u64;
@@ -87,7 +93,7 @@ impl Disk {
         if self.device.returned() {
             if !slow { mind::println!("[VFS] THE {} DRIVE ANSWERED NOT FOUND: ITS MEDIUM IS COMPARED BEFORE ANYTHING ELSE IS ASKED OF IT", crate::device_name(self.device.kind())); }
             // At once: a driver that found its medium gone and back ends at its next request, for init to start it again.
-            if self.back() { return request(&mut self.device); }
+            if self.back_waiting() { return request(&mut self.device); }
         }
         if slow { self.not_answering(now); }
         None
@@ -117,6 +123,18 @@ impl Disk {
             Some(false) => { self.silent_until = 0; self.replace(); false }
             None if self.said || now.saturating_sub(self.missing_since) >= BACK_MS => { self.not_answering(now); false }
             None => { self.silent_until = now + RETRY_MS; false }
+        }
+    }
+
+    // `back`, for a driver that answered as a fresh instance: tried again every RETURN_STEP_MS until its windows are set
+    // and the medium compared, for RETURN_WAIT_MS at most (000-KRN-0253). Not for a drive that did not answer, which
+    // keeps failing at once (211-KRN-0050), nor once the medium was found another one.
+    fn back_waiting(&mut self) -> bool {
+        let start = mind::time::uptime_ms() as u64;
+        loop {
+            if self.back() { return true; }
+            if self.replaced || self.said || (mind::time::uptime_ms() as u64).saturating_sub(start) >= RETURN_WAIT_MS { return false; }
+            mind::time::sleep(RETURN_STEP_MS);
         }
     }
 

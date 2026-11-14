@@ -140,3 +140,36 @@ fn failed_live_receive_validation_consumes_attempt_without_h2c_or_retry(){with_c
     phy.bus_between_stages().write32(crate::fwcmd::DMA_STOP,old).unwrap();
     assert!(matches!(Resolved::resolve(b,rule(),limits()).unwrap().grant(phy,b,tables,tuned,owner),Err(Error::AlreadyAttempted)));
 });}
+
+// 801 S5: an unknown platform word is held back, not enforced: the country's limits alone, as with no platform limit.
+#[test]
+fn an_unknown_platform_word_held_back_resolves_as_no_platform_limit(){
+    let b=erased();
+    for (code,channel,eirp) in [(*b"UZ",1,40),(*b"00",6,40),(*b"US",11,60)]{
+        let rule=||Rule::station(code,1,channel,eirp,false);
+        let held=Resolved::resolve(&b,rule(),PlatformInput::HeldBack).unwrap();
+        let absent=Resolved::resolve(&b,rule(),PlatformInput::CheckedAbsent).unwrap();
+        assert_eq!(held.platform_basis(),PlatformBasis::HeldBack);assert_eq!(held.policy(),absent.policy(),"{code:?}");
+    }
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"UZ",1,1,40,false),PlatformInput::Unknown),Err(Error::UnknownPlatform)),
+        "Unknown itself still refuses: only the driver's argument maps to HeldBack");
+}
+// 801-DRV-0071: the country unknown (00) holds the channel to its maximum less 3 half-dB; a known one is not capped.
+#[test]
+fn the_world_code_caps_the_power_and_a_known_country_does_not(){
+    let b=erased();
+    for platform in [PlatformInput::HeldBack,PlatformInput::CheckedAbsent]{
+        for channel in [1,6,11]{
+            let world=Resolved::resolve(&b,Rule::station(*b"00",1,channel,40,false),platform).unwrap();
+            assert_eq!(world.policy().cap(),Some(channel::Cap{maximum:[29,23],limit:[26,20]}),"channel {channel}");
+            for code in [*b"UZ",*b"RU",*b"US"]{
+                let known=Resolved::resolve(&b,Rule::station(code,1,channel,40,false),platform).unwrap();
+                assert_eq!(known.policy().cap(),None,"{code:?} channel {channel}");
+            }
+        }
+    }
+    // An EIRP above the tables' 14.5 dBm leaves their maximum; one of 13 dBm is the maximum, and its cap is below TSSI's 12 dBm.
+    let low=Resolved::resolve(&b,Rule::station(*b"00",1,6,30,false),PlatformInput::HeldBack).unwrap();
+    assert_eq!(low.policy().cap(),Some(channel::Cap{maximum:[29,23],limit:[26,20]}));
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"00",1,6,26,false),PlatformInput::HeldBack),Err(Error::TssiPower)));
+}

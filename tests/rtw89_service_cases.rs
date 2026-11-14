@@ -306,3 +306,55 @@ fn service_one_step_takes_every_waiting_frame(){run(0,true,true,|data,c|{
     ipc::reset();let mut service=Service::new(data).unwrap();c.borrow_mut().incoming=vec![packet();3];
     let wait=ipc::words(6,0);assert!(service.step());assert_eq!(words(wait),[3<<16,0]);drop(service);clean();
 });}
+
+// 801-DRV-0071: a receive that gives no Wi-Fi frame for QUIET_MS stops the service with its line, so the driver restarts.
+#[test]
+fn service_a_receive_silent_for_ten_seconds_stops_with_its_line(){run(0,true,true,|data,c|{
+    use crate::{receive_service::Event,service::{QUIET_MS,Stall}};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    // Each step's receive wait moves this clock 2 ms: 100 ms of margin either side.
+    for _ in 0..3{c.borrow_mut().incoming.push(packet());ipc::advance(QUIET_MS-100);assert!(service.step(),"a frame each 9.9 s");}
+    let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert_eq!(words(sent)[0]&255,0);
+    ipc::advance(QUIET_MS-100);assert!(service.step());assert!(service.take_event().is_none());
+    ipc::advance(200);assert!(!service.step(),"10 s with no frame");
+    let Some(Event::Stalled{channel:6,quiet_ms,frames:3,sent:1,acked:1})=service.take_event()else{panic!("no stall line")};
+    assert!((QUIET_MS..QUIET_MS+120).contains(&quiet_ms));
+    let stopped=service.stop();
+    assert!(matches!(stopped.failure,Some(Fatal::ReceiveStalled(Stall{frames:3,sent:1,acked:1,..}))));
+    assert!(stopped.owner.snapshot().is_some(),"the registers as the stall found them");clean();
+});}
+
+// A filter that lets no network in arms nothing: a station with no network hears nothing by its own choice.
+#[test]
+fn service_a_filter_with_no_network_does_not_watch_the_receive(){run(0,true,true,|data,_|{
+    use crate::{receive_service::Event,service::QUIET_MS};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let mut none=vec![0;17];let mut w=Writer::new(&mut none);wlanhw::Filter{all_beacons:false,bssid:0,own:0}.encode(&mut w).unwrap();
+    let id=ipc::buffer(3,&none);assert!(service.step());assert_eq!(words(id),[0,0]);
+    ipc::advance(3*QUIET_MS);assert!(service.step());assert!(service.take_event().is_none());
+    // A scan's filter arms it from its own start.
+    let id=ipc::buffer(3,&filter(true));assert!(service.step());assert_eq!(words(id),[0,0]);
+    ipc::advance(QUIET_MS-100);assert!(service.step());ipc::advance(200);assert!(!service.step());
+    assert!(matches!(service.take_event(),Some(Event::Stalled{frames:0,..})));drop(service);clean();
+});}
+
+// UNHEARD unicast sends in a row not acknowledged, over UNHEARD_MS, are logged once; the service goes on.
+#[test]
+fn service_a_run_of_unacknowledged_sends_is_logged_once(){run(0,true,true,|data,c|{
+    use crate::{receive_service::Event,service::{UNHEARD,UNHEARD_MS}};
+    ipc::reset();let mut service=Service::new(data).unwrap();c.borrow_mut().unacked=true;
+    let gap=UNHEARD_MS/u64::from(UNHEARD-1);
+    for n in 0..UNHEARD+4{
+        if n>0{ipc::advance(gap);}c.borrow_mut().incoming.push(packet());
+        let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());
+        let(w,b)=ipc::response(sent).unwrap();assert_eq!(w[0]&255,0);
+        let mut r=Reader::new(&b[..2]);assert_eq!(wlanhw::Sent::decode(&mut r).unwrap(),wlanhw::Sent{acked:false,attempts:1});
+        let take=ipc::buffer(5,&[]);assert!(service.step());let _=ipc::response(take);
+        let event=service.take_event();
+        if n+1==UNHEARD{assert!(matches!(event,Some(Event::Unheard{channel:6,count,ms,..})if count==UNHEARD&&ms>=UNHEARD_MS),"{event:?}");}
+        else{assert!(event.is_none(),"send {n}: {event:?}");}
+    }
+    // An acknowledgement ends the run; the next run is logged again.
+    c.borrow_mut().unacked=false;let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());words(sent);
+    let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});}

@@ -11,7 +11,7 @@ mod script;
 use script::{parse, Host, Interpreter, Value};
 
 // The Mac as the script sees it: `wifi join` fails `fail_joins` times, then joins; time moves only when asked.
-struct Mac { joins: usize, fail_joins: usize, clock: i64, printed: Vec<String>, captured: Vec<String> }
+struct Mac { joins: usize, fail_joins: usize, clock: i64, file: &'static str, printed: Vec<String>, captured: Vec<String> }
 impl Host for Mac {
     fn command(&mut self, _w: &[String]) -> Value { Value::ok(Value::Nil) }
     fn call(&mut self, name: &str, args: &[Value]) -> Option<Value> {
@@ -22,7 +22,7 @@ impl Host for Mac {
             "log" => Some(Value::ok(Value::Nil)),
             "capture" => {
                 self.captured.push(arg.clone());
-                Some(if arg == "cat data/wifijoin.txt" { Value::ok(Value::str("CoolNet2\n")) }
+                Some(if arg == "cat data/wifijoin.txt" { Value::ok(Value::str(self.file)) }
                 else if arg == "wifi status" { Value::ok(Value::str("[WIFI] STATUS OFF\n")) }
                 else if arg.starts_with("wifi join") { self.joins += 1; if self.joins <= self.fail_joins { Value::err("wifi exited with 1") } else { Value::ok(Value::str("[WIFI] JOINED CoolNet2\n")) } }
                 else if arg == "ip" { Value::ok(Value::str("CARD 2 MAC B8:F6 IP 192.168.2.236/24 GATEWAY 192.168.2.1 SENT=2\n")) }
@@ -35,10 +35,12 @@ impl Host for Mac {
     fn print(&mut self, t: &str) { self.printed.push(t.to_string()); }
 }
 
-fn run(fail_joins: usize) -> Mac {
+fn run(fail_joins: usize) -> Mac { run_file(fail_joins, "CoolNet2\n") }
+
+fn run_file(fail_joins: usize, file: &'static str) -> Mac {
     let source = include_str!("hardware/wifijoin.msh").to_string();
     let script = parse(&source).unwrap_or_else(|e| panic!("parse: {} at {}:{}", e.message, e.at.line, e.at.column));
-    let mut mac = Mac { joins: 0, fail_joins, clock: 0, printed: vec![], captured: vec![] };
+    let mut mac = Mac { joins: 0, fail_joins, clock: 0, file, printed: vec![], captured: vec![] };
     Interpreter::default().run(&script, &mut mac).unwrap_or_else(|e| panic!("run: {}", e));
     mac
 }
@@ -62,3 +64,19 @@ fn gives_up_after_five() {
 
 #[test]
 fn joins_at_once() { assert_eq!(run(0).joins, 1); }
+
+// A join with the passphrase asks keystore to remember the network, so the station rejoins after a loss (801-ASR-0015).
+#[test]
+fn a_join_with_the_passphrase_is_remembered() {
+    let mac = run_file(0, "CoolNet2\nnot-the-real-one\n");
+    let joins: Vec<&String> = mac.captured.iter().filter(|c| c.starts_with("wifi join")).collect();
+    assert_eq!(joins, ["wifi join \"CoolNet2\" --passphrase-file data/wifijoin.txt --remember"], "{:#?}", mac.captured);
+    assert!(!mac.printed.iter().any(|l| l.contains("not-the-real-one")), "{:#?}", mac.printed);
+}
+
+// A file with the name alone joins the remembered network with no passphrase.
+#[test]
+fn a_remembered_join_names_the_network_alone() {
+    let mac = run(0);
+    assert!(mac.captured.iter().any(|c| c == "wifi join \"CoolNet2\""), "{:#?}", mac.captured);
+}

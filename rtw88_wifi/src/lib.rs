@@ -4,6 +4,7 @@
 
 pub mod coex;
 pub mod cond;
+pub mod country;
 pub mod dma;
 pub mod efuse;
 pub mod fw;

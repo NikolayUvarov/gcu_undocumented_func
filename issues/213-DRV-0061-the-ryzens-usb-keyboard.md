@@ -31,6 +31,15 @@ On boot 5 the shell was on the screen and typing did nothing. The logs showed:
 
 On the Ryzen this keyboard types in the shell, with the counters of plan step 2 in the log if they were needed. The run needs the maintainer at the machine.
 
+## Progress (2026-11-13): another keyboard types on the AMD xHCI; this one not tried yet
+
+- **Run:** the Ryzen on release 202611131315 (`main` 20fba2c5), slot B.
+- **The keyboard:** a Logitech Unifying receiver, `046D:C534`, full speed, on port 2 of `XHCI 1` (AMD `1022:1639`).
+  - `usb_hid` took its interface 0 as a keyboard (endpoint 81) and interface 1 as a mouse (endpoint 82).
+  - The maintainer typed in `wm`'s shell window, and the keys appeared.
+- **What that shows:** the AMD xHCI, `usb_host` and `usb_hid` carry a keyboard to the shell on this machine.
+- **Not shown:** the low-speed `1C4F:000E` this issue names was not plugged in. The criterion is that keyboard's run.
+
 ## Related
 
 [213](213-amd-ryzen-pc.md), [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), [214](214-intel-core-i5-pc.md).
