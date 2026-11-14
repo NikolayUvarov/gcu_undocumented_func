@@ -57,8 +57,19 @@ fn valid(bytes: &[u8]) -> &str {
 /// per request and free it before they return.
 pub fn prepare() { let _ = endpoint(); }
 
+// A line waits WRITE_MS at most for `logd` (000-KRN-0252): a log that stops answering never stops the service that
+// writes, whose lines still reach the console. After a line it did not take in time, lines go to the console alone for
+// QUIET_MS, then `logd` is tried again.
+const WRITE_MS: u32 = 5000;
+const QUIET_MS: usize = 30_000;
+static QUIET_UNTIL: AtomicUsize = AtomicUsize::new(0);
+
 fn send(endpoint: Endpoint, level: u8, text: &str) -> crate::sys::Result<()> {
-    log::write(endpoint, level, text)?.map_err(|_| crate::sys::Error::Rights)
+    let now = crate::time::uptime_ms();
+    if now < QUIET_UNTIL.load(Ordering::Relaxed) { return Err(crate::sys::Error::Other(ERR_TIMEOUT)); }
+    let sent = crate::idl::wire::with_timeout(WRITE_MS, || log::write(endpoint, level, text));
+    if matches!(sent, Err(crate::sys::Error::Other(ERR_TIMEOUT))) { QUIET_UNTIL.store(now + QUIET_MS, Ordering::Relaxed); }
+    sent?.map_err(|_| crate::sys::Error::Rights)
 }
 
 /// Adds a line with a level (`DEBUG`..`ERROR`) to the system log; nothing happens without a log client.
