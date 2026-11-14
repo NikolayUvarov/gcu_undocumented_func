@@ -28,7 +28,9 @@ fn pki() -> Dir {
     fs::create_dir_all(dir.join("root/blobs")).unwrap();
     fs::write(dir.join("root/blobs").join(DIGEST), (0..70_000u32).map(|i| (i % 249) as u8).collect::<Vec<u8>>()).unwrap();
     fs::write(dir.join("san.cnf"), "subjectAltName=DNS:localhost\n").unwrap();
-    openssl(&dir, &["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2", "-subj", "/CN=httpd test CA"]);
+    // A CA's key usage, which strict verification (Python 3.13's default) asks of it (000-NET-0082).
+    openssl(&dir, &["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2", "-subj", "/CN=httpd test CA",
+                    "-addext", "keyUsage=critical,keyCertSign,cRLSign"]);
     Dir(dir)
 }
 
@@ -64,6 +66,7 @@ fn fetch(dir: &Path, addr: SocketAddr, range: &str, max: &str) -> String {
 import hashlib, socket, ssl, sys
 port, ca, rng, top = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 ctx = ssl.create_default_context(cafile=ca)
+ctx.verify_flags |= ssl.VERIFY_X509_STRICT  # as Python 3.13 does by default
 if top == "1.2": ctx.maximum_version = ssl.TLSVersion.TLSv1_2
 try:
     t = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=10), server_hostname="localhost")
