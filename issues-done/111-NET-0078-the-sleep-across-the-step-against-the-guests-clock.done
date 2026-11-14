@@ -1,0 +1,44 @@
+# 111-NET-0078 — The sleep across the step, counted by the host, against the guest's clock — done
+
+**Type:** network (a test of the gate, `tests/qemu_smoke.py`, `timed_check`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
+
+## Problem
+
+**Round 133's gate,** candidate ae418d30 (`main` d35515e0 with 000-KRN-0241 and 550-NET-0061; neither touches `timed`, the clock or `msh`), "x86: RAM above 4 GiB" on i9 (964 s). `timed_check` failed on the sleep across the step: `(25002, 24.93784049500391)`.
+- **The check:** `msh` sleeps 25 s while `timed` steps the calendar clock two years forward. The sleep must last 25 s by the guest's monotonic clock, and at least 25 s by the host's, counted from the command sent ([111-NET-0076](111-NET-0076-two-time-checks-i9-showed.done)).
+- **What it got:** 25002 ms in the guest, 24.94 s on the host. The guest's monotonic clock ran 0.25 % ahead of the host's: the host counts from before the guest can start its sleep, so nothing else makes its count the shorter.
+- **Why that can be:** under TCG the guest's clock is the kernel's measure of the LAPIC timer and the TSC against the ACPI PM timer (`TICK: LAPIC TIMER, … MEASURED ON THE ACPI PM TIMER`), made over a short window at boot. On a loaded host that measure is off by tenths of a percent. i9 is a WSL2 guest whose timer is coarse (`HUMAN/2026-11-10T1426Z` on `internal-dev-messages`). Inferred, not measured on this run.
+- **What the host's count is for:** a step that ended the sleep, or moved the monotonic clock with it, would leave a second or two on the host. A bound of exactly 25 s asks the guest's clock to run no faster than the host's, which the check is not about.
+
+## Plan
+
+The host's count is held to the guest's own: at least 96 % of the guest's milliseconds (the guest's clock up to 4 % fast), still below 33 s. The guest's bound, 25 000 ms to 26 500 ms, stays as it is.
+
+## Acceptance criteria
+
+- The check takes round 133's pair (25002 ms, 24.94 s) and refuses a sleep the step ended (25002 ms, 2 s).
+- "x86: network, TLS and Effector" and "x86: RAM above 4 GiB", which run the `net` suite, pass on the maintainer's machines, then in a gate.
+
+## Progress
+
+**Made (2026-11-14)** on `claude/111-NET-0078-the-sleep-counted-against-the-guests-clock`: `timed_check` holds the host's count to `guest * 0.96 / 1000` seconds and below 33 s; the guest's bound is unchanged.
+- **The bound:** it took round 133's pair (25002 ms, 24.94 s) and refused a sleep the step ended (25002 ms, 2 s), worked out in this container.
+- **Run** at 76a32a22 (`main` 4153c5c2 merged in) on the maintainer's machines (QEMU under TCG); both passed:
+
+  | Machine | Group | Time | The guest's count | The host's |
+  |---|---|---|---|---|
+  | i9 | "x86: RAM above 4 GiB" | 1731 s | 25002 ms | 24.7 s |
+  | acc-1 | "x86: network, TLS and Effector" | 1465 s | 25004 ms | 25.2 s |
+
+  On i9 the old bound of 25 s would have failed again: there the guest's clock ran about 1.2 % ahead of the host's, more than in round 133.
+- **Left:** the gate.
+
+## Resolution
+
+`timed_check` (`tests/qemu_smoke.py`) holds the host's count of the 25-s sleep across the clock's step to the guest's own: at least 96 % of the guest's milliseconds, below 33 s. The guest's bound, 25 000 ms to 26 500 ms, is unchanged. A step that ended the sleep, leaving a second or two, is still refused.
+- **Run:** i9, "x86: RAM above 4 GiB", 25002 ms and 24.7 s, which the old bound of 25 s would have failed; acc-1, "x86: network, TLS and Effector", 25004 ms and 25.2 s.
+- **Landed** in round 134 (`main` dc9ce196, 2026-11-14, gate `land-r134` green); in that gate i9's "x86: RAM above 4 GiB" passed on its first run (1681 s).
+
+## Related
+
+[111-NET-0076](111-NET-0076-two-time-checks-i9-showed.done) (the host counting from the command), [111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done) (`timed`).
