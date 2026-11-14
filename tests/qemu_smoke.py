@@ -10947,14 +10947,15 @@ def download_check(args, disk):
     api_asked = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # not in get's lines: asked at run time
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
-    service_port, expired_port = service.server_address[1], expired.server_address[1]
+    future, _ = _https_server(certificates, "future")
+    service_port, expired_port, future_port = service.server_address[1], expired.server_address[1], future.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data" / "chat.json").write_text('{"model":"f","messages":[{"content":"from a file"}]}')  # get's JSON POST from a file
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
                                         + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
-                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port, future_port))
                                         + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
                                         + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
@@ -10982,14 +10983,14 @@ def download_check(args, disk):
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
         get_runs(vm, api_stub.server_address[1], api_other.server_address[1], api_asked.server_address[1], secure, tls_port, rogue_port, port, files)
-        pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
+        pinned_runs(vm, certificates, service_port, rogue_port, expired_port, future_port)
     finally:
         vm.close()
         held.go.set()
         stall.go.set()
         if sftp:
             sftp.stop()
-        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired):
+        for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired, future):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -11237,9 +11238,10 @@ def get_runs(vm, port, other_port, asked_port, secure, tls_port, rogue_port, pla
           "time, refused and allowed once, from a script too (Esc answering no without stopping the script)", flush=True)
 
 
-def pinned_runs(vm, certificates, port, rogue_port, expired_port):
+def pinned_runs(vm, certificates, port, rogue_port, expired_port, future_port):
     """750-NET-0020: a server trusted by one of two pins (its leaf or its SPKI, tls.wit 1.2), its certificate's name,
-    validity and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused."""
+    end and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused.
+    801-NET-0081 (tls.wit 1.5): one whose certificate starts after the clock reached and the start logged."""
     leaf, spki = _leaf_pin(certificates / "server.pem"), _spki_pin(certificates / "server.pem")
     url = f"https://10.0.2.2:{port}/pinned"
 
@@ -11253,11 +11255,15 @@ def pinned_runs(vm, certificates, port, rogue_port, expired_port):
     for arguments in (f"https://10.0.2.2:{rogue_port}/small.bin --pin leaf:{leaf} --pin spki:{spki}", f"{url} --pin leaf:{leaf} --name other.test",
                       f"https://10.0.2.2:{expired_port}/x --pin leaf:{_leaf_pin(certificates / 'expired.pem')}"):
         require(run(arguments, "WEBCHECK: TLS CONNECT"), "Certificate")
+    require(run(f"https://10.0.2.2:{future_port}/future --pin leaf:{_leaf_pin(certificates / 'future.pem')}", "WEBCHECK DONE"), "WEBCHECK GET 200")
     log = vm.command("dmesg -s tls")
-    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired"):
+    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired",
+                 "ITS CERTIFICATE STARTS AT 3786912000 BUT THE CLOCK READS ", ": NOT ENFORCED, THE PIN BINDS THE KEY"):
         require(log, line)
+    assert "NotValidYet" not in log, log[-2000:]
     print("PASS: pinned servers: trusted by a leaf or an SPKI pin, the second pin of two accepted (rotation); a server matching "
-          "neither, a wrong name and an expired certificate refused", flush=True)
+          "neither, a wrong name and an expired certificate refused; one whose certificate starts in 2090 reached, the start "
+          "logged and not enforced (801-NET-0081)", flush=True)
 
 
 def download_runs(vm, release, port, big, small, cut, rules):
@@ -12751,6 +12757,10 @@ def _expired_certificate(directory):
     run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "expired.key", "-out", "expired.csr", "-subj", "/CN=mind.test")
     run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "expired.csr", "-out", "expired.pem", "-notext",
         "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-extfile", "names.cnf")
+    # 801-NET-0081: one that starts in 2090, as a pinned server's certificate looks to a clock far behind (a flat battery).
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "future.key", "-out", "future.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "future.csr", "-out", "future.pem", "-notext",
+        "-startdate", "20900101000000Z", "-enddate", "20910101000000Z", "-extfile", "names.cnf")
 
 
 def _leaf_pin(pem):
