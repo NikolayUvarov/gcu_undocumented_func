@@ -61,7 +61,8 @@ const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
-const REFUSED: &str = "MIND/REFUSED"; // the last trial init refused, and why (801-UPD-0037)
+// The last trial init refused, and why (801-UPD-0037): in the updater's own directory, which every slot's updater reads.
+const REFUSED: &str = "system/updater/refused";
 const REFUSED_MAX: usize = 512;
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
@@ -1141,7 +1142,7 @@ impl Updater {
 
     /// On a trial boot the kernel restarts the machine at its deadline unless init confirmed the boot: once init says it
     /// did, or past that deadline, the record says so on the disk; `why` says which.
-    // A trial init refused (801-UPD-0037): its reason kept in MIND/REFUSED for the slot before to report (S2), the
+    // A trial init refused (801-UPD-0037): its reason kept in system/updater/refused for the slot before to report (S2), the
     // trial spent on the disk so that the next boot falls back to that slot at once, and init asked to restart.
     fn refused(&mut self, boot: &init::Boot) {
         let why = if boot.why.as_str().is_empty() { "NO REASON GIVEN" } else { boot.why.as_str() };
@@ -1151,7 +1152,8 @@ impl Updater {
         let version = if self.running == 0 { String::from("not known") } else { format!("{}", self.running) };
         let log = if boot.log == 0 { String::from("none") } else { format!("log:boot{:04}.log", boot.log) };
         let text = format!("refused version {} in slot {}, falling back to slot {}\nwhy {}\nlog {}\n", version, slot_name(self.slot), slot_name(fallback), why, log);
-        let kept = File::create(REFUSED).is_ok_and(|mut file| file.write_at(0, &text.as_bytes()[..text.len().min(REFUSED_MAX)]).is_ok());
+        let made = matches!(mind::fs::mkdir(TRUSTED_DIR), Ok(()) | Err(mind::fs::Error::Exists));
+        let kept = made && File::create(REFUSED).is_ok_and(|mut file| file.write_at(0, &text.as_bytes()[..text.len().min(REFUSED_MAX)]).is_ok());
         mind::println!("[UPDATER] THE REASON {} {} (VERSION {}, THIS BOOT'S LOG {})", if kept { "KEPT IN" } else { "NOT WRITTEN TO" }, REFUSED, version, log);
         match plan::spend(records, self.slot) {
             Some(write) => match self.write_record(write) {

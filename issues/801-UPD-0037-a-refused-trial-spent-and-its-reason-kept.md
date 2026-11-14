@@ -14,7 +14,7 @@
   - While `init` says `deciding`, the updater asks again every second.
   - When `init` cannot say, the trial stays unconfirmed and the bootloader counts its tries.
 - **On a refusal:**
-  1. the reason is kept in `MIND/REFUSED`: the version and slot, the fallback, `init`'s `why`, and the trial's `log:bootNNNN.log`;
+  1. the reason is kept in `system/updater/refused`: the version and slot, the fallback, `init`'s `why`, and the trial's `log:bootNNNN.log`;
   2. the trial is spent (`plan::spend`: the same slot and fallback, no tries left), so the next boot falls back at once;
   3. the updater asks `init` to restart.
 - **At every start** the updater says a reason kept there. It gives it as the update state's failure, which the agent reports (EFF's S2 part), until a trial is confirmed; then the file goes.
@@ -22,7 +22,7 @@
 ## Acceptance criteria
 
 - **The host test** `a_trial_init_refused_is_spent_and_the_next_boot_falls_back`: a spent trial leaves the bootloader's plan on the fallback, not on trial.
-- **The `boot` suite's refused trial** (with 801-KRN-0242): two tries, one used. The next boot is slot A's, which names the reason, and `MIND/REFUSED` holds it. The newer record is B's with no tries left.
+- **The `boot` suite's refused trial** (with 801-KRN-0242): two tries, one used. The next boot is slot A's, which names the reason, and `system/updater/refused` holds it. The newer record is B's with no tries left.
 - The updater groups pass on both arches on the maintainer's machines, then in a gate.
 
 ## Related

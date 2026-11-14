@@ -17456,11 +17456,11 @@ def trial_check(args, disk):
             require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
             vm.expect("MIND> ", timeout=120)
             log = vm.service_logs("updater", "A TRIAL REFUSED BEFORE")
-            require(log, "[UPDATER] A TRIAL REFUSED BEFORE (MIND/REFUSED): refused version ")
+            require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
             require(log, "in slot B, falling back to slot A; THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED")
         finally:
             vm.close()
-        refused = (image.read("MIND/REFUSED") or b"").decode()
+        refused = (image.read("system/updater/refused") or b"").decode()
         assert refused.startswith("refused version ") and "\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog log:boot" in refused, refused
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
