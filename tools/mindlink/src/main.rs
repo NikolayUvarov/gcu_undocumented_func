@@ -32,22 +32,23 @@ commands: hello                       the other end's name and version
           mv <from> <to> [--force]    move or rename a file or directory; --force replaces a file at <to>
           rmdir <dir> [-r]            remove an empty directory; -r: and everything in it
           run <program> [<argument>...]  start a program on the other end, show its output until it ends; exits with
-                                      its code where the other end knows it (MIND Core: link.conf must hold the word run)
+                                      its code where the other end knows it
           start <program> [<argument>...]  the same, printing only the run's number
           replace <unit> <file> [<name>]  put <file> (as replace/<its name> unless <name>) and start the other end's
-                                      service <unit> again from it, unverified (MIND Core: dev in link.conf; 800-LNK-0016)
+                                      service <unit> again from it, unverified (MIND Core: init's lifecycle client for
+                                      link; 800-LNK-0016)
           replace <unit> --back       start <unit> again from its boot image
           sh <line>                   one line for the other end's shell, its output; exits 1 when the shell refused
-                                      or failed it (MIND Core: link.conf must hold the word dev; 800-LNK-0015)
+                                      or failed it (MIND Core: init's shell client for link; 800-LNK-0015)
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
           runs                        the runs the other end knows
           stop <run>                  stop a run's program
-          reboot                      restart the other end's machine (MIND Core: link.conf must hold the word dev)
+          reboot                      restart the other end's machine (MIND Core: init's lifecycle client for link)
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
           key <chord>... [--pace <ms>]  press keys on the other end's machine, as its keyboard would: QEMU's sendkey
                                       names joined by - (ctrl-alt-f6, alt-0, shift-a, ret), one chord at a time, --pace
-                                      ms apart (default 20; MIND Core: dev in link.conf and init's input capability)
+                                      ms apart (default 20; MIND Core: init's input capability for link)
           type <text> [--pace <ms>]   type the text there, a character's keys every --pace ms (default 20)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
           board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
@@ -72,7 +73,7 @@ pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).co
 fn refusal(c: u8) -> &'static str {
     match c {
         code::NOT_FOUND => "no such file or directory",
-        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf, a shell line \"dev\", keys \"dev\" and init's input capability)",
+        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core init granted link no client for it: a shell line needs the shell's, reboot and replace the lifecycle client, keys the input capability; its log names the one missing)",
         code::IO => "the other end's storage failed",
         code::MISMATCH => "SHA-256 does not match: the file was not kept",
         code::BAD_REQUEST => "the other end did not take the request",
@@ -395,7 +396,7 @@ fn keys(c: &mut Client<port::Port>, text: bool, args: &[&str]) -> Result<(), Err
         if i > 0 && pace > 0 { std::thread::sleep(Duration::from_millis(pace)); }
         for frame in group.chunks(max) {
             let posted = match c.input(frame) {
-                Err(Error::Refused(code::DENIED)) => die("the other end takes no keys: MIND Core needs dev in link.conf and init's input capability for link (800-LNK-0032)"),
+                Err(Error::Refused(code::DENIED)) => die("the other end takes no keys: MIND Core needs init's input capability for link (800-LNK-0032)"),
                 r => r?,
             } as usize;
             sent += posted;

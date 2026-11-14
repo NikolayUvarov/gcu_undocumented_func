@@ -4,7 +4,7 @@
 
 ## Problem
 
-[801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.md) made the gate's S4 check for x86 alone. Its plan left aarch64 for later, and the profile says so: "QEMU, x86, the directory source only, not the server's and not aarch64".
+[801-UPD-0038](../issues-done/801-UPD-0038-an-update-from-the-previous-release.done) made the gate's S4 check for x86 alone. Its plan left aarch64 for later, and the profile says so: "QEMU, x86, the directory source only, not the server's and not aarch64".
 
 The maintainer's words for S4: «если обновление не может подключиться к сети и/или серверу - то это обновление не рабочее». A release is not working if the release before it cannot take it. S4 names no architecture, and the bench and the boards run aarch64 too (PinePhone, Orange Pi). So without this check, a change could land that aarch64's previous release cannot update to, and no gate would say so.
 
@@ -30,7 +30,7 @@ The maintainer's words for S4: «если обновление не может �
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.md).
+[801](801-the-bench-stays-manageable.md), [801-UPD-0038](../issues-done/801-UPD-0038-an-update-from-the-previous-release.done), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](../issues-done/801-UPD-0039-the-updater-always-reads-the-cables-directory.done).
 
 ## Progress (2026-11-14)
 

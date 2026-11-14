@@ -206,8 +206,8 @@ pub const BADGE_LIFECYCLE: u16 = 2;
 pub const BADGE_MODE: u16 = 3;
 /// The badge of init's client that may only turn the maintenance mode on, with a reason: the Mind's, once it exists.
 pub const BADGE_MIND: u16 = 4;
-/// The badge of init's lifecycle client for link with `dev` in link.conf: `reboot`, and `replace` a service with an image
-/// from data/link/ (init.wit 1.6, 800-KRN-0144).
+/// The badge of init's lifecycle client for link, at its every start (801-KRN-0247): `reboot`, and `replace` a service with
+/// an image from data/link/ (init.wit 1.6, 800-KRN-0144).
 pub const BADGE_DEVELOPER: u16 = 5;
 /// The badge of init's lifecycle client for the Effector gateway (init.wit 1.7, 750-KRN-0121): `run`, `stop` and `restart`
 /// of what the owner's policy (`mind::effector::POLICY_FILE`) allows alone; never `stop-task`, `reboot` or `replace`.
@@ -215,7 +215,7 @@ pub const BADGE_NAMED: u16 = 6;
 /// The badge of init's client for the Effector agent (init.wit 1.12, 750-KRN-0194): `stop-notice` and what any client
 /// may ask; never a lifecycle change.
 pub const BADGE_NOTICE: u16 = 7;
-/// The badge of the shell's command client init mints for link with `dev` in link.conf (800-KRN-0148): the shell takes
+/// The badge of the shell's command client init mints for link at its every start (800-KRN-0148, 801-KRN-0247): the shell takes
 /// that client's lines on the link's rule.
 pub const BADGE_SHELL_LINK: u16 = 1;
 /// The badge of the copy of its command client the shell lends for REQUEST_SECRET_LINE (000-KRN-0224, for 000-APP-0126):

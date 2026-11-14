@@ -1,6 +1,6 @@
-# 801-UPD-0038 — An update from the previous release: no release lands that the one before it cannot update to
+# 801-UPD-0038 — An update from the previous release: no release lands that the one before it cannot update to — done
 
-**Type:** update (tests, the gate) · **Owner:** `UPD` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S4) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-9.4, MC-12.1
+**Type:** update (tests, the gate) · **Owner:** `UPD` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S4) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-9.4, MC-12.1
 
 ## Problem
 
@@ -33,9 +33,22 @@
 2. **The group is in the gate's list,** with its time estimated in `scripts/land.py`.
 3. **The profile** (Article 9) names the check as evidence, and what it does not cover.
 
+## Resolution
+
+Landed in round 136 (`main` bdde60e961), from `claude/801-UPD-0038-an-update-from-the-previous-release` 015323ef5c.
+
+- **Criteria:**
+  1. **x86:** the group passed on i9 on `4db07a2082` (651 s; the previous release `main` `d9753fc2`), and in round 136's gate on the candidate `ccf90086a8` (i9, 610 s; the previous release `main` `32272bba66`): the previous release's own updater took the candidate's release 6 from `data/link/rel/` into slot B, booted it on trial and confirmed it;
+  2. the group `x86: an update from the previous release` is in `scripts/ci_local.sh --list`, estimated in `scripts/land.py`;
+  3. the profile's Article 9 names the check and what it does not cover.
+- **Split off:**
+  - aarch64, to [801-UPD-0040](../issues/801-UPD-0040-an-update-from-the-previous-release-on-aarch64.md);
+  - the update through the Effector server stays ASR's [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), case 5;
+  - a release that cannot connect is S1's (801-KRN-0242).
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.md), 351-UPD-0026, 351-KRN-0141.
+[801](../issues/801-the-bench-stays-manageable.md), [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.done), 351-UPD-0026, 351-KRN-0141.
 
 ## Progress (2026-11-14)
 
