@@ -152,4 +152,9 @@ impl List {
         let rank = |b: &&Bss| if b.weakness == 0 { u8::MAX } else { b.weakness };
         self.iter().filter(|b| b.ssid() == ssid && matches!(b.security, Security::Open | Security::Wpa2)).min_by_key(rank)
     }
+    /// The strongest access point of the network named `ssid` with `security` (801-NET-0084).
+    pub fn best_of(&self, ssid: &[u8], security: Security) -> Option<&Bss> {
+        let rank = |b: &&Bss| if b.weakness == 0 { u8::MAX } else { b.weakness };
+        self.iter().filter(|b| b.ssid() == ssid && b.security == security).min_by_key(rank)
+    }
 }

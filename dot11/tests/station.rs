@@ -1,7 +1,8 @@
 //! Host tests of the 802.11 station (550-NET-0017) against a simulated access point on one channel: a scan, joining
 //! an open and a WPA2-PSK network (the access point's handshake from `wpa::authenticator`), data both ways under CCMP,
-//! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), and a country's
-//! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035).
+//! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), a country's
+//! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035), and
+//! the access point a key joins: WPA2 alone, never an open one of the same name (801-NET-0084).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
 use dot11::country::{self, Rule, Standing};
@@ -429,6 +430,50 @@ fn silence_refusal_and_a_downgrade_fail_the_join() {
     assert_eq!((air.station.state(), air.station.reason()), (State::Failed, Reason::Refused));
     assert_eq!(air.sent.last().unwrap().0[0], frame::DEAUTHENTICATION << 4);
     assert!(!air.ap.confirmed);
+}
+
+// An open access point's beacon named as the WPA2 network, from another BSSID and stronger than it (801-NET-0084).
+const TWIN: Mac = [0x02, 0xBB, 0xBB, 0xBB, 0xBB, 0x02];
+fn hear_open_twin(air: &mut Air) {
+    let mut f = Ap::new(None).beacon();
+    f[10..16].copy_from_slice(&TWIN);
+    f[16..22].copy_from_slice(&TWIN);
+    let mut out = Out::default();
+    air.station.receive(&f, 6, 30, air.now, &[0x42; 32], &mut air.service, &mut out, &mut air.tx, &mut air.rx).unwrap();
+    air.apply(out);
+}
+
+#[test]
+fn a_key_joins_only_a_wpa2_access_point_and_no_key_only_an_open_one() {
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    // The open twin is the strongest of the name, yet a key, held or kept, joins the WPA2 one.
+    for secret in [pmk, Some(Secret::Kept)] {
+        let mut air = Air::new(wpa2());
+        air.scan();
+        hear_open_twin(&mut air);
+        assert_eq!(air.station.networks().best(SSID).unwrap().bssid, TWIN);
+        air.run(|s, now, out, tx| s.join(SSID, secret, now, out, tx)).unwrap();
+        assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+        assert_eq!(air.station.network().unwrap().bssid, BSSID);
+        assert!(air.ap.confirmed);
+    }
+    // No key: the open one alone, never the WPA2 one.
+    let mut air = Air::new(wpa2());
+    air.scan();
+    hear_open_twin(&mut air);
+    air.run(|s, now, out, tx| s.join(SSID, None, now, out, tx)).unwrap();
+    assert_eq!((air.station.state(), air.station.network().map(|b| (b.bssid, b.security))), (State::Joining, Some((TWIN, Security::Open))));
+    // A key and only an open access point of the name: nothing to join, nothing sent to it.
+    let mut air = Air::new(Ap::new(None));
+    air.scan();
+    let sent = air.sent.len();
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)), Err(Error::Unsupported));
+    assert_eq!((air.station.state(), air.station.reason(), air.sent.len()), (State::Failed, Reason::Unsupported, sent));
+    // No key and only a WPA2 one: refused as before, the station as it was.
+    let mut air = Air::new(wpa2());
+    air.scan();
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, None, now, out, tx)), Err(Error::Invalid));
+    assert_eq!(air.station.state(), State::Off);
 }
 
 #[test]

@@ -12244,7 +12244,8 @@ def wifi_join_check(vm):
     # 550-NET-0061: a radio that restarted (init starts wlansim again, as it starts rtw89_wifi again after its data mode
     # failed) has no channel set and no country, and sends nothing. Once the network is lost the station notices within
     # wlan's RESTART_CHECK_MS, gives the radio the country it ran under, and the automatic join joins again by itself.
-    # The network forgotten above is remembered again first: the automatic join joins only a remembered one.
+    # The network forgotten above is remembered again first: the automatic join joins a remembered one, or one a client
+    # joined (801-NET-0084), which `wifi leave` drops.
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     radio = vm.services()["wlansim"]
@@ -12287,6 +12288,43 @@ def wifi_join_check(vm):
            if "A CALL FOUND ITS DRIVER ENDED" in before else "by the 10-s check, which came before the scan")
     print(f"PASS: a radio restarted while the station was not joined, a client's scan at once: the station noticed {how}, "
           "gave it RU, listed MIND-TEST and joined it again (550-NET-0061)", flush=True)
+    # 801-NET-0084 (DRV's Ryzen run of 2026-11-14, joined by a script without --remember): a network a client joined that
+    # keystore does not keep is joined again by itself after the radio restarts, with the PMK wlan held since that join;
+    # keystore is not asked for its keys.
+    run("wifi leave", 30, "[WIFI] LEFT")
+    scanned()
+    vm.send_bytes(b"f")
+    vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
+    quit_wifi()
+    require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    vm.command(f"logs {vm.services()['wlan']}", raw=True)  # drained, as keystore's below
+    vm.service_logs("keystore")
+    radio = vm.services()["wlansim"]
+    require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+    again = wlan_until(joined, 150)
+    assert "[WLAN] THE RADIO RESTARTED (" in again, again[-2000:]
+    assert re.search(r"\[WLAN\] AUTO-JOIN MIND-TEST: THE NETWORK A CLIENT JOINED THIS BOOT, NOT REMEMBERED \(TRY \d+\)", again), again[-2000:]
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    assert "WI-FI KEYS FOR MIND-TEST" not in vm.service_logs("keystore"), "keystore was asked for the keys of a network it does not keep"
+    # After wifi leave nothing is held: a fresh wlan (the Ryzen's `kill 27`) says once why it joins nothing, then waits.
+    run("wifi leave", 30, "[WIFI] LEFT")
+    pid = vm.services()["wlan"]
+    require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+    for _ in range(50):
+        if vm.services().get("wlan", pid) != pid:
+            break
+        time.sleep(.2)
+    else:
+        raise AssertionError(f"wlan PID={pid} was not restarted")
+    idle = wlan_until("[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK; A JOIN NEEDS THE USER", 60)
+    time.sleep(25)  # past two tries' waits
+    idle += vm.command(f"logs {vm.services()['wlan']}", raw=True)
+    assert idle.count("A JOIN NEEDS THE USER") == 1 and "AUTO-JOIN MIND-TEST" not in idle, idle[-2000:]
+    # As before this check: MIND-TEST remembered and joined.
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    print("PASS: MIND-TEST joined without being remembered, its radio restarted: the station joined it again by itself with the "
+          "PMK it held, keystore not asked; after wifi leave a fresh station said once that a join needs the user (801-NET-0084)", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
