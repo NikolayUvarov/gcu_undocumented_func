@@ -47,3 +47,9 @@ The QEMU suites need a server on the host that speaks the contract of 0001. The 
 ## Progress — 2026-10-21
 
 The `effector` QEMU suite (750-EFF-0006) uses the fixture on x86_64 and aarch64 through `10.0.2.2`, with its fault hooks (`ack_500`, `redeliver`) and a second fixture for another certificate. Still open: the checks on macOS and Windows/MSYS2.
+
+## Progress (2026-11-14): three fixes the other tracks met
+
+- **Python 3.13 (NET's report of 2026-11-05, APP's of 2026-11-10).** A TLS client that closes before its request now reaches `handle_error` as a `ConnectionError`. The fixture no longer counts that as a handler failure, so `test_contract_tls_pin_auth_and_prefix` no longer fails there.
+- **The 413 race (KRN, round 104).** A body over its limit but within 2 MiB is read before the 413, so the client's send ends and it reads the answer. `test_bounded_bodies_and_strict_json` passed 40 runs in 40 on Python 3.12.
+- **`outage(seconds)`** stands for a server out of reach: every request ends unanswered until then (801-EFF-0028). It has a test of its own.

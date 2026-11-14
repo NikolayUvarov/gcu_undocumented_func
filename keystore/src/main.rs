@@ -14,7 +14,9 @@
 // (1.5) only to the client init badged for it; `key-state` to anyone, `unlock` and `passphrase-set` only to the
 // passphrase's badge (1.6). Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
-// (slot 4).
+// (slot 4). On a boot on trial (801-NET-0079) it writes, moves and removes nothing the slot before reads: a key that
+// does not open is not replaced, and what would convert one waits for a boot not on trial; the Wi-Fi networks remembered
+// then go to a file of the trial's own (wifi.rs).
 extern crate alloc;
 
 mod certificate;
@@ -48,16 +50,27 @@ struct Keys {
     served: u32, hosted: u32, minute: usize,
     // The device key sealed under a passphrase (1.6); whether a TPM seals it instead; the certificate's serial.
     lock: lock::Lock, tpm: bool, serial: [u8; 16],
+    // Whether the boot is on trial, and whether the key held is the one the disk keeps, not one for this boot (801-NET-0079).
+    trial: bool, kept: bool, release: [u8; 32],
 }
 
+// A key held: the one the disk keeps, or one for this boot only, which nothing is written under (801-NET-0079).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held { Kept, ThisBoot }
+
+// How long a TPM that does not answer at the start is waited for while a key it sealed is there.
+const TPM_WAIT_MS: usize = 5000;
+const TPM_STEP_MS: usize = 250;
+
 impl Keys {
-    fn new() -> Self {
+    fn new(trial: bool, release: &[u8; 32]) -> Self {
+        if trial { mind::println!("[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN {} THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL", stored::DIR); }
         let mut keys = Self { key: None, certificate: Vec::new(), usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi: None, served: 0, hosted: 0, minute: mind::time::uptime_ms(),
-                              secrets: secrets::Clients::new(), lock: lock::Lock::new(), tpm: stored::tpm(), serial: [0; 16] };
+                              secrets: secrets::Clients::new(), lock: lock::Lock::new(), tpm: tpm(), serial: [0; 16], trial, kept: false, release: *release };
         // Without the random source no key is made or used: the service fails closed, as the TLS service does.
         if !random(&mut keys.serial) { return keys; }
         let mut seed = [0u8; 32];
-        if Self::seed(&mut seed, keys.tpm, &mut keys.lock) { keys.hold(&seed); }
+        if let Some(held) = Self::seed(&mut seed, keys.tpm, &mut keys.lock, trial) { keys.hold(&seed, held, release); }
         // The seed is the private key: wipe the stack copy (SigningKey wipes its own on drop).
         stored::wipe(&mut seed);
         keys
@@ -65,7 +78,7 @@ impl Keys {
 
     // Holds the key of `seed`: its certificate, its public key in the log, and the remembered Wi-Fi networks, which open
     // under it (so there are none without it).
-    fn hold(&mut self, seed: &[u8; 32]) {
+    fn hold(&mut self, seed: &[u8; 32], held: Held, release: &[u8; 32]) {
         let key = SigningKey::from_bytes(seed);
         let start = mind::rtc::unix_time().map(|t| t.saturating_sub(86400)).unwrap_or(0);
         let der = certificate::build(&key, self.serial, start);
@@ -73,7 +86,9 @@ impl Keys {
         let name = core::str::from_utf8(name.as_bytes()).unwrap_or("");
         mind::println!("[KEYSTORE] DEVICE KEY READY: {} (ED25519, CERTIFICATE {} BYTES)", name, der.len());
         mind::println!("[KEYSTORE] PUBLIC KEY {} {}", certificate::openssh(&key).as_str(), name.replace(' ', "-"));
-        self.wifi = Some(wifi::Wifi::load(seed));
+        self.kept = held == Held::Kept;
+        let writes = match (held, self.trial) { (Held::ThisBoot, _) => wifi::Writes::None, (Held::Kept, true) => wifi::Writes::Trial, (Held::Kept, false) => wifi::Writes::Kept };
+        self.wifi = Some(wifi::Wifi::load(seed, writes, release));
         (self.key, self.certificate) = (Some(key), der);
     }
 
@@ -91,9 +106,11 @@ impl Keys {
             return Err(Error::Invalid);
         }
         let mut seed = self.lock.unlock(pid, passphrase)?;
-        self.hold(&seed);
+        let release = self.release;
+        self.hold(&seed, Held::Kept, &release);
         stored::wipe(&mut seed);
-        if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
+        if self.trial { if stored::plain_present() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} STAYS UNTIL A BOOT NOT ON TRIAL", stored::FILE); } }
+        else if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
         Ok(())
     }
 
@@ -102,6 +119,8 @@ impl Keys {
         lock::client(badge, pid, "PASSPHRASE-SET")?;
         let refuse = |why: &str, error: Error| { mind::println!("[KEYSTORE] REFUSED PASSPHRASE-SET FOR PID {}: {}", pid, why); Err(error) };
         if self.tpm { return refuse("THE TPM SEALS THE DEVICE KEY", Error::Invalid); }
+        if self.trial { return refuse("THE BOOT IS ON TRIAL: SET IT AT A BOOT NOT ON TRIAL", Error::Invalid); }
+        if self.key.is_some() && !self.kept { return refuse("THE DEVICE KEY IS ONE FOR THIS BOOT ONLY", Error::NoKey); }
         let mut seed = match (&self.key, self.state()) {
             (Some(key), _) => key.to_bytes(),
             (None, KeyState::Waiting) => return refuse("THE DEVICE KEY WAITS FOR ITS PASSPHRASE", Error::Invalid),
@@ -116,41 +135,48 @@ impl Keys {
     // secrets they are; `denied` to any other client, `no-key` without the device key.
     fn secret<T>(&mut self, badge: u16, pid: u64, f: impl FnOnce(&[u8; 32], &secrets::Owner) -> Result<T, Error>) -> Result<T, Error> {
         let owner = self.secrets.owner(badge, pid)?;
+        // Under a key for this boot only, the owners' files would not open, and a new one would open at no later boot.
+        if self.key.is_some() && !self.kept { mind::println!("[KEYSTORE] SECRETS REFUSED FOR PID {}: THE DEVICE KEY IS ONE FOR THIS BOOT ONLY", pid); return Err(Error::NoKey); }
         let mut seed = self.key.as_ref().map(SigningKey::to_bytes).ok_or(Error::NoKey)?;
         let result = f(&seed, &owner);
         stored::wipe(&mut seed);
         result
     }
 
-    // The stored seed, or a new one made and stored (351-NET-0005); false without the random source, and where a
-    // passphrase seals it (`lock` then holds the file it waits on) or a sealed file does not open (1.6).
-    fn seed(seed: &mut [u8; 32], tpm: bool, lock: &mut lock::Lock) -> bool {
+    // The stored seed, or a new one made and stored (351-NET-0005); none without the random source, and where a
+    // passphrase seals it (`lock` then holds the file it waits on) or a sealed file does not open (1.6). A key that is
+    // there but does not open is never replaced on a boot on trial, nor one a TPM sealed while no TPM answers (801-NET-0079).
+    fn seed(seed: &mut [u8; 32], tpm: bool, lock: &mut lock::Lock, trial: bool) -> Option<Held> {
         if tpm {
             if lock::present() { mind::println!("[KEYSTORE] {} LEFT AS IT IS: THE TPM SEALS THE DEVICE KEY, NOT A PASSPHRASE", passlock::FILE); }
-            return Self::sealed_seed(seed);
+            return Self::sealed_seed(seed, trial);
         }
         // A key sealed under a passphrase is never replaced: a file that does not open leaves no key, and stays.
-        let kept = |why: core::fmt::Arguments| { mind::println!("[KEYSTORE] {} {}: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE", passlock::FILE, why); false };
+        let kept = |why: core::fmt::Arguments| { mind::println!("[KEYSTORE] {} {}: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE", passlock::FILE, why); None };
         match lock::find() {
             lock::Found::File(file) => {
                 mind::println!("[KEYSTORE] NO TPM: THE DEVICE KEY IS SEALED UNDER THE OWNER'S PASSPHRASE IN {}: IT WAITS FOR IT", passlock::FILE);
                 if File::open(stored::FILE).is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} IS REMOVED ONCE THE PASSPHRASE OPENS THE KEY", stored::FILE); }
                 lock.file = Some(file);
-                return false;
+                return None;
             }
             lock::Found::Damaged => return kept(format_args!("DAMAGED")),
             lock::Found::Version(version) => return kept(format_args!("OF VERSION {}, NOT {}", version, passlock::VERSION)),
             lock::Found::Unreadable(error) => return kept(format_args!("UNREADABLE ({:?})", error)),
             lock::Found::Missing => {}
         }
+        // A key a TPM sealed, and no TPM answers this boot: it may answer at the next, so nothing is replaced (801-NET-0079).
+        if stored::sealed_present() {
+            mind::println!("[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN {}, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY, NOTHING IN {} CHANGED", stored::SEALED, stored::DIR);
+            return this_boot(seed);
+        }
         mind::println!("[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED");
-        let made = |seed: &mut [u8; 32], why: &str| -> bool {
-            if !random(seed) { return false; }
+        let made = |seed: &mut [u8; 32], why: &str| -> Option<Held> {
+            if !random(seed) { return None; }
             match stored::store(seed) {
-                Ok(()) => mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND STORED IN {} (ON DISK, NOT SEALED)", why, stored::FILE),
-                Err(error) => mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {:?} (THIS BOOT ONLY)", why, error),
+                Ok(()) => { mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND STORED IN {} (ON DISK, NOT SEALED)", why, stored::FILE); Some(Held::Kept) }
+                Err(error) => { mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {:?} (THIS BOOT ONLY)", why, error); Some(Held::ThisBoot) }
             }
-            true
         };
         match stored::load() {
             stored::Loaded::Seed(stored) => {
@@ -158,39 +184,46 @@ impl Keys {
                 let mut stored = stored;
                 stored::wipe(&mut stored);
                 mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED)", stored::FILE);
-                true
+                Some(Held::Kept)
             }
+            stored::Loaded::Missing if trial => untouched(seed, "NO DEVICE KEY IS STORED"),
             stored::Loaded::Missing => anew(made(seed, "")),
-            // A damaged file is replaced: servers that knew the old key must be told the new one.
-            stored::Loaded::Damaged => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
-            stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
+            stored::Loaded::Damaged if trial => untouched(seed, "THE STORED KEY IS DAMAGED"),
+            // A damaged file is set aside and a new key made: servers that knew the old key must be told the new one.
+            stored::Loaded::Damaged => replaced(seed, stored::FILE, |seed| made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
+            stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
         }
     }
 
     // With a TPM (351-NET-0006): the sealed key; a key kept unencrypted before is sealed, and its file removed; a blob
-    // this TPM does not open (another machine's, or a TPM cleared since) is replaced by a new key.
-    fn sealed_seed(seed: &mut [u8; 32]) -> bool {
-        let made = |seed: &mut [u8; 32], why: &str| -> bool {
-            if !random(seed) { return false; }
+    // this TPM does not open (another machine's, or a TPM cleared since) is replaced by a new key. On a boot on trial the
+    // sealing and the removal wait, and nothing is replaced (801-NET-0079).
+    fn sealed_seed(seed: &mut [u8; 32], trial: bool) -> Option<Held> {
+        let made = |seed: &mut [u8; 32], why: &str| -> Option<Held> {
+            if !random(seed) { return None; }
             match stored::seal(seed) {
-                Ok(()) => mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND SEALED BY THE TPM IN {}", why, stored::SEALED),
-                Err(why_not) => mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {} (THIS BOOT ONLY)", why, why_not),
+                Ok(()) => { mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND SEALED BY THE TPM IN {}", why, stored::SEALED); Some(Held::Kept) }
+                Err(why_not) => { mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {} (THIS BOOT ONLY)", why, why_not); Some(Held::ThisBoot) }
             }
-            true
         };
         match stored::unseal() {
             stored::Unsealed::Seed(mut unsealed) => {
                 seed.copy_from_slice(&unsealed);
                 stored::wipe(&mut unsealed);
                 mind::println!("[KEYSTORE] DEVICE KEY FROM {} (SEALED BY THE TPM)", stored::SEALED);
-                if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
-                true
+                if trial { if stored::plain_present() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} STAYS UNTIL A BOOT NOT ON TRIAL", stored::FILE); } }
+                else if stored::remove_plain().is_ok() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
+                Some(Held::Kept)
             }
             stored::Unsealed::Missing => match stored::load() {
                 // The transition from the interim: the same key, sealed; the unencrypted file goes once the sealed one is written.
                 stored::Loaded::Seed(mut plain) => {
                     seed.copy_from_slice(&plain);
                     stored::wipe(&mut plain);
+                    if trial {
+                        mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED): THE TPM SEALS IT AT A BOOT NOT ON TRIAL", stored::FILE);
+                        return Some(Held::Kept);
+                    }
                     match stored::seal(seed) {
                         Ok(()) => {
                             let removed = stored::remove_plain().is_ok();
@@ -198,15 +231,21 @@ impl Keys {
                         }
                         Err(why) => mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED: {})", stored::FILE, why),
                     }
-                    true
+                    Some(Held::Kept)
                 }
-                _ => anew(made(seed, "")),
+                stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
+                stored::Loaded::Missing if trial => untouched(seed, "NO DEVICE KEY IS STORED"),
+                stored::Loaded::Missing => anew(made(seed, "")),
+                stored::Loaded::Damaged if trial => untouched(seed, "THE STORED KEY IS DAMAGED"),
+                stored::Loaded::Damaged => replaced(seed, stored::FILE, |seed| made(seed, "")),
             },
-            stored::Unsealed::Refused => anew(made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
-            stored::Unsealed::Damaged => anew(made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
-            stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
+            stored::Unsealed::Refused if trial => untouched(seed, "THE SEALED KEY DOES NOT OPEN ON THIS TPM"),
+            stored::Unsealed::Refused => replaced(seed, stored::SEALED, |seed| made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
+            stored::Unsealed::Damaged if trial => untouched(seed, "THE SEALED KEY IS DAMAGED"),
+            stored::Unsealed::Damaged => replaced(seed, stored::SEALED, |seed| made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
+            stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
             // The sealed key is kept for the next boot: a key for this boot only.
-            stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); random(seed) }
+            stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); this_boot(seed) }
         }
     }
 
@@ -269,12 +308,37 @@ impl Keys {
     }
 }
 
-// Random bytes, or a line in the log saying the service has no key without them.
-// A device key made anew, not for this boot only: the owners' secrets under the earlier one set aside (308-NET-0064).
-fn anew(made: bool) -> bool {
-    if made { secrets::set_aside(); }
+// A device key made anew and stored: the owners' secrets under the earlier one set aside (308-NET-0064).
+fn anew(made: Option<Held>) -> Option<Held> {
+    if made == Some(Held::Kept) { secrets::set_aside(); }
     made
 }
+
+// Off trial, a key file that does not open: set aside, then a new key made; if it cannot be moved, one for this boot only.
+fn replaced(seed: &mut [u8; 32], path: &str, made: impl FnOnce(&mut [u8; 32]) -> Option<Held>) -> Option<Held> {
+    if stored::set_aside(path) { anew(made(seed)) } else { this_boot(seed) }
+}
+
+// A key for this boot only: nothing is written under it.
+fn this_boot(seed: &mut [u8; 32]) -> Option<Held> { random(seed).then_some(Held::ThisBoot) }
+
+// On a boot on trial, a key that is not there or does not open: one for this boot only, and the files as they are.
+fn untouched(seed: &mut [u8; 32], why: &str) -> Option<Held> {
+    mind::println!("[KEYSTORE] THE BOOT IS ON TRIAL AND {}: A KEY FOR THIS BOOT ONLY, THE KEY FILES LEFT AS THEY ARE FOR THE SLOT BEFORE", why);
+    this_boot(seed)
+}
+
+// Whether the TPM answers; while a key it sealed is there, it is waited for a few seconds, as its service may be starting.
+fn tpm() -> bool {
+    let start = mind::time::uptime_ms();
+    loop {
+        if stored::tpm() { return true; }
+        if !stored::sealed_present() || mind::time::uptime_ms() - start >= TPM_WAIT_MS { return false; }
+        mind::time::sleep(TPM_STEP_MS);
+    }
+}
+
+// Random bytes, or a line in the log saying the service has no key without them.
 
 fn random(bytes: &mut [u8]) -> bool {
     let filled = mind::random::fill(bytes);
@@ -283,8 +347,8 @@ fn random(bytes: &mut [u8]) -> bool {
 }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
-    let mut keys = Keys::new();
+fn main(info: &'static BootInfo) {
+    let mut keys = Keys::new(info.boot_slot.trial != 0, &info.boot_slot.manifest);
     // A secret's value passes through here: the copy is wiped after each request that carried one.
     let mut scratch = alloc::boxed::Box::new([0u8; keystore::REQUEST_MAX]);
     loop {
