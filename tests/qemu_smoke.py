@@ -12912,7 +12912,7 @@ def effector_suite(args, disk):
     (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 86400 1000000000\n")
     (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "mode.conf").write_text("development\n")
-    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
+    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\nrestart-after 40\n"
     (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
     (disk / "data" / "effector" / "token").write_text(token + "\n")
     # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
@@ -13012,6 +13012,28 @@ def effector_suite(args, disk):
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
         print("PASS: restarted by svc, the agent reads its journal back (15 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
+        # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
+        # starts it again with a new flow grant, and it is back once the server is; it is never quarantined.
+        starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
+        server.outage(75)
+        ends = time.monotonic() + 75
+        out = until("NO ANSWER FROM THE SERVER FOR ", 120)
+        assert "ENDING, SO THAT init STARTS IT AGAIN WITH A NEW GRANT" in out, out[-2000:]
+        deadline = time.monotonic() + 60
+        while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
+            time.sleep(1)
+        assert session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") > starts, session()[-2000:]
+        init_log = vm.command("dmesg -s init", raw=True)
+        require(init_log, "[INIT] effector RESTARTED PID=")
+        assert "effector QUARANTINED" not in init_log, init_log[-2000:]
+        time.sleep(max(0, ends - time.monotonic()))
+        beats_then = len(server.beats)
+        deadline = time.monotonic() + 60
+        while len(server.beats) <= beats_then and time.monotonic() < deadline:
+            time.sleep(1)
+        assert len(server.beats) > beats_then, "the agent is back once the server is"
+        print("PASS: the server out of reach for 75 s: after 40 s with no answer the agent ended itself, init started it "
+              "again with a new grant, not quarantined, and its heartbeats came back with the server", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
