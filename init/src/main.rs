@@ -105,6 +105,7 @@ const NND_TASKS: u16 = 32;
 const FLOW_ONLY: [&str; 3] = ["timed", "httpd", "sshd"];
 const FLOW_LOOK_MS: usize = 30_000;
 const POLICY_PAGES_MAX: usize = 64;
+const POLICY_LOOK_MS: u32 = 1000;
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -268,32 +269,35 @@ impl Init {
         minted.slots[minted.count] = slot; minted.count += 1;
         Some(slot)
     }
-    // Whether a line of the policy in force is `program`'s (a rule, `listen` or `browse` line naming it, as the broker reads
-    // them), read through `lines` (netpolicy.wit 1.1), which the broker does not log: init asks for a grant again only
-    // once one is (801-KRN-0250).
-    fn policy_names(&mut self, program: &str) -> bool {
-        if !self.running(service_index("netpolicy")) { return false; }
-        let Some(client) = self.keeper("netpolicy").ok().and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).ok()) else { return false };
-        let (mut start, mut named) = (0, false);
+    // Which of `programs` a line of the policy in force is for (a rule, `listen` or `browse` line naming it, as the broker
+    // reads them), read through `lines` (netpolicy.wit 1.1), which the broker does not log: init asks for a grant again
+    // only once one is (801-KRN-0250). Each call waits POLICY_LOOK_MS at most, as these looks are init's own, between its
+    // lifecycle work: a broker that does not answer gives None, and costs init no more than that.
+    fn policy_names<const N: usize>(&mut self, programs: [&str; N]) -> Option<[bool; N]> {
+        if !self.running(service_index("netpolicy")) { return None; }
+        let client = self.keeper("netpolicy").ok().and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).ok())?;
+        let (mut start, mut named, mut answered) = (0, [false; N], false);
         for _ in 0..POLICY_PAGES_MAX {
-            let Ok(page) = netpolicy::lines(Endpoint(client), start) else { break };
-            named = page.as_slice().iter().any(|line| {
+            let Ok(page) = wire::with_timeout(POLICY_LOOK_MS, || netpolicy::lines(Endpoint(client), start)) else { break };
+            answered = true;
+            for line in page.as_slice() {
                 let line = line.as_str().split('#').next().unwrap_or("").trim();
                 let owner = mind::network::browse_line(line).map(|l| l.0).or_else(|| mind::network::listen_line(line).map(|l| l.0));
-                owner.or_else(|| line.split_ascii_whitespace().next()).is_some_and(|name| name.eq_ignore_ascii_case(program))
-            });
-            if named || page.len() < 16 { break; }
+                let Some(owner) = owner.or_else(|| line.split_ascii_whitespace().next()) else { continue };
+                for (i, program) in programs.iter().enumerate() { named[i] |= owner.eq_ignore_ascii_case(program); }
+            }
+            if page.len() < 16 { break; }
             start += page.len() as u32;
         }
         let _ = ipc::drop_cap(client);
-        named
+        answered.then_some(named)
     }
     // A unit that takes a flow when the policy names one and started without (the effector agent, the updater): at each
     // later start a line added since gets it its grant, kept from then on as one given at the first (801-KRN-0250).
     fn late_flow(&mut self, index: usize, plan: &mut Plan) {
         let name = unit_name(index);
         if !matches!(name, "effector" | "updater") || plan.grants.count >= SPAWN_GRANTS_MAX { return; }
-        if plan.grants.list[..plan.grants.count].iter().any(|g| g.child as usize == SLOT_NETWORK) || !self.policy_names(name) { return; }
+        if plan.grants.list[..plan.grants.count].iter().any(|g| g.child as usize == SLOT_NETWORK) || self.policy_names([name]) != Some([true]) { return; }
         let mut minted = Minted::new();
         let Some(flow) = self.flow(&mut minted, name) else { return };
         minted.count = 0; // kept for restarts
@@ -312,9 +316,10 @@ impl Init {
         let now = mind::time::uptime_ms();
         if now.wrapping_sub(self.flow_looked) < FLOW_LOOK_MS || !self.flowless() { return; }
         self.flow_looked = now;
-        for name in FLOW_ONLY {
+        let Some(named) = self.policy_names(FLOW_ONLY) else { return };
+        for (name, named) in FLOW_ONLY.into_iter().zip(named) {
             let index = service_index(name);
-            if !self.waits_flow(index) || !self.policy_names(name) { continue; }
+            if !self.waits_flow(index) || !named { continue; }
             match self.start(index) {
                 Ok(pid) => {
                     (self.missing[index], self.placed[index].off) = (false, Off::No);
