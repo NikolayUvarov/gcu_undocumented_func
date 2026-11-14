@@ -80,6 +80,25 @@ The maintainer (2026-11-14): «Каждая перезапись должна с
     - The new PowerShell was checked only by PowerShell's parser, and its identity formula on a stand-in object.
     - The labels of the bench's own keys were not computed here: no real key was read.
 
+## Progress (2026-11-14, later): the pull before the options
+
+**The maintainer:** «Он должен вызывать git pull изнутри себя и не требовать запуска предварительного git pull!!!»
+
+**The problem.** The script read its options before it pulled `fast-test`. A copy older than an option (the maintainer's clone was on `fast-test` 44a1a4f1 of 2026-11-06) took `--old-disk` for the disk number and stopped with `Disk number must be digits`, before the pull that would have brought the new script.
+
+**The fix.**
+- **The pull runs first:** the fetch, the checkout and `git pull --ff-only`, then the new script with the same arguments (800-LNK-0025). Only then are the options read, so they are always the current script's.
+- **Looked for beforehand:** `--commit <id>`. `--image`, `--list` and `--list-machines` fetch nothing, as before.
+- **An unknown option** is now named (`unknown option …`), not taken for a disk number.
+
+**What this does not fix.** A clone that holds an older copy still reads options first, once. It takes this version on its next run with options it knows, or with one `git pull` there.
+
+**Tested:**
+- `tests/build_and_write_args_test.py`: 13 passed. The 2 new tests:
+  - a clone of a temporary repository, given an option it does not know, pulls and runs the newer script with the same arguments;
+  - an unknown option is refused by name.
+- The keep and machines tests: passed.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [800-LNK-0023](800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](800-LNK-0024-keep-the-owners-settings-across-a-write.md).
