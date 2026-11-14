@@ -1352,13 +1352,13 @@ fn main(_info: &'static BootInfo) {
         // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).
         if agent.restart_at.is_some() && session.waiting().is_none() { agent.restart_at = None; agent.last_heartbeat(); }
         let quiet = now() < agent.quiet_until;
-        // No answer from the server for `restart-after`: the agent ends itself, and init starts it again with a new flow
-        // grant and new clients of tls and parse, so a spent grant or a restarted service never loses the server. Not
-        // while the machine restarts on purpose or a measurement runs (801-EFF-0028).
+        // No answer from the server for `restart-after`: the agent ends itself, and init starts it again with new clients
+        // of tls and parse and a new connection, so a restarted service never loses the server. The flow grant stays
+        // the one init took at boot (MC-3.13). Not while the machine restarts on purpose or a measurement runs (801-EFF-0028).
         let silent = now() - agent.answered_at;
         if SERVICE.load(core::sync::atomic::Ordering::Relaxed) && !quiet && agent.running.is_none()
             && silent >= agent.config.restart_after_s() as usize * 1000 {
-            mind::println!("EFFECTOR: NO ANSWER FROM THE SERVER FOR {} S ({}): ENDING, SO THAT init STARTS IT AGAIN WITH A NEW GRANT", silent / 1000, agent.problem);
+            mind::println!("EFFECTOR: NO ANSWER FROM THE SERVER FOR {} S ({}): ENDING, SO THAT init STARTS IT AGAIN WITH NEW CLIENTS", silent / 1000, agent.problem);
             mind::process::exit_with(0);
         }
         match if quiet { Ok(None) } else { session.heartbeat(ms) } {

@@ -222,10 +222,11 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one,
+        # and the first live row is the service: its workers (750-KRN-0159), listed after it under its name, never hide it.
         found, live = {}, set()
         for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
-            if name in SERVICES and (state != "EXITED" or name not in live):
+            if name in SERVICES and name not in live:
                 found[name] = int(pid)
                 if state != "EXITED":
                     live.add(name)
@@ -7869,13 +7870,17 @@ def effector_grants_check(vm):
     pids = vm.services()
     started = vm.command("dmesg -s init", raw=True)
     assert started.index("[INIT] STARTED effector_gw PID") < started.index("[INIT] STARTED effector PID"), started[-2000:]
-    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    listed = re.findall(r"^EP=(\d+) CREATOR=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)
+    servers = {int(ep): int(server) for ep, _, server in listed}
+    creators = {int(ep): int(creator) for ep, creator, _ in listed}
 
-    def held(name):  # slot -> (badge, the server's service name) of each endpoint the service holds of another
+    # slot -> (badge, the server's service name) of each endpoint the service holds of another: not one it serves, nor
+    # one it made, as the session's for its workers' answers (750-KRN-0159)
+    def held(name):
         caps = vm.command(f"stat caps {pids[name]}", raw=True)
         named = {pid: n for n, pid in pids.items()}
         return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
-                if servers.get(int(ep)) != pids[name]}
+                if pids[name] not in (servers.get(int(ep)), creators.get(int(ep)))}
     gw, session = held("effector_gw"), held("effector")
     # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap; 750-KRN-0159: the right to start
     # workers for it, a ceiling of 32 tasks (the kernel allows one per online CPU), and one endpoint they answer on.
@@ -13487,12 +13492,12 @@ def effector_suite(args, disk):
         print("PASS: restarted by svc, the agent reads its journal back (16 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
-        # starts it again with a new flow grant, and it is back once the server is; it is never quarantined.
+        # starts it again with new clients, and it is back once the server is; it is never quarantined.
         starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
         server.outage(75)
         ends = time.monotonic() + 75
         out = until("NO ANSWER FROM THE SERVER FOR ", 120)
-        assert "ENDING, SO THAT init STARTS IT AGAIN WITH A NEW GRANT" in out, out[-2000:]
+        assert "ENDING, SO THAT init STARTS IT AGAIN WITH NEW CLIENTS" in out, out[-2000:]
         deadline = time.monotonic() + 60
         while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
             time.sleep(1)
@@ -13507,7 +13512,7 @@ def effector_suite(args, disk):
             time.sleep(1)
         assert len(server.beats) > beats_then, "the agent is back once the server is"
         print("PASS: the server out of reach for 75 s: after 40 s with no answer the agent ended itself, init started it "
-              "again with a new grant, not quarantined, and its heartbeats came back with the server", flush=True)
+              "again with new clients, not quarantined, and its heartbeats came back with the server", flush=True)
         # 750-EFF-0006 with 750-KRN-0194: stopped by init, the agent hears its stop notice on a worker, sends its last
         # heartbeat, shutting_down, and ends within the notice; started again, it is back.
         require(session(), "EFFECTOR: init'S STOP NOTICE AWAITED (WORKER PID=")
@@ -13555,7 +13560,20 @@ def effector_suite(args, disk):
                 break
             time.sleep(1)
         restarted = "THE JOURNAL WAS NOT WRITTEN" in session()
+        # The gateway's first audit line after the restart is not written: that request is refused `audit`, nothing done
+        # without its record, and the gateway ends for new clients; the next is done.
         after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline and not (server.operation(after) or {}).get("status"):
+            time.sleep(1)
+        if (server.operation(after) or {}).get("result", {}).get("error") == "audit":
+            line = "[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN; vfs_server STARTED AGAIN"
+            for _ in range(30):
+                if line in vm.command("dmesg -s effector_gw", raw=True):
+                    break
+                time.sleep(1)
+            require(vm.command("dmesg -s effector_gw", raw=True), line)
+            after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
         until(f"EFFECTOR: ACK {after} completed WITH ring.log", 180)
         print(f"PASS: vfs_server restarted under the agent: {'its journal not written, it ended and init started it again' if restarted else 'its journal written as before'}; "
               "a log collected through the gateway's audit after it", flush=True)
