@@ -1,6 +1,6 @@
-# 000-KRN-0249 — The aarch64 update through the link in two groups, each under the gate's limit
+# 000-KRN-0249 — The aarch64 update through the link in two groups, each under the gate's limit — done
 
-**Type:** the gate (tests) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Roadmap:** — · **Constitution:** MC-12.1, MC-12.2
+**Type:** the gate (tests) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Roadmap:** — · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -33,6 +33,16 @@ A group that ends at the limit on one machine and passes on another is no eviden
 2. The same on x86.
 3. `cable_without_words_check` runs exactly once in the gate's list.
 
+## Resolution
+
+Landed in round 137 (`main` e7580978da), from `claude/000-KRN-0249-the-link-update-in-two-groups` 175f668441.
+
+- **The `linkupdate` suite** runs `linkupdate_suite` and `slot_applications_check`. `cable_without_words_check` is its own group on both architectures, `x86: the cable with no words` and `aarch64: the cable with no words`, in `ci_local.sh`, in CI, and estimated in `land.py`.
+- **Criteria:**
+  1. aarch64 on acc-2: the link's update 1582 s, the cable 1528 s;
+  2. x86 on i9: the updater and the link's update 1981 s, the cable 1094 s;
+  3. the check runs once in the gate's list. Round 137's gate ran all four.
+
 ## Related
 
-801-LNK-0044, [801-KRN-0247](../issues-done/801-KRN-0247-init-starts-the-cable-with-no-word-on-the-disk.done), 000-KRN-0210.
+801-LNK-0044, [801-KRN-0247](801-KRN-0247-init-starts-the-cable-with-no-word-on-the-disk.done), 000-KRN-0210.

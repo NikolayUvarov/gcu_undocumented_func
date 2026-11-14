@@ -43,3 +43,9 @@ What the code shows (`wlan/src/main.rs` on `main`, the same as on `fast-test`):
 ## Related
 
 [801](801-the-bench-stays-manageable.md), 550-NET-0061, 550-NET-0041, 801-DRV-0071, 550-DRV-0069.
+
+## Progress (2026-11-14, round 137)
+
+- **Landed** in round 137 (`main` e7580978da), from `claude/801-NET-0083-the-station-never-waits-silently` 6af3ae81db.
+- **Criterion 1** is met: the `net` suite passed on x86 (x32, 1521 s) and aarch64 (pcu, 1541 s), and in round 137's gate. On pcu the first radio-restart check was found by a call that found the driver ended, because the rejoin had already tuned the fresh radio.
+- **Left:** criterion 2, on a bench machine whose radio restarts. That is DRV's Ryzen, which is off.

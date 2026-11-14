@@ -18501,9 +18501,8 @@ def main():
         if suite == "linkupdate":
             linkupdate_suite(args)
             slot_applications_check(args)
-            cable_without_words_check(args)
             continue
-        if suite == "cable":  # 801-LNK-0044's check alone, also run by linkupdate
+        if suite == "cable":  # 801-LNK-0044's check, a group of its own so that each stays under the gate's limit (000-KRN-0249)
             cable_without_words_check(args)
             continue
         if suite == "modes":

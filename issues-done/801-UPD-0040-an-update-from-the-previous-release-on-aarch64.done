@@ -1,10 +1,10 @@
-# 801-UPD-0040 — An update from the previous release on aarch64: the gate's S4 check for the second architecture
+# 801-UPD-0040 — An update from the previous release on aarch64: the gate's S4 check for the second architecture — done
 
-**Type:** update (tests, the gate) · **Owner:** `UPD` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S4) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-9.4, MC-12.1
+**Type:** update (tests, the gate) · **Owner:** `UPD` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S4) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-9.4, MC-12.1
 
 ## Problem
 
-[801-UPD-0038](../issues-done/801-UPD-0038-an-update-from-the-previous-release.done) made the gate's S4 check for x86 alone. Its plan left aarch64 for later, and the profile says so: "QEMU, x86, the directory source only, not the server's and not aarch64".
+[801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.done) made the gate's S4 check for x86 alone. Its plan left aarch64 for later, and the profile says so: "QEMU, x86, the directory source only, not the server's and not aarch64".
 
 The maintainer's words for S4: «если обновление не может подключиться к сети и/или серверу - то это обновление не рабочее». A release is not working if the release before it cannot take it. S4 names no architecture, and the bench and the boards run aarch64 too (PinePhone, Orange Pi). So without this check, a change could land that aarch64's previous release cannot update to, and no gate would say so.
 
@@ -18,7 +18,7 @@ The maintainer's words for S4: «если обновление не может �
 - **One previous tree for each architecture:** `$TMPDIR/mind-previous-<arch>-<commit>`, kept while the base is the same. Any other tree of that name is removed, except the other architecture's, so the two groups never remove each other's.
 - **The group `aarch64: an update from the previous release`** goes in `scripts/ci_local.sh`'s aarch64 part, with its estimate in `scripts/land.py`.
 - **Not here:**
-  - the update through the Effector server (ASR's [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), case 5);
+  - the update through the Effector server (ASR's [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), case 5);
   - a release that cannot connect, which is S1's (801-KRN-0242).
 
 ## Acceptance criteria
@@ -28,11 +28,24 @@ The maintainer's words for S4: «если обновление не может �
 3. **The group is in the gate's list,** with its time estimated in `scripts/land.py`.
 4. **The profile** (Article 9) names the aarch64 check, and still says what neither check covers.
 
+## Resolution
+
+Landed in round 137 (`main` e7580978da), from `claude/801-UPD-0040-the-previous-release-on-aarch64` 520f6e73e9, with 000-KRN-0249 merged.
+
+- **`scripts/previous_release.sh [x86_64|aarch64]`:** one previous tree for each architecture. The group `aarch64: an update from the previous release` is in the gate's list, estimated in `land.py`.
+- **Criteria:**
+  1. aarch64 on acc-1 (`080a66cbc0`, 537 s): the previous release `main` `40c761e670` took the branch's release into slot B and confirmed it. Round 137's gate ran it again;
+  2. x86: passed in the kernel session's container under the new tree name, and in round 137's gate;
+  3. both groups are in `ci_local.sh --list`;
+  4. the profile's Article 9 names both.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-UPD-0038](../issues-done/801-UPD-0038-an-update-from-the-previous-release.done), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](../issues-done/801-UPD-0039-the-updater-always-reads-the-cables-directory.done).
+[801](../issues/801-the-bench-stays-manageable.md), [801-UPD-0038](801-UPD-0038-an-update-from-the-previous-release.done), [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.done).
 
 ## Progress (2026-11-14)
 
 - **aarch64, in the kernel session's container** (QEMU 8.2 with TCG, 4 CPUs): `scripts/previous_release.sh aarch64` built `main` `d9753fc238` for aarch64 (16 min). The `previous` suite then ran on that tree with a shorter `TMPDIR`, because the container's own path made QMP's socket path longer than 108 bytes. It passed in 117 s: release 5 written by that tree's tools took this branch's release 6 from `data/link/rel/` (111 files) into slot B, booted it on trial and confirmed it.
-- **Left:** the group on a maintainer's machine, and the x86 group again under its tree's new name.
+- **aarch64, on acc-1** (`080a66cbc0`, `main` `40c761e670` merged, the group `aarch64: an update from the previous release`, 537 s): passed. The previous release was `main` `40c761e670`.
+- **x86, in the kernel session's container** (the same tree, `scripts/previous_release.sh x86_64`): passed. Release 5 from `mind-previous-x86_64-40c761e670…`, its updater took release 6 (117 files in `data/link/rel/`), under the tree's new name.
+- **Left:** none beyond the gate's own run.
