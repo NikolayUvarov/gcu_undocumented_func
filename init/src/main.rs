@@ -1777,7 +1777,9 @@ impl Init {
             Request::Configuration => idl_init::reply_configuration(call, Ok(self.configuration)),
             // A running boot service asks to be told before it is stopped: the call is held until then (750-KRN-0194).
             Request::StopNotice => {
-                let Some(index) = (1..UNITS).find(|&i| self.pids[i] == sender && self.running(i)) else {
+                // The Effector agent's call may come from its worker, which holds its BADGE_NOTICE copy (750-KRN-0248).
+                let agent = (badge == mind::process::BADGE_NOTICE).then(|| Self::index("effector")).flatten().filter(|&i| self.running(i));
+                let Some(index) = agent.or_else(|| (1..UNITS).find(|&i| self.pids[i] == sender && self.running(i))) else {
                     return idl_init::reply_stop_notice(call, Err(E::Denied));
                 };
                 let mut call = call;

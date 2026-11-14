@@ -331,8 +331,9 @@ pub fn configuration(endpoint: Endpoint) -> Result<core::result::Result<Configur
 
 /// Waits until init decides to stop the caller, and says why (1.12, 750-KRN-0194). The caller then has 2 s to end on
 /// its own; that end is not restarted, and past the 2 s init kills it as before. Only a running boot service may ask,
-/// and init holds one call for each: a second one replaces the first, which is answered `failed`. Errors: denied (not
-/// a running boot service), failed.
+/// and init holds one call for each: a second one replaces the first, which is answered `failed`; the Effector agent's
+/// `BADGE_NOTICE` client asks for the agent from any of its tasks, its worker's too (750-KRN-0248). Errors: denied
+/// (not a running boot service), failed.
 pub fn stop_notice(endpoint: Endpoint) -> Result<core::result::Result<StopReason, Error>> {
     let words = [14 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -344,7 +345,8 @@ pub fn stop_notice(endpoint: Endpoint) -> Result<core::result::Result<StopReason
 /// The Effector agent's word on its way to the server (1.13, 801-KRN-0242), `detail` saying more (a status, an
 /// error). Where the agent runs with a server configured (`data/effector/effector.conf`), a trial boot is confirmed
 /// on `accepted` within 10 min of init's READY and refused otherwise, the last word said being its `why` (MC-9.4,
-/// 9.9). Only the agent's own client (`BADGE_NOTICE`, from the running agent) may say it; others get `denied`.
+/// 9.9). Only the agent's own client (`BADGE_NOTICE`, while the agent runs, from any of its tasks) may say it; others get
+/// `denied`.
 pub fn agent_step(endpoint: Endpoint, step: AgentStep, detail: &str) -> Result<core::result::Result<(), Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {
