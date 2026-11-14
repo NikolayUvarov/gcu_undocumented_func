@@ -15,13 +15,13 @@ extern crate alloc;
 use alloc::{boxed::Box, string::String, vec::Vec};
 use effector::session::{self, Accepted, Artifact, Outcome, Session, Time};
 use effector::{bench, config, journal, telemetry, update, wire};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_LIFECYCLE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
 use mind::effector::{OWNER_DIR, SESSION_DIR, SLOT_GATEWAY};
 use mind::idl::codec::Text;
 use mind::idl::effector as gateway;
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Connection, Method, Transport, Url};
-use mind::idl::{parse, socket, tls};
+use mind::idl::{init, parse, socket, tls};
 use mind::ipc::Endpoint;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_FILE);
@@ -49,7 +49,31 @@ const INLINE_MAX: u64 = 8 << 20; // an artifact's bytes, so its ACK as base64 st
 const JOURNAL_MAX: usize = 8 * session::RECORDS_MAX * journal::LINE_MAX; // compacted at each start, so far above its need
 
 fn now() -> usize { mind::time::uptime_ms() }
-fn time() -> Time { Time { monotonic_ms: now() as u64, unix_seconds: mind::rtc::unix_time() } }
+// The server's time less the device's, in seconds, from the `Date` of the server's last answer; 0 until one came
+// (801-EFF-0027). An RTC in local time, or off by hours, then judges no command.
+static CLOCK_OFFSET: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+// The offset, a second's rounding apart: what the log last said of it.
+static CLOCK_SAID: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+
+/// The time as the server keeps it: the device's clock with the offset its last answer showed.
+fn server_unix() -> Option<u64> {
+    mind::rtc::unix_time().map(|t| t.saturating_add_signed(CLOCK_OFFSET.load(core::sync::atomic::Ordering::Relaxed)))
+}
+
+/// The offset from an answer's `Date`, kept whole: under 2 s apart it counts as none.
+fn clock_from(date: Option<u64>) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let (Some(server), Some(device)) = (date, mind::rtc::unix_time()) else { return };
+    let offset = server as i64 - device as i64;
+    let offset = if offset.abs() < 2 { 0 } else { offset };
+    CLOCK_OFFSET.store(offset, Relaxed);
+    if (offset - CLOCK_SAID.load(Relaxed)).abs() > 60 {
+        CLOCK_SAID.store(offset, Relaxed);
+        mind::println!("EFFECTOR: THE DEVICE CLOCK IS {} S OFF THE SERVER'S: COMMANDS ARE JUDGED BY THE SERVER'S TIME", offset);
+    }
+}
+
+fn time() -> Time { Time { monotonic_ms: now() as u64, unix_seconds: server_unix() } }
 fn jitter() -> u32 { mind::random::u64().unwrap_or(0) as u32 }
 
 // Started by init with `--service`: a failure then waits before it ends the process (801-EFF-0028).
@@ -229,6 +253,7 @@ struct Agent {
     update: Option<Box<UpdateWait>>,
     restart_at: Option<usize>, // a restart the gateway admitted: once its answer is sent, the last heartbeat (750-EFF-0006)
     answered_at: usize, // when the server last answered, whatever the status (801-EFF-0028)
+    step: Option<init::AgentStep>, // what init was last told of the way to the server (801-EFF-0031)
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
@@ -246,7 +271,11 @@ impl Agent {
         }
         let address = self.config.address().unwrap_or(0);
         let attached = tls::attach(TLS, SLOT_NETWORK);
-        if !matches!(attached, Ok(Ok(_))) { self.problem = alloc::format!("TLS ATTACH {:?}", attached); }
+        if !matches!(attached, Ok(Ok(_))) {
+            self.problem = alloc::format!("TLS ATTACH {:?}", attached);
+            let detail = self.problem.clone();
+            self.tell_init(init::AgentStep::NoNetwork, &detail);
+        }
         let attempt = attached.ok().and_then(|r| r.ok()).ok_or("attach").and_then(|session| {
             match tls::connect_pins(TLS, session, self.config.tls_name(), address, self.config.port(), pins.as_slice(), CONNECT_MS) {
                 Ok(Ok(_)) => Ok(session),
@@ -254,6 +283,9 @@ impl Agent {
                     let _ = tls::close(TLS, session);
                     mind::println!("EFFECTOR: TLS CONNECT REFUSED: {:?}", other.map_err(|_| ()));
                     self.problem = alloc::format!("TLS CONNECT {:?}", other.map_err(|_| ()));
+                    let detail = self.problem.clone();
+                    let step = if matches!(other, Ok(Err(tls::Error::NoNetwork | tls::Error::Refused | tls::Error::Timeout | tls::Error::Denied))) { init::AgentStep::NoNetwork } else { init::AgentStep::NoTls };
+                    self.tell_init(step, &detail);
                     Err("connect")
                 }
             }
@@ -306,6 +338,7 @@ impl Agent {
             let sent = connection.request(method, &url, headers, body, &mut parser, false);
             let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", method.name(), route, e); return None; } };
             let status = response.status;
+            clock_from(response.head.date);
             let mut chunk = [0u8; 2048];
             loop {
                 match response.read(&mut chunk) {
@@ -381,7 +414,7 @@ impl Agent {
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
         // Busy from the first heartbeat that finds an answer waiting, until the server takes it.
         match (waiting, self.busy_since.is_some()) {
-            (Some(_), false) => { let mut since = [0u8; 20]; self.busy_since = Some(String::from(mind::rtc::unix_time().map_or("1970-01-01T00:00:00Z", |t| wire::rfc3339_utc(t, &mut since)))); }
+            (Some(_), false) => { let mut since = [0u8; 20]; self.busy_since = Some(String::from(server_unix().map_or("1970-01-01T00:00:00Z", |t| wire::rfc3339_utc(t, &mut since)))); }
             (None, true) => { self.busy_since = None; self.held = None; }
             _ => {}
         }
@@ -397,6 +430,8 @@ impl Agent {
         let Some(status) = self.request(Method::Post, "/api/heartbeat", "", Some(&body)) else { return Outcome::Retry };
         let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
         if !ok { mind::println!("EFFECTOR: HEARTBEAT ANSWERED {}", status); }
+        // The server's word on this boot (801-EFF-0031): `accepted` confirms a trial, any other the reason it is refused.
+        if ok { self.tell_init(init::AgentStep::Accepted, ""); } else { self.tell_init(init::AgentStep::Refused, &alloc::format!("HTTP {}", status)); }
         session::outcome(status, ok)
     }
 
@@ -428,7 +463,7 @@ impl Agent {
         if kept.command != ack.record.id.as_str() || file.size() != kept.start + kept.size { return None; }
         // Past the command's run time the server has ended it and keeps nothing of a late answer but its status: the
         // answer goes at once, naming the artifact, rather than tying the agent up sending megabytes (750-EFF-0025).
-        if kept.ends_unix != 0 && mind::rtc::unix_time().is_some_and(|t| t >= kept.ends_unix) {
+        if kept.ends_unix != 0 && server_unix().is_some_and(|t| t >= kept.ends_unix) {
             let line = alloc::format!("not sent: the server had ended the command; {} {} {}", kept.name, kept.size, kept.sha256);
             let mut buf = [0u8; 1024];
             let result = wire::exec_result(&mut buf, 0, &line, "").ok()?.to_vec();
@@ -735,7 +770,7 @@ impl Agent {
         };
         // The run time's end in Unix seconds, so that it holds across a restart: an answer later than it goes without
         // its artifact (750-EFF-0025).
-        let ends_unix = mind::rtc::unix_time().map_or(0, |t| t + o.deadline_ms.saturating_sub(now() as u64) / 1000);
+        let ends_unix = server_unix().map_or(0, |t| t + o.deadline_ms.saturating_sub(now() as u64) / 1000);
         let kept = self.keep(id, &opened, name, ends_unix);
         if let Err(f) = kept { mind::println!("EFFECTOR: {}: {} BYTES NOT KEPT: {}", id, opened.size, f.name()); }
         let _ = gateway::close(GATEWAY, opened.handle);
@@ -858,7 +893,7 @@ impl Agent {
         let boot_unix = mind::rtc::unix_time().map(|t| t.saturating_sub(now() as u64 / 1000));
         let pending = update::Pending {
             id: String::from(id), agent_id: self.agent_id.clone(), action: String::from("update_agent"), program: String::from(program), payload: String::from(payload),
-            expires_unix, received_unix: mind::rtc::unix_time(), at_ms: now() as u64, boot_unix, running, staged,
+            expires_unix, received_unix: server_unix(), at_ms: now() as u64, boot_unix, running, staged,
         };
         // Kept and flushed before the apply: the restart leaves no time after it.
         let kept = update::write(&pending).is_some_and(|text| {
@@ -878,6 +913,22 @@ impl Agent {
         while now() < until { mind::time::sleep(500); }
         let _ = fs::remove(&self.path("update"));
         self.update_answer(id, 1, &alloc::format!("the restart did not come: version {} stays staged", staged), "restart")
+    }
+
+    /// Tells `init` how far the way to the server got (`init.wit` 1.13 `agent-step`): a trial is confirmed on `accepted`,
+    /// and any other step is its reason if refused (801's S1 and S2, 801-KRN-0242). Said only when it changes; once
+    /// accepted, an update waiting for its confirmation counts from now (801-EFF-0031).
+    fn tell_init(&mut self, step: init::AgentStep, detail: &str) {
+        if self.step == Some(step) { return; }
+        self.step = Some(step);
+        if mind::dev::cap_info(SLOT_LIFECYCLE).0 != CAP_KIND_ENDPOINT { return; }
+        let mut end = detail.len().min(64);
+        while !detail.is_char_boundary(end) { end -= 1; }
+        match init::agent_step(Endpoint(SLOT_LIFECYCLE), step, &detail[..end]) {
+            Ok(Ok(())) => {}
+            other => mind::println!("EFFECTOR: init WAS NOT TOLD {:?}: {:?}", step, other.map_err(|_| ())),
+        }
+        if step == init::AgentStep::Accepted { if let Some(u) = self.update.as_mut() { u.since = now(); } }
     }
 
     /// One heartbeat saying `shutting_down`, before a restart the agent knows of; then no heartbeat or poll until the
@@ -919,7 +970,7 @@ impl Agent {
         let p = &u.pending;
         let answer = self.update_answer(&p.id, exit_code, &stdout, error);
         // Received before the restart: its term in the server's queue is judged at that time.
-        let received = Time { monotonic_ms: now() as u64, unix_seconds: p.received_unix.or(mind::rtc::unix_time()) };
+        let received = Time { monotonic_ms: now() as u64, unix_seconds: p.received_unix.or(server_unix()) };
         let command = session::Command { id: &p.id, agent_id: &p.agent_id, action: &p.action, program: &p.program, payload: &p.payload, expires_unix: p.expires_unix };
         let received = session.receive_with(command, received, answer);
         let durable = matches!(received, Ok(Accepted::Store(_)) | Ok(Accepted::Replay));
@@ -942,7 +993,7 @@ impl Agent {
             self.hostname = String::from(name);
         }
         if s.cpus == 0 { return self.no_telemetry(String::from("THE GATEWAY COUNTS NO PROCESSORS")); }
-        let Some(unix) = mind::rtc::unix_time() else { return self.no_telemetry(String::from("NO CLOCK")) };
+        let Some(unix) = server_unix() else { return self.no_telemetry(String::from("NO CLOCK")) };
         let state = |st: gateway::ServiceState| match st {
             gateway::ServiceState::Running => "running", gateway::ServiceState::Stopped => "stopped",
             gateway::ServiceState::Quarantined => "quarantined", gateway::ServiceState::Absent => "not_found",
@@ -1138,7 +1189,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
-        answered_at: now(), problem: String::from("NOT CONNECTED YET") });
+        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1201,6 +1252,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("effector — the Effector agent's session (750-EFF-0006): heartbeat, poll, the gateway's actions and telemetry with a pinned Effector server.\nUsage: effector data/effector/effector.conf [--for SECONDS]");
     let (mut agent, mut session, run_for) = start();
+    agent.tell_init(init::AgentStep::Started, "");
     let started = now();
     let mut stopped_at = None;
     loop {

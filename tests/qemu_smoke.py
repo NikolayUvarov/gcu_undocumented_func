@@ -12945,7 +12945,9 @@ def effector_suite(args, disk):
     # stays the agent the server knows.
     (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+    # The guest's clock 3 h ahead, as the DEXP's RTC was after Windows (801, S5): commands are judged by the server's time.
+    ahead = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + 3 * 3600))
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc=ahead, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
     def session():
         return vm.command("dmesg -s effector", raw=True)
@@ -13016,6 +13018,15 @@ def effector_suite(args, disk):
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
+        # 801-EFF-0027: a command with a 10-minute term by the server's clock is run, not `command_expired`, though the
+        # device's clock is 3 h past it; the log names the offset.
+        term_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
+        until(f"EFFECTOR: ACK {term_id} completed WITH ITS RESULT ACCEPTED")
+        offset = re.search(r"THE DEVICE CLOCK IS (-?\d+) S OFF THE SERVER'S", session())
+        assert offset and -10900 <= int(offset[1]) <= -10700, (offset, session()[-1500:])
+        assert server.operation(term_id)["status"] == "completed", server.operation(term_id)
+        print(f"PASS: the device clock {offset[1]} s off the server's: a command with a 10-minute term run and answered "
+              "completed, judged by the server's time", flush=True)
         # 750-EFF-0018: the machine's name set by the shell's `hostname` is what the heartbeats report from the next sample
         # on, with no restart; once removed, the agent's own name stands again.
         def reported(name, seconds=75):
@@ -13103,6 +13114,16 @@ def effector_suite(args, disk):
         until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)")
         print(f"PASS: a kept identity recorded on another machine: a new agent ID {new[1]}, not the owner's {agent}, its journal set "
               "aside", flush=True)
+        # 801-EFF-0027 with NET's 801-NET-0081: the clock at 2000-01-01, as after a flat battery. The pinned server is
+        # reached, its certificate's start logged and not enforced, and a command with a term is run.
+        vm.close()
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="2000-01-01T00:00:00", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+        until(f"EFFECTOR: AGENT {new[1]} TO 10.0.2.2/effector", 120)
+        old_id = server.queue(new[1], "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
+        until(f"EFFECTOR: ACK {old_id} completed WITH ITS RESULT ACCEPTED", 180)
+        require(vm.command("dmesg -s tls", raw=True), "NOT ENFORCED, THE PIN BINDS THE KEY")
+        print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command "
+              "with a 10-minute term run, judged by the server's time", flush=True)
     finally:
         stop_watch.set()
         vm.close()
