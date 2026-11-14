@@ -1763,7 +1763,8 @@ impl Init {
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
             // Only the running agent's own client says how far it got (801-KRN-0242).
             Request::AgentStep { step, detail } => {
-                let agent = Self::index("effector").is_some_and(|i| self.pids[i] == sender && self.running(i));
+                // BADGE_NOTICE is the agent's alone, lent only to its own worker (750-KRN-0159), which may make the call.
+                let agent = Self::index("effector").is_some_and(|i| self.running(i));
                 if badge != mind::process::BADGE_NOTICE || !agent {
                     return idl_init::reply_agent_step(call, Err(refused(sender, badge, "AGENT-STEP", format_args!("SPEAK FOR THE EFFECTOR AGENT"), "MC-3.4")));
                 }
