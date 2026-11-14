@@ -78,6 +78,16 @@ pub fn report(keeper: usize) {
     let _ = mind::ipc::drop_cap(client);
 }
 
+/// This boot's log on the log volume (`log:bootNNNN.log`, 801-KRN-0242): its number, 0 without a log volume.
+pub fn boot_log(keeper: usize) -> u32 {
+    let Ok(client) = mind::ipc::mint_badged(keeper, crate::CLIENT, mind::fs::BADGE_USER) else { return 0 };
+    let files = Endpoint(client);
+    let mut this = 0;
+    if let Ok(Ok(root)) = vfs::root(files, "log") { this = this_boot(files, root); let _ = vfs::close(files, root); }
+    let _ = mind::ipc::drop_cap(client);
+    this
+}
+
 /// The platform's transmit power policy for a WLAN device (213-KRN-0122): every DSDT and SSDT read whole and checked,
 /// and the SAR names searched for; a table that cannot be mapped makes it unknown. Read once at boot, while the platform
 /// privilege allows it.

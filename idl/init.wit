@@ -4,9 +4,9 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-/// A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice` and what any client
-/// may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
-package mind:init@1.12.0;
+/// A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice`, say `agent-step`
+/// (1.13) and ask what any client may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
+package mind:init@1.13.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -36,9 +36,11 @@ interface init {
     /// developer mode, 1.6) may ask; others get `denied` (1.3, 351-KRN-0022).
     reboot: func() -> result<_, error>;
     /// How this boot went (1.4, 000-KRN-0102): the slot it came from (`BOOT_SLOT_*`: 0 the volume's root, 1 A, 2 B),
-    /// whether it was on trial, and whether init confirmed it (`BOOT_CONFIRM`). init answers once it has decided, so a
-    /// trial boot not confirmed is one it refused: the kernel restarts the machine at the deadline. Any client may ask.
-    record boot { slot: u8, trial: bool, confirmed: bool }
+    /// whether it was on trial, and whether init confirmed it. Since 1.13 (801-KRN-0242) init answers at once:
+    /// `deciding` while a trial waits for the Effector agent's word (`agent-step`); a trial neither confirmed nor
+    /// deciding is one init refused, `why` saying why, and the machine restarts into the slot before. `log` is this
+    /// boot's log on the log volume (`log:bootNNNN.log`), 0 if none. Any client may ask.
+    record boot { slot: u8, trial: bool, confirmed: bool, deciding: bool, why: string<96>, log: u32 }
     boot: func() -> result<boot, error>;
     /// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
     /// Effector agent's services (750-EFF-0013); in neither, the normal mode, it runs none and grants them nothing.
@@ -89,4 +91,13 @@ interface init {
     /// and init holds one call for each: a second one replaces the first, which is answered `failed`. Errors: denied (not
     /// a running boot service), failed.
     stop-notice: func() -> result<stop-reason, error>;
+    /// How far the Effector agent got towards its server (1.13, 801-KRN-0242): `started` (its configuration read),
+    /// `no-network` (no flow, address or route to the server), `no-tls` (no TLS session with the pinned server),
+    /// `refused` (the server answered, but did not accept the heartbeat) or `accepted` (it accepted one).
+    enum agent-step { started, no-network, no-tls, refused, accepted }
+    /// The Effector agent's word on its way to the server (1.13, 801-KRN-0242), `detail` saying more (a status, an
+    /// error). Where the agent runs with a server configured (`data/effector/effector.conf`), a trial boot is confirmed
+    /// on `accepted` within 10 min of init's READY and refused otherwise, the last word said being its `why` (MC-9.4,
+    /// 9.9). Only the agent's own client (`BADGE_NOTICE`, from the running agent) may say it; others get `denied`.
+    agent-step: func(step: agent-step, detail: string<64>) -> result<_, error>;
 }

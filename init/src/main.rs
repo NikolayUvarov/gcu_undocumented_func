@@ -91,6 +91,7 @@ const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; l
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
+const EFFECTOR_CONF: &str = "data/effector/effector.conf"; // the owner's server for the agent (801-KRN-0242)
 // The services that need the device key, and the store's file face after the store: where keystore holds the key sealed
 // under the owner's passphrase (308-NET-0055), they are prepared at boot and started once it is typed (308-KRN-0205).
 const KEYED: [&str; 5] = ["blockstore", "storefs", "wlan", "tls", "ssh"];
@@ -187,7 +188,14 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
               notices: [Option<wire::Call>; UNITS],
               // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
-              power: mind::platform_power::Policy }
+              power: mind::platform_power::Policy,
+              // A trial that waits for the Effector server's word (801-KRN-0242).
+              trial: Trial }
+
+// A trial held for the Effector agent's word (801-KRN-0242): READY's time, the agent's last step and its detail, and
+// when a refused trial restarts the machine.
+#[derive(Default)]
+struct Trial { ready: usize, step: Option<idl_init::AgentStep>, detail: mind::util::FixedBuf<64>, restart_at: Option<usize> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -201,6 +209,11 @@ fn unit_image(unit: usize) -> (usize, usize) {
 // Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
 const RESTART_BUDGET: usize = 3;
 const RESTART_WINDOW_MS: u64 = 60_000;
+// A trial where the Effector agent runs with a server configured is confirmed on that server's accepted heartbeat, within
+// this long of READY, and refused otherwise (801-KRN-0242, MC-9.9); a refused trial restarts the machine into the slot
+// before this long after, unless the updater, which spends the trial first, asks sooner.
+const TRIAL_CONNECT_MS: usize = 600_000;
+const REFUSED_RESTART_MS: usize = 30_000;
 
 impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
@@ -1713,8 +1726,17 @@ impl Init {
                 idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
             }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
-            // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
+            // Answered at once: a trial that waits for the Effector server says so (801-KRN-0242).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
+            // Only the running agent's own client says how far it got (801-KRN-0242).
+            Request::AgentStep { step, detail } => {
+                let agent = Self::index("effector").is_some_and(|i| self.pids[i] == sender && self.running(i));
+                if badge != mind::process::BADGE_NOTICE || !agent {
+                    return idl_init::reply_agent_step(call, Err(refused(sender, badge, "AGENT-STEP", format_args!("SPEAK FOR THE EFFECTOR AGENT"), "MC-3.4")));
+                }
+                self.agent_said(step, detail.as_str());
+                idl_init::reply_agent_step(call, Ok(()))
+            }
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
             Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
             Request::BootPlan => idl_init::reply_boot_plan(call, Ok(&self.boot_plan()[..])),
@@ -1815,6 +1837,70 @@ impl Init {
         }
         let _ = ipc::drop_cap(client);
         Policy::parse(&text[..length]).ok()
+    }
+
+    // Whether the Effector agent runs with a server configured (801-KRN-0242): a mode on, the agent in this build and
+    // the owner's data/effector/effector.conf on the disk, whatever this release makes of it.
+    fn agent_configured(&mut self) -> bool {
+        if !(self.modes.development || self.modes.maintenance) || Self::index("effector").is_none() { return false; }
+        let Ok(client) = self.user_files() else { return false };
+        let files = Endpoint(client);
+        let mut present = false;
+        if let Ok(Ok(root)) = vfs::root(files, "") {
+            if let Ok(Ok(file)) = vfs::open(files, root, EFFECTOR_CONF, 0) { present = true; let _ = vfs::close(files, file); }
+            let _ = vfs::close(files, root);
+        }
+        let _ = ipc::drop_cap(client);
+        if !present { mind::println!("[INIT] NO {}: THE TRIAL DOES NOT WAIT FOR AN EFFECTOR SERVER", EFFECTOR_CONF); }
+        present
+    }
+
+    // The Effector agent's word (init.wit 1.13 `agent-step`): logged when the step changes; `accepted` confirms a trial
+    // that waits for it (801-KRN-0242).
+    fn agent_said(&mut self, step: idl_init::AgentStep, detail: &str) {
+        if self.trial.step != Some(step) || self.trial.detail.as_str() != detail {
+            mind::println!("[INIT] THE EFFECTOR AGENT: {}{}{}", step_name(step), if detail.is_empty() { "" } else { ": " }, detail);
+        }
+        self.trial.step = Some(step);
+        self.trial.detail = mind::util::FixedBuf::new();
+        let _ = core::fmt::Write::write_str(&mut self.trial.detail, detail);
+        if step == idl_init::AgentStep::Accepted && self.boot.deciding {
+            (self.boot.deciding, self.boot.confirmed) = (false, true);
+            mind::println!("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT {} S AFTER READY", (mind::time::uptime_ms() - self.trial.ready) / 1000);
+        }
+    }
+
+    // A trial that waits for the Effector server (801-KRN-0242), looked at each tick: refused once the agent is
+    // quarantined or the bound passed, and the machine restarted after a refusal; confirmed as before the wait if the
+    // owner turned the modes off, which stops the agent.
+    fn trial_due(&mut self) {
+        let now = mind::time::uptime_ms();
+        if self.trial.restart_at.is_some_and(|at| now >= at) {
+            mind::println!("[INIT] THE REFUSED TRIAL: RESTARTING INTO THE SLOT BEFORE");
+            self.reboot();
+        }
+        if !self.boot.deciding { return; }
+        if !(self.modes.development || self.modes.maintenance) {
+            (self.boot.deciding, self.boot.confirmed) = (false, true);
+            return mind::println!("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR MODES WERE TURNED OFF; EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED");
+        }
+        let mut why = mind::util::FixedBuf::<96>::new();
+        let agent = Self::index("effector");
+        if agent.is_some_and(|i| self.quarantined[i]) {
+            let _ = core::fmt::Write::write_str(&mut why, "THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED");
+        } else if now - self.trial.ready >= TRIAL_CONNECT_MS {
+            let _ = core::fmt::Write::write_fmt(&mut why, format_args!("NO HEARTBEAT ACCEPTED IN {} S: ", TRIAL_CONNECT_MS / 1000));
+            match self.trial.step {
+                None => { let _ = core::fmt::Write::write_str(&mut why, "THE AGENT SAID NOTHING"); }
+                Some(step) => { let _ = core::fmt::Write::write_fmt(&mut why, format_args!("{} {}", step_name(step), self.trial.detail.as_str())); }
+            }
+        } else {
+            return;
+        }
+        self.boot.deciding = false;
+        self.boot.why = wire_text(why.as_str());
+        self.trial.restart_at = Some(now + REFUSED_RESTART_MS);
+        mind::println!("[INIT] TRIAL BOOT REFUSED: {}; THE MACHINE RESTARTS INTO THE SLOT BEFORE WITHIN {} S", why.as_str(), REFUSED_RESTART_MS / 1000);
     }
 
     // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
@@ -2123,6 +2209,17 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
     idl_init::Error::Denied
 }
 
+// The Effector agent's step as init.wit names it (801-KRN-0242).
+fn step_name(step: idl_init::AgentStep) -> &'static str {
+    match step {
+        idl_init::AgentStep::Started => "started",
+        idl_init::AgentStep::NoNetwork => "no-network",
+        idl_init::AgentStep::NoTls => "no-tls",
+        idl_init::AgentStep::Refused => "refused",
+        idl_init::AgentStep::Accepted => "accepted",
+    }
+}
+
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
 fn not_found(name: &str) -> &'static str {
     match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
@@ -2304,10 +2401,10 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
                          vfs_parts: [None; VFS_PARTS], vfs_whole: [false; UNITS], boot_volume: info.boot_volume,
                          link: (info.link_present != 0).then_some(info.link_words),
-                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
+                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, ..Default::default() },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
-                         power: hardware::power_policy(), nodes: hardware::Nodes::default() };
+                         power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
@@ -2355,12 +2452,22 @@ fn boot(info: &'static BootInfo) {
     // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
     // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
-    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
+    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); init.boot.log = hardware::boot_log(keeper); }
     let mounted = mounted.unwrap_or_else(|| wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted()));
     // The machine's modes, once the boot volume is there; the Effector services follow them (750-KRN-0143).
     if mounted { init.read_modes(); init.follow_modes(); }
+    // Where the Effector agent runs with a server configured, the kernel's deadline is lifted the same way, but the trial
+    // waits for the server's accepted heartbeat (801-KRN-0242): a release that cannot reach it is not a working one.
     if healthy && mounted {
-        if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
+        if platform::confirm_boot() == Ok(true) {
+            if init.agent_configured() {
+                init.boot.deciding = true;
+                mind::println!("[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS THE AGENT'S HEARTBEAT, WITHIN {} S OF READY", TRIAL_CONNECT_MS / 1000);
+            } else {
+                init.boot.confirmed = true;
+                mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED");
+            }
+        }
     } else if info.boot_slot.trial != 0 {
         mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
     }
@@ -2372,12 +2479,16 @@ fn boot(info: &'static BootInfo) {
     }
     mind::println!("[INIT] READY");
     let ready = mind::time::uptime_ms();
+    init.trial.ready = ready;
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
         // A look every second too while keyed services wait for the passphrase (308-KRN-0205).
-        let received = if mark.is_some() || init.passphrase_waits() { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        // And while a trial waits for the Effector server, or a refused one for its restart (801-KRN-0242).
+        let ticks = mark.is_some() || init.passphrase_waits() || init.boot.deciding || init.trial.restart_at.is_some();
+        let received = if ticks { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
         init.key_opened();
+        init.trial_due();
         if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
             let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
             let _ = ipc::drop_cap(f);
