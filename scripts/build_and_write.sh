@@ -117,6 +117,36 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
+# The pull comes before the options are read (801-LNK-0046): the new script reads them, so an option this copy does not
+# know yet still works. --commit is looked for here; --image, --list and --list-machines fetch nothing.
+EARLY_COMMIT=""; EARLY_SKIP=0
+for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in
+        --commit) j=$((i + 1)); EARLY_COMMIT="${!j:-}" ;;
+        --image|--list|--list-machines) EARLY_SKIP=1 ;;
+    esac
+done
+if [[ -z $UPDATED && $EARLY_SKIP == 0 ]]; then
+    git -C "$REPO" fetch origin
+    if [[ -n $EARLY_COMMIT ]]; then
+        git -C "$REPO" checkout --detach "$EARLY_COMMIT"
+        trap 'git -C "$REPO" checkout -q "$BRANCH" || echo ">>> The clone stays at $EARLY_COMMIT: git checkout $BRANCH there." >&2; rm -f -- "$COPY"' EXIT
+    else
+        git -C "$REPO" checkout "$BRANCH"
+        git -C "$REPO" pull --ff-only
+    fi
+    # The checkout or the pull may have changed this script: the new one runs, with the same arguments, before
+    # anything is saved or written (the maintainer's word, 2026-10-24). exec runs no EXIT trap, so the copy goes
+    # first, and with --commit the new run gives the branch back itself.
+    if [[ -f $SELF ]] && ! cmp -s -- "$SELF" "$COPY"; then
+        echo ">>> build_and_write.sh changed with the $([[ -n $EARLY_COMMIT ]] && echo checkout || echo pull): running the new one"
+        rm -f -- "$COPY"
+        BUILD_AND_WRITE_UPDATED=1 BUILD_AND_WRITE_RESTORE_BRANCH="$([[ -n $EARLY_COMMIT ]] && echo "$BRANCH")" exec bash "$SELF" "${ORIG_ARGS[@]}"
+    fi
+elif [[ -n $RESTORE_BRANCH ]]; then
+    trap 'git -C "$REPO" checkout -q "$RESTORE_BRANCH" || echo ">>> The clone stays at the commit: git checkout $RESTORE_BRANCH there." >&2; rm -f -- "$COPY"' EXIT
+fi
+
 MODE_WORDS="development maintenance link-console remote-update link-remote-update"
 COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; LINK_ADDRESS=; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
 MACHINE=""; OLD_DISK=""; OLD_GIVEN=0; NEW_KEY=0
@@ -152,6 +182,8 @@ while [[ $# -gt 0 ]]; do
                   done
                   [[ ${#words[@]} -gt 0 ]] || { echo "--mode=<modes>: ${MODE_WORDS// /, }, comma-separated" >&2; exit 1; }
                   MODES=" ${words[*]} "; FLAGS+=("mode.conf:${words[*]}"); shift ;;
+        --list|--list-machines) break ;;
+        --*) echo "build_and_write.sh: unknown option $1 (the usage is at the top of scripts/build_and_write.sh)" >&2; exit 1 ;;
         *) break ;;
     esac
 done
@@ -772,26 +804,6 @@ if [[ -n $IMAGE_FILE ]]; then
     [[ -f $MANIFEST_FILE ]] || { echo "No MANIFEST beside $IMAGE_FILE: the steps after the write could not find its volume" >&2; exit 1; }
     echo ">>> Writing the given image $IMAGE_FILE (no build); its MANIFEST $(sha256sum "$MANIFEST_FILE" | cut -c1-16)"
 else
-if [[ -z $UPDATED ]]; then
-    git fetch origin
-    if [[ -n "$COMMIT" ]]; then
-        git checkout --detach "$COMMIT"
-        trap 'git -C "$REPO" checkout -q "$BRANCH" || echo ">>> The clone stays at $COMMIT: git checkout $BRANCH there." >&2; rm -f -- "$COPY"' EXIT
-    else
-        git checkout "$BRANCH"
-        git pull --ff-only
-    fi
-    # The checkout or the pull may have changed this script: the new one runs, with the same arguments, before
-    # anything is saved or written (the maintainer's word, 2026-10-24). exec runs no EXIT trap, so the copy goes
-    # first, and with --commit the new run gives the branch back itself.
-    if [[ -f $SELF ]] && ! cmp -s -- "$SELF" "$COPY"; then
-        echo ">>> build_and_write.sh changed with the $([[ -n $COMMIT ]] && echo checkout || echo pull): running the new one"
-        rm -f -- "$COPY"
-        BUILD_AND_WRITE_UPDATED=1 BUILD_AND_WRITE_RESTORE_BRANCH="$([[ -n $COMMIT ]] && echo "$BRANCH")" exec bash "$SELF" "${ORIG_ARGS[@]}"
-    fi
-elif [[ -n $RESTORE_BRANCH ]]; then
-    trap 'git -C "$REPO" checkout -q "$RESTORE_BRANCH" || echo ">>> The clone stays at $COMMIT: git checkout $RESTORE_BRANCH there." >&2; rm -f -- "$COPY"' EXIT
-fi
 [[ -n "$COMMIT" ]] && echo ">>> Building commit $(git log -1 --format='%h %ad %s' --date=short)"
 echo ">>> build_and_write.sh $(git log -1 --format=%h -- scripts/build_and_write.sh) runs$([[ -n $UPDATED ]] && { [[ -n $RESTORE_BRANCH ]] && echo ", the commit's own" || echo ', the version the pull brought'; })"
 # Build first, then pack: make_usb_image.py lists the programs when it starts, so packing inside its own build misses new ones.
