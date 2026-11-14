@@ -201,8 +201,8 @@ done
 read -r -d '' PS_FLAG <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "flag: $_"; exit 1 }
 for ($i = 0; $i -lt 30; $i++) {
-    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { break }
+    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Where-Object { $l = $_.DriveLetter; @("$($l):\MANIFEST", "$($l):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count } | Select-Object -First 1
+    if ($v) { break }
     $v = $null; Start-Sleep 2
 }
 if (-not $v) { Write-Output 'flag: no volume MIND CORE holding this build (its MANIFEST) within 60 s'; exit 1 }
@@ -227,8 +227,8 @@ WIFIJOIN_CONF="${WIFIJOIN_CONF:-$HOME/.config/mind/wifijoin}"
 read -r -d '' PS_LETTER <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
 for ($i = 0; $i -lt 30; $i++) {
-    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { Write-Output $v.DriveLetter; exit 0 }
+    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Where-Object { $l = $_.DriveLetter; @("$($l):\MANIFEST", "$($l):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count } | Select-Object -First 1
+    if ($v) { Write-Output $v.DriveLetter; exit 0 }
     Start-Sleep 2
 }
 exit 1
@@ -258,8 +258,8 @@ put_wifijoin() {
 read -r -d '' PS_LINK <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "link: $_"; exit 1 }
 for ($i = 0; $i -lt 30; $i++) {
-    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { break }
+    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Where-Object { $l = $_.DriveLetter; @("$($l):\MANIFEST", "$($l):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count } | Select-Object -First 1
+    if ($v) { break }
     $v = $null; Start-Sleep 2
 }
 if (-not $v) { Write-Output 'link: no volume MIND CORE holding this build (its MANIFEST) within 60 s'; exit 1 }
@@ -522,31 +522,31 @@ find_old_volume() {
     [[ $state =~ ^[A-Z]$ ]] && OLD_LETTER=$state
     return 0
 }
-# A disk's state for telling two devices apart (--old-disk): `old` while a disk is the device named __OLD__ (Windows'
-# unique ID, serial number and size, in A-Z a-z 0-9 _ |), else `here <that identity>` for disk __DISK__, or `absent`.
+# Disk __DISK__'s state (--old-disk): `old` while it is the device named __OLD__ (Windows' unique ID, serial number
+# and size, in A-Z a-z 0-9 _ |), `here <its identity>` when it is another device, or `absent`. The old one may stay in.
 read -r -d '' PS_DISK <<'PS' || true
 $ProgressPreference = 'SilentlyContinue'
 function DiskId($d) { "$($d.UniqueId)|$($d.SerialNumber)|$($d.Size)" -replace '[^A-Za-z0-9|]', '_' }
 $old = '__OLD__'
-if ($old -and @(Get-Disk | Where-Object { (DiskId $_) -eq $old }).Count) { 'old'; exit 0 }
 $d = Get-Disk -Number __DISK__ -ErrorAction SilentlyContinue
-if ($d) { "here $(DiskId $d)" } else { 'absent' }
+if (-not $d) { 'absent' } elseif ($old -and (DiskId $d) -eq $old) { 'old' } else { "here $(DiskId $d)" }
 PS
 disk_state() { local s="${PS_DISK//__OLD__/$2}"; winps "${s//__DISK__/$1}" | tr -d '\r\n'; }
 OLD_IDENT=""
-# With --old-disk, the old disk read: the new one is asked for as disk $DISK, and waited on until the old device is out
-# and another is there; the steps after the write find the new volume by its label, so the old one must be out.
+# With --old-disk, the old disk read: the new one is asked for as disk $DISK, and waited on until disk $DISK is there
+# and it is another device; the steps after the write find the new volume by this build's MANIFEST, so the old one may stay in.
 wait_new_disk() {
-    local state end=$((SECONDS + OLD_DISK_WAIT)) tty=0 said="" went=0
+    local state end=$((SECONDS + OLD_DISK_WAIT)) tty=0 said="" went=0 shown=$SECONDS
     if [[ -n $OLD_IDENT ]]; then state=$(disk_state "$DISK" "$OLD_IDENT"); else state=unknown; fi
     [[ $state == here* ]] && { echo ">>> Disk $DISK is another device than the old disk: it is written."; return 0; }
-    echo ">>> The old disk (disk $OLD_DISK) is read. Take it out now, and insert the NEW disk to be written as disk $DISK: only the new one may be in while it is written. Waiting up to $((OLD_DISK_WAIT / 60)) min; Enter goes on as it is."
+    echo ">>> The old disk (disk $OLD_DISK) is read. Insert the NEW disk to be written as disk $DISK; the old one may stay in. Waiting up to $((OLD_DISK_WAIT / 60)) min, the state shown every 15 s; Enter goes on as it is."
     if (: < /dev/tty) 2> /dev/null; then exec 3< /dev/tty; tty=1; fi
     while [[ $state != here* ]] && (( SECONDS < end )); do
         if [[ $state == absent && $said != absent ]]; then
             echo ">>> The old disk is out, and there is no disk $DISK yet. If the new one takes another number (scripts/build_and_write.sh --list), stop with Ctrl+C and run again with --machine $MACHINE and that number: the settings are kept already."
         fi
         said=$state
+        (( SECONDS - shown >= 15 )) && { shown=$SECONDS; echo ">>> Waiting for disk $DISK: $([[ $state == old ]] && echo "it is the old disk" || { [[ $state == absent ]] && echo "not there" || echo "$state"; })"; }
         if (( tty )); then
             if read -r -t 3 _ <&3; then went=1; echo ">>> Going on as it is: the writer shows disk $DISK and asks before it erases it."; break; fi
         else sleep 3; fi
