@@ -398,6 +398,18 @@ fn heads_say_coding_type_location_and_retry() {
     assert_eq!(parse_head(b"HTTP/1.1 429 Slow\r\nRetry-After: Wed, 21 Oct 2015 07:28:00 GMT").unwrap().retry_after, Some(RetryAfter::Date(1_445_412_480)));
 }
 
+// 801-NET-0080: the server's `Date`, for a client that judges by the server's time; an invalid one is ignored.
+#[test]
+fn heads_say_the_servers_date() {
+    let date = |value: &str| parse_head(format!("HTTP/1.1 200 OK\r\nDate: {}", value).as_bytes()).unwrap().date;
+    assert_eq!(date("Sat, 14 Nov 2026 09:09:00 GMT"), Some(1_794_647_340));
+    assert_eq!(date("Saturday, 14-Nov-26 09:09:00 GMT"), Some(1_794_647_340));
+    assert_eq!(date("Sat Nov 14 09:09:00 2026"), Some(1_794_647_340));
+    assert_eq!([date("yesterday"), date("Sat, 32 Nov 2026 09:09:00 GMT"), date("")], [None, None, None]);
+    assert_eq!(parse_head(b"HTTP/1.1 200 OK").unwrap().date, None);
+    assert_eq!(Head::status(200).date, None);
+}
+
 #[test]
 fn http_dates_in_their_three_forms() {
     // RFC 9110's example: 784111777 seconds.

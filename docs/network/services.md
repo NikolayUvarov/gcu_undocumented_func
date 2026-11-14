@@ -64,7 +64,7 @@ A service that talks to one server for as long as the machine runs, such as the 
 - **`connect-pins`** takes one or two pins. Each is the SHA-256 of the server's certificate (its DER, a *leaf* pin) or of its SubjectPublicKeyInfo (an *SPKI* pin). The second is the next one: a server matching either is accepted, so a pin can rotate without a moment when neither is right.
 - **Still checked:**
   - the certificate's name against the one asked for (webpki);
-  - its validity period by the system clock;
+  - its end by the system clock. A start after the clock is logged and not enforced (`tls.wit` 1.5, 801-NET-0081): such a clock is taken as wrong, a flat battery or an unset RTC, and the pin binds the key;
   - the server-authentication purpose when it names purposes;
   - `CA:false`;
   - the handshake's signature by its key.
@@ -73,7 +73,7 @@ A service that talks to one server for as long as the machine runs, such as the 
 - **Refused** (`certificate`), each logged by `tls`:
   - a server matching neither pin (`REFUSED: NOT A PINNED KEY OR CERTIFICATE`);
   - a wrong name (`REFUSED: CERTIFICATE NotValidForName`);
-  - an expired or not yet valid certificate (`Expired`, `NotValidYet`);
+  - an expired certificate (`Expired`);
   - a purpose other than server authentication, or a CA certificate (`InvalidPurpose`).
 - **`connect-pinned` (1.1)** keeps its meaning: one SPKI pin and nothing else checked.
 - **The pins of a certificate:**
