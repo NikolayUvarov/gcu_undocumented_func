@@ -13097,6 +13097,27 @@ def effector_suite(args, disk):
         until("EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", 60)
         print("PASS: stopped by init, the agent heard the stop notice on its worker, sent shutting_down and ended within "
               "the notice; started again, it is back", flush=True)
+        # 801-EFF-0032: vfs_server restarted under the agent and the gateway, whose file clients of the old instance answer
+        # no more. A journal or audit line not written ends the service, init starts it again with new clients, and the
+        # commands after it are done; the agent never stays busy for good (the MacBook Pro, 2026-11-14).
+        old_vfs = vm.services()["vfs_server"]
+        require(vm.command("svc restart vfs_server", timeout=60), "vfs_server restarted: PID")
+        for _ in range(50):
+            if vm.services().get("vfs_server", old_vfs) != old_vfs:
+                break
+            time.sleep(.2)
+        first = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60})
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            out = session()
+            if f"EFFECTOR: ACK {first} completed WITH ITS RESULT ACCEPTED" in out or "THE JOURNAL WAS NOT WRITTEN" in out:
+                break
+            time.sleep(1)
+        restarted = "THE JOURNAL WAS NOT WRITTEN" in session()
+        after = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 60}, program="mind")
+        until(f"EFFECTOR: ACK {after} completed WITH ring.log", 180)
+        print(f"PASS: vfs_server restarted under the agent: {'its journal not written, it ended and init started it again' if restarted else 'its journal written as before'}; "
+              "a log collected through the gateway's audit after it", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")

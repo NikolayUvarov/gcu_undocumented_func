@@ -257,6 +257,7 @@ struct Agent {
     step: Option<init::AgentStep>, // what init was last told of the way to the server (801-EFF-0031)
     pool: Box<workers::Pool>, // the session's workers: the benchmark's on every CPU, and init's stop notice
     fallback: String, // the updater's line of a refused trial it fell back from, reported in each heartbeat (801-EFF-0029)
+    journal_problem: String, // why the journal was not written, once it was not (801-EFF-0032)
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
 }
@@ -544,14 +545,16 @@ impl Agent {
     }
 
     #[inline(never)]
-    fn append_journal(&self, record: &session::Record) -> bool {
+    fn append_journal(&mut self, record: &session::Record) -> bool {
         let path = self.path("journal");
-        let Ok(mut file) = File::open_mode(&path, MODE_WRITE | MODE_CREATE) else { return false };
-        if file.size() == 0 && file.write_at(0, journal::HEADER.as_bytes()).is_err() { return false; }
+        let mut file = match File::open_mode(&path, MODE_WRITE | MODE_CREATE) { Ok(f) => f, Err(e) => { self.journal_problem = alloc::format!("OPEN: {:?}", e); return false } };
+        if file.size() == 0 { if let Err(e) = file.write_at(0, journal::HEADER.as_bytes()) { self.journal_problem = alloc::format!("HEADER: {:?}", e); return false; } }
         let mut line = [0u8; journal::LINE_MAX];
         let n = journal::line(record, &mut line);
         let at = file.size();
-        file.write_at(at, &line[..n]).map(|w| w == n).unwrap_or(false) && file.flush().is_ok()
+        match file.write_at(at, &line[..n]) { Ok(w) if w == n => {}, other => { self.journal_problem = alloc::format!("WRITE: {:?}", other.map(|_| ())); return false } }
+        if let Err(e) = file.flush() { self.journal_problem = alloc::format!("FLUSH: {:?}", e); return false; }
+        true
     }
 
 
@@ -1208,7 +1211,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
-        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new() });
+        answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new(), journal_problem: String::new() });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -1290,6 +1293,12 @@ fn main(_info: &'static BootInfo) {
         if let workers::Event::Stop(reason) = agent.pool.poll() {
             let outcome = agent.heartbeat(true, None);
             mind::println!("EFFECTOR: init STOPS IT ({:?}): SHUTTING_DOWN SENT ({:?}), ENDING", reason, outcome);
+            mind::process::exit_with(0);
+        }
+        // A journal not written stops answers and new commands (MC-6.6): the agent ends, so that init starts it again with
+        // a new file client, the likely cause being a restarted vfs_server; never a session left busy for good (801-EFF-0032).
+        if session.journal_failed() && SERVICE.load(core::sync::atomic::Ordering::Relaxed) {
+            mind::println!("EFFECTOR: THE JOURNAL WAS NOT WRITTEN ({}): ENDING, SO THAT init STARTS IT AGAIN WITH A NEW FILE CLIENT", agent.journal_problem);
             mind::process::exit_with(0);
         }
         // A restart the gateway admitted: once no answer waits, the last heartbeat, then quiet until it comes (750-EFF-0006).

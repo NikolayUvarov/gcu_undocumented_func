@@ -162,7 +162,7 @@ impl Client {
 
 /// The machine as `init`'s grants show it to the gateway. `writer` is the scope `init` made of the policy's `deliver`
 /// root at this start (750-KRN-0120): its root is that directory, so paths are named below it.
-struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String> }
+struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String>, audit_failed: bool }
 
 fn temporary(path: &str) -> String { format!("{}.part", path) }
 
@@ -296,7 +296,9 @@ impl Machine for Host {
         let at = self.private.size(&file).unwrap_or(0);
         let mut text = String::from(line);
         text.push('\n');
-        self.private.write_at(&file, at, text.as_bytes(), mind::fs::MODE_WRITE | mind::fs::MODE_CREATE).is_ok()
+        let written = self.private.write_at(&file, at, text.as_bytes(), mind::fs::MODE_WRITE | mind::fs::MODE_CREATE);
+        if let Err(e) = &written { mind::println!("[EFFECTOR_GW] THE AUDIT LINE WAS NOT WRITTEN: {:?}", e); self.audit_failed = true; }
+        written.is_ok()
     }
 
     fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.reader.read_whole(POLICY_FILE, policy::FILE_MAX + 1) }
@@ -433,7 +435,7 @@ fn main(_info: &'static BootInfo) {
     // init starts it with `--service` in a mode (750-KRN-0119, 0143); started any other way it serves nothing.
     let service = mind::process::args_str().split_whitespace().any(|a| a == "--service");
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
-    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None };
+    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None, audit_failed: false };
     // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
@@ -453,6 +455,12 @@ fn main(_info: &'static BootInfo) {
             };
             let _ = display::remote(Endpoint(SLOT_DISPLAY), state);
             mark_at = mind::time::uptime_ms() + MARK_MS;
+        }
+        // An audit not written refuses its request (MC-10.6); once answered, the gateway ends, so that init starts it again
+        // with new clients: a file client of a restarted vfs_server answers no more (801-EFF-0032).
+        if host.audit_failed {
+            mind::println!("[EFFECTOR_GW] THE AUDIT CANNOT BE WRITTEN: ENDING, SO THAT init STARTS IT AGAIN WITH A NEW FILE CLIENT");
+            mind::process::exit_with(0);
         }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, MARK_MS as u32) else { continue };
         if !request.is_call { continue; }
