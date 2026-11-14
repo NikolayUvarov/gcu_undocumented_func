@@ -7068,6 +7068,7 @@ def modes_suite(args):
                     require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
                     print("PASS: modes: the shell's mode shows the mode set by disk, turns one on after the operator agrees "
                           "and off at once; init logs the change with the shell's badge (750-EFF-0013)", flush=True)
+                    effector_policy_edits(vm)
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
@@ -7090,6 +7091,7 @@ def modes_suite(args):
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
+    effector_policy_recovery_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -7102,6 +7104,60 @@ def modes_suite(args):
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
+
+
+def effector_policy_edits(vm):
+    """801-APP-0140: `effector policy` shows the owner's policy and whether it parses; `allow` asks and adds a rule or puts
+    it in place of the one with its key, `deny` takes one out at once; a rule that would make the policy refused is not
+    written; no temporary file is left."""
+    shown = vm.command("effector policy", raw=True)
+    require_all(shown, "  effector-policy 1", "  service sysmon restart", "THE POLICY PARSES: ")
+    for answer, said in ((b"n", "EFFECTOR POLICY: NOT CHANGED"), (b"y", "EFFECTOR POLICY: + update apply; ")):
+        vm.send("effector policy allow update apply\n")
+        require(vm.expect("(Y/N)", timeout=10), "ALLOW `update apply` IN THE EFFECTOR POLICY?")
+        vm.send_bytes(answer)
+        require(vm.expect("MIND> ", timeout=30), said)
+    require(vm.command("cat data/effector/policy", raw=True), "update apply")
+    vm.send("effector policy allow reboot on\n")
+    vm.expect("(Y/N)", timeout=10)
+    vm.send_bytes(b"y")
+    require(vm.expect("MIND> ", timeout=30), "EFFECTOR POLICY: + reboot on; ")
+    require(vm.command("effector policy allow update everything", raw=True), "EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE ")
+    require(vm.command("effector policy deny reboot", raw=True), "EFFECTOR POLICY: - reboot on; ")
+    require(vm.command("effector policy deny screen", raw=True), "NO RULE screen TO DENY")
+    policy = vm.command("cat data/effector/policy", raw=True)
+    assert "update apply" in policy and "reboot on" not in policy and "update everything" not in policy, policy
+    listed = vm.command("ls data/effector", raw=True)
+    assert "policy.new" not in listed and "policy.old" not in listed, listed
+    require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] EFFECTOR POLICY: + update apply; ")
+    require(vm.command("effector policy edit", raw=True), "USAGE: EFFECTOR POLICY")
+    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written; deny at "
+          "once; a rule the gateway would refuse not written; no temporary file left", flush=True)
+
+
+def effector_policy_recovery_check(args):
+    """801-APP-0140: an edit a restart cut, with no data/effector/policy, its new file whole beside the old one: the shell
+    gives the new one its name at its start and removes the old one."""
+    if not raw_tools():
+        print("SKIP: effector policy recovery needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-policy-cut-", dir=ROOT / IMAGE) as temp:
+        files = {k: v for k, v in MODES_EFFECTOR_FILES.items() if k != "data/effector/policy"}
+        files.update({"data/effector/policy.new": GATEWAY_POLICY + b"update apply\n", "data/effector/policy.old": GATEWAY_POLICY})
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            log = vm.command("dmesg -s shell", raw=True)
+            require_all(log, "[SHELL] EFFECTOR POLICY: AN EDIT WAS CUT BY A RESTART: THE NEW ONE TOOK ITS NAME", "[SHELL] EFFECTOR POLICY: data/effector/policy.old LEFT BY A CUT EDIT, REMOVED")
+            require(vm.command("cat data/effector/policy", raw=True), "update apply")
+            listed = vm.command("ls data/effector", raw=True)
+            assert "policy.new" not in listed and "policy.old" not in listed, listed
+            require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+        finally:
+            vm.close()
+    print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
+          "the old file removed", flush=True)
 
 
 def remote_update_check(args):
@@ -7130,6 +7186,23 @@ def remote_update_check(args):
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
                     held = re.search(r"^SLOT=35 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", vm.command(f"stat caps {pids['effector_gw']}", raw=True), re.M)
                     assert held and held[1] == "1" and servers.get(int(held[2])) == pids["updater"], held
+                    # 801-APP-0139: the shell's notice and `mode` show the permission; off at once, on after the operator
+                    # agrees, which init logs with the shell's badge; the link's leave refused without the link's console.
+                    require(vm.command("dmesg -s shell", raw=True), "[SHELL] REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED")
+                    require(vm.command("mode", raw=True), "REMOTE UPDATE: ON (A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED); THE LINK'S CONSOLE MAY SWITCH IT: NO")
+                    require_all(vm.command("mode remote-update off bench check", raw=True), "MODE REMOTE-UPDATE OFF", "REMOTE UPDATE: OFF;")
+                    assert "remote-update" not in vm.command("cat data/mode.conf", raw=True)
+                    for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "REMOTE UPDATE: ON (")):
+                        vm.send("mode remote-update on the modes suite\n")
+                        require(vm.expect("(Y/N)", timeout=10), "TURN REMOTE-UPDATE ON?")
+                        vm.send_bytes(answer)
+                        require(vm.expect("MIND> ", timeout=30), said)
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE REMOTE-UPDATE ON BY operator (PID ")
+                    require(vm.command("cat data/mode.conf", raw=True), "remote-update")
+                    vm.send("mode link-remote-update on\n")
+                    require(vm.expect("(Y/N)", timeout=10), "TURN LINK-REMOTE-UPDATE ON?")
+                    vm.send_bytes(b"y")
+                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WITH THE LINK'S CONSOLE")
                     # The last mode turned off takes the permission with it: a mode turned on again does not bring it back.
                     require(vm.command("mode development off", raw=True), "MODE: NORMAL")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE")
@@ -7138,13 +7211,55 @@ def remote_update_check(args):
                     require(log, "[INIT] MODE: NORMAL (data/mode.conf)")
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: remote-update (NEITHER development NOR maintenance)")
                     assert "REMOTE UPDATE ON" not in log, log[-2000:]
+                    # 801-APP-0139: without a mode init refuses the permission, and the shell says why.
+                    assert "REMOTE UPDATE ON" not in vm.command("dmesg -s shell", raw=True)
+                    vm.send("mode remote-update on\n")
+                    vm.expect("(Y/N)", timeout=10)
+                    vm.send_bytes(b"y")
+                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: REMOTE-UPDATE COUNTS ONLY WITH THE DEVELOPMENT OR MAINTENANCE MODE ON")
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-remote-update-{args.cpus}cpu.log").write_text(vm.log)
+    # 801-APP-0139: the link's console switches remote-update only with the owner's link-remote-update; never that word.
+    mindlink = mindlink_tool()
+
+    def link(port, *command, ok=True):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command], capture_output=True, text=True, timeout=120)
+        out = r.stdout + r.stderr
+        assert ok is None or (r.returncode == 0) == ok, (command, r.returncode, out)
+        return out
+    for words in (b"development\nlink-console\nlink-remote-update\n", b"development\nlink-console\n"):
+        with tempfile.TemporaryDirectory(prefix="smoke-remote-link-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "link.conf": b"baud=115200 dev\n", "data/mode.conf": words})
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False,
+                    extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand",
+                           "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
+            try:
+                port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+                require(link(port, "hello"), '"MIND Core link"')
+                leave = b"link-remote-update" in words
+                require(vm.command("mode", raw=True), f"THE LINK'S CONSOLE MAY SWITCH IT: {'YES' if leave else 'NO'}")
+                if leave:
+                    require(link(port, "sh", "mode", "remote-update", "on"), "MODE REMOTE-UPDATE ON")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE REMOTE-UPDATE ON BY operator (PID ")
+                    require(vm.command("dmesg -s init", raw=True), ": the link's console")
+                    require(link(port, "sh", "mode", "remote-update", "off"), "MODE REMOTE-UPDATE OFF")
+                else:
+                    require(link(port, "sh", "mode", "remote-update", "on", ok=None), "THE OWNER'S LINK-REMOTE-UPDATE IS OFF")
+                    assert "MODE REMOTE-UPDATE ON BY" not in vm.command("dmesg -s init", raw=True)
+                for line in (("mode", "link-remote-update", "off"), ("mode", "development", "off")):
+                    require(link(port, "sh", *line, ok=False), "refused")
+                require(vm.command("mode", raw=True), "MODE: DEVELOPMENT")
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-remote-link-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: remote-update (751-KRN-0185): counted with the development mode, left out without a mode, its link switch "
           "left out without the link's console, the test keys' warning, the gateway's updater client badged 1 in slot 35, "
-          "dropped with the last mode", flush=True)
+          "dropped with the last mode; the shell's mode remote-update off at once and on after the operator agrees, its notice, "
+          "refused without a mode, link-remote-update refused without the link's console; the link's console switched "
+          "remote-update with the owner's link-remote-update and not without it, and never the other words (801-APP-0139)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.

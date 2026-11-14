@@ -27,6 +27,10 @@ mod netstat;
 mod ping;
 #[path = "../shell/src/modes.rs"]
 mod modes;
+#[path = "../shell/src/policyedit.rs"]
+mod policyedit;
+#[path = "../libmind/src/effector/policy.rs"]
+mod policy;
 #[path = "../shell/src/pick.rs"]
 mod pick;
 #[path = "../shell/src/pipe.rs"]
@@ -180,6 +184,27 @@ fn the_links_console_gets_scripts_and_the_policy_but_never_mode() {
         assert_eq!(console(line), taken_by(line, Client::Link), "{:?}", line);
     }
     for line in ["msh /data/link/effector/start.msh", "netpolicy add allow x", "netrevoke fetch"] { assert_eq!(taken_by(line, Client::Link), Taken::Refused, "{}", line); }
+}
+
+#[test]
+fn the_links_console_switches_remote_update_only_with_the_owners_leave() {
+    // 801-APP-0139 (EFF's request of 2026-10-29): `mode remote-update on|off` is the one `mode` the link's console sends;
+    // the shell then runs it only while init reports `link-remote-update`.
+    use clients::{taken_by, Client, Taken};
+    use modes::{link_may, parse};
+    for line in ["mode remote-update on", "mode REMOTE-UPDATE off", "mode remote-update on the server's release 202611141200"] {
+        assert_eq!(taken_by(line, Client::LinkConsole), Taken::Now, "{}", line);
+        assert!(link_may(&parse(line.trim_start_matches("mode ")).unwrap(), true), "{}", line);
+        assert!(!link_may(&parse(line.trim_start_matches("mode ")).unwrap(), false), "{}: not without link-remote-update", line);
+    }
+    // Never the link's leave itself, the modes, or `mode` from the link's client, an SSH session or a lent program.
+    for line in ["mode link-remote-update on", "mode link-remote-update off", "mode development on", "mode maintenance off", "mode", "mode remote-update", "mode remote-update up"] {
+        assert_eq!(taken_by(line, Client::LinkConsole), Taken::Refused, "{:?}", line);
+    }
+    for client in [Client::Link, Client::Remote, Client::Program] {
+        assert_eq!(taken_by("mode remote-update on", client), Taken::Refused, "{:?}", client);
+    }
+    for args in ["link-remote-update on", "development on", "maintenance off"] { assert!(!link_may(&parse(args).unwrap(), true), "{}", args); }
 }
 
 #[test]
@@ -410,6 +435,34 @@ fn mode_shows_the_modes_and_turns_one_on_or_off() {
     let mut notice = String::new();
     assert!(!modes::notice(&mut notice, false, false, "disk") && notice.is_empty());
     assert!(modes::notice(&mut notice, true, false, "disk") && notice.starts_with("THE DEVELOPMENT MODE IS ON (SET BY disk)"), "{}", notice);
+}
+
+#[test]
+fn mode_switches_the_owners_remote_update_permissions() {
+    // 801-APP-0139: `mode remote-update|link-remote-update on|off [reason]` (init.wit 1.11, 751-KRN-0185).
+    use modes::{parse, Asked, Which};
+    assert_eq!(parse("remote-update on bench release"), Ok(Asked::Set { which: Which::RemoteUpdate, on: true, reason: "bench release" }));
+    assert_eq!(parse("Link-Remote-Update OFF"), Ok(Asked::Set { which: Which::LinkRemoteUpdate, on: false, reason: "" }));
+    for wrong in ["remote on", "remote-update", "remote-updates on", "link-remote-update maybe"] { assert_eq!(parse(wrong), Err(modes::USAGE), "{:?}", wrong); }
+    assert!(modes::USAGE.contains("REMOTE-UPDATE|LINK-REMOTE-UPDATE"));
+    assert_eq!((modes::name(Which::RemoteUpdate), modes::name(Which::LinkRemoteUpdate)), ("REMOTE-UPDATE", "LINK-REMOTE-UPDATE"));
+    // The state line, whether each counts now.
+    let permissions = |r, l| { let mut out = String::new(); modes::permissions(&mut out, r, l); out };
+    assert_eq!(permissions(false, false), "REMOTE UPDATE: OFF; THE LINK'S CONSOLE MAY SWITCH IT: NO\n");
+    assert_eq!(permissions(true, true), "REMOTE UPDATE: ON (A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED); THE LINK'S CONSOLE MAY SWITCH IT: YES\n");
+    // The questions say what each allows and that it lasts.
+    let question = |which| { let mut out = String::new(); modes::question(&mut out, which); out };
+    let remote = question(Which::RemoteUpdate);
+    assert!(remote.starts_with("TURN REMOTE-UPDATE ON?") && remote.contains("EFFECTOR SERVER MAY THEN BE INSTALLED") && remote.contains("MODE REMOTE-UPDATE OFF"), "{}", remote);
+    let link = question(Which::LinkRemoteUpdate);
+    assert!(link.starts_with("TURN LINK-REMOTE-UPDATE ON?") && link.contains("THE LINK'S CONSOLE (THE CABLE) MAY THEN TURN REMOTE-UPDATE ON OR OFF"), "{}", link);
+    // The notice while remote-update counts, with the test keys named; nothing while it does not.
+    let notice = |r, l, t| { let mut out = String::new(); (modes::remote_notice(&mut out, r, l, t), out) };
+    assert_eq!(notice(false, true, true), (false, String::new()));
+    let (shown, text) = notice(true, false, false);
+    assert!(shown && text == "REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED; THE LINK'S CONSOLE MAY NOT SWITCH IT. MODE REMOTE-UPDATE OFF ENDS IT.\n", "{}", text);
+    let (_, text) = notice(true, true, true);
+    assert!(text.contains("(THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED)") && text.contains("THE LINK'S CONSOLE MAY SWITCH IT"), "{}", text);
 }
 
 #[test]
@@ -902,4 +955,62 @@ fn ip_names_a_card_out_of_use() {
     assert_eq!(card_words(false, false, false, true, false), " WIRED DEFAULT");
     assert!(off(0b01, 0) && !off(0b01, 1) && off(0b10, 1) && !off(0, 0));
     assert!(!off(0xFF, 8), "no ninth card");
+}
+
+// The parser the gateway uses, as the shell calls it (shell/src/policyctl.rs).
+fn policy_check(text: &str) -> Result<u16, (u16, &'static str)> {
+    policy::Policy::parse(text.as_bytes()).map(|p| p.rules()).map_err(|e| (e.line, policyedit::why(&format!("{:?}", e.kind))))
+}
+
+#[test]
+fn effector_policy_edits_one_rule_and_never_writes_a_refused_policy() {
+    // 801-APP-0140: `effector policy [show | allow <line> | deny <line>]`.
+    use policyedit::{edit, parse, Asked, Change};
+    assert_eq!(parse("policy"), Ok(Asked::Show));
+    assert_eq!(parse("POLICY show"), Ok(Asked::Show));
+    assert_eq!(parse("policy allow update   apply"), Ok(Asked::Allow("update   apply")));
+    assert_eq!(parse("policy deny reboot"), Ok(Asked::Deny("reboot")));
+    for wrong in ["", "policy allow", "policy deny", "policy edit x", "setup https://x", "policy show more"] { assert_eq!(parse(wrong), Err(policyedit::USAGE), "{:?}", wrong); }
+    let current = "# the bench\neffector-policy 1\nagent on\nservice sysmon restart\nupdate check\n";
+    // A rule with a new key is added at the end; one with the same key takes the old one's place; comments stay.
+    let (text, change, rules) = edit(Some(current), Asked::Allow("reboot  on"), policy_check).unwrap();
+    assert_eq!((text.as_str(), change, rules), ("# the bench\neffector-policy 1\nagent on\nservice sysmon restart\nupdate check\nreboot on\n", Change::Added("reboot on".into()), 4));
+    let (text, change, _) = edit(Some(current), Asked::Allow("update apply"), policy_check).unwrap();
+    assert_eq!(text, "# the bench\neffector-policy 1\nagent on\nservice sysmon restart\nupdate apply\n");
+    assert_eq!(change, Change::Replaced { old: "update check".into(), new: "update apply".into() });
+    // A service's rule is its own name's: another service is added, the same one replaced.
+    let (text, _, _) = edit(Some(current), Asked::Allow("service blockstore start"), policy_check).unwrap();
+    assert!(text.contains("service sysmon restart\n") && text.ends_with("service blockstore start\n"), "{}", text);
+    let (text, _, _) = edit(Some(current), Asked::Allow("service sysmon start,stop"), policy_check).unwrap();
+    assert!(text.contains("service sysmon start,stop\n") && !text.contains("restart"), "{}", text);
+    // Deny takes the rule out by its key (and name), whatever its value.
+    let (text, change, rules) = edit(Some(current), Asked::Deny("update"), policy_check).unwrap();
+    assert_eq!((text.as_str(), change, rules), ("# the bench\neffector-policy 1\nagent on\nservice sysmon restart\n", Change::Removed("update check".into()), 2));
+    assert_eq!(edit(Some(current), Asked::Deny("service sysmon"), policy_check).unwrap().0, "# the bench\neffector-policy 1\nagent on\nupdate check\n");
+    assert!(edit(Some(current), Asked::Deny("reboot on"), policy_check).unwrap_err().contains("NO RULE reboot on TO DENY"));
+    // Never a policy the gateway would refuse: an unknown key, a wrong word, a protected service, the header.
+    // (`update everything` takes update check's place, line 5; the others are added as line 6.)
+    for (line, at, why) in [("turbo on", 6, "A KEY THE GRAMMAR DOES NOT KNOW"), ("update everything", 5, "A RULE'S WORDS ARE WRONG"), ("service shell restart", 6, "A PROTECTED NAME OR TREE")] {
+        let refused = edit(Some(current), Asked::Allow(line), policy_check).unwrap_err();
+        assert!(refused.starts_with(&format!("EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE {} ", at)) && refused.contains(why), "{}: {}", line, refused);
+    }
+    assert!(edit(Some(current), Asked::Allow("effector-policy 2"), policy_check).unwrap_err().contains("NOT A RULE"));
+    assert!(edit(Some(current), Asked::Allow("# a note"), policy_check).unwrap_err().contains("NOT A COMMENT"));
+    // No file: one is written new, with its first line; a file that is refused now is edited only into one that parses.
+    let (text, _, rules) = edit(None, Asked::Allow("agent on"), policy_check).unwrap();
+    assert_eq!((text.as_str(), rules), ("effector-policy 1\nagent on\n", 1));
+    let broken = "effector-policy 1\nagent on\nturbo on\n";
+    assert!(edit(Some(broken), Asked::Allow("reboot on"), policy_check).unwrap_err().contains("REFUSED AT LINE 3"));
+    assert_eq!(edit(Some(broken), Asked::Deny("turbo"), policy_check).unwrap().0, "effector-policy 1\nagent on\n");
+    // CRLF lines are read as the parser reads them.
+    assert_eq!(edit(Some("effector-policy 1\r\nagent on\r\n"), Asked::Allow("reboot on"), policy_check).unwrap().0, "effector-policy 1\nagent on\nreboot on\n");
+    // The text: the question, the line after an edit, the state below the file.
+    assert!(policyedit::question("update apply").starts_with("ALLOW `update apply` IN THE EFFECTOR POLICY?"));
+    assert_eq!(policyedit::done(&Change::Replaced { old: "update check".into(), new: "update apply".into() }, 3, Some(3)),
+               "EFFECTOR POLICY: update apply (WAS update check); 3 RULES, KEPT IN data/effector/policy. THE GATEWAY READ IT: 3 RULES");
+    assert!(policyedit::done(&Change::Removed("reboot on".into()), 2, None).contains("- reboot on; 2 RULES") );
+    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, None).ends_with("THE GATEWAY READS IT AT ITS NEXT START (A RESTART, OR A MODE TURNED OFF AND ON); INIT'S OWN CHECKS AT ONCE"));
+    assert_eq!(policyedit::state(true, policy_check(current)), "THE POLICY PARSES: 3 RULES");
+    assert_eq!(policyedit::state(true, policy_check(broken)), "THE POLICY IS REFUSED AT LINE 3 (A KEY THE GRAMMAR DOES NOT KNOW): THE GATEWAY ALLOWS NOTHING");
+    assert!(policyedit::state(false, Ok(0)).starts_with("NO data/effector/policy: THE GATEWAY ALLOWS NOTHING"));
 }
