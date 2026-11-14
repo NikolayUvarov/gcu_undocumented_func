@@ -9888,6 +9888,69 @@ def link_release_image(temp, arch, extra):
     return image, server, kept, good, forged, manifest6, boot_files, channel
 
 
+def previous_suite(args):
+    """801-UPD-0038 (801 S4): no release lands that the one before it cannot update to. The release `main` held before
+    this tree, built by scripts/previous_release.sh in a worktree of its own (`--previous-tree`), is signed as version 5,
+    staged and published by its own tools, and written as a maintainer writes a disk (make_usb_image.py --slots: slot A
+    confirmed, its channel and key file kept), with update.txt naming the cable's directory. This tree's build is signed
+    as version 6 and published by this tree's release tool into the same server, and put in data/link/rel/ as the cable
+    puts it. The previous release's own updater must take it into slot B, boot it on trial and confirm it."""
+    prev = Path(args.previous_tree or "")
+    if not args.previous_tree or not (prev / "scripts/make_usb_image.py").is_file():
+        raise AssertionError("the previous suite needs --previous-tree, a built tree of the release before (scripts/previous_release.sh)")
+    if not raw_tools() or not shutil.which("openssl") or not shutil.which("qemu-img"):
+        print("SKIP: previous suite needs mkfs.fat, fsck.fat, mtools, openssl and qemu-img", flush=True)
+        return
+    arch, root = args.arch, {"x86_64": "usb_root", "aarch64": "aarch64_root"}[args.arch]
+    temp = Path(tempfile.mkdtemp(prefix="mind-previous-"))
+
+    def tool(*command):  # one of the previous tree's own tools, run in that tree
+        r = subprocess.run([sys.executable, *command], cwd=prev, capture_output=True, text=True, timeout=1800)
+        assert r.returncode == 0, (command, r.stdout[-3000:], r.stderr[-3000:])
+        return r.stdout
+    try:
+        tool("scripts/sign_manifest.py", root, "--version", "5")
+        tool("scripts/release.py", "stage", "5", str(temp / "staged5"), "--arch", f"{arch}={root}")
+        tool("scripts/release.py", "publish", str(temp / "staged5"), str(temp / "six/server"))
+        (temp / "update.txt").write_text("# 801-UPD-0038: a release put in the cable's directory\nsource data/link/rel\nchannel stable\nautomatic apply\nevery 20\ntries 3\n")
+        tool("scripts/make_usb_image.py", "--arch", arch, "--no-build", "--slots", "--channel", str(temp / "six/server/channels/stable"),
+             "--keys", str(temp / "six/server/keys/current"), "--update", str(temp / "update.txt"), "--output", str(temp / "previous.img"), "--force")
+        # This tree's release 6, published by this tree's release tool into the server that holds release 5.
+        server, manifest6 = link_update.build(ROOT / IMAGE, arch, 6, temp / "six")
+        files = link_update.release_files(manifest6, arch, 6, release_tool.key_versions(release_tool.destination(server)))
+        files += ["channels/stable", "timestamps/stable"]
+        image = boot_slots.Image(temp / "previous.img")
+        made = set()
+        for path in files:
+            parts = f"data/link/{link_update.DIR}/{path}".split("/")[:-1]
+            for n in range(2, len(parts) + 1):
+                if (folder := "/".join(parts[:n])) not in made:
+                    subprocess.run(["mmd", "-i", image.drive, f"::{folder}"], env=MTOOLS_ENV, capture_output=True)  # one there is left
+                    made.add(folder)
+            image.write(f"data/link/{link_update.DIR}/{path}", (server / path).read_bytes())
+        print(f"PREVIOUS: release 5 from {prev.name}, release 6 from this tree, {len(files)} files put in data/link/{link_update.DIR}/", flush=True)
+        cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+        vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64", prompt=False, extra=[*cpu, "-nic", "none"])
+        try:
+            vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=1800)
+            vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=600)
+            vm.expect("MIND> ", timeout=300)
+            log = vm.service_logs("updater", "SLOT B CONFIRMED ON THE DISK")
+            require_all(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6", "[UPDATER] SLOT B CONFIRMED ON THE DISK")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-previous-{args.cpus}cpu.log").write_text(vm.log)
+        records = boot_slots.records(image.path)
+        newest = boot_slots.newest(records)[1]
+        assert newest["slot"] == "B" and newest["confirmed"], records
+        assert image.read("MIND/B/MANIFEST") == manifest6, "slot B holds release 6's manifest"
+        print(f"PASS: previous: the release before ({prev.name}), written as a disk is written, took this tree's release 6 "
+              "from data/link/rel/ through its own updater into slot B, booted it on trial and confirmed it (801-UPD-0038)", flush=True)
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
 def linkupdate_suite(args):
     """An update through the link (351-KRN-0141): the update suite's image (release 5 in slot A, confirmed, its channel
     kept there) with an empty link.conf at the root, so link serves at 460800 bit/s (801-LNK-0044), and update.txt naming
@@ -18035,6 +18098,7 @@ def main():
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
+    parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
     parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
@@ -18142,6 +18206,9 @@ def main():
             continue
         if suite == "link":
             link_suite(args)
+            continue
+        if suite == "previous":  # 801-UPD-0038, its own group through scripts/previous_release.sh
+            previous_suite(args)
             continue
         if suite == "linkupdate":
             linkupdate_suite(args)
