@@ -57,7 +57,7 @@ fn notice_worker() {
         match mind::idl::init::stop_notice(lifecycle) {
             Ok(Ok(reason)) => { let _ = back.send(&Message::new(NOTICE_TAG, reason as usize)); return; }
             // Replaced by a later call, or refused: this worker has nothing more to wait for.
-            Ok(Err(_)) => return,
+            Ok(Err(e)) => { mind::println!("EFFECTOR: init ANSWERED THE STOP NOTICE'S WORKER {:?}: NO NOTICE AWAITED", e); return }
             // The call itself failed (init restarting): again a second later.
             Err(_) => { mind::time::sleep(1000); }
         }

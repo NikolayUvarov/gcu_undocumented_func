@@ -153,4 +153,9 @@ The service runs as a program started from the shell (`effector data/effector/ef
   - It is started at the session's start, with a copy of the notice client and the session's one endpoint (750-KRN-0159).
   - It blocks on `stop-notice`, and sends the reason to the session.
 - **On the reason, the session** sends one heartbeat with `shutting_down`, logs `init STOPS IT (…)`, and ends within the notice.
-- **The `effector` suite:** `svc stop effector` gives init's `STOP NOTICE TO effector` and `ENDED WITHIN THE NOTICE`, and a `shutting_down` heartbeat at the fixture; `svc start effector` brings the agent back. Not run yet.
+- **The `effector` suite:** `svc stop effector` gives init's `STOP NOTICE TO effector` and `ENDED WITHIN THE NOTICE`, and a `shutting_down` heartbeat at the fixture; `svc start effector` brings the agent back.
+- **Run on x86 (2026-11-14): it does not work yet.**
+  - **What happened:** init stopped the agent at once, with no notice.
+  - **Why:** `init` takes `stop-notice` only from a service's own PID (`self.pids[i] == sender`), and the worker has a PID of its own. So `init` answers the worker `denied`; the worker now logs that and ends.
+  - **What is asked of KRN:** that `init` take the call from any holder of the agent's `BADGE_NOTICE` client while the agent runs. Only the agent holds that client, and it lends it only to its own worker.
+  - **Until then,** the suite says SKIP where `init` refuses the worker. A stop sends no `shutting_down` heartbeat; `docs/effector/protocol.md` says so.
