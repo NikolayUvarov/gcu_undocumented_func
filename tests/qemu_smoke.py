@@ -7214,7 +7214,7 @@ def remote_update_check(args):
                     vm.send("mode link-remote-update on\n")
                     require(vm.expect("(Y/N)", timeout=10), "TURN LINK-REMOTE-UPDATE ON?")
                     vm.send_bytes(b"y")
-                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WITH THE LINK'S CONSOLE")
+                    require(vm.expect("MIND> ", timeout=30), "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WHILE THE LINK'S CONSOLE IS ON")
                     # The last mode turned off takes the permission with it: a mode turned on again does not bring it back.
                     require(vm.command("mode development off", raw=True), "MODE: NORMAL")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] REMOTE-UPDATE OFF WITH THE LAST MODE")
@@ -7439,7 +7439,7 @@ def gateway_stub_check(args):
             vm.send_bytes(b"y")
             shown = vm.expect("MIND> ", timeout=30)
             require(shown, "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
-            require(shown, "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF)")  # the shell shows the link's console (800-APP-0108)
+            require(shown, "LINK CONSOLE: ON (DATA/MODE.CONF): THE LINK'S LINES ARE THE CONSOLE'S")  # the shell shows the link's console (800-APP-0108)
             kept = vm.command("cat data/mode.conf", raw=True)
             for word in ("development", "maintenance", "link-console"):
                 assert re.search(rf"^{word}$", kept.replace("\r", ""), re.M), (word, kept)
