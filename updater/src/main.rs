@@ -61,8 +61,9 @@ const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
+const REFUSED: &str = "MIND/REFUSED"; // the last trial init refused, and why (801-UPD-0037)
+const REFUSED_MAX: usize = 512;
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
-const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not been confirmed, the machine would have restarted
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
 const TRIES_MAX: u8 = 9;
 const RETRY_MS: usize = 30_000; // an automatic run the source did not answer is tried again after this
@@ -1140,6 +1141,39 @@ impl Updater {
 
     /// On a trial boot the kernel restarts the machine at its deadline unless init confirmed the boot: once init says it
     /// did, or past that deadline, the record says so on the disk; `why` says which.
+    // A trial init refused (801-UPD-0037): its reason kept in MIND/REFUSED for the slot before to report (S2), the
+    // trial spent on the disk so that the next boot falls back to that slot at once, and init asked to restart.
+    fn refused(&mut self, boot: &init::Boot) {
+        let why = if boot.why.as_str().is_empty() { "NO REASON GIVEN" } else { boot.why.as_str() };
+        mind::println!("[UPDATER] INIT REFUSED THE TRIAL BOOT: {}", why);
+        let records = self.records();
+        let fallback = plan::newest(records).map_or(0, |(_, r)| r.fallback);
+        let version = if self.running == 0 { String::from("not known") } else { format!("{}", self.running) };
+        let log = if boot.log == 0 { String::from("none") } else { format!("log:boot{:04}.log", boot.log) };
+        let text = format!("refused version {} in slot {}, falling back to slot {}\nwhy {}\nlog {}\n", version, slot_name(self.slot), slot_name(fallback), why, log);
+        let kept = File::create(REFUSED).is_ok_and(|mut file| file.write_at(0, &text.as_bytes()[..text.len().min(REFUSED_MAX)]).is_ok());
+        mind::println!("[UPDATER] THE REASON {} {} (VERSION {}, THIS BOOT'S LOG {})", if kept { "KEPT IN" } else { "NOT WRITTEN TO" }, REFUSED, version, log);
+        match plan::spend(records, self.slot) {
+            Some(write) => match self.write_record(write) {
+                Ok(()) => mind::println!("[UPDATER] SLOT {} SPENT: THE NEXT BOOT FALLS BACK TO SLOT {}", slot_name(self.slot), slot_name(fallback)),
+                Err(_) => mind::println!("[UPDATER] SLOT {} NOT SPENT, ITS RECORD NOT WRITTEN: THE BOOTLOADER COUNTS ITS TRIES", slot_name(self.slot)),
+            },
+            None => mind::println!("[UPDATER] SLOT {}: NO TRY LEFT TO SPEND", slot_name(self.slot)),
+        }
+        let _ = self.restart();
+    }
+
+    // A trial refused before (801-UPD-0037): said at start, and the update state's failure until a trial is confirmed.
+    fn refused_before(&mut self) {
+        let Ok(file) = File::open(REFUSED) else { return };
+        let mut data = [0u8; REFUSED_MAX];
+        let n = file.read_at(0, &mut data).unwrap_or(0).min(file.size());
+        let text = core::str::from_utf8(&data[..n]).unwrap_or("");
+        let (what, why) = (text.lines().next().unwrap_or(""), text.lines().find_map(|l| l.strip_prefix("why ")).unwrap_or(""));
+        mind::println!("[UPDATER] A TRIAL REFUSED BEFORE ({}): {}; {}", REFUSED, what, why);
+        self.failure = format!("{}: {}", what.strip_prefix("refused ").unwrap_or(what), why);
+    }
+
     fn confirm(&mut self, why: &str) {
         let records = self.records();
         if plan::confirm(records, self.slot, 0).is_none() {
@@ -1150,6 +1184,8 @@ impl Updater {
         match self.write_record(write) {
             Ok(()) => {
                 mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why);
+                // A trial refused before is answered by this one (801-UPD-0037).
+                if mind::fs::remove(REFUSED).is_ok() { mind::println!("[UPDATER] {} REMOVED: A TRIAL WAS CONFIRMED SINCE", REFUSED); }
                 if keys > plan::keys(records) { mind::println!("[UPDATER] KEY FILE VERSION {} IN THE RECORDS: A SLOT WITH A LOWER ONE IS NOT BOOTED (MC-9.6)", keys); }
                 self.raise_floor();
                 self.keep_running();
@@ -1242,9 +1278,9 @@ fn main(info: &'static BootInfo) {
     if keys::ROOT_TEST_KEYS {
         mind::println!("[UPDATER] KEYS: THE TEST ROOT KEYS");
     }
-    // The trial is confirmed once init says it confirmed the boot (asked every ASK_MS), or past the kernel's deadline
-    // (351-KRN-0014), measured on the same clock, when init cannot say.
-    let (mut confirm_at, mut ask_at) = (None, None);
+    // The trial is confirmed on the disk only once init says it confirmed the boot, asked every ASK_MS: while init holds
+    // it for the Effector server's word, and when init cannot say, it stays a trial (801-UPD-0037).
+    let (mut waiting, mut ask_at) = (false, None);
     if slot == 0 {
         mind::println!("[UPDATER] BOOTED FROM THE VOLUME'S ROOT: NO SLOT TO FILL");
         // The key file kept, read only when there is one: a boot from the root starts no parser for nothing.
@@ -1277,39 +1313,42 @@ fn main(info: &'static BootInfo) {
         }
         updater.keep_running();
         updater.trim();
+        updater.refused_before();
         if updater.trial {
-            let seconds = if info.boot_slot.deadline_s == 0 { TRIAL_DEADLINE_S } else { info.boot_slot.deadline_s } as usize;
-            let at = seconds * 1000 + MARGIN_MS;
-            mind::println!("[UPDATER] TRIAL BOOT: CONFIRMED ON THE DISK ONCE INIT CONFIRMS IT, OR AT {} S UNLESS THE KERNEL RESTARTS THE MACHINE FIRST", at / 1000);
-            (confirm_at, ask_at) = (Some(at), Some(0));
+            mind::println!("[UPDATER] TRIAL BOOT: CONFIRMED ON THE DISK ONLY ONCE INIT CONFIRMS IT");
+            (waiting, ask_at) = (true, Some(0));
         }
     }
-    let mut next_automatic = Some(0);
+    let (mut next_automatic, mut said) = (Some(0), false);
     let mut scratch: alloc::boxed::Box<[u8; api::REQUEST_MAX]> = alloc::vec![0u8; api::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
         let now = mind::time::uptime_ms();
-        // init answers once it has confirmed or refused the boot (init.wit 1.4); until then the call times out.
+        // init answers at once (init.wit 1.13): confirmed, refused, or deciding while it waits for the Effector server.
         if ask_at.is_some_and(|at| now >= at) {
             ask_at = None;
             match wire::with_timeout(ASK_MS as u32, || init::boot(Endpoint(SLOT_LIFECYCLE))) {
-                Ok(Ok(boot)) if boot.trial && boot.confirmed => { confirm_at = None; updater.confirm("INIT CONFIRMED THE TRIAL BOOT"); }
-                // Refused: the kernel restarts the machine at its deadline, into the other slot, which stays untouched.
-                Ok(Ok(boot)) if boot.trial => {
-                    (confirm_at, next_automatic) = (None, None);
-                    mind::println!("[UPDATER] INIT REFUSED THE TRIAL BOOT: NOT CONFIRMED; THE KERNEL RESTARTS THE MACHINE AT ITS DEADLINE");
+                Ok(Ok(boot)) if boot.trial && boot.confirmed => { waiting = false; updater.confirm("INIT CONFIRMED THE TRIAL BOOT"); }
+                Ok(Ok(boot)) if boot.trial && boot.deciding => {
+                    if !said { said = true; mind::println!("[UPDATER] INIT HOLDS THE TRIAL BOOT FOR THE EFFECTOR SERVER'S WORD: NOT CONFIRMED UNTIL THEN"); }
+                    ask_at = Some(now + ASK_MS);
                 }
+                // Refused: the trial spent, its reason kept, and the machine restarted into the slot before.
+                Ok(Ok(boot)) if boot.trial => { (waiting, next_automatic) = (false, None); updater.refused(&boot); }
+                Ok(Ok(_)) => waiting = false,
                 Err(mind::sys::Error::Other(ERR_TIMEOUT)) => ask_at = Some(now + ASK_MS),
-                other => mind::println!("[UPDATER] INIT DOES NOT SAY HOW THE BOOT WENT ({:?}): CONFIRMED PAST THE KERNEL'S DEADLINE", other.map(|r| r.map(|b| (b.trial, b.confirmed)))),
+                other => {
+                    if !said { said = true; mind::println!("[UPDATER] INIT DOES NOT SAY HOW THE BOOT WENT ({:?}): NOT CONFIRMED, ASKED AGAIN", other.map(|r| r.map(|b| (b.trial, b.confirmed)))); }
+                    ask_at = Some(now + ASK_MS * 10);
+                }
             }
         }
-        if confirm_at.is_some_and(|at| now >= at) { confirm_at = None; updater.confirm("THE TRIAL OUTLIVED THE KERNEL'S DEADLINE"); }
         // Nothing automatic while the trial waits: the other slot is its fallback until then.
-        if confirm_at.is_none() && next_automatic.is_some_and(|at| now >= at) {
+        if !waiting && next_automatic.is_some_and(|at| now >= at) {
             let again = updater.automatic().then_some(RETRY_MS);
             let every = (updater.config.every_ms > 0).then_some(updater.config.every_ms);
             next_automatic = [again, every].into_iter().flatten().min().map(|ms| mind::time::uptime_ms() + ms);
         }
-        let wake = [ask_at, confirm_at, if confirm_at.is_none() { next_automatic } else { None }].into_iter().flatten().min();
+        let wake = [ask_at, if waiting { None } else { next_automatic }].into_iter().flatten().min();
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };

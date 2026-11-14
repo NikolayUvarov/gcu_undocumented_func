@@ -9599,7 +9599,10 @@ def install_suite(args, stub_elf):
     for name in size:
         shutil.copyfile(bundles / name, gateway / name)
     (gateway / "install.txt").write_text("".join(f"{line.split()[0]} {sha[line.split()[0]]} {' '.join(line.split()[1:])}\n" for line in listed))
+    # No server for the agent: the trial is not held for its word (801-KRN-0242); the gateway's stand-in is what is tested.
     for name, data in {**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"}.items():
+        if name == "data/effector/effector.conf":
+            continue
         (layout / name).parent.mkdir(parents=True, exist_ok=True)
         (layout / name).write_bytes(data)
     # Room for both slots, the bundles and the one being staged.
@@ -17436,8 +17439,40 @@ def trial_check(args, disk):
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
             finally:
                 vm.close()
+        # 801-KRN-0242, 801-UPD-0037: the development mode on and a server configured, but an agent that cannot read its
+        # configuration. init lifts the kernel's deadline, holds the trial for the server's word, and refuses it once the
+        # agent is quarantined; the updater keeps the reason, spends the trial's second try and asks for the restart, so
+        # the next boot is slot A's, which says why.
+        volume = temp / "agent"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+            (volume / name).parent.mkdir(parents=True, exist_ok=True)
+            (volume / name).write_bytes(data)
+        image = boot_slots.Image.create(temp / "agent.img", boot_slots.layout(volume, temp / "agent-slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "agent-slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=2)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+            assert "WAS NOT CONFIRMED IN 15 S" not in out and out.count("BOOT: SLOT B LOADED ON TRIAL") == 0, out[-3000:]
+            require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("updater", "A TRIAL REFUSED BEFORE")
+            require(log, "[UPDATER] A TRIAL REFUSED BEFORE (MIND/REFUSED): refused version ")
+            require(log, "in slot B, falling back to slot A; THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED")
+        finally:
+            vm.close()
+        refused = (image.read("MIND/REFUSED") or b"").decode()
+        assert refused.startswith("refused version ") and "\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog log:boot" in refused, refused
+        chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+        assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts at the deadline, and the next boot falls back to slot A", flush=True)
+          "restarts at the deadline, and the next boot falls back to slot A; one held for the Effector server whose agent "
+          "is quarantined is refused, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
 
 
 def loader_error(vm, name, reason):
