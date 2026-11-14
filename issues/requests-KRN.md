@@ -56,3 +56,11 @@ BAR/start control, Realtek boot grants and the ABI 11 transition. This is the
 bounded integration dependency of DRV-0031/0032, not ownership of the remaining
 kernel backlog. No change is sent to the kernel owner's branch. Physical
 MacBook/Ryzen evidence and the deferred ARM gate remain open.
+
+## The shell's owner client of `effector_gw` (`BADGE_OWNER`), for 801-APP-0140 and 750-APP-0093
+
+**Asked by:** APP, 2026-11-14, for [801](801-the-bench-stays-manageable.md)'s S7 · **Constitution:** MC-3.8, MC-3.11
+
+- **What:** while `effector_gw` runs, `init` lends the shell a client of the gateway's endpoint badged `mind::effector::BADGE_OWNER` (2), in a slot of the shell's own, and lends it again at each start of the gateway; none while no mode is on.
+- **Why:** the gateway reads the owner's policy when it starts and on the owner's `reload-policy` (`idl/effector.wit`), which only that badge may call. Without the client, `effector policy allow update apply` (801-APP-0140) takes effect only at the gateway's next start, and the shell's `effector status` and `audit` (750-APP-0093) have nothing to ask. No one mints `BADGE_OWNER` today (`docs/effector/README.md` names the shell as its holder).
+- **How the shell uses it:** `reload-policy` after each write of `data/effector/policy`, its answer shown; `status` and `audit` only. The shell never lends it on.
