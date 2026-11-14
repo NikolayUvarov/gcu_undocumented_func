@@ -44,6 +44,8 @@ impl Limits {
         }
         Ok(Self { code: bytes, version, applied })
     }
+    /// The world rules (00) at their own EIRP, for a radio the station gave no country (801-DRV-0071).
+    pub fn world(version: u64) -> Result<Self, Refusal> { Self::accept("00", version, CHANNELS.map(|ch| (ch, u8::MAX, false))) }
     pub fn code(&self) -> [u8; 2] { self.code }
     pub fn version(&self) -> u64 { self.version }
     /// The channels left after the radio's own limits, for `info`.

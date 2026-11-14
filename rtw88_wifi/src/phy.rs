@@ -82,8 +82,9 @@ fn switch_rf<R: Regs>(r: &mut R, btg: bool) {
     r.w32(0xcb8, v);
 }
 
-/// rtw8821c_set_channel at 20 MHz on 2.4 GHz: baseband, its swing, MAC, RF, RX DFIR; then the TX power.
-pub fn channel<R: Regs>(r: &mut R, ch: u8, b: &Board, filter: &CckFilter) -> Result<(), Error> {
+/// rtw8821c_set_channel at 20 MHz on 2.4 GHz: baseband, its swing, MAC, RF, RX DFIR; then the TX power, capped when
+/// the country is `unknown`.
+pub fn channel<R: Regs>(r: &mut R, ch: u8, b: &Board, filter: &CckFilter, unknown: bool) -> Result<(), Error> {
     if !(1..=13).contains(&ch) { return Err(Error::Chip("not a 2.4 GHz channel this driver serves")); }
     // set_channel_bb
     r.mask32(0x808, 1 << 28, 1);
@@ -117,7 +118,7 @@ pub fn channel<R: Regs>(r: &mut R, ch: u8, b: &Board, filter: &CckFilter) -> Res
     r.mask32(0x94c, 0x3000_0000, 2);
     r.mask32(0xc20, 1 << 31, 1);
     r.mask32(0x8f0, 1 << 31, 0);
-    power(r, ch, b);
+    power(r, ch, b, unknown);
     Ok(())
 }
 
@@ -146,9 +147,21 @@ pub fn indices(ch: u8, b: &Board) -> ([u8; 4], [u8; 8]) {
     (core::array::from_fn(|i| idx(cck_base, BY_RATE_CCK[i], LIMIT_CCK[at])), core::array::from_fn(|i| idx(ofdm_base, BY_RATE_OFDM[i], LIMIT_OFDM[at])))
 }
 
-/// The indices written: CCK at 0x1d00, OFDM at 0x1d04 and 0x1d08, four rates a word.
-fn power<R: Regs>(r: &mut R, ch: u8, b: &Board) {
+/// 75 % of a power in mW is 1.249 dB below it; the index's 0.5 dB steps round that down to 3 (1.5 dB, 70.8 %).
+pub const UNKNOWN_COUNTRY_STEPS: u8 = 3;
+
+/// The country unknown (801-DRV-0071): the indices of `indices` held at their highest less UNKNOWN_COUNTRY_STEPS; that
+/// highest and the cap are returned too.
+pub fn capped(ch: u8, b: &Board) -> ([u8; 4], [u8; 8], u8, u8) {
     let (cck, ofdm) = indices(ch, b);
+    let top = cck.iter().chain(&ofdm).copied().max().unwrap_or(0);
+    let cap = top.saturating_sub(UNKNOWN_COUNTRY_STEPS);
+    (cck.map(|i| i.min(cap)), ofdm.map(|i| i.min(cap)), top, cap)
+}
+
+/// The indices written: CCK at 0x1d00, OFDM at 0x1d04 and 0x1d08, four rates a word; capped when the country is unknown.
+pub fn power<R: Regs>(r: &mut R, ch: u8, b: &Board, unknown: bool) {
+    let (cck, ofdm) = if unknown { let (cck, ofdm, _, _) = capped(ch, b); (cck, ofdm) } else { indices(ch, b) };
     r.w32(0x1d00, u32::from_le_bytes(cck));
     r.w32(0x1d04, u32::from_le_bytes(ofdm[0..4].try_into().unwrap()));
     r.w32(0x1d08, u32::from_le_bytes(ofdm[4..8].try_into().unwrap()));

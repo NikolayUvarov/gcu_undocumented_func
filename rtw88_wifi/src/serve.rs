@@ -6,40 +6,28 @@ use mind::idl::codec::List;
 use mind::idl::{wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BAND_2GHZ, BAND_2GHZ_OFDM};
+use rtw88_wifi::country::{Country, CHANNELS};
 use rtw88_wifi::io::Regs;
+use rtw88_wifi::phy;
 
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 2;
 const WAITERS: usize = 4;
-const CHANNELS: core::ops::RangeInclusive<u8> = 1..=13;
-const PROBE_REQUEST: u8 = 0x40;
 /// How often the log says what moved.
 const TALLY_MS: u64 = 10_000;
 
-// A country's channels and those to listen on only, as bit masks; None until first set (wlanhw 1.1's ways).
-#[derive(Clone, Copy)]
-struct Country { channels: u16, listen: u16 }
+// The country's channels for `info`, as the IDL's list.
+fn channel_list(c: Option<Country>) -> List<u8, 64> {
+    let mut l = List::default();
+    for ch in CHANNELS.filter(|&ch| Country::allows(c, ch)) { l.push(ch); }
+    l
+}
 
-impl Country {
-    fn allows(c: Option<Country>, ch: u8) -> bool { c.map_or(CHANNELS.contains(&ch), |c| c.channels >> ch & 1 != 0) }
-    fn may_send(c: Option<Country>, ch: u8, frame: &[u8]) -> bool {
-        let Some(c) = c else { return true };
-        c.channels >> ch & 1 != 0 && !(c.listen >> ch & 1 != 0 && frame.first() == Some(&PROBE_REQUEST))
-    }
-    fn list(c: Option<Country>) -> List<u8, 64> {
-        let mut l = List::default();
-        for ch in CHANNELS.filter(|&ch| Country::allows(c, ch)) { l.push(ch); }
-        l
-    }
-    fn from(code: &str, limits: &[wlanhw::Limit]) -> Option<Country> {
-        if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_uppercase()) { return None; }
-        let mut c = Country { channels: 0, listen: 0 };
-        for l in limits {
-            if !CHANNELS.contains(&l.channel) || c.channels >> l.channel & 1 != 0 { return None; }
-            c.channels |= 1 << l.channel;
-            if l.listen { c.listen |= 1 << l.channel; }
-        }
-        Some(c)
+// The cap of an unknown country on the channel set, logged at the start and at each country (801-DRV-0071).
+fn say_cap<R: Regs>(radio: &Radio<R>, why: &str) {
+    if let Some((top, cap)) = radio.cap() {
+        mind::println!("[RTW88] {}: POWER CAPPED AT 75 % OF THE MAXIMUM (-1.25 DB ROUNDED DOWN TO {} INDEX STEPS OF 0.5 DB): INDEX {} ON CHANNEL {}, ITS MAXIMUM {} (801-DRV-0071)",
+                       why, phy::UNKNOWN_COUNTRY_STEPS, cap, radio.channel(), top);
     }
 }
 
@@ -51,7 +39,7 @@ fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
 fn mac(v: u64) -> [u8; 6] { core::array::from_fn(|i| (v >> (40 - 8 * i)) as u8) }
 
 fn info<R: Regs>(radio: &Radio<R>, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: BAND_2GHZ | BAND_2GHZ_OFDM, channels: Country::list(country), supported: supported(), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: BAND_2GHZ | BAND_2GHZ_OFDM, channels: channel_list(country), supported: supported(), frame_max: FRAME_MAX as u16, channel: radio.channel() }
 }
 
 // The radio's own channels, whatever the limits (wlanhw.wit 2.0, 550-NET-0059).
@@ -71,6 +59,7 @@ pub fn run<R: Regs>(radio: &mut Radio<R>) -> ! {
     let mut country: Option<Country> = None;
     let mut tally_at = mind::time::uptime_ms() as u64 + TALLY_MS;
     let mut last = radio.counts;
+    say_cap(radio, "NO COUNTRY YET");
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         radio.poll();
@@ -120,15 +109,18 @@ pub fn run<R: Regs>(radio: &mut Radio<R>) -> ! {
             }
             wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
-            wlanhw::Request::SetCountry { code, limits, .. } => match Country::from(code.as_str(), limits.as_slice()) {
+            wlanhw::Request::SetCountry { code, limits, .. } => match Country::from(code.as_str(), limits.as_slice().iter().map(|l| (l.channel, l.listen))) {
                 None => wlanhw::reply_set_country(call, Err(wlanhw::Error::Invalid)),
                 Some(c) => {
                     country = Some(c);
-                    mind::println!("[RTW88] COUNTRY {}: {} CHANNELS, {} TO LISTEN ON ONLY; TX POWER UNDER THE WORLD-WIDE LIMITS, EIRP NOT APPLIED",
-                                   code.as_str(), limits.as_slice().len(), limits.as_slice().iter().filter(|l| l.listen).count());
+                    mind::println!("[RTW88] COUNTRY {}: {} CHANNELS, {} TO LISTEN ON ONLY; TX POWER UNDER THE WORLD-WIDE LIMITS{}, EIRP NOT APPLIED",
+                                   code.as_str(), limits.as_slice().len(), limits.as_slice().iter().filter(|l| l.listen).count(),
+                                   if Country::unknown(country) { "" } else { ", NOT CAPPED" });
+                    radio.country_unknown(Country::unknown(country));
                     if !Country::allows(country, radio.channel()) {
-                        if let Some(&first) = Country::list(country).as_slice().first() { let _ = radio.set_channel(first); }
+                        if let Some(&first) = channel_list(country).as_slice().first() { let _ = radio.set_channel(first); }
                     }
+                    say_cap(radio, "COUNTRY UNKNOWN (00)");
                     wlanhw::reply_set_country(call, Ok(&info(radio, country)))
                 }
             },

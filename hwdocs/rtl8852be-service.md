@@ -142,7 +142,7 @@ the aggregate candidate or native endpoint/radio behavior.
 
 The country reaches the radio through `set-country` on its own endpoint, so the endpoint comes before any calibration. KRN and DRV agreed on two lines:
 - `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`, the gate for `init`;
-- `[RTW89] DATAPATH ADMITTED ON CHANNEL n`, after a country, a platform word that is not `unknown`, and that channel's calibration.
+- `[RTW89] DATAPATH ADMITTED ON CHANNEL n`, after a country and that channel's calibration. Since 801-DRV-0071 an `unknown` platform word is held back, not enforced (801 S5), and a station that sends before it gives a country gets the world rules (`00`).
 
 `receive_service::serve` is the first. It runs when `init` lends an endpoint in `SLOT_SERVICE`; without one, the driver keeps its bounded listen. It does the listen's setup:
 - `listen::open`, then `listen::prepare_receive` on the caller's live PHY: the initial PHY, one passive channel, the report tail and the scan filter.
@@ -155,9 +155,9 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 | `set-channel` | any of those channels, tuned passively (`channel::run` under `Policy::passive`) and answered after the tune; others `invalid` |
 | `set-filter` | the station filter applied in software over the scan filter. When it ends a scan (`all-beacons` set, then cleared), the service logs `[RTW89] SCAN: n PASSIVE TUNES, THE LONGEST t US; k FRAMES KEPT, d DROPPED` |
 | `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted |
-| `send` | `failed` before a country, on a listen-only channel, and for a probe request. Otherwise `busy`, and that channel is admitted (below) |
+| `send` | `failed` on a listen-only channel and for a probe request. Before a country, the first other send takes the world rules (`00`, 801-DRV-0071). Otherwise `busy`, and that channel is admitted (below) |
 | `attach`, `kick` | `invalid`; a ring capability is dropped |
-| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken, and applied (answered with `info`) unless 213-KRN-0122's platform word is `unknown`, when it is `failed`, 1.2's "could not apply them" |
+| `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken, and applied (answered with `info`). Until 801-DRV-0071 an `unknown` platform word made it `failed`; that word is now held back (801 S5) |
 
 **Admission.** The first `send` that may go out admits its channel: an active tune under the station's rule, `grant`, IQK, TSSI and DPK, the station with the filter the station last set, the data mode, then `service.rs`. The service logs `[RTW89] DATAPATH ADMITTED ON CHANNEL n`.
 - **A probe request admits nothing** (2026-11-08). A scan visits every channel, and Linux too calibrates a channel when the station joins there (`rtw89_core_sta_add` → `rtw89_chip_rfk_channel`), not on each scan hop (`__rtw89_set_channel`). So scans stay receive-only, and the join's authentication admits the network's channel.
@@ -218,3 +218,14 @@ After a stop with `RESTART_AFTER_FAILURE` false, or one that did not quiesce, it
 - in data mode, countries kept and refused at the admitted power.
 
 `tests/rtw89_connection_cases.rs` runs the full admission, from the receive-only start to a frame sent, with the join's filter kept.
+
+## An unknown platform word, an unknown country and a stalled receive (801-DRV-0071, 2026-11-14)
+
+The maintainer's decisions of 2026-11-14 (801 S5): a connection that worked is never lost to an unknown power limit, and with the country unknown too the radio sends at 75 % of its maximum.
+- **The platform word.** `platform=unknown:<why>`, a malformed or repeated word, or none, maps to `PlatformInput::HeldBack`: no platform limit, the country's limits alone, as `CheckedAbsent`. `PlatformInput::Unknown` itself still refuses. `main.rs` logs `PLATFORM POWER POLICY FROM INIT: UNKNOWN (<why>): HELD BACK, NOT ENFORCED: SENDING UNDER THE COUNTRY'S LIMITS ALONE (801)`.
+- **The 75 % cap.** 75 % in mW is 1.249 dB down; the MAC's power registers are in half-dB, so 3 steps (1.5 dB, 70.8 %). Under `00`, `Policy::resolve` holds each NTX limit at the channel's maximum less 3. The maximum is the most any rate is given there: the least of its by-rate value and its section's 20 MHz non-beamformed limit (`channel_power::maximum`). Under the world group it is 29 half-dBm on 1 TX on channels 1 to 11 (28 on 12 and 13) and 23 on 2 TX (21 on 13), so the limits become 26 and 20. A known country is not capped. TSSI's 12 dBm floor still holds.
+- **No country.** A station that sends anything but a probe request before its first `set-country` gets `country::Limits::world`: the world rules at their own EIRP, so the channel is admitted under `00` and capped.
+- **In data mode,** a `00` that arrives keeps the power the channel was admitted at. The cap is set at admission.
+- **A stalled receive** (`service.rs`'s `QUIET_MS`). No Wi-Fi frame for 10 s while the filter lets a network in (a scan's filter or a BSSID) stops the data service as `Fatal::ReceiveStalled`, with the line `RECEIVE STALLED ON CHANNEL n: NO FRAME FOR q MS …`. The driver then stops the device and exits (`RESTART_AFTER_FAILURE`), and `init` restarts it. A filter with no network arms nothing.
+- **Unacknowledged sends** (`UNHEARD`). 16 unicast sends in a row not acknowledged, over at least 5 s, are logged once a run; the service goes on.
+

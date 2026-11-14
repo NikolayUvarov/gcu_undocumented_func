@@ -25,6 +25,10 @@ pub enum Event {
     Serving { channel: u8 },
     /// A well-formed `set-country` taken; `applied` unless the platform's power policy is unknown (213-KRN-0122).
     CountryTaken { code: [u8; 2], channels: usize, listen_only: usize, applied: bool },
+    /// The station sent before it gave a country: the world rules (00) taken in its place (801-DRV-0071).
+    NoCountry { channels: usize, listen_only: usize },
+    /// A channel admitted with the country unknown (00): its maximum per NTX and the limit that holds it to 75 %, half-dBm.
+    Capped { channel: u8, maximum: [i8; 2], limit: [i8; 2] },
     /// `[RTW89] DATAPATH ADMITTED ON CHANNEL n`: calibrated under the station's country, and served for data; the
     /// registers a data mode's stop reports, as they are now.
     Admitted { channel: u8, registers: crate::btc_session::Snapshot },
@@ -41,6 +45,11 @@ pub enum Event {
     /// The `count`-th send that outran its time (service.rs's KEEP_LATE): its submissions finished, whether the last was
     /// fetched and released, its length and age; answered as not acknowledged, its release awaited.
     LateFrame { count: u32, finished: u8, fetched: bool, released: bool, length: u16, age_us: u64 },
+    /// No Wi-Fi frame for `quiet_ms` in data mode (service.rs's QUIET_MS): the frames before, the sends finished and
+    /// acknowledged since; the service stops (801-DRV-0071).
+    Stalled { channel: u8, quiet_ms: u64, frames: u64, sent: u32, acked: u32 },
+    /// `count` unicast sends in a row not acknowledged over `ms`; the last frame heard `heard_ms` ago. Logged once a run.
+    Unheard { channel: u8, count: u32, ms: u64, heard_ms: u64 },
 }
 
 #[derive(Debug)]
@@ -144,6 +153,14 @@ impl ReceiveOnly {
         if self.failure.is_none() { self.failure = Some(stop); }
         for waiter in &mut self.waiters { if let Some(waiter) = waiter.take() { let _ = wlanhw::reply_wait(waiter.call, 0); } }
     }
+    // No country from the station: the world rules in its place, so a radio that sent before is not silenced (801-DRV-0071).
+    fn world(&mut self, events: &mut impl FnMut(Event)) {
+        self.settings = self.settings.saturating_add(1);
+        let Ok(taken) = Limits::world(self.settings) else { return };
+        let listen_only = taken.channels().filter(|&ch| taken.applied(ch).is_some_and(|a| a.listen)).count();
+        events(Event::NoCountry { channels: taken.channels().count(), listen_only });
+        self.limits = Some(taken);
+    }
     fn info(&self) -> wlanhw::Info {
         // Its own channels are 1 to 13 at 20 MHz (wlanhw.wit 2.0), each tuned passively; an applied country leaves its own.
         let mut channels = List::default();
@@ -206,6 +223,7 @@ impl ReceiveOnly {
             // (rtw89_core_sta_add), not on each scan hop; the scan stays receive-only.
             wlanhw::Request::Send { frame, .. } => {
                 let probe = frame.first().is_some_and(|control| control & 0xfc == 0x40);
+                if !probe && self.limits.is_none() && self.admits { self.world(events); }
                 let admit = !probe && self.sends_on(self.channel) && self.ask.is_none();
                 let _ = wlanhw::reply_send(call, Err(if admit { wlanhw::Error::Busy } else { wlanhw::Error::Failed }));
                 if admit { self.ask = Some(Ask::Admit(self.channel)); }
@@ -279,12 +297,12 @@ pub fn absent_forever() -> ! {
     }
 }
 
-// 213-KRN-0122's word as the calibration policy takes it.
-fn platform_input(platform: Platform<'_>) -> PlatformInput {
+// 213-KRN-0122's word as the calibration policy takes it; an unknown one is held back, not enforced (801 S5).
+pub(crate) fn platform_input(platform: Platform<'_>) -> PlatformInput {
     match platform {
         Platform::Absent => PlatformInput::CheckedAbsent,
         Platform::Limits { per_ntx, per_path } => PlatformInput::Limits(Constraints { per_ntx, per_path }),
-        Platform::Unknown(_) => PlatformInput::Unknown,
+        Platform::Unknown(_) => PlatformInput::HeldBack,
     }
 }
 
@@ -370,6 +388,7 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
         service.filter()) {
         Ok(done) => done, Err(failure) => return failed(failure),
     };
+    if let Some(cap) = tuned.cap() { events(Event::Capped { channel: admit, maximum: cap.maximum, limit: cap.limit }); }
     if let Err(error) = phy.bus_between_stages().attach_inbox(inbox) { return Stop::Radio(Cause::Session(error)) }
     let activation = match data_mode::prepare(&mut phy, board, &tuned, &calibrated, &prepared.owner, station, transmit) {
         Ok(activation) => activation, Err(failure) => return failed(connection::Failure::Station(failure)),

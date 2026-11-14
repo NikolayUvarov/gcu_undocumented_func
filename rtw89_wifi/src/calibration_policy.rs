@@ -13,10 +13,11 @@ const TSSI_MAX_QUARTER_DBM:i16=48;
 pub(crate) enum SourceCalibrationProfile{Rtl8852bCbvRfe1Initial2g20V1}
 
 /// A scoped input consumer must establish these facts; a missing or failed collection is not CheckedAbsent.
+/// `HeldBack`: an unknown policy that is not enforced (801 S5, the maintainer, 2026-11-14): no platform limit, the country's alone.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum PlatformInput{Unknown,Invalid,CheckedAbsent,Limits(Constraints)}
+pub(crate) enum PlatformInput{Unknown,Invalid,CheckedAbsent,HeldBack,Limits(Constraints)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum PlatformBasis{NoAdditionalSar,ExplicitLimits}
+pub(crate) enum PlatformBasis{NoAdditionalSar,HeldBack,ExplicitLimits}
 #[derive(Debug)]
 pub(crate) enum Error{Board,UnknownPlatform,InvalidPlatform,Policy(PolicyError),Passive,TssiPower,
     State,Identity,PolicyChanged,AlreadyAttempted,Firmware,Clock,Timeout,Owner(btc_context::Error)}
@@ -56,6 +57,7 @@ impl Resolved{
         let(basis,limits)=match platform{
             PlatformInput::Unknown=>return Err(Error::UnknownPlatform),PlatformInput::Invalid=>return Err(Error::InvalidPlatform),
             PlatformInput::CheckedAbsent=>(PlatformBasis::NoAdditionalSar,Constraints{per_ntx:[63;2],per_path:[63;2]}),
+            PlatformInput::HeldBack=>(PlatformBasis::HeldBack,Constraints{per_ntx:[63;2],per_path:[63;2]}),
             PlatformInput::Limits(limits)=>(PlatformBasis::ExplicitLimits,limits),
         };
         let policy=Policy::resolve(board,rule,Platform::Resolved(limits)).map_err(Error::Policy)?;

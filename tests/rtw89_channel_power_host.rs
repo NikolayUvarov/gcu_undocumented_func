@@ -74,3 +74,36 @@ fn unknown_channels_and_out_of_range_caps_never_generate_an_image(){
     for value in [-128,-65,64,127]{for path in [false,true]{let mut c=limits();if path{c.per_path[0]=value;}else{c.per_ntx[1]=value;}
         assert_eq!(build(Group::ETSI,1,c).unwrap_err(),Error::PowerRange);}}
 }
+
+// 801-DRV-0071: the most a rate sends at, per NTX, from the same tables `build` writes.
+fn written_maximum(image:&Image,streams:usize)->i8{
+    let rates:Vec<i8>=(0..11).flat_map(|i|word(image,0xd2c0+4*i).to_le_bytes()).map(|b|b as i8).collect();
+    let page:Vec<i8>=(0..10).flat_map(|i|word(image,0xd2ec+40*(streams-1)+4*i).to_le_bytes()).map(|b|b as i8).collect();
+    // By-rate bytes: CCK 0..4, OFDM 4..12, MCS 1SS 12..24, HE-DCM 1SS 24..28, MCS 2SS 28..40, HE-DCM 2SS 40..44.
+    let(cck,ofdm,mcs)=(page[0],page[4],page[6]);
+    let sections:[(&[i8],i8);4]=if streams==1{[(&rates[0..4],cck),(&rates[4..12],ofdm),(&rates[12..24],mcs),(&rates[24..28],mcs)]}
+        else{[(&rates[0..4],cck),(&rates[4..12],ofdm),(&rates[28..40],mcs),(&rates[40..44],mcs)]};
+    sections.iter().flat_map(|(r,cap)|r.iter().map(move|v|(*v).min(*cap))).max().unwrap()
+}
+#[test]
+fn an_unknown_countrys_cap_is_its_maximum_less_three_half_db_steps(){
+    assert_eq!(UNKNOWN_COUNTRY_STEPS,3,"75 % is -1.249 dB: 2 steps (-1 dB, 79.4 %) would pass it, 3 (-1.5 dB, 70.8 %) do not");
+    let world=Constraints{per_ntx:[40,40],per_path:[63,63]};
+    let mut seen=vec![];
+    for channel in 1..=13{
+        let most=maximum(Group::WORLDWIDE,channel,world).unwrap();
+        let plain=build(Group::WORLDWIDE,channel,world).unwrap();
+        assert_eq!(most,[written_maximum(&plain,1),written_maximum(&plain,2)],"channel {channel}: the maximum is what the MAC is given");
+        let(capped,again)=unknown_country(Group::WORLDWIDE,channel,world).unwrap();assert_eq!(again,most);
+        assert_eq!(capped.per_ntx,[most[0]-3,most[1]-3],"channel {channel}");assert_eq!(capped.per_path,world.per_path);
+        let image=build(Group::WORLDWIDE,channel,capped).unwrap();
+        assert_eq!([written_maximum(&image,1),written_maximum(&image,2)],[most[0]-3,most[1]-3],"channel {channel}: held exactly there");
+        seen.push((channel,most));
+    }
+    // The world group's maxima: 14.5 dBm on one TX on channels 1 to 11, so 13 dBm under the cap.
+    let wanted:Vec<(u8,[i8;2])>=(1..=13).map(|ch|(ch,match ch{12=>[28,23],13=>[28,21],_=>[29,23]})).collect();
+    assert_eq!(seen,wanted);
+    // A lower EIRP than the tables is the maximum itself: the cap is 3 below it.
+    let low=Constraints{per_ntx:[20,20],per_path:[63,63]};
+    assert_eq!(unknown_country(Group::WORLDWIDE,6,low).unwrap(),(Constraints{per_ntx:[17,17],per_path:[63,63]},[20,20]));
+}

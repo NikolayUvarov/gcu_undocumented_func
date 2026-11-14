@@ -35,6 +35,16 @@ On the Ryzen:
 
 The machine is the maintainer's: the run needs it booted into MIND Core, and the tone needs ears.
 
+## Progress (2026-11-13): the analog output heard; the second disk still not listed
+
+- **Run:** the Ryzen on release 202611131315 (`main` 20fba2c5), speakers on its analog jack.
+- **The output:** `audio_gw` drives HDA's second function: Realtek `10EC:0269`, out pin 0x15 (headphone jack) from DAC 0x2.
+  - `beep` (440 Hz and 660 Hz) and `say`, run over the link, were heard by the maintainer at 100 % (0 dB of 88 settings).
+  - The first criterion is met.
+- **The disks:** only one `nvme` instance runs, `NAMESPACE 1: 250069680 SECTORS`. That is the Patriot disk with Windows' partitions.
+  - Linux lists a second one, a Netac 128 GB with Ubuntu, and MIND Core lists nothing of it.
+  - The second and third criteria are left.
+
 ## Related
 
 [213](213-amd-ryzen-pc.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), [551](551-sound-on-pcs.md).
