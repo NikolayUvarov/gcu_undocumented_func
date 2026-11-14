@@ -86,6 +86,7 @@ X86_GROUPS=(
     "x86: the window manager|$X86 --suites wm"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
     "x86: the updater and an update through the link|$X86 --suites updater,linkupdate"
+    "x86: the cable with no words|$X86 --suites cable"
     "x86: an update from the previous release|OVMF=$OVMF scripts/previous_release.sh x86_64"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
@@ -115,6 +116,7 @@ A64_GROUPS=(
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"
     "aarch64: the updater and the modes|$A64 --suites updater,modes,bootkeys"
     "aarch64: an update through the link|$A64 --suites linkupdate"
+    "aarch64: the cable with no words|$A64 --suites cable"
     "aarch64: an update from the previous release|scripts/previous_release.sh aarch64"
     "aarch64: the link|$A64 --suites link"
     # At EL2 as well (100004-PRT-0014): AAVMF starts the loader there when the guest has it, with the GICv3 system registers.

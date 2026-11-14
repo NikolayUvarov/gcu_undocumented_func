@@ -79,6 +79,8 @@ jobs:
             args: --suites vfs,edit,disk,block,store,storefaults
           - name: the updater and an update through the link
             args: --suites updater,linkupdate
+          - name: the cable with no words
+            args: --suites cable
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -191,6 +193,8 @@ jobs:
             suites: updater,modes,bootkeys
           - group: an update through the link
             suites: linkupdate
+          - group: the cable with no words
+            suites: cable
           - group: the link
             # dev's grants, and none of its input in a safe start (800-KRN-0191)
             suites: link

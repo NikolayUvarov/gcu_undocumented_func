@@ -338,7 +338,9 @@ SECONDS = {
     "aarch64: boot and fault containment": 205, "aarch64: programs, shell and four CPUs": 432,
     "aarch64: files and the block store": 380, "aarch64: network, TLS and Effector": 789, "aarch64: the updater and the modes": 572,
     "aarch64: an update from the previous release": 1500,  # the previous tree built for aarch64, then two boots (801-UPD-0040)
-    "aarch64: an update through the link": 899, "aarch64: the link": 225, "aarch64: RAM, ACPI and PCI above 4 GiB": 844, "aarch64: network above 4 GiB": 550,
+    "aarch64: an update through the link": 899, "aarch64: the link": 225,
+    # 801-LNK-0044's check split from the link's update (000-KRN-0249): round 136 timed the two together at 2070 s (x86) and 3054 s (aarch64).
+    "x86: the cable with no words": 1400, "aarch64: the cable with no words": 2200, "aarch64: RAM, ACPI and PCI above 4 GiB": 844, "aarch64: network above 4 GiB": 550,
     "aarch64: GICv2 with GICv2m": 804, "aarch64: NVMe boot disk": 164, "aarch64: 16 CPUs": 212,
 }
 
