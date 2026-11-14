@@ -329,6 +329,7 @@ SECONDS = {
     "network driver without legacy": 6, "host tests": 600, "models (TLC)": 298, "NRL checks": 102,
     "x86: boot, display, shell, memory, clock": 650, "x86: network, TLS and Effector": 839, "x86: keys, shell, tools": 361,
     "x86: the window manager": 662, "x86: files and block writes": 397, "x86: the updater and an update through the link": 694,
+    "x86: an update from the previous release": 1300,  # the previous tree built first, then two boots (801-UPD-0038)
     "x86: services, storage, audio": 561, "x86: scheduling, isolation, heap": 110, "x86: NVMe boot disk": 87,
     "x86: 16 CPUs": 121, "x86: RAM above 4 GiB": 944, "x86: one CPU": 125, "x86: AVX state": 53,
     "x86: AVX state, one CPU": 39, "x86: no PIT": 127, "x86: x2APIC": 190, "x86: padded vector area": 87,
