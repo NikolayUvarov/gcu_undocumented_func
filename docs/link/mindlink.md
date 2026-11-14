@@ -30,11 +30,11 @@ Options come before the command; what follows the command is its own, a program'
 
 **Names** on the other end are paths below its directory, their parts joined by `/` (`apps/test/x.elf`), none of them `.` or `..` ([protocol, section 5](protocol.md#5-requests)). An older end takes one part only.
 
-**Firmware on MIND Core** (800-LNK-0027). With `dev` in `link.conf`, init lets `link` write `data/firmware/` too (800-KRN-0173). There it is the name `firmware/`:
+**Firmware on MIND Core** (800-LNK-0027). Where init grants it, today with `dev` in `link.conf`, `link` writes `data/firmware/` too (800-KRN-0173). There it is the name `firmware/`:
 - `put`, `get`, `stat`, `ls`, `mkdir`, `rm` and `rmdir` work there;
 - the top's `ls` lists `firmware/` last;
 - a move between `firmware/` and the rest is refused, as are a change of `firmware` itself and `run` or `replace` of a name there;
-- without `dev` such names are unsupported.
+- without that grant such names are unsupported.
 
 A driver's proprietary file thus goes to a running machine with no disk written again: `scripts/proprietary.sh link PORT`, or `scripts/proprietary.sh link effector485` through the daemon. The driver reads it at its next start (a restart, or `replace <unit> --back`). `rtw88_wifi`, `rtw89_wifi` and `bt_hci` refuse a file whose SHA-256 is not the one they pin. `bcm_wifi` only logs its microcode's SHA-256, for a file from the cable as for one from the disk.
 
@@ -60,17 +60,17 @@ A driver's proprietary file thus goes to a running machine with no disk written 
 | `mkdir <dir>` | makes a directory and its missing parents |
 | `mv <from> <to> [--force]` | moves or renames a file or a whole directory; `--force` replaces a file at `<to>` |
 | `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
-| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it, and 1 after a fault. On MIND Core, `link.conf` must hold the word `run` |
+| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it, and 1 after a fault. On MIND Core no word in `link.conf` is asked (801-LNK-0044) |
 | `start <program> [<argument>...]` | the same, printing only the run's number and the program's PID |
-| `sh <line>` | one line for the other end's shell, and its output; exits 1 when the shell refused or failed it. MIND Core: `dev` in `link.conf` (800-LNK-0015) |
-| `replace <unit> <file> [<name>]`, `replace <unit> --back` | puts the file (as `replace/<its name>`) and starts the other end's service from it, unverified; `--back` returns it to its boot image. MIND Core: `dev` in `link.conf` (800-LNK-0016) |
+| `sh <line>` | one line for the other end's shell, and its output; exits 1 when the shell refused or failed it. MIND Core: the shell's client `init` grants `link` (800-LNK-0015) |
+| `replace <unit> <file> [<name>]`, `replace <unit> --back` | puts the file (as `replace/<its name>`) and starts the other end's service from it, unverified; `--back` returns it to its boot image. MIND Core: `init`'s lifecycle client for `link` (800-LNK-0016) |
 | `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
 | `runs` | the runs the other end knows: number, PID, state, program |
 | `stop <run>` | ends a run's program |
-| `reboot` | restarts the other end's machine. On MIND Core, `link.conf` must hold the word `dev` |
+| `reboot` | restarts the other end's machine. On MIND Core, through `init`'s lifecycle client for `link` |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
-| `key <chord>... [--pace <ms>]` | presses keys on the other end's machine, as its keyboard would (800-LNK-0032): QEMU's `sendkey` names joined by `-` (`ctrl-alt-f6`, `alt-0`, `shift-a`, `ret`), a chord every `--pace` ms (default 20). MIND Core: `dev` in `link.conf` and the input capability from `init` |
+| `key <chord>... [--pace <ms>]` | presses keys on the other end's machine, as its keyboard would (800-LNK-0032): QEMU's `sendkey` names joined by `-` (`ctrl-alt-f6`, `alt-0`, `shift-a`, `ret`), a chord every `--pace` ms (default 20). MIND Core: the input capability `init` gives `link` |
 | `type <text> [--pace <ms>]` | types the text there as the US keys give it, a character every `--pace` ms; a character no US key gives goes as itself. `--pace 0` sends as many as a frame holds at once |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |
 | `board <line>` | one line to a [multi-device](multi-device.md) board's control port (`type …`, `key …`, `move …`, `status`), and its answer |
@@ -90,11 +90,46 @@ A driver's proprietary file thus goes to a running machine with no disk written 
 Each file moved is reported with its size, time, rate and SHA-256. A refusal or a missing answer is reported with its reason, and the exit status is 1.
 
 **The mark on MIND Core's screen** (800-LNK-0020). While a master is heard over the link, MIND Core's `link` lights a ring with a dot in the screen's top right corner:
-- **red** with `dev` in `link.conf`: the master can change the machine;
-- **yellow** without it: the master can only read;
+- **red** while `init`'s grants let the master change the machine beyond `data/link/`: the lifecycle client, the shell's, keys or `data/firmware/`;
+- **yellow** without any of them: the master reads, writes `data/link/` and starts programs;
 - **grey** once the master has been quiet for 5 s. The mark goes away when `link` stops.
 
 The compositor draws the mark, so no screen capture holds it and no other program can light it (800-KRN-0156). `effector485` keeps the line warm with a POLL every 2 s, so the mark stays lit between its operations. A `mindlink` command lights it only while it runs.
+
+## What the cable may do on MIND Core
+
+The cable is physical access to the machine (801-LNK-0044, the maintainer's decision of 2026-11-14). It is meant for critical cases, and may be absent (801, condition S6).
+- **`link` asks no word of `link.conf`.** The file sets only:
+  - the rate, `baud=<rate>`. Without one, 460800 bit/s, the bench's (`scripts/build_and_write.sh --link`, `effector485 --baud 460800`); then 115200 where the line refuses that, as a UART that keeps its firmware's rate does. A named rate the line refuses falls back the same way;
+  - the address, `address=<n>` (below).
+
+  The words `run` and `dev` mean nothing to `link` any more.
+- **What it does is what `init` grants it** (MC-2.3):
+  - always files in `data/link/`, the log, and programs, from `data/link/` and built-in ones by name;
+  - the shell's lines with the shell's client;
+  - `reboot` and `replace` with the lifecycle client;
+  - keys with the input capability;
+  - `firmware/` with the scope of `data/firmware/`;
+  - the network, the Wi-Fi station and the system monitor, lent to the programs it starts, with the policy broker's, the station's and the monitor's clients.
+
+  A request whose client `init` did not grant is refused DENIED, and the log names the client missing (`[LINK] REBOOT REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT`). Once started, `link` logs what it holds: `[LINK] NO WORD IN link.conf LIMITS THE CABLE (801-LNK-0044); FROM INIT: …`.
+- **What `init` does today** (the kernel session's, unchanged by 801-LNK-0044):
+  - it starts `usb_serial` and `link` only when the boot volume holds a `link.conf`, empty or not;
+  - it grants the clients above, beyond files, the log and programs, only with the word `dev` in it (800-KRN-0139).
+
+  801-LNK-0044 asks it to start them with no `link.conf`, and to grant those clients whenever it does, but the input capability in a safe start.
+- **A slot update over the cable** goes through the updater, as one from the network does:
+  - `scripts/link_update.py` puts a signed release into `data/link/rel/`;
+  - the updater checks its signatures and digests as any source's (MC-9.2, MC-9.3), so an unsigned or changed release is refused, and its version floor holds (MC-9.4).
+
+  Today the updater reads that directory only when `update.txt` names it (`source data/link/rel`). 801-LNK-0044 asks the update track to take it whatever `update.txt` says.
+- **What this does not give.** The line is not authenticated ([protocol, section 7](protocol.md#7-what-the-protocol-does-not-do)). Where `init` grants those clients, anyone who plugs a supported converter into the machine can:
+  - restart it;
+  - run the shell's lines and press its keys;
+  - start a service from an unverified image until the next boot (`replace`, 800-LNK-0016);
+  - install a release signed by the keys its updater trusts.
+
+  Nothing on the line tells the maintainer's cable from another.
 
 ## The converters on Windows
 

@@ -6650,10 +6650,12 @@ def link_suite(args):
     """800-LNK-0003, 800-KRN-0128: MIND Core's end of MIND Link through QEMU's emulated FT232 (`-device usb-serial` on a
     pseudo-terminal), with `link.conf` at the root, against the host's `mindlink`: a file each way checked by SHA-256,
     the system log read, a name outside data/link/ refused. 800-LNK-0010: a tree made, filled, moved and removed, `ls`
-    showing each step, names that climb out refused. 800-LNK-0009 (`run` in link.conf): a program put into a directory
-    of data/link/ started with arguments, its output, its end and its exit code read (800-KRN-0138), one stopped, a path
-    the loader cannot take refused. 800-LNK-0032: keys over the link reach `keys` as `sendkey`'s do once init gives link
-    the input capability with dev; until then, and always without dev, refused and logged, nothing reaching it. 256-byte
+    showing each step, names that climb out refused. 800-LNK-0009: a program put into a directory of data/link/ started
+    with arguments, its output, its end and its exit code read (800-KRN-0138), one stopped, a path the loader cannot take
+    refused; no word in link.conf is asked for it (801-LNK-0044). 800-LNK-0032: keys over the link reach `keys` as
+    `sendkey`'s do once init gives link the input capability, with dev; without it, refused and logged, nothing reaching
+    it. 801-LNK-0044: with no `baud=` link serves at 460800 bit/s, and what it refuses it refuses for a client init did not
+    grant, saying which. 256-byte
     frames: the emulated chip keeps 384 bytes and is filled again from the pseudo-terminal only when QEMU's main loop
     wakes (docs/link/mindlink.md). Skipped until init starts `link` (it is in BOOT_SERVICES)."""
     services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
@@ -6676,8 +6678,8 @@ def link_suite(args):
         return out
 
     with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
-        # `dev` (800-LNK-0012) with a policy that lets netcheck ping the gateway.
-        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run dev\n", "netpolicy.txt": b"netcheck 10.0.2.2 icmp\n"})
+        # `dev`, for init's grants (800-KRN-0139), with a policy that lets netcheck ping the gateway; no `run` (801-LNK-0044).
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n", "netpolicy.txt": b"netcheck 10.0.2.2 icmp\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
                 extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link",
                        # A network card, for the developer mode's netcheck (800-LNK-0012).
@@ -6706,8 +6708,8 @@ def link_suite(args):
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
             caps_held = [(int(slot), int(ep)) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M)]
             held = sorted((slot, servers.get(ep)) for slot, ep in caps_held)
-            # With `run` in link.conf, link also holds one endpoint of its own (800-KRN-0137) for its programs' output, the
-            # send copy it lends them and the receiving copy the loader's watch gets (800-LNK-0009): nothing granted.
+            # link also holds one endpoint of its own (800-KRN-0137) for its programs' output, the send copy it lends them
+            # and the receiving copy the loader's watch gets (800-LNK-0009): nothing granted.
             granted = [h for h in held if h[1] != pids["link"]]
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
@@ -6775,7 +6777,7 @@ def link_suite(args):
             link(port, "put", str(program), "t/mt.elf")
             logged = vm.command("dmesg -s link", raw=True)
             require(logged, "[LINK] MOVED a/b/s.bin TO c/s.bin")
-            require(logged, "[LINK] PROGRAMS IN data/link/ MAY BE STARTED")
+            require(logged, "[LINK] PROGRAMS IN data/link/ AND BUILT-IN ONES BY NAME MAY BE STARTED")
             require(link(port, "run", "t/mt.elf"), "USAGE: MEMTEST ALLOC")
             require(link(port, "run", "t/mt.elf", "--help"), "memtest — test program of task memory")
             require(link(port, "runs"), "ended\tdata/link/t/mt.elf")
@@ -6800,10 +6802,12 @@ def link_suite(args):
             require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
             assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
 
-            # 800-LNK-0012, the developer mode: built-in programs by name, and what init grants link with `dev` lent on.
-            dev = re.search(r"\[LINK\] DEVELOPER MODE \(link.conf: dev\): BUILT-IN PROGRAMS BY NAME; FROM INIT:([A-Z ]*)", logged)
+            # 800-LNK-0012, the developer mode: built-in programs by name, and what init grants link with `dev` lent on;
+            # link itself asks no word (801-LNK-0044) and says what it holds.
+            dev = re.search(r"\[LINK\] NO WORD IN link.conf LIMITS THE CABLE \(801-LNK-0044\); FROM INIT:([A-Z ]*)", logged)
             assert dev, logged[-2000:]
             powers = dev[1].split()
+            assert {"REBOOT", "SHELL", "FIRMWARE"} <= set(powers), powers
             require(link(port, "run", "memtest"), "USAGE: MEMTEST ALLOC")
             checks = {"NETWORK": (("netcheck", "ping:10.0.2.2"), "NETCHECK ping:10.0.2.2 OK"),
                       "WIFI": (("wifi", "status"), "[WIFI] STATUS"), "SYSINFO": (("uptime",), "up ")}
@@ -6920,12 +6924,13 @@ def link_suite(args):
                 require(link(port, "reboot"), "restarting")
                 vm.process.wait(timeout=60)
             else:
-                require(link(port, "reboot", ok=False), "does not serve this")
+                require(link(port, "reboot", ok=False), "not allowed")
         finally:
             vm.close()
-    # 800-LNK-0026: with `address=5` link answers only frames to its address, so it can share an RS-485 line.
+    # 800-LNK-0026: with `address=5` link answers only frames to its address, so it can share an RS-485 line. No `baud=`:
+    # 460800 bit/s (801-LNK-0044); no `dev`, so init grants none of the developer mode's clients (800-KRN-0139).
     with tempfile.TemporaryDirectory(prefix="smoke-link-address-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 address=5\n"})
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"address=5\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
                 extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
         try:
@@ -6935,11 +6940,23 @@ def link_suite(args):
             sent.write_bytes(os.urandom(16 * 1024))
             require(link(port, "--address", "5", "put", str(sent)), "put ")
             require(link(port, "--address", "5", "ls"), "16384  sent.bin")
-            require(vm.command("dmesg -s link", raw=True), "[LINK] ADDRESS 5 ON A SHARED LINE")
-            # 800-LNK-0015: without `dev` a shell line is refused as not allowed, and the log says why.
-            require(link(port, "--address", "5", "sh", "ps", ok=False), 'a shell line "dev"')
-            require(vm.command("dmesg -s link", raw=True), 'REFUSED, link.conf HAS NO "dev"')
-            # 800-LNK-0032: without `dev` keys are refused DENIED and logged, and nothing reaches the focused program.
+            logged = vm.command("dmesg -s link", raw=True)
+            require_all(logged, "[LINK] ADDRESS 5 ON A SHARED LINE", "[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S",
+                        "[LINK] NO WORD IN link.conf LIMITS THE CABLE (801-LNK-0044); FROM INIT:")
+            # 801-LNK-0044: programs from data/link/ and built-in ones start with no word in link.conf.
+            shutil.copyfile(ROOT / IMAGE / "memtest.elf", Path(temp) / "mt.elf")
+            link(port, "--address", "5", "put", str(Path(temp) / "mt.elf"))
+            require(link(port, "--address", "5", "run", "mt.elf", "--help"), "memtest — test program of task memory")
+            require(link(port, "--address", "5", "run", "memtest"), "USAGE: MEMTEST ALLOC")
+            # 800-LNK-0015: without the shell's client from init a shell line is refused as not allowed, and the log says why.
+            require(link(port, "--address", "5", "sh", "ps", ok=False), "init granted link no client for it")
+            require(vm.command("dmesg -s link", raw=True), "REFUSED, INIT GAVE LINK NO SHELL CLIENT: ps")
+            # REBOOT and REPLACE without init's lifecycle client: refused, nothing restarted.
+            require(link(port, "--address", "5", "reboot", ok=False), "not allowed")
+            require(link(port, "--address", "5", "replace", "rtc", "--back", ok=False), "not allowed")
+            require_all(vm.command("dmesg -s link", raw=True), "[LINK] REBOOT REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT",
+                        "[LINK] REPLACE rtc REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT")
+            # 800-LNK-0032: without init's input capability keys are refused DENIED and logged, and nothing reaches the focused program.
             vm.send("run keys\n")
             require(vm.expect("[KEYS] READY"), "[KEYS] LISTEN")
             start = len(vm.log)
@@ -6950,7 +6967,7 @@ def link_suite(args):
             vm.send_bytes(b"\x1b")
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
-            require(vm.command("dmesg -s link", raw=True), 'INPUT REFUSED: link.conf HAS NO "dev"')
+            require(vm.command("dmesg -s link", raw=True), "INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY")
             # 800-KRN-0191: without `dev` link holds no input privilege at all.
             caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
             assert "KIND=6 " not in caps, caps
@@ -7028,7 +7045,8 @@ def link_suite(args):
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again; "
-          "with address=5 in link.conf it answered only frames to address 5, and without dev no shell line and no key; the shell's lines over the "
+          "with address=5 in link.conf it answered only frames to address 5 at 460800 bit/s, started programs with no word asked, and without "
+          "init's clients for dev no shell line, no reboot, no replace and no key, each refusal naming the client; the shell's lines over the "
           "link answered, a policy change refused and a secret kept out of the log; with link-console a script put over the link "
           "ran as the console's, refused without it, mode refused in both; with `uart` in link.conf, the same link over the console UART through "
           "uart_serial (16 KiB each way), usb_serial not started and the shell without its serial line (100000-KRN-0221)", flush=True)
@@ -9832,10 +9850,25 @@ def mindlink_tool():
     return target / "release/mindlink"
 
 
+def link_release_image(temp, arch, extra):
+    """The update suite's releases, and an image of release 5 in slot A, confirmed, its channel and key file kept there,
+    with the files `extra` names at the root (link.conf, update.txt). Returns the image and update_releases' others."""
+    volume, _, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
+    layout = temp / "layout"
+    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
+    for name, text in extra.items():
+        (layout / name).write_text(text)
+    image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
+    return image, server, kept, good, forged, manifest6, boot_files, channel
+
+
 def linkupdate_suite(args):
     """An update through the link (351-KRN-0141): the update suite's image (release 5 in slot A, confirmed, its channel
-    kept there) with link.conf at the root and update.txt naming data/link/rel, `automatic apply` every 20 s, and no
-    network. Through QEMU's emulated FT232 the host's mindlink puts release 6 there as the release tool lays a server
+    kept there) with an empty link.conf at the root, so link serves at 460800 bit/s (801-LNK-0044), and update.txt naming
+    data/link/rel, `automatic apply` every 20 s, and no network. Through QEMU's emulated FT232 the host's mindlink puts release 6 there as the release tool lays a server
     out: the boot files' blobs and the signed manifest, then an expired channel and one whose signature was changed, each
     refused with no boot record written (351-UPD-0025), then the channel as published. The updater takes version 6 from that directory into slot B,
     boots it on trial through init's restart and confirms it on the disk; mindlink's `log` reads each step from the
@@ -9846,16 +9879,8 @@ def linkupdate_suite(args):
     mindlink = mindlink_tool()
     temp = Path(tempfile.mkdtemp(prefix="mind-linkupdate-"))
     arch = args.arch
-    volume, _, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
-    layout = temp / "layout"
-    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
-    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
-    (layout / "MIND/A/CHANNEL").write_bytes(kept)
-    (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())  # the key file beside it (351-UPD-0026)
-    (layout / "link.conf").write_text("baud=115200\n")
-    (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
-                                       "automatic apply\nevery 20\ntries 3\n")
-    image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
+    image, server, kept, good, forged, manifest6, boot_files, channel = link_release_image(temp, arch, {
+        "link.conf": "", "update.txt": "# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\nautomatic apply\nevery 20\ntries 3\n"})
     # What the updater reads from its source, and nothing more, as scripts/link_update.py puts it on a real machine.
     files = link_update.release_files(manifest6, arch, 6, release_tool.key_versions(release_tool.destination(server)))
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
@@ -9867,6 +9892,7 @@ def linkupdate_suite(args):
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
+        require(link.log(), "[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S")  # no word in link.conf (801-LNK-0044)
         # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (7, 10, 11, 19, 30, 33); slot 15
         # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
@@ -9939,6 +9965,72 @@ def linkupdate_suite(args):
           "signature are refused with no boot record written; the channel as published is taken from that directory into slot B with "
           "release 6's loader, booted on trial through init's restart and that loader, and confirmed on the disk; mindlink's log "
           "shows each step", flush=True)
+
+
+def cable_without_words_check(args):
+    """801-LNK-0044's acceptance in QEMU: the update suite's image (release 5 in slot A, confirmed) with no link.conf and
+    no update.txt. Over the emulated FT232, `reboot` restarts the machine, and release 6, put into data/link/rel/ as
+    scripts/link_update.py puts it, is taken into slot B, booted on trial and confirmed. Each step is skipped, saying
+    which request it waits for, while init starts link only with link.conf or grants it no lifecycle client without `dev`
+    (KRN), or while the updater takes nothing from data/link/rel/ without update.txt naming it (UPD)."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: cable without words needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    mindlink = mindlink_tool()
+    temp = Path(tempfile.mkdtemp(prefix="mind-cable-"))
+    arch = args.arch
+    image, server, _, good, _, manifest6, boot_files, _ = link_release_image(temp, arch, {})
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link",
+                   "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
+    updated = False
+    try:
+        if "link" not in vm.services():
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link NOT STARTED: NO LINK.CONF")
+            print("SKIP: cable without words: init starts link only when the boot volume holds link.conf (801-LNK-0044's request to KRN)", flush=True)
+            return
+        port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+        link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
+        require(link.run("hello").stdout, '"MIND Core link"')
+        require(link.log(), "[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S")
+        rebooted = link.run("reboot", ok=False)
+        if rebooted.returncode != 0:
+            require(rebooted.stdout + rebooted.stderr, "not allowed")
+            require(link.log(), "[LINK] REBOOT REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT")
+            print("SKIP: cable without words: reboot: init grants link its lifecycle client only with dev in link.conf (801-LNK-0044's request to KRN)", flush=True)
+        else:
+            require(rebooted.stdout + rebooted.stderr, "restarting")
+            vm.collect(); vm.output = ""
+            vm.expect("MIND> ", timeout=240, after="MIND CORE KERNEL: INIT STARTED")
+            require(link.run("hello").stdout, '"MIND Core link"')  # served again by the new boot
+            require(link.log(), "[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S")
+        try:
+            line = link_update.update(link, server, manifest6, arch, 6, 900, say=lambda line: None)
+        except RuntimeError as refused:
+            if "has no source" not in str(refused):
+                raise
+            print(f"SKIP: cable without words: slot update: {refused}", flush=True)
+            return
+        require(line, "[UPDATER] SLOT B CONFIRMED ON THE DISK")
+        require(link.log(), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+        updated = True
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-cable-{args.cpus}cpu.log").write_text(vm.log)
+        if not updated:
+            shutil.rmtree(temp, ignore_errors=True)
+    if updated:
+        records = boot_slots.records(image.path)
+        assert boot_slots.newest(records)[1]["slot"] == "B" and boot_slots.newest(records)[1]["confirmed"], records
+        for name, digest in boot_files:
+            assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+        assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+        boot_slots_check.fsck(image)
+        print("PASS: cable without words: with no link.conf and no update.txt, link served at 460800 bit/s, the machine restarted on "
+              "reboot over the link, and release 6 put into data/link/rel/ was taken into slot B, booted on trial and confirmed (801-LNK-0044)", flush=True)
+        shutil.rmtree(temp, ignore_errors=True)
 
 
 def slot_applications_check(args):
@@ -17997,6 +18089,10 @@ def main():
         if suite == "linkupdate":
             linkupdate_suite(args)
             slot_applications_check(args)
+            cable_without_words_check(args)
+            continue
+        if suite == "cable":  # 801-LNK-0044's check alone, also run by linkupdate
+            cable_without_words_check(args)
             continue
         if suite == "modes":
             modes_suite(args)

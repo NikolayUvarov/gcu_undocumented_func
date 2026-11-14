@@ -4,23 +4,30 @@ the machine at the other end of the cable with mindlink, and the updater's log f
 until the new slot is confirmed or the update refused.
 
 Usage:
-    link_update.py PORT [--version N] [--arch x86_64|aarch64] [--root DIR] [--mindlink PATH] [--timeout S]
-                        [--mindlink-option OPTION]...
+    link_update.py PORT [--version N] [--arch x86_64|aarch64] [--root DIR] [--channel NAME] [--mindlink PATH]
+                        [--timeout S] [--mindlink-option OPTION]...
 
     PORT          the serial port mindlink speaks on (COM10, /dev/ttyUSB0, tcp:HOST:PORT)
     --version N   the release's version (default: the time as YYYYMMDDHHMM, above any earlier one of this script)
     --root DIR    the signed build (default: usb_root, aarch64_root with --arch aarch64)
+    --channel     the channel the release is published in, which the other end's updater reads (default stable)
     --mindlink    the mindlink program (default: mindlink on the PATH)
     --timeout S   how long to follow the log after the channel is put (default 1800 s)
     --mindlink-option OPTION   passed to every mindlink call, once per word (--mindlink-option=--baud
                   --mindlink-option=460800)
 
-The machine needs an image with slots and this update.txt at its root (make_usb_image.py --slots --update FILE),
-and link.conf:
+The machine needs an image with slots (make_usb_image.py --slots). link asks no word of link.conf for this
+(801-LNK-0044): the files go to data/link/, which it always serves, and the file sets only its rate and address
+(460800 bit/s without one). init starts link only while the boot volume holds a link.conf, empty or not, until it
+starts it with none (801-LNK-0044's request to KRN). The updater takes the release from data/link/rel/ with this
+update.txt at the volume's root,
     source data/link/rel
     channel stable
     automatic apply
     every 60
+and, once it takes that directory whatever update.txt says (801-LNK-0044's request to UPD), with any update.txt or
+none. An updater that says it has no source and names no data/link/rel in the log is refused at once, before anything
+is put.
 
 The release is signed as scripts/release.py signs one: the manifest with the build's boot key, the channel with
 $MIND_RELEASE_KEY, or the public test release key without it, under the key file the server tree holds (the test one
@@ -48,6 +55,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DIR = "rel"  # below data/link/: update.txt's `source data/link/rel`
 DONE = re.compile(r"\[UPDATER\] SLOT ([AB]) CONFIRMED ON THE DISK")
 FAILED = re.compile(r"\[UPDATER\] [^\n]*(REFUSED|ROLLBACK)[^\n]*")
+NO_SOURCE = "[UPDATER] NO update.txt: IT ACTS ONLY WHEN ASKED, AND HAS NO SOURCE"  # an updater that reads only update.txt's source
 CHECKED = re.compile(r"\[UPDATER\] CHECK \S+: VERSION (\d+)")
 ANCHOR = 8  # lines that mark where the last read of the log ended
 BOOT_S = 60  # a log whose first line is this young is a new boot's
@@ -81,15 +89,15 @@ def release_files(manifest, arch, version, key_versions=()):
             + [f"keys/{v}" for v in key_versions] + ["keys/current"])
 
 
-def build(root, arch, version, temp):
-    """The signed build at `root` staged and published as release `version` into a server tree under `temp`."""
+def build(root, arch, version, temp, channel="stable"):
+    """The signed build at `root` staged and published as release `version` of `channel` into a server tree under `temp`."""
     staged, server = Path(temp) / "staged", Path(temp) / "server"
     # A copy signed again with the release's version, which the bootloader's floor reads (351-UPD-0024).
     volume = Path(temp) / "volume"
     shutil.copytree(root, volume)
     sign_manifest.sign_volume(volume, version=version)
     release.stage(version, staged, {arch: volume})
-    release.publish(staged, server)
+    release.publish(staged, server, channel=channel)
     return server, (volume / "MANIFEST").read_bytes()
 
 
@@ -180,8 +188,20 @@ def follow(link, timeout, say=print, pause=5, before="", version=None):
     raise RuntimeError(f"no confirmation within {timeout} s")
 
 
-def update(link, server, manifest, arch, version, timeout, say=print):
-    """Puts release `version` from `server` and follows the log to its end."""
+def sourceless(log):
+    """Why the other end's updater takes nothing from data/link/rel/, or None: it said at its start that it has no source
+    (no update.txt) and no line names the directory (801-LNK-0044)."""
+    if log and NO_SOURCE in log and f"data/link/{DIR}" not in log:
+        return (f"the other end's updater has no source ({NO_SOURCE.split('] ', 1)[1]}) and reads nothing from data/link/{DIR}/: "
+                f"put update.txt naming it (source data/link/{DIR}), or update the updater first (801-LNK-0044)")
+    return None
+
+
+def update(link, server, manifest, arch, version, timeout, say=print, channel="stable"):
+    """Puts release `version` of `channel` from `server` and follows the log to its end."""
+    why = sourceless(link.log())
+    if why:
+        raise RuntimeError(why)
     files = release_files(manifest, arch, version, release.key_versions(release.destination(server)))
     started = time.monotonic()
     for index, name in enumerate(files, 1):
@@ -192,9 +212,9 @@ def update(link, server, manifest, arch, version, timeout, say=print):
     before = link.log()
     if before is None:
         raise RuntimeError("the other end's log could not be read")
-    link.put(Path(server) / "channels/stable", "channels/stable")
+    link.put(Path(server) / f"channels/{channel}", f"channels/{channel}")
     # Then the timestamp naming it (351-UPD-0028): until it is there the updater holds the channel it had.
-    link.put(Path(server) / "timestamps/stable", "timestamps/stable")
+    link.put(Path(server) / f"timestamps/{channel}", f"timestamps/{channel}")
     return follow(link, timeout, say, before=before, version=version)
 
 
@@ -204,6 +224,7 @@ def main(argv=None):
     parser.add_argument("--version", type=int, default=int(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M")))
     parser.add_argument("--arch", choices=sorted(release.ARCHES), default="x86_64")
     parser.add_argument("--root", type=Path)
+    parser.add_argument("--channel", default="stable")
     parser.add_argument("--mindlink", default="mindlink")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--mindlink-option", action="append", default=[])
@@ -213,9 +234,9 @@ def main(argv=None):
     try:
         print(link.run("hello").stdout.strip())
         with tempfile.TemporaryDirectory(prefix="mind-link-update-") as temp:
-            server, manifest = build(root, args.arch, args.version, temp)
-            print(f"RELEASE {args.version} OF {root} ({args.arch})")
-            line = update(link, server, manifest, args.arch, args.version, args.timeout)
+            server, manifest = build(root, args.arch, args.version, temp, args.channel)
+            print(f"RELEASE {args.version} OF {root} ({args.arch}), CHANNEL {args.channel}")
+            line = update(link, server, manifest, args.arch, args.version, args.timeout, channel=args.channel)
         print(f"CONFIRMED: {line.strip()}")
         return 0
     except (RuntimeError, release.ReleaseError, subprocess.TimeoutExpired) as e:

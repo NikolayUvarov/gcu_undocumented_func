@@ -75,16 +75,18 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
                 install file=<path here> [name=<file name>]    into apps/, replacing any
                 uninstall name=<file name>                     from apps/
                 log [from=<cursor>] [max_bytes=<n>]
-                reboot                                         restarts the other end (MIND Core: dev in link.conf)
-                shell line=<line> [timeout_seconds=<n>]        one line for the other end's shell (MIND Core: dev)
+                reboot                                         restarts the other end (MIND Core: init's lifecycle client)
+                shell line=<line> [timeout_seconds=<n>]        one line for the other end's shell (MIND Core: init's shell
+                                                               client)
                 key names=<chord> <chord>... [pace_ms=<n>]     presses keys on the other end's machine as its keyboard
                                                                would, QEMU's sendkey names (ctrl-alt-f6 alt-0), a chord
-                                                               every pace_ms (default 20; MIND Core: dev and init's
-                                                               input capability, 800-LNK-0032)
+                                                               every pace_ms (default 20; MIND Core: init's input
+                                                               capability, 800-LNK-0032)
                 type text=<text> [pace_ms=<n>]                 types the text there, a character every pace_ms
                 replace unit=<service> file=<path here> [name=<there>] | unit=<service> back=true
                                                                starts a service from the file, unverified, until the
-                                                               next boot; back=true: from its boot image (MIND Core: dev)
+                                                               next boot; back=true: from its boot image (MIND Core:
+                                                               init's lifecycle client)
           status <id>                    the operation as JSON
           wait <id>                      its output as it comes, until it ends; the exit code of a program
           output <id>                    its output so far

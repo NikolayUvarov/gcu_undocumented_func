@@ -3,25 +3,25 @@
 // link (800-LNK-0003): MIND Core's end of MIND Link, the slave of linkproto (docs/link/protocol.md) over usb_serial's
 // port (idl/serial.wit, SLOT_DEV0). Its authority is what init grants (MC-2.3): files only in data/link/ (a vfs client
 // confined there, SLOT_VFS), the system log through a reading log client (SLOT_LOG), an application's loader client
-// (SLOT_LOADER) and no console. init starts it when the boot volume holds link.conf at its root and passes that file's
-// words as arguments: `baud=<rate>`, and `run`, without which it starts no program (800-LNK-0009). Files may lie in
-// directories below data/link/ (800-LNK-0010). With `dev`, the developer mode (800-LNK-0012, the maintainer's decision
-// of 2026-10-21): it also starts the built-in programs by name, lends them the network, the Wi-Fi station and the
-// system monitor where init granted it those, and restarts the machine on REBOOT; and posts the master's key events where
-// init gave it the input capability (800-LNK-0032). Everything from the line is checked by linkproto before use (MC-11.4);
-// hellos, files, programs, input and refusals are logged (MC-10.2).
+// (SLOT_LOADER) and no console. init passes link.conf's words as arguments, of which link reads only `baud=<rate>` and
+// `address=<n>` (conf.rs); none, or no link.conf, serves at 460800 bit/s. No word limits the cable (801-LNK-0044, the
+// maintainer's decision of 2026-11-14): it starts programs from data/link/ (800-LNK-0009) and built-in ones by name,
+// lends them the network, the Wi-Fi station and the system monitor, takes shell lines, restarts the machine on REBOOT,
+// replaces a service and posts the master's key events (800-LNK-0032) wherever init granted it the client each needs.
+// Files may lie in directories below data/link/ (800-LNK-0010). Everything from the line is checked by linkproto before
+// use (MC-11.4); hellos, files, programs, input and refusals are logged (MC-10.2).
+mod conf;
 mod names;
 
 use linkproto::app::{FileService, Files, RunOutput, COMMAND_MAX, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_INPUT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_DISPLAY, SLOT_FILE, SLOT_INPUT, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
 use mind::fs::{self, File};
 use mind::idl::{display, init as lifecycle, loader, netpolicy, serial, shell};
 use mind::ipc::{self, Endpoint};
 use names::{hidden, DIR};
 
-const FIRST_BAUD: u32 = 115_200;
 // The screen's mark for the link (800-LNK-0020, the compositor's 800-KRN-0156): said every MARK_MS; a master heard in
 // the last PEER_MS is connected.
 const MARK_MS: u64 = 1000;
@@ -104,11 +104,16 @@ fn remove_tree(top: &str) -> Result<(), u8> {
 /// notices arrive there too, through the loader's watch (`notices`, a receiving copy; 800-KRN-0138), and the loader
 /// ends them on STOP. With a loader that cannot, the end is seen by `alive` and its reason stays unknown.
 /// A COMMAND's line waits in `pending` for the shell until its answer is out (800-LNK-0015).
-struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowed: bool, dev: bool, reboot_at: u64, next: u32, runs: [Run; RUNS], checked: u64,
+struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, reboot_at: u64, next: u32, runs: [Run; RUNS], checked: u64,
                   pending: Option<(u32, [u8; COMMAND_MAX], usize)> }
 
 /// Whether init granted link an endpoint in `slot` (the developer mode's clients, 800-LNK-0012).
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
+
+/// Whether init granted link a client that changes the machine beyond data/link/: the reboot, the shell, keys, data/firmware/.
+fn changes() -> bool {
+    holds(SLOT_LIFECYCLE) || holds(SLOT_SHELL) || holds(SLOT_FILE) || mind::dev::cap_info(SLOT_INPUT).0 == CAP_KIND_INPUT
+}
 
 /// The bytes of a command or arguments on one log line: libmind's line holds 200 with the head.
 const LOGGED_PIECE: usize = 140;
@@ -213,7 +218,6 @@ impl Programs {
     fn find(&mut self, id: u32) -> Result<&mut Run, u8> { self.runs.iter_mut().find(|r| r.id != 0 && r.id == id).ok_or(code::NOT_FOUND) }
 
     fn start(&mut self, full: &str, args: &str) -> Result<(u32, u64), u8> {
-        if !self.allowed { mind::println!("[LINK] RUN {} REFUSED: link.conf HAS NO \"run\"", full); return Err(code::DENIED); }
         if self.inbox.is_none() { return Err(code::UNSUPPORTED); }
         if full.len() > LOADER_PATH_MAX { return Err(code::DENIED); }
         self.pump();
@@ -226,7 +230,7 @@ impl Programs {
         }
         // Its exit notice to the same endpoint (loader.wit 1.11); an older loader leaves the end to `alive`.
         let watched = matches!(loader::watch(Endpoint::LOADER, session, self.notices), Ok(Ok(())));
-        let (lent, flow) = if self.dev { self.lend(session, full) } else { ([""; 3], None) };
+        let (lent, flow) = self.lend(session, full);
         let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(loader_code)?;
         // The network grant ends with the program (as the shell binds its own).
         if let Some(badge) = flow { let _ = netpolicy::bind(Endpoint(SLOT_NETPOLICY), badge, pid); }
@@ -240,7 +244,7 @@ impl Programs {
         Ok((id, pid))
     }
 
-    /// The developer mode's clients a program asks for (`mind::request!`) and init granted link, lent in its slots as
+    /// The clients a program asks for (`mind::request!`) and init granted link, lent in its slots as
     /// the shell lends them: the station's (REQUEST_WIFI), the system monitor's (REQUEST_SYSINFO) and a network grant
     /// from the policy broker (REQUEST_NETWORK), which `start` binds to the program. What was lent, and the grant's badge.
     fn lend(&self, session: u32, full: &str) -> ([&'static str; 3], Option<u16>) {
@@ -275,14 +279,13 @@ impl Programs {
 
     /// COMMAND (800-LNK-0015): a run for `line`, handed to the shell's `run` by `main` once this answer is out, so that a
     /// long command does not hold it. The shell takes the link's lines by its own rule (800-APP-0102), through the client
-    /// init grants with `dev` (800-KRN-0148). The whole line is logged (the maintainer's word, 2026-10-22), but for a
-    /// secret `tpm seal` takes.
+    /// init grants link (800-KRN-0148); without it DENIED. The whole line is logged (the maintainer's word, 2026-10-22), but
+    /// for a secret `tpm seal` takes.
     fn command(&mut self, line: &str) -> Result<u32, u8> {
         let word = line.split_whitespace().next().unwrap_or("");
         let word = &word[..word.len().min(LOADER_PATH_MAX - 4)];
         let (shown, tail) = logged(line);
-        if !self.dev { log_whole("COMMAND", 0, "REFUSED, link.conf HAS NO \"dev\": ", shown, tail); return Err(code::DENIED); }
-        if !holds(SLOT_SHELL) { return Err(code::UNSUPPORTED); }
+        if !holds(SLOT_SHELL) { log_whole("COMMAND", 0, "REFUSED, INIT GAVE LINK NO SHELL CLIENT: ", shown, tail); return Err(code::DENIED); }
         if self.pending.is_some() { return Err(code::BUSY); }
         self.pump();
         let index = self.entry().ok_or(code::BUSY)?;
@@ -325,10 +328,9 @@ impl Programs {
     }
 
     /// REPLACE (800-LNK-0016): init starts `unit` again from `data/link/<path>`, or from its boot image for "", through the
-    /// lifecycle client it grants with `dev` (800-KRN-0144); init logs the image NOT VERIFIED.
+    /// lifecycle client it grants link (800-KRN-0144); without it DENIED. init logs the image NOT VERIFIED.
     fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
-        if !self.dev { mind::println!("[LINK] REPLACE {} REFUSED: link.conf HAS NO \"dev\"", unit); return Err(code::DENIED); }
-        if !holds(SLOT_LIFECYCLE) { return Err(code::UNSUPPORTED); }
+        if !holds(SLOT_LIFECYCLE) { mind::println!("[LINK] REPLACE {} REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT", unit); return Err(code::DENIED); }
         mind::println!("[LINK] REPLACE {} FROM {} ASKED BY THE MASTER", unit, if path.is_empty() { "ITS BOOT IMAGE" } else { path });
         match lifecycle::replace(Endpoint(SLOT_LIFECYCLE), unit, path) {
             Ok(Ok(())) => Ok(()),
@@ -340,19 +342,17 @@ impl Programs {
     }
 
     /// A REBOOT from the master: the machine restarts once the answer is out (`main`), through init's lifecycle client
-    /// badged for it, which init grants only with `dev`.
+    /// badged for it; without it DENIED.
     fn reboot(&mut self) -> Result<(), u8> {
-        if !self.dev { mind::println!("[LINK] REBOOT REFUSED: link.conf HAS NO \"dev\""); return Err(code::DENIED); }
-        if !holds(SLOT_LIFECYCLE) { return Err(code::UNSUPPORTED); }
+        if !holds(SLOT_LIFECYCLE) { mind::println!("[LINK] REBOOT REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT"); return Err(code::DENIED); }
         mind::println!("[LINK] REBOOT ASKED BY THE MASTER");
         self.reboot_at = mind::time::uptime_ms() as u64 + 500;
         Ok(())
     }
 
     /// INPUT (800-LNK-0032): the master's events posted as the keyboard drivers post them, a word of 0 the attention key,
-    /// through the input capability init gives link with `dev` (KRN). Without either, refused DENIED with none posted.
+    /// through the input capability init gives link (800-KRN-0191). Without it, refused DENIED with none posted.
     fn input(&mut self, words: &[u64]) -> Result<u32, u8> {
-        if !self.dev { mind::println!("[LINK] INPUT REFUSED: link.conf HAS NO \"dev\""); return Err(code::DENIED); }
         let mut posted = 0u32;
         for &w in words {
             let r = if w == 0 { mind::dev::input_key(0, 0, true) } else { mind::dev::input_key(w as usize, w as usize, false) };
@@ -408,7 +408,7 @@ impl Programs {
     }
 }
 
-static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, allowed: false, dev: false, reboot_at: 0, next: 1, runs: [NO_RUN; RUNS], checked: 0, pending: None };
+static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, reboot_at: 0, next: 1, runs: [NO_RUN; RUNS], checked: 0, pending: None };
 fn programs() -> &'static mut Programs { unsafe { &mut *core::ptr::addr_of_mut!(PROGRAMS) } }
 
 /// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
@@ -427,7 +427,7 @@ const UNKNOWN: Known = Known { name: [0; 255], len: 0, size: 0, digest: [0; 32] 
 const CHUNK: usize = 16 * 1024;
 
 impl Store {
-    /// The client of `firmware`'s place in use: data/firmware/'s only where init granted it, in developer mode.
+    /// The client of `firmware`'s place in use: data/firmware/'s only where init granted it (800-KRN-0173).
     fn scope(&mut self, firmware: bool) -> Result<(), u8> {
         if firmware && !holds(SLOT_FILE) { return Err(code::UNSUPPORTED); }
         if firmware != self.firmware {
@@ -663,8 +663,8 @@ impl Files for Store {
 
     fn run(&mut self, name: &str, args: &str) -> Result<(u32, u64), u8> {
         let mut buf = [0u8; names::PATH_MAX];
-        // In the developer mode a plain name (`wifi`, `netcheck`) is a built-in program, which the loader finds by name.
-        if programs().dev && !name.contains('/') && !name.contains('.') { return programs().start(name, args); }
+        // A plain name (`wifi`, `netcheck`) is a built-in program, which the loader finds by name (800-LNK-0012).
+        if !name.contains('/') && !name.contains('.') { return programs().start(name, args); }
         // The loader starts programs from data/link/ alone.
         if names::firmware(name) { return Err(code::DENIED); }
         programs().start(names::path(name, &mut buf), args)
@@ -744,17 +744,18 @@ impl Service for Logged {
     }
 }
 
-/// The link's mark on the screen (800-LNK-0020): grey with no master heard for PEER_MS, red while one is and `dev` lets
-/// it change the machine, yellow while it may only read. The compositor shows it a few seconds past the last call.
+/// The link's mark on the screen (800-LNK-0020): grey with no master heard for PEER_MS, red while one is and init's grants
+/// let it change the machine (`changes`), yellow while it may only read and write data/link/. The compositor shows it a
+/// few seconds past the last call.
 struct Mark { requests: u32, heard: u64, next: u64, on: bool, said: Option<display::RemoteState> }
 impl Mark {
-    fn tick(&mut self, requests: u32, dev: bool) {
+    fn tick(&mut self, requests: u32, changing: bool) {
         let now = mind::time::uptime_ms() as u64;
         if requests != self.requests { (self.requests, self.heard) = (requests, now); }
         if !self.on || now < self.next { return; }
         self.next = now + MARK_MS;
         let state = if self.heard == 0 || now - self.heard > PEER_MS { display::RemoteState::Unconnected }
-                    else if dev { display::RemoteState::Changing } else { display::RemoteState::Reading };
+                    else if changing { display::RemoteState::Changing } else { display::RemoteState::Reading };
         match display::remote(Endpoint(SLOT_DISPLAY), state) {
             Ok(Ok(())) => if self.said != Some(state) { mind::println!("[LINK] MARK: {:?}", state); self.said = Some(state); },
             // An older compositor, or no grant: said once, then not asked again.
@@ -763,39 +764,29 @@ impl Mark {
     }
 }
 
-/// The rate from the arguments (`baud=<rate>`), else 115200.
-fn baud() -> u32 {
-    mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("baud=")?.parse().ok()).unwrap_or(FIRST_BAUD)
-}
+const _: () = assert!(conf::ADDRESS_MAX == linkproto::frame::ADDRESS_MAX);
 
-/// This machine's address on a line shared by several (800-LNK-0026): `address=<1..247>` in link.conf. None, or one out
-/// of range (said once), is a line with one slave, answered in version 1 frames as before.
+/// This machine's address on a shared line (800-LNK-0026, conf.rs); one out of range is said once and serves a line of one.
 fn address() -> u8 {
-    let Some(word) = mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("address=")) else { return 0 };
-    match word.parse::<u8>() {
-        Ok(a) if (1..=linkproto::frame::ADDRESS_MAX).contains(&a) => a,
-        _ => { mind::println!("[LINK] address={} IS NOT 1 TO {}: SERVING A LINE OF ONE", word, linkproto::frame::ADDRESS_MAX); 0 }
-    }
+    conf::address(mind::process::args_str()).unwrap_or_else(|word| {
+        mind::println!("[LINK] address={} IS NOT 1 TO {}: SERVING A LINE OF ONE", word, linkproto::frame::ADDRESS_MAX);
+        0
+    })
 }
 
-/// Programs may be started only with the word `run` in link.conf; their output comes to an endpoint of link's.
+/// What init granted link, said once, and the endpoint its programs' output comes to: no word in link.conf is asked.
 fn prepare_programs() {
     let p = programs();
-    p.dev = mind::process::args_str().split_ascii_whitespace().any(|w| w == "dev");
-    // The developer mode starts programs too.
-    p.allowed = p.dev || mind::process::args_str().split_ascii_whitespace().any(|w| w == "run");
-    if p.dev {
-        let has = |slot: usize, what: &'static str| if holds(slot) { what } else { "" };
-        mind::println!("[LINK] DEVELOPER MODE (link.conf: dev): BUILT-IN PROGRAMS BY NAME; FROM INIT:{}{}{}{}{}", has(SLOT_NETPOLICY, " NETWORK"),
-                       has(SLOT_WIFI, " WIFI"), has(SLOT_SYSINFO, " SYSINFO"), has(SLOT_LIFECYCLE, " REBOOT"), has(SLOT_FILE, " FIRMWARE (data/firmware/ AS firmware/)"));
-    }
+    let has = |slot: usize, what: &'static str| if holds(slot) { what } else { "" };
+    let input = if mind::dev::cap_info(SLOT_INPUT).0 == CAP_KIND_INPUT { " INPUT" } else { "" };
+    mind::println!("[LINK] NO WORD IN link.conf LIMITS THE CABLE (801-LNK-0044); FROM INIT:{}{}{}{}{}{}{}", has(SLOT_NETPOLICY, " NETWORK"), has(SLOT_WIFI, " WIFI"),
+                   has(SLOT_SYSINFO, " SYSINFO"), has(SLOT_LIFECYCLE, " REBOOT"), has(SLOT_SHELL, " SHELL"), input, has(SLOT_FILE, " FIRMWARE (data/firmware/ AS firmware/)"));
     p.next = (mind::time::rdtsc() as u32 & 0xFFFF_0000) | 1;
-    if !p.allowed { return; }
     // One endpoint (init's quota, 800-KRN-0137): a send copy for the programs' output, a receiving one for the loader's watch.
     match Endpoint::create().and_then(|inbox| Ok((inbox, ipc::mint(inbox.0, CAP_WRITE, 0, 0)?, ipc::mint(inbox.0, CAP_READ, 0, 0)?))) {
         Ok((inbox, output, notices)) => {
             (p.inbox, p.output, p.notices) = (Some(inbox), output, notices);
-            mind::println!("[LINK] PROGRAMS IN data/link/ MAY BE STARTED (link.conf: run)");
+            mind::println!("[LINK] PROGRAMS IN data/link/ AND BUILT-IN ONES BY NAME MAY BE STARTED");
         }
         Err(e) => mind::println!("[LINK] NO ENDPOINT FOR PROGRAMS' OUTPUT ({:?}): NONE WILL BE STARTED", e),
     }
@@ -803,18 +794,20 @@ fn prepare_programs() {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("link — MIND Link's end on this machine: files in data/link/ and its directories, the system log, and with the word run in link.conf the programs in data/link/, for mindlink on another machine, over a serial converter; init starts it when the boot volume holds link.conf (800-LNK-0003).");
+    mind::about!("link — MIND Link's end on this machine for mindlink and effector485 on another, over a serial converter: files in data/link/ and its directories, the system log, programs, and what init grants it (the shell's lines, reboot, replace, keys); link.conf sets only its rate and address, 460800 bit/s without one (800-LNK-0003, 801-LNK-0044).");
     let endpoint = Endpoint(SLOT_DEV0);
     fs::use_scope(Endpoint(SLOT_VFS), DIR);
-    let baud = baud();
-    let mut said = false;
+    // The rate link.conf names, else 460800, then 115200: a rate the line refuses is said and the next one tried.
+    let (rates, count) = conf::rates(mind::process::args_str());
+    let (mut tried, mut said) = (0, false);
     loop {
+        let Some(&baud) = rates[..count].get(tried) else { mind::println!("[LINK] THE CONVERTER MAKES NONE OF THE RATES TRIED: NOT SERVING"); return };
         match serial::configure(endpoint, baud) {
             Ok(Ok(actual)) => { mind::println!("[LINK] SERVING data/link/ AND THE LOG AT {} BIT/S (THE CONVERTER MAKES {})", baud, actual); break; }
-            Ok(Err(serial::Error::Invalid)) => { mind::println!("[LINK] {} BIT/S IS NOT A RATE THE CONVERTER MAKES", baud); return; }
+            Ok(Err(serial::Error::Invalid)) => { mind::println!("[LINK] {} BIT/S IS NOT A RATE THE CONVERTER MAKES", baud); tried += 1; }
             Ok(Err(_)) => { if !said { mind::println!("[LINK] WAITING FOR A SERIAL CONVERTER"); said = true; } mind::time::sleep(1000); }
             // No usb_serial behind the slot: started by hand, not by init.
-            Err(_) => { mind::println!("link: no serial port was given to it; init starts it when the boot volume holds link.conf"); return; }
+            Err(_) => { mind::println!("link: no serial port was given to it; init starts it with the serial converter's driver"); return; }
         }
     }
     prepare_programs();
@@ -826,9 +819,10 @@ fn main(_info: &'static BootInfo) {
     if slave.address != 0 { mind::println!("[LINK] ADDRESS {} ON A SHARED LINE: ONLY FRAMES TO IT ARE ANSWERED", slave.address); }
     let mut dropped = 0;
     let mut mark = Mark { requests: 0, heard: 0, next: 0, on: holds(SLOT_DISPLAY), said: None };
+    let changing = changes();
     loop {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
-        mark.tick(slave.stats.requests, programs().dev);
+        mark.tick(slave.stats.requests, changing);
         // A REBOOT is carried out once its answer has gone; the line has had time to turn round.
         let p = programs();
         // So is a COMMAND's line, whose output the master then reads.
