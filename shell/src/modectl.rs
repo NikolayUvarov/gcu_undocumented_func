@@ -13,7 +13,7 @@ pub fn launched(test_key: bool) { TEST_KEY.store(test_key, Ordering::Relaxed); }
 fn error(error: Error, which: Option<Which>) -> &'static str {
     match error {
         Error::Denied if which == Some(Which::RemoteUpdate) => "INIT REFUSED IT: REMOTE-UPDATE COUNTS ONLY WITH THE DEVELOPMENT OR MAINTENANCE MODE ON",
-        Error::Denied if which == Some(Which::LinkRemoteUpdate) => "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WITH THE LINK'S CONSOLE (DEV IN LINK.CONF AND LINK-CONSOLE)",
+        Error::Denied if which == Some(Which::LinkRemoteUpdate) => "INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WHILE THE LINK'S CONSOLE IS ON",
         Error::Denied => "INIT REFUSED IT: THIS CLIENT MAY NOT CHANGE THE MODE",
         Error::Failed => "INIT COULD NOT WRITE DATA/MODE.CONF OR START THE SERVICES",
         Error::NoDevice => "NO BOOT VOLUME FOR DATA/MODE.CONF",
@@ -69,8 +69,9 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
     if crate::link_console() { let _ = writeln!(shell.term, "{}", LINK_CONSOLE); }
 }
 
-// The `link-console` mode (init.wit 1.8, 800-APP-0108): only data/mode.conf sets it, so `mode` shows it and never changes it.
-const LINK_CONSOLE: &str = "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF): THE LINK'S LINES ARE THE CONSOLE'S, BUT NOT MODE";
+// The `link-console` mode (init.wit 1.8, 800-APP-0108): only data/mode.conf sets it, so `mode` shows it and never changes
+// it; the link's console switches remote-update alone, with the owner's link-remote-update (801-APP-0139, 0141).
+const LINK_CONSOLE: &str = "LINK CONSOLE: ON (DATA/MODE.CONF): THE LINK'S LINES ARE THE CONSOLE'S, BUT NO MODE: REMOTE-UPDATE ALONE, WITH THE OWNER'S LINK-REMOTE-UPDATE";
 
 // The modes, and the link's console, above the first prompt and in the system log while one is on. No timeout: a call given up revokes its lent
 // buffer under init's late answer (the fault of LNK's report, 2026-10-22), and init answers `mode` at once.

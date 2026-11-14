@@ -1,0 +1,33 @@
+# 801-APP-0141 — The shell's link console line names `data/mode.conf` alone, and the one `mode` the cable may send — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S6) · **Roadmap:** stage V · **Constitution:** MC-12.3
+
+**Asked by:** KRN, `APP/2026-11-14T1328Z-KRN-801-krn-0247-link-console-counts-without-dev.md` on `internal-dev-messages`, for 801-KRN-0247. Numbered on 2026-11-14.
+
+## Problem
+
+- **801-KRN-0247** counts `link-console` from `data/mode.conf` whatever `link.conf` says (801's S6). It does that by the maintainer's decision of 2026-11-14: the cable updates all code with no permissions.
+- **The shell's `LINK_CONSOLE` line** reads `LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF): …, BUT NOT MODE`. Once 0247 lands, that says more than is true.
+- **Its "but not mode"** has not been quite true since 801-APP-0139: the link's console may switch `remote-update` with the owner's `link-remote-update`.
+- **The refusal of `link-remote-update`** names `dev` in `link.conf` the same way.
+
+## Plan
+
+Texts true both before 801-KRN-0247 lands and after:
+- the line: `LINK CONSOLE: ON (DATA/MODE.CONF): THE LINK'S LINES ARE THE CONSOLE'S, BUT NO MODE: REMOTE-UPDATE ALONE, WITH THE OWNER'S LINK-REMOTE-UPDATE`;
+- the refusal: `INIT REFUSED IT: LINK-REMOTE-UPDATE COUNTS ONLY WHILE THE LINK'S CONSOLE IS ON`;
+- the `modes` suite's two expectations changed in the same commit, and the docs.
+
+## Acceptance criteria
+
+The `modes` suite passes on x86 with the new texts.
+
+## Resolution
+
+- **The texts:** `shell/src/modectl.rs`, and `docs/tools/README.md` and `README_RU.md`. The docs also say the one `mode` the link's console may send.
+- **The `modes` suite's expectations:** `remote_update_check` and `services_config_check` (`tests/qemu_smoke.py`).
+- **Tested:** the `modes` suite on x86, 4 CPUs, in this container.
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md), [801-APP-0139](801-APP-0139-mode-remote-update-in-the-shell.done), [800-APP-0108](800-APP-0108-the-links-lines-as-the-consoles.done).
