@@ -140,7 +140,7 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 **POLL (2).** Empty request, empty answer: the line is alive.
 
 **REBOOT (3)** (800-LNK-0012). Empty request, empty answer. The slave's machine restarts once the answer is out.
-- MIND Core's `link` does so only with the word `dev` in `link.conf` (DENIED otherwise) and the lifecycle client `init` grants with it (UNSUPPORTED without it).
+- MIND Core's `link` does so through the lifecycle client `init` grants it, and refuses DENIED without it. It asks no word of `link.conf` (801-LNK-0044); `init` grants the client only with `dev` there (800-KRN-0139).
 - `mindlink serve` refuses it with UNSUPPORTED.
 
 ### Files (channel 2)
@@ -217,11 +217,10 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 ### Programs (channel 5)
 
 The slave starts a program from its directory for the master, keeps its output and tells its end (800-LNK-0009).
-- **On MIND Core** only when `link.conf` holds the word `run`, through the loader as an application starts one (800-KRN-0132).
-  - **With `dev`** (the developer mode, 800-LNK-0012), a name of one part without `.` (`wifi`, `netcheck`) is a built-in program from the volume's root.
-  - **Also with `dev`,** the programs get the network, the Wi-Fi station and the system monitor where they ask for them and `init` granted `link` those.
-- **`mindlink serve`** only with `--run`.
-- **Without it,** RUN is refused with DENIED.
+- **On MIND Core** with no word in `link.conf` (801-LNK-0044), through the loader as an application starts one (800-KRN-0132).
+  - A name of one part without `.` (`wifi`, `netcheck`) is a built-in program from the volume's root (800-LNK-0012).
+  - The programs get the network, the Wi-Fi station and the system monitor where they ask for them and `init` granted `link` those.
+- **`mindlink serve`** only with `--run`. Without it, RUN is refused with DENIED.
 
 | Request | Payload | Answer |
 |---|---|---|
@@ -230,7 +229,7 @@ The slave starts a program from its directory for the master, keeps its output a
 | STOP (52) | `run u32` | empty: the program is ended |
 | RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped`, `faulted` |
 | COMMAND (54) | one line for the slave's shell, UTF-8, at most 240 bytes, no control characters | `run u32`: a run whose output and end OUTPUT reads (800-LNK-0015) |
-| REPLACE (55) | `unit_len u8`, the service's name (at most 16 bytes), then a file's name under the store (at most 64 bytes; empty: its boot image) | empty: the service was started again from it, unverified (800-LNK-0016; MIND Core: `dev` in `link.conf`, `init.wit` 1.6 `replace`) |
+| REPLACE (55) | `unit_len u8`, the service's name (at most 16 bytes), then a file's name under the store (at most 64 bytes; empty: its boot image) | empty: the service was started again from it, unverified (800-LNK-0016; MIND Core: `init`'s lifecycle client, `init.wit` 1.6 `replace`) |
 
 - **Output** is counted from the program's start.
   - The slave keeps the last part of it: at least 16 KiB on MIND Core, 64 KiB in `mindlink serve`.
@@ -245,7 +244,7 @@ The slave starts a program from its directory for the master, keeps its output a
   - The shell's answer is the run's output, and its end is the run's end: exit 0, or 1 with the shell's reason when it refused or failed the line.
   - `mindlink serve --run` runs the line with `sh -c`.
   - MIND Core's `link` logs the whole line, as `[LINK] COMMAND <run>: <line>`. The one exception is the secret `tpm seal` takes, which is never logged.
-  - MIND Core's `link` will pass it to the shell's `run` (`idl/shell.wit`) with `dev` in `link.conf`, once `init` gives it a client of the shell. Until then it answers UNSUPPORTED.
+  - MIND Core's `link` passes it to the shell's `run` (`idl/shell.wit`) through the client of the shell `init` grants it (800-KRN-0148), and answers DENIED without one.
 - **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` asks the loader, which ends only the programs it started for `link` (800-KRN-0138).
 
 ### Input (channel 4)
@@ -270,8 +269,8 @@ The slave starts a program from its directory for the master, keeps its output a
 
   So a key over the link is the event QEMU's `sendkey` of that key gives. The decoder keeps the US layout and never switches it: the machine's own layout is its keyboard driver's.
 - **What the slave does.** It posts each word as its keyboard driver does. MIND Core's `link`:
-  - posts them through `SYSCALL_INPUT_EVENT`, with `dev` in `link.conf` and the input capability `init` gives it (asked of the kernel track for 800-LNK-0032). It logs `[LINK] INPUT: <n> EVENTS FROM THE MASTER`;
-  - refuses DENIED without `dev`, or without the capability, posting none, and logs the refusal.
+  - posts them through `SYSCALL_INPUT_EVENT`, with the input capability `init` gives it (800-KRN-0191). It logs `[LINK] INPUT: <n> EVENTS FROM THE MASTER`;
+  - refuses DENIED without the capability, posting none, and logs the refusal.
 - **A payload** that is empty, longer than 64 words, or not whole words is BAD_REQUEST. At a smaller payload agreed in the hello, a frame holds fewer words.
 - **`mindlink serve`** refuses INPUT with UNSUPPORTED: it posts no input on its machine.
 
@@ -294,8 +293,8 @@ The slave starts a program from its directory for the master, keeps its output a
 The protocol makes no claims beyond these:
 - **No security:** no authentication and no encryption. It is for a cable between the maintainer's machines.
   - A slave serves files only in its own directory: no name leaves it.
-  - On MIND Core, the link service decides what a master may do (800-LNK-0003). `vfs_server` keeps its files inside `data/link/` whatever it checks.
-  - Starting programs is a power the slave's owner gives: `run` in `link.conf`, or `--run` for `mindlink serve`. Whoever holds the cable then runs programs as that end allows: on MIND Core with an application's grants, under `mindlink serve` as the user who serves.
+  - On MIND Core, what a master may do is what `init` grants the link service (800-LNK-0003, 801-LNK-0044): the cable is physical access to the machine, and no word in `link.conf` narrows it ([mindlink, "What the cable may do on MIND Core"](mindlink.md#what-the-cable-may-do-on-mind-core)). `vfs_server` keeps its files inside `data/link/` whatever it checks.
+  - Whoever holds the cable runs programs as that end allows: on MIND Core with an application's grants and those `init` gave `link` to lend; under `mindlink serve` only with `--run`, as the user who serves.
 - **An address is no identity:** any machine on the pair may answer for any address, and hears every frame on it. The address only keeps honest slaves from talking over each other.
 - **No integrity against an attacker:** the CRC and SHA-256 catch noise on the line, not an end that lies.
 - **No guarantees from tests:** the host tests exercise a simulated line that loses, damages, repeats and echoes bytes. They are evidence for that line, not for a real one. A real line's evidence is recorded in the task that tests it.
