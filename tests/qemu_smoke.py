@@ -12260,16 +12260,19 @@ def wifi_join_check(vm):
     # Planned over the radio's own channels, not the 11 US left it: RU, as UZ, sends on all 13 (550-NET-0059).
     require(ru, "[WLAN] COUNTRY RU (CHOSEN BY THE USER, KEPT BY KEYSTORE): 13 CHANNELS TO SEND ON, 0 TO LISTEN ON; THE RADIO APPLIED ITS LIMITS")
     require(vm.command("dmesg -s wlansim", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
+    # MIND-TEST, joined by a client and not remembered, is held (801-NET-0084): the station joins it again by itself
+    # under RU, then a client's join under RU.
     after = ru.partition("[WLAN] COUNTRY RU (CHOSEN BY THE USER")[2]
-    if "[WLAN] Off" not in after:  # the station's state is logged after the country's line
-        after += wlan_until("[WLAN] Off", 30)
+    if "[WLAN] AUTO-JOIN MIND-TEST: JOINED" not in after:
+        after += wlan_until("[WLAN] AUTO-JOIN MIND-TEST: JOINED", 90)
+    assert "[WLAN] AUTO-JOIN MIND-TEST: THE NETWORK A CLIENT JOINED THIS BOOT, NOT REMEMBERED (TRY" in after, after[-2000:]
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # The world domain over the radio's 13: 11 to send on, 12 and 13 to listen on (550-NET-0059).
     channels = run("wifi channels 00", 30, "[WIFI] 13 CHANNELS UNDER 00 (the world domain)")
     assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and re.search(r"CHANNEL +13 2\.4 GHZ LISTEN", channels), channels[-1500:]
     print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
           "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
-          "while joined left the access point, and the station joined again under RU. After the restart the radio named its own "
+          "while joined left the access point, and the station joined again under RU by itself, the network held since the client's join (801-NET-0084). After the restart the radio named its own "
           "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)", flush=True)
     # 550-NET-0061: a radio that restarted (init starts wlansim again, as it starts rtw89_wifi again after its data mode
     # failed) has no channel set and no country, and sends nothing. Once the network is lost the station notices within
