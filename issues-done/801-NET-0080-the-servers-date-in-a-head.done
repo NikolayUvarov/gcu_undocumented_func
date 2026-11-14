@@ -1,6 +1,6 @@
-# 801-NET-0080 — The server's `Date` in an HTTP head, for a client that judges by the server's time
+# 801-NET-0080 — The server's `Date` in an HTTP head, for a client that judges by the server's time — done
 
-**Type:** network (`libmind` `http` and `parse`, `parse.wit` 5.0) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-7.5, MC-11.11, MC-12.4
+**Type:** network (`libmind` `http` and `parse`, `parse.wit` 5.0) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-7.5, MC-11.11, MC-12.4
 
 ## Problem
 
@@ -19,6 +19,12 @@
 - **The host test** `heads_say_the_servers_date`: the three forms are read to the same second, and invalid dates are none.
 - **The groups that use the parser** (both arches' network, TLS and Effector groups) pass on the maintainer's machines, then in a gate.
 
+## Resolution
+
+`mind::http::Head.date` holds a valid `Date` (any of the three HTTP-date forms) as Unix seconds, an invalid one none; `parse.wit` 5.0's `http-response` carries `has-date` and `date`, and 4.x's record is gone (dcfdedf24b). The agent's offset from it is EFF's (801-EFF-0027).
+
+Evidence: host test `heads_say_the_servers_date`; "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector" on x32, and round 135's gate (main 01c3b5aa32), green.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) (`Retry-After` and the other fields for API clients).
+[801](../issues/801-the-bench-stays-manageable.md), [000-NET-0047](000-NET-0047-http-for-api-clients.done) (`Retry-After` and the other fields for API clients).
