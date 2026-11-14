@@ -12325,7 +12325,8 @@ def wifi_join_check(vm):
     # keystore does not keep is joined again by itself after the radio restarts, with the PMK wlan held since that join;
     # keystore is not asked for its keys.
     run("wifi leave", 30, "[WIFI] LEFT")
-    scanned()
+    vm.send("wifi\n")  # as scanned() does: that name holds a scan's text by now
+    vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
     vm.send_bytes(b"f")
     vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
     quit_wifi()
