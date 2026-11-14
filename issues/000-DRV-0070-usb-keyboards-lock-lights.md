@@ -56,6 +56,13 @@ From the maintainer's Ryzen PC, 2026-11-13.
   - Caps Lock and Num Lock light on 17EF:60A1;
   - a keyboard plugged in after Caps Lock was turned on lights it at once.
 
+## Progress (2026-11-14): on the MacBook Pro, the maintainer
+
+- **Release:** 202611140614 (local tree 8f15853e = `main` 20fba2c5 with this issue's three files and 550-DRV-0069), slot B, over the link. The same build of `usb_hid` ran there first by `replace` (SHA-256 567247c7…).
+- **The log:** `05AC:0263 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)` and the same for `05AC:820A`, at set-up.
+- **The maintainer:** Caps Lock lights its key's light, and the letters turn to capitals; pressed again, both go off. A long press acts as a short one (the held key toggles once).
+- **Left:** the Ryzen's run as the criteria name it (17EF:60A1, and a keyboard plugged in after Caps Lock). The release with this change also runs on the Ryzen (202611132118) since 2026-11-13; no keyboard was plugged in there for the check yet.
+
 ## Related
 
 [213](213-amd-ryzen-pc.md) (the Ryzen), [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md) (its other USB keyboard), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (`usb_hid`).
