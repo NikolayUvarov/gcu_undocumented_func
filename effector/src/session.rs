@@ -265,6 +265,10 @@ impl Session {
 
     pub fn registered(&self) -> bool { self.registered }
 
+    /// Whether the answer saved under `id` was sent before for good: its first ACK was taken or refused, so a repeat is
+    /// a redelivery of a command already answered (750-EFF-0033).
+    pub fn answered(&self, id: Id) -> bool { self.records.iter().flatten().any(|s| s.record.id == id && s.done) }
+
     /// The command whose answer waits for the server, the oldest first: the agent's one slot is occupied meanwhile.
     pub fn waiting(&self) -> Option<Id> {
         let pending = self.pending.and_then(|p| self.records[p.slot]).map(|s| (s.sequence, s.record.id));

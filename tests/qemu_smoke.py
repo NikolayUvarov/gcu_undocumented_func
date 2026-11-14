@@ -13511,6 +13511,29 @@ def effector_suite(args, disk):
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
         print("PASS: restarted by svc, the agent reads its journal back (16 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
+        # 750-EFF-0033 (the Effector project's 81-01): redelivered commands answered before. The last measured result is
+        # kept and sent again the same, which the server takes; an older one's is not kept, so it is answered completed
+        # again, saying so, and the server keeps its first result. No action runs again.
+        reported = re.findall(r"EFFECTOR: ACK (\S+) completed WITH ITS RESULT ACCEPTED", session())
+        assert reported and reported[-1] == term_id and any(r != term_id for r in reported), reported
+        older = next(r for r in reported if r != term_id)
+        first = server.operation(older)
+        def times(line, count, timeout=60):
+            deadline = time.monotonic() + timeout
+            while (seen := session().count(line)) < count and time.monotonic() < deadline:
+                time.sleep(1)
+            assert seen >= count, (line, seen, session()[-2000:])
+        server.redeliver(term_id)
+        times(f"EFFECTOR: REPEATED {term_id}: THE SAVED ANSWER AGAIN", 1)
+        times(f"EFFECTOR: ACK {term_id} completed WITH ITS RESULT ACCEPTED", 2)
+        server.redeliver(older)
+        times(f"EFFECTOR: REPEATED {older}: THE SAVED ANSWER AGAIN", 1)
+        times(f"EFFECTOR: ACK {older} completed AGAIN, ITS RESULT NOT KEPT: ", 1)
+        assert server.operation(older) == first, (server.operation(older), first)
+        assert session().count(f"EFFECTOR: COMPLETED {term_id}") <= 1 and session().count(f"EFFECTOR: COMPLETED {older}") <= 1, session()[-3000:]
+        print(f"PASS: redelivered after their ACKs: the last measured command ({term_id}) answered with its kept result again, "
+              f"taken; an older one ({older}) answered completed again, its result not kept, the server's first result "
+              "unchanged; neither run again", flush=True)
         # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
         # starts it again with new clients, and it is back once the server is; it is never quarantined.
         starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")

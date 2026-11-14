@@ -451,14 +451,17 @@ impl Agent {
         session::outcome(status, ok)
     }
 
+    // `answered`: the command was answered before for good, and this is a redelivery of it (750-EFF-0033).
     #[inline(never)]
-    fn ack(&mut self, ack: &session::Ack) -> Outcome {
+    fn ack(&mut self, ack: &session::Ack, answered: bool) -> Outcome {
         if ack.record.result == session::Final::Reported {
             if let Some(outcome) = self.ack_result(ack) { return outcome; }
+            if answered { return self.ack_again(ack, "RESULT", "its result"); }
             mind::println!("EFFECTOR: THE RESULT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
         }
         if let session::Final::Captured(kind) = ack.record.result {
             if let Some(outcome) = self.ack_artifact(ack, kind) { return outcome; }
+            if answered { return self.ack_again(ack, "ARTIFACT", "its artifact"); }
             mind::println!("EFFECTOR: THE ARTIFACT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
         }
         let mut buf = [0u8; 1024];
@@ -507,6 +510,23 @@ impl Agent {
         Some(session::outcome(status, ok))
     }
 
+    /// A redelivered command answered before whose result or artifact is no longer kept: completed, as it was, saying its
+    /// first answer carried it. The action is not run again; the server keeps its first result (750-EFF-0033).
+    #[inline(never)]
+    fn ack_again(&mut self, ack: &session::Ack, what: &str, said: &str) -> Outcome {
+        let line = alloc::format!("answered before: {} went with its first answer and is not kept for a repeat", said);
+        let mut buf = [0u8; 1024];
+        let Ok(result) = wire::exec_result(&mut buf, 0, &line, "") else { return Outcome::Permanent };
+        let Ok(result) = core::str::from_utf8(result) else { return Outcome::Permanent };
+        let mut body = [0u8; 1536];
+        let Ok(body) = wire::ack(&mut body, ack.record.id.as_str(), result) else { return Outcome::Permanent };
+        let body: Vec<u8> = body.to_vec();
+        let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Outcome::Retry };
+        let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
+        mind::println!("EFFECTOR: ACK {} completed AGAIN, ITS {} NOT KEPT: {}", ack.record.id.as_str(), what, if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+        session::outcome(status, ok)
+    }
+
     /// The ACK of a measured result, from the private file it was kept in; `None` if that file does not hold it.
     #[inline(never)]
     fn ack_result(&mut self, ack: &session::Ack) -> Option<Outcome> {
@@ -522,7 +542,8 @@ impl Agent {
         Some(session::outcome(status, ok))
     }
 
-    /// An answer that needs no more ACK: its `done` line, and its artifact removed.
+    /// An answer that needs no more ACK: its `done` line, and its artifact removed. A measured result stays until the next
+    /// one replaces it, so a redelivery of the last gets the same answer again (750-EFF-0033).
     #[inline(never)]
     fn finished(&self, record: &session::Record) {
         let mut line = [0u8; journal::LINE_MAX];
@@ -531,7 +552,6 @@ impl Agent {
         let written = File::open_mode(&path, MODE_WRITE).and_then(|mut f| { let at = f.size(); f.write_at(at, &line[..n])?; f.flush() });
         if written.is_err() { mind::println!("EFFECTOR: JOURNAL: THE DONE LINE OF {} WAS NOT WRITTEN", record.id.as_str()); }
         if matches!(record.result, session::Final::Captured(_)) { let _ = fs::remove(&self.path("artifact")); }
-        if record.result == session::Final::Reported { let _ = fs::remove(&self.path("result")); }
     }
 
     /// The journal written again whole (a record was dropped to make room): to `journal.new`, then put in its place.
@@ -1386,7 +1406,7 @@ fn main(_info: &'static BootInfo) {
         }
         match session.next_ack(time()) {
             Ok(Some(ack)) => {
-                let outcome = agent.ack(&ack);
+                let outcome = agent.ack(&ack, session.answered(ack.record.id));
                 let _ = session.ack_done(ack, outcome, now() as u64, jitter());
                 if outcome != Outcome::Retry { agent.finished(&ack.record); }
                 // The agent is free again: ask for the next command at once.

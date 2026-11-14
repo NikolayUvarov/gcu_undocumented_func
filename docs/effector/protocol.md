@@ -292,6 +292,22 @@ Conflicting reuse of an ID is an error. A permanent ACK rejection retains the
 journal entry for diagnosis/reconciliation instead of making it executable
 again. Command expiry must not erase evidence of a possibly completed action.
 
+**A redelivery of a command answered before** (750-EFF-0033, the Effector
+project's 81-01). The journal keeps every answer, but the files behind two of
+them are not kept for ever:
+- **A measured result** (`health`, `performance_measure`) stays until the next
+  one replaces it. A redelivery of the last is answered with the same result,
+  byte for byte, so a server that keeps its first result takes it as a repeat.
+- **A collected artifact** (`collect_logs`, `screenshot`) goes once its first
+  ACK has ended, since it may be megabytes.
+- **An older measured result, or any artifact,** is answered `completed`,
+  `exit_code` 0, with `stdout` `answered before: its result went with its
+  first answer and is not kept for a repeat` (or `its artifact`). The agent logs
+  `EFFECTOR: ACK <id> completed AGAIN, ITS RESULT NOT KEPT: …`. The server keeps
+  its first result; the reviewed fixture refuses the different repeat with 409.
+- **The action never runs again.** A result lost before its first ACK ended is
+  still answered `failed` with `io`, as the loss it is.
+
 ## Bounds and errors
 
 | Item | Contract 1.0 client limit or requirement |
