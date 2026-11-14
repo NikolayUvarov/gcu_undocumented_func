@@ -1,10 +1,10 @@
-# 801-UPD-0039 — The updater always reads the cable's directory, `data/link/rel/`, whatever `update.txt` says
+# 801-UPD-0039 — The updater always reads the cable's directory, `data/link/rel/`, whatever `update.txt` says — done
 
-**Type:** update (`updater`) · **Owner:** `UPD` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S6) · **Roadmap:** stage V · **Constitution:** MC-9.2, MC-9.3, MC-9.4, MC-12.3
+**Type:** update (`updater`) · **Owner:** `UPD` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S6) · **Roadmap:** stage V · **Constitution:** MC-9.2, MC-9.3, MC-9.4, MC-12.3
 
 ## Problem
 
-LNK's request (`UPD/2026-11-14T0944Z-LNK-801-the-updater-always-reads-data-link-rel.md`), for [801-LNK-0044](801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), under the maintainer's decision of 2026-11-14: the cable updates all code with no permissions, and releases stay signed.
+LNK's request (`UPD/2026-11-14T0944Z-LNK-801-the-updater-always-reads-data-link-rel.md`), for [801-LNK-0044](../issues/801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), under the maintainer's decision of 2026-11-14: the cable updates all code with no permissions, and releases stay signed.
 
 The updater's only source was the one `update.txt` names. A release put into `data/link/rel/` through the cable was taken only where `update.txt` said `source data/link/rel` with `automatic apply`. It was ignored:
 - with no `update.txt`, where the updater logged `NO update.txt: IT ACTS ONLY WHEN ASKED, AND HAS NO SOURCE`;
@@ -41,6 +41,16 @@ The updater's only source was the one `update.txt` names. A release put into `da
 2. **The `updater` suite** still passes.
 3. **The documents:** `docs/update/updater.md` (EN and RU) and the threat model's cable entry say what the updater does.
 
+## Resolution
+
+Landed in round 136 (`main` bdde60e961), from `claude/801-KRN-0247-the-cable-with-no-words` ec0264e037, with 801-KRN-0247 and LNK's 801-LNK-0044 commit.
+
+- **The updater** reads the cable's directory `data/link/rel/` on its own timer, whatever `mode.conf` says; the automatic source skips that directory.
+- **Criteria**, on `ec0264e037` through Effector, and again in round 136's gate:
+  1. `linkupdate` on x86 (x32, 2030 s) and aarch64 (acc-1, 3095 s): `cable_without_words_check` printed its PASS line, and `linkupdate_suite` passed with its refusals. In round 136's gate the aarch64 group passed on its second run, on x32 (3054 s), after reaching the gate's limit on pcu (000-KRN-0249);
+  2. the `updater` suite, in the same x86 group;
+  3. `docs/update/updater.md` (EN and RU) and the threat model's cable entry say what the updater does.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-LNK-0044](801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), [801-KRN-0247](801-KRN-0247-init-starts-the-cable-with-no-word-on-the-disk.md) (`init`'s half), 351-KRN-0141.
+[801](../issues/801-the-bench-stays-manageable.md), [801-LNK-0044](../issues/801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), [801-KRN-0247](801-KRN-0247-init-starts-the-cable-with-no-word-on-the-disk.done) (`init`'s half), 351-KRN-0141.

@@ -1,10 +1,10 @@
-# 801-KRN-0246 — The shell's owner client of the Effector gateway (`SLOT_EFFECTOR`, ABI 33)
+# 801-KRN-0246 — The shell's owner client of the Effector gateway (`SLOT_EFFECTOR`, ABI 33) — done
 
-**Type:** kernel (`common/abi.rs`, `init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7) · **Roadmap:** stage V · **Constitution:** MC-3.8, MC-3.11, MC-12.4
+**Type:** kernel (`common/abi.rs`, `init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S7) · **Roadmap:** stage V · **Constitution:** MC-3.8, MC-3.11, MC-12.4
 
 ## Problem
 
-APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.md) and 750-APP-0093:
+APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](../issues/801-APP-0140-effector-policy-in-the-shell.md) and 750-APP-0093:
 - **No task holds the owner's badge.** `effector_gw` reads the owner's policy only when it starts, and on the owner's `reload-policy` (`idl/effector.wit`). Only a client badged `mind::effector::BADGE_OWNER` (2) may call that, and no task holds one.
 - **So a policy change waits for the gateway's next start.** `effector policy allow update apply` (801-APP-0140) takes effect only then.
 - **The shell's `effector status` and `audit` have nothing to ask.**
@@ -36,9 +36,20 @@ APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](801-APP-0140
    - `docs/api` names the slot and ABI 33;
    - the profile names it with the shell's clients, and gives the fixed slots 1–45.
 
+## Resolution
+
+Landed in round 136 (`main` bdde60e961), from `claude/801-KRN-0246-the-shells-owner-client-of-the-gateway` c9ae15159b.
+
+- **`common/abi.rs`:** `SLOT_EFFECTOR` 45, the shell's alone; `SLOT_DYNAMIC` 46, `CAP_SLOTS` 110, ABI 33. The handoff stays 35.
+- **`init`:** the shell gets `effector_gw`'s client badged `BADGE_OWNER` in slot 45. The endpoint is kept across the gateway's starts, so the client answers `ERR_PEER` while no mode runs the gateway.
+- **Criteria:**
+  1. the host tests (`tests/runtime.rs`, `tests/boot_abi_host.rs`) passed on x32;
+  2. the `modes` suite passed on x86 (x32, in `x86: services, storage, audio`) and aarch64 (acc-1, in `aarch64: the updater and the modes`), on `53ca073e24`, which `c9ae15159b` follows with text only; and again in round 136's gate;
+  3. `docs/api`, the README, `bootstrap.md` and `kernel-objects.md` name the slot and ABI 33.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.md), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`SLOT_MODE`), [308-KRN-0205](../issues-done/308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) (`SLOT_PASSPHRASE`, ABI 31).
+[801](../issues/801-the-bench-stays-manageable.md), [801-APP-0140](../issues/801-APP-0140-effector-policy-in-the-shell.md), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`SLOT_MODE`), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) (`SLOT_PASSPHRASE`, ABI 31).
 
 ## Progress (2026-11-14)
 
