@@ -1,6 +1,6 @@
 # 111-NET-0078 — The sleep across the step, counted by the host, against the guest's clock
 
-**Type:** network (a test of the gate, `tests/qemu_smoke.py`, `timed_check`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [111](111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
+**Type:** network (a test of the gate, `tests/qemu_smoke.py`, `timed_check`) · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress (made and run on i9 and acc-1; the gate left) · **Blocked by:** — · **Main task:** [111](111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -18,6 +18,20 @@ The host's count is held to the guest's own: at least 96 % of the guest's millis
 
 - The check takes round 133's pair (25002 ms, 24.94 s) and refuses a sleep the step ended (25002 ms, 2 s).
 - "x86: network, TLS and Effector" and "x86: RAM above 4 GiB", which run the `net` suite, pass on the maintainer's machines, then in a gate.
+
+## Progress
+
+**Made (2026-11-14)** on `claude/111-NET-0078-the-sleep-counted-against-the-guests-clock`: `timed_check` holds the host's count to `guest * 0.96 / 1000` seconds and below 33 s; the guest's bound is unchanged.
+- **The bound:** it took round 133's pair (25002 ms, 24.94 s) and refused a sleep the step ended (25002 ms, 2 s), worked out in this container.
+- **Run** at 76a32a22 (`main` 4153c5c2 merged in) on the maintainer's machines (QEMU under TCG); both passed:
+
+  | Machine | Group | Time | The guest's count | The host's |
+  |---|---|---|---|---|
+  | i9 | "x86: RAM above 4 GiB" | 1731 s | 25002 ms | 24.7 s |
+  | acc-1 | "x86: network, TLS and Effector" | 1465 s | 25004 ms | 25.2 s |
+
+  On i9 the old bound of 25 s would have failed again: there the guest's clock ran about 1.2 % ahead of the host's, more than in round 133.
+- **Left:** the gate.
 
 ## Related
 
