@@ -1,11 +1,11 @@
-# 000-KRN-0234 — A program's start waited past 8 s, the chain ending at `ata` (round 121, x32)
+# 000-KRN-0234 — A program's start waited past 8 s, the chain ending at `ata` (round 121, x32) — done
 
-**Type:** tests (the stuck record) and the boot disk's path · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (step 1 in `main` since round 122, 33c38b60; step 2, ten runs on x32 beside a busy lane, started) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
+**Type:** tests (the stuck record) and the boot disk's path · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track A · **Constitution:** MC-12.2
 
 ## Problem
 
 **Round 121's gate,** candidate 1a18628c (`main` f8a5220a with 110-NET-0068), "x86: RAM above 4 GiB" on x32 (x32-128). In the `net` suite's `browse_check`, `run netcheck ask:11.0.2.80:81:30 &` got no prompt in 8 s.
-- **The third such start in that group on x32,** after rounds 114 and 116 ([000-KRN-0232](../issues-done/000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.done), closed: the next one opens a new issue).
+- **The third such start in that group on x32,** after rounds 114 and 116 ([000-KRN-0232](000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.done), closed: the next one opens a new issue).
 - **The record** (000-KRN-0214 with 000-KRN-0232's task states), at 20 000 ms, is kept on x32-128 in `mind-core/KRN/logs/land-r121/x32-03/`:
   - all four CPUs halted;
   - the shell waits for a reply from the loader (PID 10), the loader from `vfs_server` (PID 9), and `vfs_server` from `ata` (PID 6);
@@ -43,6 +43,12 @@ The slowest single start under load was 1.3 to 1.4 s with either. What a loaded 
 
 **Step 1 landed** in round 122 (`main` 33c38b60, 2026-11-11); the gate passed every group on its first run. Round 121's group passed when the gate ran it again alone (1254 s). **Left:** step 2, ten runs of "x86: RAM above 4 GiB" on x32 beside x32-2's runs, with the record.
 
+## Resolution
+
+The cause of round 121's wait was not found; the criterion's other branch is met, and the record stays.
+- **Step 1, the record** (`tests/qemu_smoke.py`, landed in round 122, `main` 33c38b60): when a wait runs out, the stuck record holds the tasks' states and QEMU's `info blockstats` twice, a second apart, so the next such wait shows whether the drive's reads advanced and whether `ata` went on waking.
+- **Step 2, ten runs beside a busy lane** (2026-11-14, `main` 35344467, operations `KRN-k234-ten-x32-01` to `-10`): "x86: RAM above 4 GiB" ten times in turn in lane KRN on x32-128, each one in a single operation that ran "x86: services, storage, audio" over and over in lane KRN-2 beside it until it ended (two load runs beside each). **Ten of ten passed,** in 1219 s to 1224 s. No wait ran out, so the record was not needed. This is evidence for that machine, that load and those runs, not a proof (MC-12.1, MC-12.2).
+
 ## Related
 
-[000-KRN-0232](../issues-done/000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.done), [000-KRN-0214](../issues-done/000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md) (`ata`'s waits).
+[000-KRN-0232](000-KRN-0232-a-program-start-sent-nothing-in-8-s-in-the-wifi-check.done), [000-KRN-0214](000-KRN-0214-the-shell-stopped-answering-during-the-effector-screenshot.done) (the record), [000-DRV-0064](../issues/000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md) (`ata`'s waits).
