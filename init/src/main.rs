@@ -74,6 +74,7 @@ const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's in
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
+const SLOT_STORE_RTC: usize = 5; // blockstore: an rtc client that reads the calendar time and sets nothing (312-KRN-0239)
 const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
 const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
@@ -165,7 +166,7 @@ struct StorePart { driver: &'static str, number: u8, id: partition::Id, first: u
 #[derive(Clone, Copy)]
 struct VfsPart { driver: &'static str, window: u8, number: u8, id: partition::Id, first: u64, count: u32 }
 
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>, store_part: Option<Option<StorePart>>,
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], cool: [(usize, usize); UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<(Option<&'static str>, Option<&'static str>)>, store_part: Option<Option<StorePart>>,
               // vfs_server's windows of partitioned disks (307-KRN-0229), and the volume the firmware booted from.
               // vfs_whole: the drivers whose whole disk vfs_server holds, where the store takes no partition.
               vfs_parts: [Option<VfsPart>; VFS_PARTS], vfs_whole: [bool; UNITS], boot_volume: BootVolume,
@@ -200,6 +201,10 @@ fn unit_image(unit: usize) -> (usize, usize) {
 // Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
 const RESTART_BUDGET: usize = 3;
 const RESTART_WINDOW_MS: u64 = 60_000;
+// A service its restart budget quarantined is started again after a cool-down, 1 min doubling to 30 min, so that none on
+// the path to the Effector server stays down for good (801-KRN-0245); one start a cool-down keeps MC-6.5's bound.
+const COOL_FIRST_MS: usize = 60_000;
+const COOL_MAX_MS: usize = 1_800_000;
 
 impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
@@ -951,6 +956,9 @@ impl Init {
                 if disk.is_some() {
                     if let Some(copy) = self.store_copy() { grants.add(SLOT_STORE_COPY, self.badged(&mut minted, copy, mind::block::BADGE_WRITE)?, CLIENT); }
                 }
+                // The calendar time for a memory domain's term (312-STO-0050): rtc's client without the setting badge;
+                // without rtc the store starts with slot 5 empty and acts on no term.
+                if self.present("rtc") { self.lend(&mut grants, SLOT_STORE_RTC, "rtc")?; }
             }
             // The store's file face (311-STO-0032): `vfs.wit` over the store's trees, with the block store's client that
             // may get, put and publish where `tally` and `blocks` find theirs. It badges its own clients, as the store
@@ -1098,7 +1106,12 @@ impl Init {
             "clipboard" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "clipboard")?, ALL | CAP_BADGE); }
             // The TPM service alone holds the TPM's registers (351-KRN-0043); without a TPM it runs and says so.
             "tpm" => {
-                if let Some(slot) = self.nodes.tpm.and_then(|node| minted.mint(PLATFORM_MMIO, node, 0).ok()) { grants.add(SLOT_DEV0, slot, 0); }
+                // A node the kernel does not lend is said: tpm then reports no TPM, and keystore keeps its sealed key (801-KRN-0244).
+                match self.nodes.tpm.map(|node| (node, minted.mint(PLATFORM_MMIO, node, 0))) {
+                    Some((_, Ok(slot))) => grants.add(SLOT_DEV0, slot, 0),
+                    Some((node, Err(error))) => mind::println!("[INIT] tpm: PLATFORM NODE {} NOT LENT: {:?}", node, error),
+                    None => {}
+                }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
             // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports; the
@@ -1478,7 +1491,9 @@ impl Init {
         let recent = &mut self.restarts[index];
         if recent.iter().filter(|&&at| at != 0 && now - at < RESTART_WINDOW_MS).count() >= RESTART_BUDGET {
             self.quarantined[index] = true;
-            mind::println!("[INIT] {} QUARANTINED: {} RESTARTS IN {} S", name, RESTART_BUDGET, RESTART_WINDOW_MS / 1000);
+            let cool = if self.cool[index].1 == 0 { COOL_FIRST_MS } else { (self.cool[index].1 * 2).min(COOL_MAX_MS) };
+            self.cool[index] = (mind::time::uptime_ms() + cool, cool);
+            mind::println!("[INIT] {} QUARANTINED: {} RESTARTS IN {} S; STARTED AGAIN IN {} S", name, RESTART_BUDGET, RESTART_WINDOW_MS / 1000, cool / 1000);
             return;
         }
         let oldest = (0..RESTART_BUDGET).min_by_key(|&i| recent[i]).unwrap(); recent[oldest] = now.max(1);
@@ -1503,8 +1518,30 @@ impl Init {
             mind::println!("[INIT] {} NOT STARTED: NO MODE IS ON", unit_name(index));
             return Err(Error::Rights);
         }
-        if !self.running(index) { self.quarantined[index] = false; self.restarts[index] = [0; RESTART_BUDGET]; if self.pids[index] != 0 { self.quiesce(index)?; } }
+        if !self.running(index) { self.quarantined[index] = false; self.restarts[index] = [0; RESTART_BUDGET]; self.cool[index] = (0, 0); if self.pids[index] != 0 { self.quiesce(index)?; } }
         self.start(index)
+    }
+
+    // The services whose cool-down after a quarantine by the restart budget has passed, started again (801-KRN-0245); a
+    // start that fails waits the next, longer cool-down. A service stopped on request, or quarantined for its DMA, is not.
+    fn cooled(&mut self) {
+        let now = mind::time::uptime_ms();
+        for index in 1..UNITS {
+            let (at, cool) = self.cool[index];
+            if at == 0 || now < at { continue; }
+            self.cool[index].0 = 0;
+            if !self.quarantined[index] || self.running(index) || self.stopped[index] { continue; }
+            (self.quarantined[index], self.restarts[index]) = (false, [0; RESTART_BUDGET]);
+            match self.start(index) {
+                Ok(pid) => mind::println!("[INIT] {} STARTED AGAIN PID={} AFTER {} S IN QUARANTINE", unit_name(index), pid, cool / 1000),
+                Err(error) => {
+                    self.quarantined[index] = true;
+                    let next = (cool * 2).min(COOL_MAX_MS);
+                    self.cool[index] = (now + next, next);
+                    mind::println!("[INIT] {} NOT STARTED AGAIN AFTER ITS QUARANTINE: {:?}; TRIED AGAIN IN {} S", unit_name(index), error, next / 1000);
+                }
+            }
+        }
     }
 
     fn start_service(&mut self, index: usize) -> core::result::Result<u64, idl_init::Error> {
@@ -2297,7 +2334,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], cool: [(0, 0); UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
                          vfs_parts: [None; VFS_PARTS], vfs_whole: [false; UNITS], boot_volume: info.boot_volume,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
@@ -2306,10 +2343,11 @@ fn boot(info: &'static BootInfo) {
                          power: hardware::power_policy(), nodes: hardware::Nodes::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
-    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122).
+    // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
+    // back and not enforced (801-KRN-0243, 801 S5): it silences no radio; only rtw89_wifi is given the word.
     match init.power {
         mind::platform_power::Policy::Absent { tables } => mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT ({} AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)", tables),
-        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): A RADIO SENDS NOTHING", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
+        policy => { let mut word = [0u8; 48]; let n = policy.word(&mut word); mind::println!("[INIT] PLATFORM POWER POLICY FOR WLAN: UNKNOWN ({}): HELD BACK, NOT ENFORCED; ONLY rtw89_wifi IS GIVEN THE WORD", core::str::from_utf8(&word[17.min(n)..n]).unwrap_or("?")); }
     }
     // The devices outside PCI init may lend, by their compatible strings (100000-KRN-0171).
     init.nodes = hardware::platform_nodes();
@@ -2372,8 +2410,11 @@ fn boot(info: &'static BootInfo) {
     // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
         // A look every second too while keyed services wait for the passphrase (308-KRN-0205).
-        let received = if mark.is_some() || init.passphrase_waits() { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        // And while a quarantined service waits for its cool-down (801-KRN-0245).
+        let ticks = mark.is_some() || init.passphrase_waits() || init.cool.iter().any(|&(at, _)| at != 0);
+        let received = if ticks { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
         init.key_opened();
+        init.cooled();
         if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
             let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
             let _ = ipc::drop_cap(f);

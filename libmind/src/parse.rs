@@ -12,7 +12,7 @@ use crate::ipc::{Endpoint, Message};
 use crate::release;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// A head as parse.wit 2.0's `http-response` carries it (750-NET-0019, 000-NET-0047).
+/// A head as parse.wit 5.0's `http-response` carries it (750-NET-0019, 000-NET-0047, 801-NET-0080).
 pub fn to_response(head: &Head) -> HttpResponse {
     let (has_range, range_unsatisfied, range_start, range_end, range_total) = match head.range {
         None => (false, false, 0, 0, 0),
@@ -23,7 +23,7 @@ pub fn to_response(head: &Head) -> HttpResponse {
     let (retry, retry_after) = match head.retry_after { None => (RetryKind::None, 0), Some(RetryAfter::Seconds(s)) => (RetryKind::Seconds, s), Some(RetryAfter::Date(d)) => (RetryKind::Date, d) };
     HttpResponse { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total,
                    chunked: head.chunked, close: head.close, encoding, media: Text::new(head.media.as_str()).unwrap_or_default(),
-                   location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after }
+                   location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after, has_date: head.date.is_some(), date: head.date.unwrap_or(0) }
 }
 
 /// A request head as parse.wit 2.1's `http-request` carries it, or its refusal (110-NET-0070).
@@ -70,7 +70,7 @@ pub fn from_response(r: &HttpResponse) -> Option<Head> {
     let encoding = match r.encoding { ContentCoding::Identity => Encoding::Identity, ContentCoding::Gzip => Encoding::Gzip, ContentCoding::Deflate => Encoding::Deflate, ContentCoding::Other => Encoding::Other };
     let retry_after = match r.retry { RetryKind::None => None, RetryKind::Seconds => Some(RetryAfter::Seconds(r.retry_after)), RetryKind::Date => Some(RetryAfter::Date(r.retry_after)) };
     Some(Head { status: r.status, length: r.has_length.then_some(r.length), range, chunked: r.chunked, close: r.close, encoding,
-                media: Field::new(r.media.as_str())?, location: Field::new(r.location.as_str())?, retry_after })
+                media: Field::new(r.media.as_str())?, location: Field::new(r.location.as_str())?, retry_after, date: r.has_date.then_some(r.date) })
 }
 
 /// A `mind::http::Parser` that asks the parser service at the endpoint (`SLOT_PARSE` in a program that asked for it).
@@ -327,6 +327,28 @@ pub fn read_timestamp(endpoint: Endpoint, file: &[u8]) -> Result<(release::Times
     let record = match parse::timestamp(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
     let (stamp, signed) = timestamp_from(&record).ok_or(Refused::Lied)?;
     if release::timestamp_is(file, &stamp, &signed) { Ok((stamp, signed)) } else { Err(Refused::Lied) }
+}
+
+/// The record of a recovery order `mind::release` read (parse.wit 4.2, 351-UPD-0030).
+pub fn order_record(order: &release::Order, signed: &release::Signed) -> parse::RecoveryOrder {
+    parse::RecoveryOrder {
+        channel: Text::new(order.channel.as_str()).unwrap_or_default(),
+        expires: Text::new(core::str::from_utf8(&order.expires).unwrap_or("")).unwrap_or_default(),
+        floor: order.floor, sequence: order.sequence, version: order.version, signed: signed.body as u32, signatures: signature_records(signed),
+    }
+}
+
+/// A recovery order read by the service at `endpoint`, taken only if its fields and signatures encode again to exactly
+/// `file` (351-UPD-0030). Which signatures count is the caller's.
+pub fn read_order(endpoint: Endpoint, file: &[u8]) -> Result<(release::Order, release::Signed), Refused> {
+    let record = match parse::order(endpoint, file) { Ok(Ok(record)) => record, Ok(Err(_)) => return Err(Refused::Malformed), Err(_) => return Err(Refused::Service) };
+    let order = release::Order {
+        channel: release::Text::new(record.channel.as_str().as_bytes()).ok_or(Refused::Lied)?,
+        expires: record.expires.as_str().as_bytes().try_into().map_err(|_| Refused::Lied)?,
+        floor: record.floor, sequence: record.sequence, version: record.version,
+    };
+    let signed = signed_from(record.signed, record.signatures.as_slice()).ok_or(Refused::Lied)?;
+    if release::order_is(file, &order, &signed) { Ok((order, signed)) } else { Err(Refused::Lied) }
 }
 
 /// A boot manifest read by the service at `endpoint` a page at a time, taken only if its header lines and its files,

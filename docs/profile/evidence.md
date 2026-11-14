@@ -61,7 +61,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
 | A CPU budget of 20 ms per 100 ms keeps a busy loop at 12–35 % of its CPU and lifting it restores the full share; `init` restarts a service within 5 s while eight busy applications saturate every CPU | `busy`, `smp` suites |
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |
-| A killed service is restarted by `init` and serves clients started before the failure; after 3 restarts in 60 s it is quarantined until `RUN`; killing `init` halts the system | `services` suite |
+| A killed service is restarted by `init` and serves clients started before the failure; after 3 restarts in 60 s it is quarantined until `RUN` or its cool-down: started again by `init` 60 s later, and quarantined again with a 120 s cool-down, which `RUN` lifts (801-KRN-0245); killing `init` halts the system | `services` suite |
 | A send queued for a server that dies fails with `ERR_PEER` instead of waiting for a new instance | `isolation` suite, case `f` |
 | An endpoint badge set by `CAP_MINT` reaches the receiver, is kept by children and cannot be replaced | `isolation` suite, case `i` |
 | Setting a badge needs `CAP_BADGE` (000-KRN-0073): a new endpoint has it; a client minted or granted without it is refused (`ERR_INVALID`), in the program and in a child it starts; a badged child lacks it whatever the mask | `isolation` suite, case `a` (x86) |

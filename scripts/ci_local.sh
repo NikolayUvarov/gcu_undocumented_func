@@ -107,10 +107,12 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd"
+    # The tools as aarch64's virt shows them: a 37-row screen, a VirtIO tablet, BOOTAA64.EFI (000-APP-0137, 000-KRN-0240).
+    "aarch64: tools|$A64 --suites tools"
     "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
     "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"
-    "aarch64: the updater and the modes|$A64 --suites updater,modes"
+    "aarch64: the updater and the modes|$A64 --suites updater,modes,bootkeys"
     "aarch64: an update through the link|$A64 --suites linkupdate"
     "aarch64: the link|$A64 --suites link"
     # At EL2 as well (100004-PRT-0014): AAVMF starts the loader there when the guest has it, with the GICv3 system registers.

@@ -22,7 +22,10 @@
 /// 1.4 (111-NET-0073) adds what NTS-KE (RFC 8915) needs: `connect-alpn`, a client session that offers one application
 /// protocol (RFC 7301) and is refused when the server does not agree on it, and `export`, the keying material RFC 8446
 /// section 7.5 derives from an established session's secrets, for its own client alone. The session's keys stay here.
-package mind:tls@1.4.0;
+///
+/// 1.5 (801-NET-0081): `connect-pins` logs a certificate whose start is after the system clock instead of refusing it,
+/// so that a machine whose clock is far behind (a flat battery) still reaches a server it knows by its pin.
+package mind:tls@1.5.0;
 
 interface tls {
     /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -57,9 +60,10 @@ interface tls {
     record pin { kind: pin-kind, digest: list<u8, 32> }
     /// As `connect`, the server trusted by one of `pins` (one or two; the second is the next one, for rotation) instead
     /// of the root store (1.2). Still checked: the certificate's name against `name` (a DNS name or an IPv4 address),
-    /// its validity period by the system clock, the server-authentication purpose when it names purposes, `CA:false`,
-    /// and the handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A
-    /// server that matches no pin, or fails a check, is refused (`certificate`).
+    /// its end by the system clock, the server-authentication purpose when it names purposes, `CA:false`, and the
+    /// handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A server that
+    /// matches no pin, or fails a check, is refused (`certificate`). Since 1.5 (801-NET-0081) a certificate whose start
+    /// is after the system clock is logged, not refused: such a clock is taken as wrong, and the pin binds the key.
     connect-pins: func(session: u32, name: string<253>, address: u32, port: u16, pins: list<pin, 2>, timeout-ms: u32) -> result<peer, error>;
 
     /// A connection a listening session took (1.3): the new session, and the peer's IPv4 address and TCP port.

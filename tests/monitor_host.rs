@@ -516,14 +516,34 @@ fn every_cpu() {
 }
 
 #[test]
+fn the_hardware_report_names_aarch64s_own() {
+    // 000-APP-0137: aarch64's CPU IDs are MPIDR affinities and its clock the generic timer, whose rate CNTFRQ_EL0
+    // states; EL0 reads no ID registers, so no features line.
+    let mut source = system();
+    source.ranges = physmap();
+    let (ids, counter, counter_rate) = hw::AARCH64_NAMES;
+    let local = hw::Local { vendor: "AArch64".into(), tsc_hz: 62_500_000, resolution_ns: 16, width: 800, height: 600, stride: 800, ids, counter, counter_rate, ..hw::Local::default() };
+    let mut report = hw::Hw::new(local);
+    report.refresh(&mut source).unwrap();
+    let lines: Vec<String> = report.lines().into_iter().map(|l| l.0).collect();
+    let has = |text: &str| assert!(lines.iter().any(|l| l.contains(text)), "{:?} lacks {:?}", lines, text);
+    has("2 CPUs online, MPIDR affinities 0, 1");
+    has("generic timer 62.500 MHz (CNTFRQ_EL0), monotonic clock resolution 16 ns");
+    assert!(!lines.iter().any(|l| l.contains("APIC") || l.contains("TSC")), "{:?}", lines);
+    let processor = lines.iter().position(|l| l == "Processor").unwrap();
+    assert_eq!(lines[processor + 3], "", "no features line: {:?}", &lines[processor..processor + 4]);
+}
+
+#[test]
 fn hardware_report() {
     let mut source = system();
     source.ranges = physmap();
     source.devices = vec![Device { class: 0x010180, index: 3, holder: 5, irq: 14, bars: [0, 0, 0, 0, 16, 0], location: 1 << 3 | 1, io_bars: 1 << 4, ..Device::default() },
                           Device { class: 0x0C0330, index: 4, holder: 0, irq: 11, bars: [0x4000, 0, 0, 0, 0, 0], location: 2 << 8 | 4 << 3, ..Device::default() }];
     source.irqs = vec![Irq { line: 1, count: 1234, holder: 7, endpoint: 4, masked: false, holders: 2 }, Irq { line: 3, ..Irq::default() }];
+    let (ids, counter, counter_rate) = hw::X86_NAMES;
     let local = hw::Local { vendor: "GenuineIntel".into(), brand: "Test CPU".into(), family: 6, model: 85, stepping: 4, features: vec![("NX", true), ("x2APIC", false)],
-                            tsc_hz: 2_400_000_000, resolution_ns: 1, width: 1280, height: 800, stride: 1280 };
+                            tsc_hz: 2_400_000_000, resolution_ns: 1, width: 1280, height: 800, stride: 1280, ids, counter, counter_rate };
     let mut report = hw::Hw::new(local);
     report.refresh(&mut source).unwrap();
     let lines: Vec<String> = report.lines().into_iter().map(|l| l.0).collect();
@@ -532,7 +552,7 @@ fn hardware_report() {
     has("GenuineIntel, family 6, model 85, stepping 4");
     has("2 CPUs online, APIC IDs 0, 1");
     has("+NX  -x2APIC");
-    has("TSC 2400.000 MHz");
+    has("TSC 2400.000 MHz (calibrated)");
     has("GOP framebuffer 1280x800, 1280 pixels per line, 32 bits per pixel, 4.0M at 0x80000000");
     has("00:01.1  010180  IDE controller   IRQ 14  loader (PID 5)");
     has("BAR4 16B io");

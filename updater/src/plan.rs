@@ -62,21 +62,26 @@ pub fn newest(records: [Option<Record>; 2]) -> Option<(usize, Record)> {
 /// The version floor the records hold (351-UPD-0024): the newer valid one's, as the bootloader reads it; 0 with none.
 pub fn floor(records: [Option<Record>; 2]) -> u64 { newest(records).map_or(0, |(_, r)| r.floor) }
 
+/// The lowest key file version a slot may hold (351-UPD-0029): the newer valid record's, as the bootloader reads it.
+pub fn keys(records: [Option<Record>; 2]) -> u64 { newest(records).map_or(0, |(_, r)| r.keys) }
+
 /// `record` one past the newer valid one, and the file it goes to; file 0 with sequence 1 when none is valid. It
-/// carries the newer record's floor, or `record`'s when higher: no write of the updater lowers it. None when the sequence could not count
-/// on: a trial needs two more, which the bootloader writes.
+/// carries the newer record's floor and key file version, or `record`'s when higher: no write of the updater lowers
+/// them. None when the sequence could not count on: a trial needs two more, which the bootloader writes.
 fn next(records: [Option<Record>; 2], record: Record) -> Option<(usize, Record)> {
     let (file, sequence) = newest(records).map_or((0, 1), |(k, r)| (1 - k, r.sequence + 1));
-    let floor = floor(records).max(record.floor);
-    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { sequence, floor, ..record }))
+    let (floor, keys) = (floor(records).max(record.floor), keys(records).max(record.keys));
+    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { sequence, floor, keys, ..record }))
 }
 
-/// The record that confirms `running` once its trial boot was confirmed: the same slot and fallback, confirmed. None
-/// when the newer record already confirms it, or names another slot.
-pub fn confirm(records: [Option<Record>; 2], running: u8) -> Option<(usize, Record)> {
+/// The record that confirms `running` once its trial boot was confirmed: the same slot and fallback, confirmed, the key
+/// file version raised to `keys`, the running slot's (351-UPD-0029): from then a slot whose key file is below it, which
+/// may name keys that version revoked, is not booted. None when the newer record already confirms it, or names another
+/// slot.
+pub fn confirm(records: [Option<Record>; 2], running: u8, keys: u64) -> Option<(usize, Record)> {
     let (_, current) = newest(records)?;
     if current.slot != running || current.confirmed { return None; }
-    next(records, Record { slot: running, fallback: current.fallback, tries: 0, confirmed: true, sequence: 0, floor: 0 })
+    next(records, Record { slot: running, fallback: current.fallback, tries: 0, confirmed: true, sequence: 0, floor: 0, keys })
 }
 
 /// Whether the other slot may be written: not while the running slot is on trial and not yet confirmed on the disk,
@@ -88,7 +93,17 @@ pub fn may_stage(records: [Option<Record>; 2], running: u8, trial: bool) -> bool
 /// The record that boots the other slot on trial with `tries`, falling back to the running one: an update's activation
 /// point, and a rollback's.
 pub fn trial_of_other(records: [Option<Record>; 2], running: u8, tries: u8) -> Option<(usize, Record)> {
-    next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0, floor: 0 })
+    next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0, floor: 0, keys: 0 })
+}
+
+/// The record a recovery order writes (351-UPD-0030): the other slot on trial with one try, falling back to the running
+/// one, the floor lowered to `floor`. The one write that lowers the floor, and only for an order the recovery keys'
+/// threshold signed; the key file version stays (351-UPD-0029). A trial needs two more sequence numbers, which the
+/// bootloader writes.
+pub fn recover(records: [Option<Record>; 2], running: u8, floor: u64) -> Option<(usize, Record)> {
+    let (file, sequence) = newest(records).map_or((0, 1), |(k, r)| (1 - k, r.sequence + 1));
+    let keys = keys(records);
+    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { slot: other(running), fallback: running, tries: 1, confirmed: false, sequence, floor, keys }))
 }
 
 /// The record that raises the version floor (351-UPD-0024) to `minimum`, a checked channel's, once the newer record

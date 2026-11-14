@@ -87,6 +87,8 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
   - A double tap that holds the button for dragging a window with one finger: the drag lock, added here with three host tests.
   - A mark on the window being dragged: `wm` is `APP`'s, requested in [requests-APP.md](requests-APP.md).
 
+**2026-11-13: the cursor on the MacBook Pro** (DRV's run, `KRN/2026-11-13T2014Z-DRV-the-macs-speakers-heard-for-551-drv-0010.md` on `internal-dev-messages`), release 202611131315 (`main` 20fba2c5): the maintainer says the cursor moves normally. The drag lock and three-finger scrolling were not reported on; they are what is left of the criteria.
+
 ## Related
 
 [211-DRV-0017](211-DRV-0017-usb-input-delayed-by-hub-polling.md), [211-DRV-0016](../issues-done/211-DRV-0016-hid-interfaces-not-ours-claimed-once.done), `libmind/src/hid.rs`, `usb_hid/src/main.rs`, `usb_host/src/ehci.rs`.

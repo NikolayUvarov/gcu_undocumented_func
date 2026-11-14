@@ -1,12 +1,19 @@
 // Signed boot volumes (350-UPD-0003, docs/update/README.md; MC-9.1, 9.2): MANIFEST's signature is checked against
-// the public key built in (build.rs), then every image against the manifest's size and SHA-256 before it is used.
-// The manifest describes images and what they ask for; it grants nothing (MC-3.11).
+// the boot keys of the volume's key file, itself checked under the root keys built in (build.rs, 351-UPD-0029), then
+// every image against the manifest's size and SHA-256 before it is used. The manifest describes images and what they
+// ask for; it grants nothing (MC-3.11).
 use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
+use super::release::Role;
 
 include!(concat!(env!("OUT_DIR"), "/boot_key.rs"));
 
-pub struct Manifest<'a> { text: &'a [u8] }
+/// The Ed25519 check (RFC 8032, strict) the key files' signatures and the manifest's are checked with.
+pub fn ed25519(key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+    VerifyingKey::from_bytes(key).is_ok_and(|key| key.verify_strict(message, &Signature::from_bytes(signature)).is_ok())
+}
+
+pub struct Manifest<'a> { text: &'a [u8], signer: [u8; 32] }
 
 // The `index`th space-separated field of a line.
 fn field(line: &[u8], index: usize) -> Option<&[u8]> { line.split(|&b| b == b' ').nth(index) }
@@ -22,14 +29,18 @@ fn hex(text: &[u8]) -> Option<[u8; 32]> {
 }
 
 impl<'a> Manifest<'a> {
-    /// The manifest, if `signature` is the built-in key's over exactly `text` and the text is of format 1.
-    pub fn verified(text: &'a [u8], signature: &[u8]) -> Result<Self, &'static str> {
-        let key = VerifyingKey::from_bytes(&KEY).map_err(|_| "the built-in key is not a key")?;
+    /// The manifest, if `signature` is over exactly `text` by a key of `boot`, the key file's boot role, and the text
+    /// is of format 1. A manifest carries one signature: a boot role asking for more is refused.
+    pub fn verified(text: &'a [u8], signature: &[u8], boot: &Role) -> Result<Self, &'static str> {
         let signature: [u8; 64] = signature.try_into().map_err(|_| "a signature is 64 bytes (MC-9.1)")?;
-        key.verify_strict(text, &Signature::from_bytes(&signature)).map_err(|_| "bad signature (MC-9.1)")?;
+        if boot.threshold != 1 { return Err("the key file's boot role asks for more than the one signature a manifest carries"); }
+        let signer = *boot.keys().iter().find(|key| ed25519(key, text, &signature)).ok_or("bad signature (MC-9.1)")?;
         if !text.starts_with(b"MIND-MANIFEST 1\n") { return Err("another manifest format (MC-4.13)"); }
-        Ok(Manifest { text })
+        Ok(Manifest { text, signer })
     }
+
+    /// Whether the test keys vouch for it: the root set built in is the test one, or the test boot key signed it.
+    pub fn test_key(&self) -> bool { ROOT_TEST_KEYS || self.signer == TEST_BOOT_KEY }
 
     fn lines(&self) -> impl Iterator<Item = &'a [u8]> { self.text.split(|&b| b == b'\n').filter(|l| !l.is_empty()) }
 

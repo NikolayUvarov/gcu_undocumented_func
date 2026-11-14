@@ -423,7 +423,7 @@ types! {
     audio: Range Levels;
     battery: Error Status;
     clipboard: Error Part;
-    blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed CopyStats Standing CopyName Walked Rebuilt;
+    blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed CopyStats Standing CopyName Walked Rebuilt TermMode Term;
     display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;
     gpio: Kind Pull Error Controller Pin;
@@ -435,7 +435,7 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant Question Choice;
     nn: Error Model Budget Usage Status;
-    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage HttpRefusal HttpMethod HttpRequest Signature PublicKey Role KeyFile Timestamp;
+    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage HttpRefusal HttpMethod HttpRequest Signature PublicKey Role KeyFile Timestamp RecoveryOrder;
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;

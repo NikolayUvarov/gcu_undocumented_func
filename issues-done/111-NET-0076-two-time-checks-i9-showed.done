@@ -1,0 +1,49 @@
+# 111-NET-0076 — Two of the time checks i9 showed: the refused NTS servers and the sleep across the step — done
+
+**Type:** network (tests of `timed`) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-13) · **Blocked by:** — · **Main task:** [111](../issues/111-network-time.md) · **Roadmap:** track D · **Constitution:** MC-12.2
+
+## Problem
+
+Round 129's gate (2026-11-13) failed "x86: network, TLS and Effector" twice on i9, in two checks of 111 that `main` already holds. Its candidate touches neither them nor `timed`, the network services or `msh`. i9 had been out of the gates since round 113, so neither check had run there.
+
+**1. The refused NTS servers** (the `tls` suite, `nts_check`'s second boot; 1239 s):
+- **The check:** the boot names three servers, one agreeing on no application protocol, one with a rogue certificate and one honest. At timed's first `NOTHING SET` it looks for each server's key establishment line.
+- **What the log showed:** the rogue server refused (`Certificate`) and the honest one's 8 cookies, but no line for the first server. timed's round counted one server: `NOTHING SET: FEWER THAN 2 ANSWERS (1 OF 1 ANSWERED)`.
+- **Why:** netpolicy made timed's grant before the network was up. The first server's two rules waited for their name (`mind.test WAITS FOR THE NETWORK`) and joined the grant at 2.4 s, after timed's first round (`2 RULES ADDED, ITS HOST NAMES RESOLVED ONCE THE NETWORK CAME UP`). Its key establishment comes in a later round. This is 111-NET-0074's behaviour, which the check's first boot allows for and the second did not. Read from the run's logs (`mind-core-nts-refused-4cpu.log`, `mind-core-nts-4cpu.log` on i9).
+
+**2. The sleep across the step** (the `net` suite, `timed_check`; the run again, alone, 577 s):
+- **The check:** `msh` sleeps 25 s while timed steps the calendar clock; the sleep must last 25 s by the guest's monotonic clock and 24 s to 32 s by the host's, counted from a second after the command was sent.
+- **What it got:** 25002 ms in the guest and 23.996 s on the host. The first run there had 24.1 s.
+- **Why the host's count is short:** it starts after the host's own `time.sleep(1)`, so it is 24 s plus the guest's start and the answer's way back, less however much that second overran. On i9, a WSL2 guest whose timer is coarse (`HUMAN/2026-11-10T1426Z`), the margin was 4 ms. Inferred from the check's code and the two numbers; the host's sleep was not timed.
+
+## Plan
+
+1. The second boot waits, up to 180 s, until timed's lines hold each of the three servers' key establishment, then checks them as before.
+2. The host counts from just before the command is sent, before the guest can start its sleep, and the bounds move with it: 25 s to 33 s. The guest's sleep cannot start before the command, so the check is no looser.
+
+## Acceptance criteria
+
+- The `net` and `tls` suites pass on x86 and aarch64, i9 among the machines.
+
+## Progress
+
+**Made (2026-11-13)** on `claude/111-NET-0076-nts-refused-race`: `tests/qemu_smoke.py` `nts_check` and `timed_check`.
+- **Not run in this container:** its `tls` suite stops before the NTS check, at Python's `cryptography` there (`No module named '_cffi_backend'`). They run on the maintainer's machines, i9 among them.
+- **Run on the maintainer's machines** (Effector, QEMU under TCG), with 000-NET-0077:
+  - at c57928a1, "aarch64: network, TLS and Effector" on PCU (1420 s) passed;
+  - at dd79ebc0, "x86: network, TLS and Effector" on x32-128 (1421 s, its other lane idle) and "aarch64: network, TLS and Effector" on PCU (1411 s) passed;
+  - on i9 at dd79ebc0, the `net` suite passed, `timed_check` with it, but the `tls` suite stopped after its TLS client check: nothing more was logged for 40 minutes, until the operation's limit (3500 s). That check and the ones after it, up to the NTS check, are not this task's; the hang is recorded for the kernel track's next look at i9. At c57928a1 the group's first run there timed out the same way, its logs overwritten.
+
+## Resolution
+
+Landed in round 130 (`main` c3a2c7d8):
+- **The refused NTS servers' check** waits for each server's key establishment.
+- **The sleep across the step** is counted on the host from the command sent.
+- **The criteria:** both suites passed in round 130's gate:
+  - "x86: network, TLS and Effector" (acc-2, 1516 s);
+  - "aarch64: network, TLS and Effector" (acc-1, 1172 s).
+- **On i9** the `net` suite passed with both changes (the runs listed above); its `tls` suite stopped once after the TLS client check, recorded above. The gate's pool gave the x86 group to acc-2.
+
+## Related
+
+[111-NET-0057](111-NET-0057-timed-sets-the-clock-by-sntp-within-bounds.done), [111-NET-0074](111-NET-0074-a-grants-host-names.done), [111-NET-0075](111-NET-0075-timed-with-nts.done).

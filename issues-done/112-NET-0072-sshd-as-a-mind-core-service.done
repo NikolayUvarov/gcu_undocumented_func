@@ -52,7 +52,7 @@
 - **Host:** `ssh/tests/keys.rs` (4 tests), in `scripts/host_tests.sh`.
 - **QEMU, x86 and aarch64** (`sshd_check`, in the `tls` suite): the host key against a known_hosts line made of the device key; `scp` into `data/` and back with equal SHA-256; `sftp`; `data/ssh/` and paths above the root refused; an unlisted key and a password refused; each login, refusal and write logged; `keystore`'s `SIGNED SshHost`. Passed on the maintainer's machines at d95c55c5 ("x86: network, TLS and Effector" on x32, 1357 s; "aarch64: network, TLS and Effector" on acc-1, 1145 s) and in round 127's gate.
 - **Without the grant:** `init` says `THE POLICY GIVES IT NO LISTENING GRANT` (the `tls` suite's first boot).
-- **The console** (with [112-APP-0136](../issues/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md)): the console key's `ps` through the shell, `update` refused, no console for the files' key.
+- **The console** (with [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done)): the console key's `ps` through the shell, `update` refused, no console for the files' key.
 - **The profile:** the MC-11.9 row, `tcb.md` and `bootstrap.md` say what `sshd` is trusted with.
 - **Landed** in round 127 (`main` 86794305): the gate, every group of scripts/ci_local.sh --list over acc-1, acc-2, PCU and x32-128 (two lanes), green in 78 minutes (x86: USB image on its second run, alone, as the rule allows; its first failed on the log's length, fixed for 000-KRN-0235), and GitHub CI. Tests are evidence, not proofs (MC-12.2).
 

@@ -281,8 +281,9 @@ class Releases(unittest.TestCase):
         self.assertEqual((status, release.root_set(root)[1]), (0, 2))
         public = sm.public_key(release.TEST_RELEASE_SEED).hex()
         stamper = sm.public_key(release.TEST_TIMESTAMP_SEED).hex()
-        roles = [x for name in release.ROLES if name not in ("root", "timestamp") for x in ("--role", f"{name}={public}:1")]
-        roles += ["--role", f"root={','.join(pub[:3])}:2", "--role", f"timestamp={stamper}:1"]
+        boot = sm.public_key(sm.TEST_SEED).hex()  # the boot key that signs the staged manifests (351-UPD-0029)
+        roles = [x for name in release.ROLES if name not in ("boot", "root", "timestamp") for x in ("--role", f"{name}={public}:1")]
+        roles += ["--role", f"boot={boot}:1", "--role", f"root={','.join(pub[:3])}:2", "--role", f"timestamp={stamper}:1"]
         made = self.dir / "keys"
         self.assertEqual(self.keys("make", made, "--version", 1, *roles)[0], 0)
         self.assertIn("not 1 to 8 signature lines", self.keys("check", made, "--root", root)[1])
@@ -336,7 +337,7 @@ class Releases(unittest.TestCase):
             self.keys("sign", third, seed)
         self.assertIn("signed by 0 of the root keys, not 1", self.keys("publish", third, self.dest, "--root", root)[1])
         # A revocation that would leave a role short of its threshold is refused; a history with a version missing fails.
-        self.assertIn("boot, recovery, release: fewer keys than the threshold", self.keys("revoke", made, public, third)[1])
+        self.assertIn("without it, recovery, release: fewer keys than the threshold", self.keys("revoke", made, public, third)[1])
         (self.dest / "keys/1").unlink()
         self.assertEqual(self.check(root=release.root_set(root)), "keys/1: missing: the key history starts at version 1")
 
@@ -369,6 +370,26 @@ class Releases(unittest.TestCase):
         self.assertEqual(self.check(), "timestamps/stable: names another channel file")
         path.unlink()
         self.assertEqual(self.check(), "timestamps/stable: missing")
+
+    def test_a_recovery_order_with_the_recovery_key_alone(self):
+        # 351-UPD-0030: `recover` writes recovery/<channel>, its sequence one more each time, signed by the recovery key
+        # the key file names; another key is refused.
+        import contextlib, io
+        release.publish(self.staged(1), self.dest, now=NOW)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(release.main(["recover", str(self.dest), "--version", "1", "--floor", "1"]), 0, out.getvalue())
+            self.assertEqual(release.main(["recover", str(self.dest), "--version", "1", "--floor", "1", "--days", "2"]), 0, out.getvalue())
+        whole = (self.dest / "recovery/stable").read_bytes()
+        body, signatures = release.split_signed(whole)[0]
+        o = json.loads(body)
+        self.assertEqual((o["channel"], o["sequence"], o["version"], o["floor"]), ("stable", 2, 1, 1))
+        self.assertEqual(signatures[0][0], sm.public_key(release.TEST_RECOVERY_SEED))
+        k, _ = release.check_chain(release.destination(self.dest), now=NOW)
+        with self.assertRaisesRegex(release.ReleaseError, "names 0 of the 1 recovery keys"):
+            release.order(release.destination(self.dest), "stable", k, 1, 1, seeds=[release.TEST_RELEASE_SEED])
+        with self.assertRaisesRegex(release.ReleaseError, "1 <= floor <= version"):
+            release.order(release.destination(self.dest), "stable", k, 1, 2)
 
     def test_a_server_without_a_key_file(self):
         # The test key file goes up with a channel the test release key signs; with real keys none is made.

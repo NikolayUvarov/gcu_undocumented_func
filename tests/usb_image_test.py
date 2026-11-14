@@ -46,6 +46,8 @@ put("voice/commands.txt", b"commands\n")
 put("tlsroots.pem", b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 put("MANIFEST", "".join(f"file {name} 0\n" for name in ["kernel.elf", *boot]).encode())
 put("MANIFEST.SIG", b"signature")
+put("KEYS", b"keys\n")  # 351-UPD-0029: the key file goes with the manifest
+put("KEYS.1", b"root change\n")
 '''
 
 
@@ -100,12 +102,12 @@ def main():
     # 351-UPD-0036: with --slots, a release's period.txt goes into slot A with the boot files; update.txt stays at the root.
     from scripts.make_usb_image import slots
     laid = slots({"kernel.elf": b"k", "init.elf": b"i", "wm.elf": b"w", "period.txt": b"every 60\n", "update.txt": b"every 20\n",
-                  "EFI/BOOT/BOOTX64.EFI": b"l", "LICENSES/MIT.txt": b"m", "MANIFEST": b"", "MANIFEST.SIG": b""}, "x86_64")
-    for name in ("MIND/A/kernel.elf", "MIND/A/init.elf", "MIND/A/wm.elf", "MIND/A/period.txt", "MIND/A/BOOTX64.EFI", "MIND/A/MANIFEST",
+                  "EFI/BOOT/BOOTX64.EFI": b"l", "LICENSES/MIT.txt": b"m", "MANIFEST": b"", "MANIFEST.SIG": b"", "KEYS": b"", "KEYS.1": b""}, "x86_64")
+    for name in ("MIND/A/kernel.elf", "MIND/A/init.elf", "MIND/A/wm.elf", "MIND/A/period.txt", "MIND/A/BOOTX64.EFI", "MIND/A/MANIFEST", "MIND/A/KEYS", "MIND/A/KEYS.1",
                  "update.txt", "EFI/BOOT/BOOTX64.EFI", "LICENSES/MIT.txt"):
         assert name in laid, (name, sorted(laid))
-    assert "period.txt" not in laid and "MIND/A/update.txt" not in laid, sorted(laid)
-    print("PASS: --slots puts a release's period.txt in slot A and leaves update.txt at the root")
+    assert "period.txt" not in laid and "MIND/A/update.txt" not in laid and "KEYS" not in laid, sorted(laid)
+    print("PASS: --slots puts a release's period.txt and the key files in slot A and leaves update.txt at the root")
 
 
 if __name__ == "__main__":

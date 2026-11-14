@@ -18,6 +18,9 @@ extern crate alloc;
 #[allow(dead_code)]
 #[path = "../../bootloader/src/slots.rs"]
 mod slots;
+// The bootloader's check of a slot's key files, which the updater makes of a slot it writes (351-UPD-0029).
+#[path = "../../bootloader/src/keychain.rs"]
+mod keychain;
 mod plan;
 mod source;
 mod bundle;
@@ -36,8 +39,8 @@ use mind::idl::update::{self as api, Error, Metadata, Offer, State};
 use mind::idl::codec::{List, Text};
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
-use mind::parse::{read_channel, read_keys, read_manifest, read_timestamp, Refused, Session};
-use mind::release::{self, Channel, Keys, Step, Timestamp, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX, TIMESTAMP_MAX};
+use mind::parse::{read_channel, read_keys, read_manifest, read_order, read_timestamp, Refused, Session};
+use mind::release::{self, Channel, Keys, Order, Step, Timestamp, CHANNEL_MAX, KEYS_MAX, MANIFEST_MAX, ORDER_MAX, TIMESTAMP_MAX};
 use mind::zip; // the names a bundle may hold (bundle.rs)
 use mind::{cid, dag, tree}; // kept.rs names them as crate::cid, crate::dag and crate::tree, as the host tests build it
 use cid::Cid;
@@ -78,6 +81,13 @@ const TRUSTED_NEW: &str = "system/updater/keys.new";
 // The highest timestamp version it took for its channel (351-UPD-0028): `<channel> <version>`, kept the same way.
 const STAMP: &str = "system/updater/timestamp";
 const STAMP_NEW: &str = "system/updater/timestamp.new";
+// Every recovery order applied (351-UPD-0030): a line `<channel> <sequence> <version> <floor> <its SHA-256>` each.
+const ORDERS: &str = "system/updater/recovery";
+const ORDERS_NEW: &str = "system/updater/recovery.new";
+const ORDERS_MAX: usize = 16384;
+// The key files taken that changed the root (351-UPD-0029), `roots/<version>`: a slot carries those below its own key
+// file as KEYS.1, KEYS.2, …, so that the bootloader follows its root from the one built in.
+const ROOTS: &str = "system/updater/roots";
 
 // About 110 KiB: kept here rather than on the stack; only `builder` takes it, and no call of it is reentrant.
 static mut BUILDER: Builder = Builder::new();
@@ -138,6 +148,44 @@ fn verified(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
     key.verify_strict(message, &Signature::from_bytes(&signature)).is_ok()
 }
 
+/// Whether a boot key of `keys` signed `manifest` (351-UPD-0029): its boot role's, which asks for the one signature a
+/// manifest carries.
+fn boot_signed(keys: &Keys, manifest: &[u8], signature: &[u8]) -> bool {
+    keys.role("boot").is_some_and(|boot| boot.threshold == 1 && boot.keys().iter().any(|key| verified(key, manifest, signature)))
+}
+
+/// The key files taken that changed the root, below version `below`, in order: those a slot carries before its own.
+fn kept_roots(below: u64) -> Vec<Vec<u8>> {
+    let mut versions = Vec::new();
+    let _ = mind::fs::list(ROOTS, |entry| if let Ok(v) = entry.name_str().parse::<u64>() { if !entry.is_dir && v < below { versions.push(v); } });
+    versions.sort_unstable();
+    versions.iter().filter_map(|v| {
+        let file = File::open(&format!("{}/{}", ROOTS, v)).ok().filter(|f| f.size() <= KEYS_MAX)?;
+        let mut data = alloc::vec![0u8; file.size()];
+        (file.read_at(0, &mut data) == Ok(data.len())).then_some(data)
+    }).collect()
+}
+
+/// Key file `file` of `version`, which changed the root, kept for the slots it writes.
+fn keep_root(version: u64, file: &[u8]) -> Result<(), mind::fs::Error> {
+    match mind::fs::mkdir(TRUSTED_DIR) { Ok(()) | Err(mind::fs::Error::Exists) => {} Err(e) => return Err(e) }
+    match mind::fs::mkdir(ROOTS) { Ok(()) | Err(mind::fs::Error::Exists) => {} Err(e) => return Err(e) }
+    put_kept(&format!("{}/{}", ROOTS, version), &format!("{}/{}.new", ROOTS, version), file)
+}
+
+/// A slot's key files checked as the bootloader checks them (keychain.rs): under the root keys built in, its key file
+/// not below `held`, the records' version. Its key file, or why not.
+fn slot_keys(slot: &str, held: u64, parser: Endpoint) -> Result<Keys, keychain::Refusal> {
+    let root = keychain::built_in(&keys::ROOT_KEYS, keys::ROOT_THRESHOLD);
+    let read = |name: &str, buffer: &mut [u8]| -> Result<usize, &'static str> {
+        let file = File::open(&format!("MIND/{}/{}", slot, name)).map_err(|_| "file not found")?;
+        if file.size() >= buffer.len() { return Err("file larger than its buffer"); }
+        if file.read_at(0, &mut buffer[..file.size()]) != Ok(file.size()) { return Err("read error"); }
+        Ok(file.size())
+    };
+    keychain::check(root, held, read, |file| read_keys(parser, file).ok(), verify).map(|checked| checked.keys)
+}
+
 fn refused(why: Refused) -> Error { match why { Refused::Service => Error::NoParser, Refused::Malformed | Refused::Lied => Error::Malformed } }
 
 /// A parser of the check's own, which the loader starts as a helper holding nothing but its endpoint, and which ends
@@ -187,6 +235,23 @@ fn put_kept(path: &str, new: &str, data: &[u8]) -> Result<(), mind::fs::Error> {
 /// Key file `file` kept as the one trusted.
 fn keep_keys(file: &[u8]) -> Result<(), mind::fs::Error> { put_kept(TRUSTED, TRUSTED_NEW, file) }
 
+/// The account of the recovery orders applied (351-UPD-0030), as kept: `recovery`, else `recovery.new`.
+fn kept_orders() -> String {
+    [ORDERS, ORDERS_NEW].into_iter().find_map(|path| {
+        let file = File::open(path).ok().filter(|f| f.size() <= ORDERS_MAX)?;
+        let mut data = alloc::vec![0u8; file.size()];
+        (file.read_at(0, &mut data) == Ok(data.len())).then(|| String::from_utf8(data).ok()).flatten()
+    }).unwrap_or_default()
+}
+
+/// The highest sequence of a recovery order applied for channel `channel`, in the account `text`; 0 with none.
+fn order_applied(text: &str, channel: &str) -> u64 {
+    text.lines().filter_map(|line| {
+        let mut words = line.split(' ');
+        (words.next()? == channel).then(|| words.next()?.parse::<u64>().ok()).flatten()
+    }).max().unwrap_or(0)
+}
+
 /// The highest timestamp version kept for channel `channel` (351-UPD-0028): of `timestamp` and `timestamp.new`, 0 without one.
 fn kept_stamp(channel: &str) -> u64 {
     [STAMP, STAMP_NEW].into_iter().filter_map(|path| {
@@ -231,6 +296,8 @@ struct Updater {
     trusted: Option<(Keys, Vec<u8>)>,
     /// The highest timestamp version it took for its channel (351-UPD-0028): a lower one is refused.
     stamp_seen: u64,
+    /// The highest recovery order applied for its channel (351-UPD-0030), and the last one refused, said once.
+    order_seen: u64, order_refused: Option<(u64, String)>,
 }
 
 /// Where the channel the updater holds came from.
@@ -280,8 +347,8 @@ impl Updater {
         let mut back = [0u8; RECORD];
         let ok = File::open(RECORDS[file]).is_ok_and(|f| f.read_at(0, &mut back) == Ok(RECORD)) && Record::parse(&back) == Some(record);
         if !ok { return Err(Error::Write); }
-        mind::println!("[UPDATER] RECORD {} SEQUENCE {}: SLOT {}, FALLBACK {}, {} TRIES, {}, FLOOR {}", RECORDS[file], record.sequence, record.slot as char,
-            if record.fallback == 0 { '-' } else { record.fallback as char }, record.tries, if record.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, record.floor);
+        mind::println!("[UPDATER] RECORD {} SEQUENCE {}: SLOT {}, FALLBACK {}, {} TRIES, {}, FLOOR {}, KEY FILE {}", RECORDS[file], record.sequence, record.slot as char,
+            if record.fallback == 0 { '-' } else { record.fallback as char }, record.tries, if record.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, record.floor, record.keys);
         Ok(())
     }
 
@@ -313,10 +380,17 @@ impl Updater {
             if !quiet { mind::println!("[UPDATER] KEY FILE VERSION {} REFUSED ({}): {}", next.version, from, why); }
             return Err(error);
         }
-        let rotated = self.trusted.as_ref().is_some_and(|(k, _)| k.root() != next.root());
+        // A file that changes the root, the one built in or the one before, is kept for the slots (351-UPD-0029).
+        let before = self.trusted.as_ref().map_or(keychain::built_in(&keys::ROOT_KEYS, keys::ROOT_THRESHOLD), |(k, _)| *k.root());
+        let rotated = before != *next.root();
         self.trusted = Some((next, Vec::from(file)));
         let kept = match keep_keys(file) { Ok(()) => format!("KEPT IN {}", TRUSTED), Err(e) => format!("NOT KEPT ({:?}): HELD UNTIL THE UPDATER ENDS", e) };
-        mind::println!("[UPDATER] KEY FILE VERSION {} TAKEN ({}){}, {}", next.version, from, if rotated { ", THE ROOT ROTATED" } else { "" }, kept);
+        let root = match rotated.then(|| keep_root(next.version, file)) {
+            None => String::new(),
+            Some(Ok(())) => format!(" AND {}", ROOTS),
+            Some(Err(e)) => format!("; NOT IN {} ({:?}): A SLOT WRITTEN UNDER IT IS NOT BOOTED", ROOTS, e),
+        };
+        mind::println!("[UPDATER] KEY FILE VERSION {} TAKEN ({}){}, {}{}", next.version, from, if rotated { ", THE ROOT ROTATED" } else { "" }, kept, root);
         Ok(next)
     }
 
@@ -359,6 +433,63 @@ impl Updater {
             return Err(error);
         }
         Ok(stamp)
+    }
+
+    /// The recovery order `source` holds for the channel, `recovery/<channel>` (351-UPD-0030): applied when the recovery
+    /// keys of `keys` signed it to their threshold, it is this channel's, its sequence is above the last one applied, it
+    /// has not expired, the running slot is not on trial, and the other slot holds its version, checked as the
+    /// bootloader will check it. Then it is kept in the account first, the floor lowered to its own and that slot booted
+    /// on trial through init's restart. A refusal is said once and the check goes on; without an order, nothing.
+    fn recovery(&mut self, source: &Source, keys: &Keys, parser: &mut Session) -> Result<(), Error> {
+        let file = match source.small(&format!("recovery/{}", self.config.channel), ORDER_MAX, parser) {
+            Ok(file) => file, Err(Error::Missing) => return Ok(()), Err(error) => return Err(error),
+        };
+        let (order, signed) = read_order(parser.endpoint(), &file).map_err(refused)?;
+        let role = keys.role("recovery").ok_or(Error::Signature)?;
+        let expires = core::str::from_utf8(&order.expires).unwrap_or("");
+        let refusal = if !release::signed_by(role.keys(), role.threshold, &file[..signed.body], &signed, &verify) {
+            Some(format!("FEWER THAN {} OF THE RECOVERY KEYS OF KEY FILE VERSION {} SIGNED IT", role.threshold, keys.version))
+        } else if order.channel.as_str() != self.config.channel {
+            Some(format!("IT IS CHANNEL {}'S", order.channel.as_str()))
+        } else if order.sequence <= self.order_seen {
+            Some(format!("NOT ABOVE ORDER {}, APPLIED BEFORE", self.order_seen))
+        } else if plan::expired(release::expires_unix(&order.expires), mind::rtc::unix_time()) {
+            Some(format!("EXPIRED AT {}, OR THE CLOCK CANNOT BE READ", expires))
+        } else if self.may_stage().is_err() {
+            Some(String::from("THE RUNNING SLOT IS ON TRIAL, OR NO SLOT RUNS"))
+        } else {
+            match self.verify_other() {
+                Ok(channel) if channel.version == order.version => None,
+                Ok(channel) => Some(format!("SLOT {} HOLDS VERSION {}, NOT {}", self.other(), channel.version, order.version)),
+                Err(error) => Some(format!("SLOT {} IS NOT AS ITS MANIFEST LISTS IT ({:?})", self.other(), error)),
+            }
+        };
+        if let Some(why) = refusal {
+            if self.order_refused.as_ref() != Some(&(order.sequence, why.clone())) {
+                mind::println!("[UPDATER] RECOVERY ORDER {} REFUSED: {}", order.sequence, why);
+                self.order_refused = Some((order.sequence, why));
+            }
+            return Ok(());
+        }
+        let write = plan::recover(self.records(), self.slot, order.floor).ok_or(Error::Write)?;
+        // The account first: an order a restart cuts is applied once, never again.
+        self.keep_order(&order, &file)?;
+        let floor = plan::floor(self.records());
+        mind::println!("[UPDATER] RECOVERY ORDER {} OF CHANNEL {} APPLIED: VERSION {} IN SLOT {} ON TRIAL, THE FLOOR {} LOWERED TO {}; SIGNED BY THE RECOVERY KEYS OF KEY FILE VERSION {}, EXPIRES {}",
+                       order.sequence, order.channel.as_str(), order.version, self.other(), floor, order.floor, keys.version, expires);
+        self.write_record(write)?;
+        self.restart()
+    }
+
+    /// The account of recovery orders with `order` added, kept in system/updater before the order acts.
+    fn keep_order(&mut self, order: &Order, file: &[u8]) -> Result<(), Error> {
+        let mut text = kept_orders();
+        let digest: String = mind::sha256::digest(file).iter().map(|b| format!("{:02x}", b)).collect();
+        text.push_str(&format!("{} {} {} {} {}\n", order.channel.as_str(), order.sequence, order.version, order.floor, digest));
+        if text.len() > ORDERS_MAX { return Err(Error::Write); }
+        put_kept(ORDERS, ORDERS_NEW, text.as_bytes()).map_err(|e| { mind::println!("[UPDATER] RECOVERY ORDER {} NOT KEPT ({:?}): NOT APPLIED", order.sequence, e); Error::Write })?;
+        self.order_seen = order.sequence;
+        Ok(())
     }
 
     /// The timestamp version taken, kept when it is above the one seen.
@@ -489,6 +620,8 @@ impl Updater {
     /// timestamp's, and its version against the running one; with the channel's file and the key file as read.
     fn read_channel(&mut self, source: &Source, from: Held, parser: &mut Session) -> Result<(Channel, Vec<u8>, Vec<u8>), Error> {
         let (keys, keys_file) = self.trust_source(source, parser)?;
+        // A recovery order for the channel first (351-UPD-0030): the authority's word over what the channel says.
+        self.recovery(source, &keys, parser)?;
         let stamp_file = source.small(&format!("timestamps/{}", self.config.channel), TIMESTAMP_MAX, parser)?;
         let stamp = self.timestamp_of(&stamp_file, &keys, parser.endpoint())?;
         let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
@@ -561,7 +694,13 @@ impl Updater {
         let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX, parser)?;
         if mind::sha256::digest(&manifest) != digest { return Err(Error::Digest); }
         let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64, parser)?;
-        if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
+        // Signed by a boot key of the key file it trusts, which goes into the slot with the root changes before it.
+        let (keys, _) = self.trusted.as_ref().ok_or(Error::Signature)?;
+        if !boot_signed(keys, &manifest, &signature) {
+            mind::println!("[UPDATER] {}: VERSION {}: ITS MANIFEST IS SIGNED BY NO BOOT KEY OF KEY FILE VERSION {}", step, channel.version, keys.version);
+            return Err(Error::Signature);
+        }
+        let roots = kept_roots(keys.version);
         let files = slot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
         let applications = files.iter().filter(|f| kind(f.path.as_str()) == Kind::Application).count();
@@ -615,7 +754,11 @@ impl Updater {
             // Each file in the log, so that a slow or stalled fetch shows how far it got (351-UPD-0018).
             mind::println!("[UPDATER] {}: {} OF {}: {}, {} BYTES IN {} MS", step, index + 1, files.len(), f.path.as_str(), f.size, mind::time::uptime_ms() - started);
         }
-        for (name, data) in [("MANIFEST", &manifest[..]), ("MANIFEST.SIG", &signature[..]), ("KEYS", keys_file), ("CHANNEL", channel_file)] {
+        let names: Vec<&str> = keychain::ROTATIONS.iter().take(roots.len()).copied().collect();
+        if roots.len() > names.len() { mind::println!("[UPDATER] {}: MORE ROOT CHANGES THAN A SLOT HOLDS", step); return Err(Error::Signature); }
+        let signed = [("MANIFEST", &manifest[..]), ("MANIFEST.SIG", &signature[..])].into_iter();
+        let chain = names.iter().zip(&roots).map(|(name, data)| (*name, &data[..])).chain([("KEYS", keys_file), ("CHANNEL", channel_file)]);
+        for (name, data) in signed.chain(chain) {
             let mut file = File::create(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::Write)?;
             if file.write_at(0, data) != Ok(data.len()) || file.flush().is_err() { return Err(Error::Write); }
         }
@@ -642,10 +785,20 @@ impl Updater {
             Ok(data)
         };
         let (manifest, signature) = (read("MANIFEST", MANIFEST_MAX)?, read("MANIFEST.SIG", 64)?);
-        if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
         // The metadata first: a session's own parser ends after 30 s without a request, less than hashing a slot takes
         // on a slow machine (parse's IDLE_MS).
         let parser = parser();
+        // Its key files as the bootloader checks them, and its manifest signed by a boot key they name (351-UPD-0029).
+        let held = plan::keys(self.records());
+        let checked = slot_keys(slot, held, parser.endpoint()).or_else(|refusal| match self.refresh_keys(slot, &manifest, &signature) {
+            true => slot_keys(slot, held, parser.endpoint()),
+            false => Err(refusal),
+        });
+        match checked {
+            Ok(keys) if boot_signed(&keys, &manifest, &signature) => {}
+            Ok(keys) => { mind::println!("[UPDATER] SLOT {}: ITS MANIFEST IS SIGNED BY NO BOOT KEY OF ITS KEY FILE, VERSION {}", slot, keys.version); return Err(Error::Signature); }
+            Err(refusal) => { mind::println!("[UPDATER] SLOT {}: {}: {}", slot, refusal, refusal.reason()); return Err(Error::Signature); }
+        }
         let files = slot_files(&manifest, parser.endpoint())?;
         let shown = self.kept(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint());
         drop(parser);
@@ -827,10 +980,11 @@ impl Updater {
             (read("MANIFEST", MANIFEST_MAX), read("MANIFEST.SIG", 64), read("CHANNEL", CHANNEL_MAX), read("KEYS", KEYS_MAX)) else {
             return mind::println!("[UPDATER] STORE: SLOT {} LACKS ITS MANIFEST, SIGNATURE, CHANNEL OR KEY FILE: VERSION {} NOT KEPT", slot, self.running);
         };
-        if mind::sha256::digest(&manifest) != self.manifest || !verified(&keys::BOOT_KEY, &manifest, &signature) {
+        let parser = parser();
+        let booted = slot_keys(slot, 0, parser.endpoint()).is_ok_and(|keys| boot_signed(&keys, &manifest, &signature));
+        if mind::sha256::digest(&manifest) != self.manifest || !booted {
             return mind::println!("[UPDATER] STORE: SLOT {}'S MANIFEST IS NOT THE ONE BOOTED: VERSION {} NOT KEPT", slot, self.running);
         }
-        let parser = parser();
         let checked = self.trusted.as_ref().and_then(|(keys, _)| channel_of(&channel_file, keys, parser.endpoint()).ok())
             .filter(|c| c.version == self.running && c.manifest(ARCH) == Some(self.manifest))
             .map(|c| (c, slot_files(&manifest, parser.endpoint())));
@@ -987,18 +1141,45 @@ impl Updater {
     /// On a trial boot the kernel restarts the machine at its deadline unless init confirmed the boot: once init says it
     /// did, or past that deadline, the record says so on the disk; `why` says which.
     fn confirm(&mut self, why: &str) {
-        match plan::confirm(self.records(), self.slot) {
-            Some(write) => match self.write_record(write) {
-                Ok(()) => {
-                    mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why);
-                    self.raise_floor();
-                    self.keep_running();
-                    self.trim();
-                }
-                Err(error) => { let _ = self.fail::<()>("confirm", error); }
-            },
-            None => mind::println!("[UPDATER] SLOT {}: THE RECORD NEEDS NO CONFIRMATION", slot_name(self.slot)),
+        let records = self.records();
+        if plan::confirm(records, self.slot, 0).is_none() {
+            return mind::println!("[UPDATER] SLOT {}: THE RECORD NEEDS NO CONFIRMATION", slot_name(self.slot));
         }
+        let keys = self.keys_to_hold(records);
+        let Some(write) = plan::confirm(records, self.slot, keys) else { return };
+        match self.write_record(write) {
+            Ok(()) => {
+                mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why);
+                if keys > plan::keys(records) { mind::println!("[UPDATER] KEY FILE VERSION {} IN THE RECORDS: A SLOT WITH A LOWER ONE IS NOT BOOTED (MC-9.6)", keys); }
+                self.raise_floor();
+                self.keep_running();
+                self.trim();
+            }
+            Err(error) => { let _ = self.fail::<()>("confirm", error); }
+        }
+    }
+
+    /// The key file version the confirmation writes into the records (351-UPD-0029): the running slot's, never lower
+    /// than theirs. When it rises, the other slot gets the key files the updater trusts first if a boot key they name
+    /// signed its manifest, and stays a fallback; otherwise it is not booted from then on, which the log says.
+    fn keys_to_hold(&self, records: [Option<Record>; 2]) -> u64 {
+        let held = plan::keys(records);
+        let parser = parser();
+        let running = match slot_keys(slot_name(self.slot), 0, parser.endpoint()) {
+            Ok(keys) => keys.version,
+            Err(refusal) => { mind::println!("[UPDATER] SLOT {}: {}: THE RECORDS' KEY FILE VERSION STAYS", slot_name(self.slot), refusal); return held; }
+        };
+        if running <= held { return held; }
+        let other = self.other();
+        if slot_keys(other, running, parser.endpoint()).is_err() {
+            let read = |name: &str, limit: usize| slot_file(other, name, limit);
+            if let (Some(manifest), Some(signature)) = (read("MANIFEST", MANIFEST_MAX), read("MANIFEST.SIG", 64)) {
+                if !self.refresh_keys(other, &manifest, &signature) {
+                    mind::println!("[UPDATER] SLOT {}: SIGNED BY NO BOOT KEY OF KEY FILE VERSION {}: NOT A FALLBACK FROM NOW ON", other, running);
+                }
+            }
+        }
+        running
     }
 
     /// The version floor raised (351-UPD-0024), as `plan::raise` says: a record of its own, written like the others.
@@ -1015,6 +1196,20 @@ impl Updater {
             Ok(()) => mind::println!("[UPDATER] VERSION FLOOR {} RAISED TO {}: A SLOT BELOW IT IS NOT BOOTED (MC-9.4)", plan::floor(records), write.1.floor),
             Err(_) => mind::println!("[UPDATER] VERSION FLOOR: NOT WRITTEN"),
         }
+    }
+
+    /// The key files the updater trusts written into `slot` over its own (351-UPD-0029), when a boot key they name signed
+    /// its manifest: the root changes before it, then the key file. Whether they were.
+    fn refresh_keys(&self, slot: &str, manifest: &[u8], signature: &[u8]) -> bool {
+        let Some((keys, file)) = &self.trusted else { return false };
+        if !boot_signed(keys, manifest, signature) { return false; }
+        let roots = kept_roots(keys.version);
+        if roots.len() > keychain::ROTATIONS_MAX { return false; }
+        let write = |name: &str, data: &[u8]| File::create(&format!("MIND/{}/{}", slot, name)).is_ok_and(|mut f| f.write_at(0, data) == Ok(data.len()) && f.flush().is_ok());
+        let written = keychain::ROTATIONS.iter().zip(&roots).all(|(name, data)| write(name, data)) && write("KEYS", file);
+        for name in &keychain::ROTATIONS[roots.len()..] { let _ = mind::fs::remove(&format!("MIND/{}/{}", slot, name)); }
+        if written { mind::println!("[UPDATER] SLOT {}: KEY FILE VERSION {} WRITTEN THERE, A BOOT KEY OF WHICH SIGNED ITS MANIFEST", slot, keys.version); }
+        written
     }
 
     // What update.txt asks it to do by itself; whether to try again soon, since the source did not answer.
@@ -1036,12 +1231,16 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
-                                failure: String::new(), install: None, handles: 0, store: None, trusted: None, stamp_seen: 0 };
+                                failure: String::new(), install: None, handles: 0, store: None, trusted: None, stamp_seen: 0,
+                                order_seen: 0, order_refused: None };
     // The highest timestamp version taken before (351-UPD-0028): a lower one is refused.
     updater.stamp_seen = kept_stamp(&updater.config.channel);
+    // The recovery orders applied before (351-UPD-0030): one not above them is refused.
+    updater.order_seen = order_applied(&kept_orders(), &updater.config.channel);
+    if updater.order_seen > 0 { mind::println!("[UPDATER] RECOVERY ORDER {} OF CHANNEL {} APPLIED BEFORE ({})", updater.order_seen, updater.config.channel, ORDERS); }
     if updater.stamp_seen > 0 { mind::println!("[UPDATER] TIMESTAMP VERSION {} OF CHANNEL {} FROM {}, TAKEN BEFORE", updater.stamp_seen, updater.config.channel, STAMP); }
-    if keys::ROOT_TEST_KEYS || keys::BOOT_TEST_KEY {
-        mind::println!("[UPDATER] KEYS: {}{}", if keys::ROOT_TEST_KEYS { "THE TEST ROOT KEYS " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
+    if keys::ROOT_TEST_KEYS {
+        mind::println!("[UPDATER] KEYS: THE TEST ROOT KEYS");
     }
     // The trial is confirmed once init says it confirmed the boot (asked every ASK_MS), or past the kernel's deadline
     // (351-KRN-0014), measured on the same clock, when init cannot say.

@@ -68,6 +68,7 @@ pub fn resolve(target: &str) -> Result<(String, Kind), Refusal> {
         ["keys", "current"] => Kind::Channel, // the key file (351-UPD-0026), fetched fresh as a channel is
         ["keys", version] if digits(version) => Kind::Manifest, // its history (351-UPD-0027): a version never changes
         ["timestamps", name] if channel_name(name) => Kind::Channel, // a channel's timestamp (351-UPD-0028), fetched fresh
+        ["recovery", name] if channel_name(name) => Kind::Channel, // a channel's recovery order (351-UPD-0030), fetched fresh
         _ => return Err(Refusal::NotInLayout),
     };
     Ok((names.join("/"), kind))

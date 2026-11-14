@@ -86,6 +86,7 @@ fn the_layout_and_each_refusal_as_tools_httpd_has_them() {
     assert_eq!(resolve("/keys/current").unwrap().1, Kind::Channel);
     assert_eq!(resolve("/keys/3").unwrap().1, Kind::Manifest); // its history (351-UPD-0027)
     assert_eq!(resolve("/timestamps/stable").unwrap().1, Kind::Channel); // 351-UPD-0028
+    assert_eq!(resolve("/recovery/stable").unwrap().1, Kind::Channel); // 351-UPD-0030
     assert_eq!(resolve("/keys/other").err(), Some(Refusal::NotInLayout));
     let upper = BLOB.to_uppercase().replace("/BLOBS/", "/blobs/");
     let refused = [

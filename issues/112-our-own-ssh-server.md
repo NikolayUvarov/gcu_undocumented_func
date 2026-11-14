@@ -58,7 +58,7 @@
 
 ## Progress
 
-**Stage 1 landed (2026-11-13)** in `main` 86794305 (round 127): [112-NET-0071](../issues-done/112-NET-0071-the-ssh-servers-role-in-ssh.done), the server's role in `ssh/`, and [112-NET-0072](../issues-done/112-NET-0072-sshd-as-a-mind-core-service.done), `sshd`, both closed; the console through the shell is [112-APP-0136](112-APP-0136-the-shell-takes-an-ssh-sessions-lines.md), APP's. Every criterion above is met by them; the main task closes once 112-APP-0136 is closed. Stage 2 stays an intention.
+**Stage 1 landed (2026-11-13)** in `main` 86794305 (round 127): [112-NET-0071](../issues-done/112-NET-0071-the-ssh-servers-role-in-ssh.done), the server's role in `ssh/`, and [112-NET-0072](../issues-done/112-NET-0072-sshd-as-a-mind-core-service.done), `sshd`, both closed; the console through the shell is [112-APP-0136](../issues-done/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done), APP's. Every criterion above is met by them; the main task closes once 112-APP-0136 is closed. Stage 2 stays an intention.
 
 ## Related
 

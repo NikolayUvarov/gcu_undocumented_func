@@ -8,8 +8,8 @@
 #[path = "../libmind/src/release.rs"]
 mod release;
 
-use release::{channel_is, encode_channel, encode_file, encode_keys, encode_timestamp, expires_unix, keys_is, parse_channel, parse_keys, parse_timestamp, signed_by, step,
-               timestamp_is, Malformed, Manifest, Rebuild, Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ROLES, TIMESTAMP_MAX};
+use release::{channel_is, encode_channel, encode_file, encode_keys, encode_order, encode_timestamp, expires_unix, keys_is, parse_channel, parse_keys, parse_order, parse_timestamp, signed_by, step,
+               order_is, timestamp_is, Malformed, Manifest, Rebuild, Step, CHANNEL_MAX, FILE_LINE_MAX, KEYS_MAX, ORDER_MAX, ROLES, TIMESTAMP_MAX};
 use std::process::Command;
 
 // Output of a Python snippet run with scripts/ on its path.
@@ -477,6 +477,42 @@ fn other_forms_of_a_timestamp_are_refused() {
             if bytes[at] == value { continue; }
             bytes[at] = value;
             if let Ok((stamp, signed)) = parse_timestamp(&bytes) { assert!(timestamp_is(&bytes, &stamp, &signed), "at {}", at); }
+        }
+    }
+}
+
+// A recovery order as `release.py recover` writes one: back to version 5, the floor lowered to 5, sequence 3.
+fn order_file() -> Vec<u8> {
+    python("import release\nbody = release.order_bytes('stable', '2026-11-20T06:00:00Z', 5, 3, 5)\n\
+            sys.stdout.buffer.write(body + release.signature_lines(body, [release.TEST_RECOVERY_SEED]))")
+}
+
+#[test]
+fn a_recovery_order_reads_and_other_forms_are_refused() {
+    // 351-UPD-0030.
+    let file = order_file();
+    let (order, signed) = parse_order(&file).unwrap();
+    assert_eq!((order.channel.as_str(), order.floor, order.sequence, order.version), ("stable", 5, 3, 5));
+    let mut body = [0u8; ORDER_MAX];
+    let n = encode_order(&order, &mut body).unwrap();
+    assert_eq!(&body[..n], &file[..signed.body]);
+    assert!(order_is(&file, &order, &signed));
+    let mut lie = order;
+    lie.floor = 4;
+    assert!(!order_is(&file, &lie, &signed), "a parser that lies about the floor");
+    let good = String::from_utf8(file.clone()).unwrap();
+    let changed = |from: &str, to: &str| -> Vec<u8> { assert!(good.contains(from), "{}", from); good.replacen(from, to, 1).into_bytes() };
+    for (what, bytes) in [("a floor above the version", changed("\"floor\":5", "\"floor\":6")), ("floor 0", changed("\"floor\":5", "\"floor\":0")),
+                          ("sequence 0", changed("\"sequence\":3", "\"sequence\":0")), ("a space", changed("\"version\":5", "\"version\": 5")),
+                          ("no signature", good.split_inclusive('\n').next().unwrap().as_bytes().to_vec())] {
+        assert_eq!(parse_order(&bytes).err(), Some(Malformed), "{}", what);
+    }
+    for at in 0..file.len() {
+        for value in [b'0', b'9', b'a', b'"', b'\n'] {
+            let mut bytes = file.clone();
+            if bytes[at] == value { continue; }
+            bytes[at] = value;
+            if let Ok((order, signed)) = parse_order(&bytes) { assert!(order_is(&bytes, &order, &signed), "at {}", at); }
         }
     }
 }

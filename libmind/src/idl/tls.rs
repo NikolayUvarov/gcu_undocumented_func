@@ -23,6 +23,9 @@
 //! 1.4 (111-NET-0073) adds what NTS-KE (RFC 8915) needs: `connect-alpn`, a client session that offers one application
 //! protocol (RFC 7301) and is refused when the server does not agree on it, and `export`, the keying material RFC 8446
 //! section 7.5 derives from an established session's secrets, for its own client alone. The session's keys stay here.
+//!
+//! 1.5 (801-NET-0081): `connect-pins` logs a certificate whose start is after the system clock instead of refusing it,
+//! so that a machine whose clock is far behind (a flat battery) still reaches a server it knows by its pin.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -32,7 +35,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:tls";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -201,9 +204,10 @@ pub fn connect_pinned(endpoint: Endpoint, session: u32, name: &str, address: u32
 
 /// As `connect`, the server trusted by one of `pins` (one or two; the second is the next one, for rotation) instead
 /// of the root store (1.2). Still checked: the certificate's name against `name` (a DNS name or an IPv4 address),
-/// its validity period by the system clock, the server-authentication purpose when it names purposes, `CA:false`,
-/// and the handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A
-/// server that matches no pin, or fails a check, is refused (`certificate`).
+/// its end by the system clock, the server-authentication purpose when it names purposes, `CA:false`, and the
+/// handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A server that
+/// matches no pin, or fails a check, is refused (`certificate`). Since 1.5 (801-NET-0081) a certificate whose start
+/// is after the system clock is logged, not refused: such a clock is taken as wrong, and the pin binds the key.
 pub fn connect_pins(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, pins: &[Pin], timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {

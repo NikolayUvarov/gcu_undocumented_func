@@ -1,6 +1,6 @@
 // The public keys the updater checks releases with: the root set's (351-UPD-0026) from $MIND_ROOT_KEYS or
-// keys/root-test.pub, `threshold T` and then a key a line, as `release.py keys root` prints it; the boot key's as the
-// bootloader takes it ($MIND_BOOT_PUBLIC_KEY or its keys/test.pub). The release keys are the key file's.
+// keys/root-test.pub, `threshold T` and then a key a line, as `release.py keys root` prints it, the set the bootloader
+// is built with too (351-UPD-0029). The release, timestamp, recovery and boot keys are the key file's.
 use std::{env, fs};
 use std::path::Path;
 
@@ -29,9 +29,7 @@ fn main() {
     let keys = &words[2..];
     assert!(keys.len() <= 4 && (1..=keys.len()).contains(&(threshold as usize)), "1 to 4 root keys and a threshold up to their number");
     assert!(keys.iter().enumerate().all(|(i, k)| !keys[..i].contains(k)), "the root keys are distinct");
-    let (boot, boot_test) = text("MIND_BOOT_PUBLIC_KEY", "../bootloader/keys/test.pub");
     let out = Path::new(&env::var("OUT_DIR").unwrap()).join("keys.rs");
-    fs::write(out, format!("pub const ROOT_KEYS: [[u8; 32]; {}] = [{}];\npub const ROOT_THRESHOLD: u8 = {};\npub const ROOT_TEST_KEYS: bool = {};\n\
-                            pub const BOOT_KEY: [u8; 32] = {};\npub const BOOT_TEST_KEY: bool = {};\n",
-        keys.len(), keys.iter().map(|k| key(k)).collect::<Vec<_>>().join(", "), threshold, root_test, key(boot.trim()), boot_test)).unwrap();
+    fs::write(out, format!("pub const ROOT_KEYS: [[u8; 32]; {}] = [{}];\npub const ROOT_THRESHOLD: u8 = {};\npub const ROOT_TEST_KEYS: bool = {};\n",
+        keys.len(), keys.iter().map(|k| key(k)).collect::<Vec<_>>().join(", "), threshold, root_test)).unwrap();
 }

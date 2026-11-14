@@ -98,6 +98,26 @@ class Manifest(unittest.TestCase):
     def test_the_bootloaders_test_key(self):
         self.assertEqual((ROOT / "bootloader/keys/test.pub").read_text().strip(), sm.public_key(sm.TEST_SEED).hex())
 
+    def test_the_key_file_goes_with_the_manifest(self):
+        # 351-UPD-0029: the volume gets its key file, which names the boot key; another boot key without the key history
+        # that names it ($MIND_KEYS) is refused by the command, since the bootloader would refuse the volume.
+        with tempfile.TemporaryDirectory() as temp:
+            v = self.volume(temp)
+            self.assertEqual(sm.main([str(v)]), 0)
+            self.assertIn(sm.public_key(sm.TEST_SEED), sm.boot_keys((v / "KEYS").read_bytes()))
+            self.assertNotIn("KEYS", sm.shipped(v))
+            seed = v / "boot.seed"
+            seed.write_text(hashlib.sha256(b"a boot key of this test").hexdigest())
+            saved = {name: os.environ.pop(name, None) for name in ("MIND_BOOT_SIGNING_KEY", "MIND_KEYS")}
+            try:
+                os.environ["MIND_BOOT_SIGNING_KEY"] = str(seed)
+                self.assertEqual(sm.main([str(v)]), 1)
+            finally:
+                for name, value in saved.items():
+                    os.environ.pop(name, None)
+                    if value is not None:
+                        os.environ[name] = value
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
