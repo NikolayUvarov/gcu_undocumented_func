@@ -791,8 +791,8 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
             }
-            // The link to another machine (800-KRN-0128), started only with link.conf at the boot volume's root: the
-            // serial converters' driver holds usb_host's client badged for them, and its endpoint.
+            // The link to another machine (800-KRN-0128), started whether or not the boot volume holds link.conf (801-KRN-0247):
+            // the serial converters' driver holds usb_host's client badged for them, and its endpoint.
             "usb_serial" => {
                 if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
                 grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_SERIAL)?, CLIENT);
@@ -819,10 +819,11 @@ impl Init {
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
                 let words = core::str::from_utf8(&words[..length]).unwrap_or("");
                 let _ = core::fmt::Write::write_str(&mut args, words);
-                // Developer mode, link.conf's word `dev` (800-KRN-0139, the maintainer's decision of 2026-10-21): what the
-                // shell lends its programs without asking, so whoever holds the cable may debug the machine as its user.
-                // The servers start after link: their keepers are made now and reached once they run.
-                if self.link_dev() {
+                // The cable's clients at every start (801-KRN-0247, the maintainer's decision of 2026-11-14: the cable is
+                // physical access, and no word on the disk narrows it): what the shell lends its programs without asking, so
+                // whoever holds the cable may debug and restore the machine as its user. The servers start after link: their
+                // keepers are made now and reached once they run.
+                {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                     // The policy broker's client that may only launch (800-KRN-0142): link has no user to ask before a change.
                     grants.add(SLOT_NETPOLICY, self.badged(&mut minted, "netpolicy", mind::network::BADGE_LAUNCH)?, CLIENT);
@@ -834,7 +835,7 @@ impl Init {
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
                     // Keys and the pointer from the cable (800-KRN-0191); not in a safe start, whose asker is at the machine.
                     if !self.safe { grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0); }
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
+                    mind::println!("[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
                                    if self.safe { "NO INPUT IN A SAFE START; " } else { "INPUT; " }, FIRMWARE_DIR);
                 }
             }
@@ -1423,9 +1424,9 @@ impl Init {
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
             }
         }
-        // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
-        // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
-        if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
+        // link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file goes over the cable,
+        // not by writing the disk again (800-KRN-0173, for 800-LNK-0027; at every start since 801-KRN-0247). The user's badge writes there.
+        if name == "link" && grants.count < SPAWN_GRANTS_MAX {
             match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
@@ -1688,7 +1689,7 @@ impl Init {
                 Off::NoImage => core::fmt::Write::write_str(&mut off, "no image"),
                 Off::Safe => core::fmt::Write::write_str(&mut off, "safe start"),
                 Off::Mode => core::fmt::Write::write_str(&mut off, "mode"),
-                Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"),
+                Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"), // the line link.conf did not choose (init.wit)
                 Off::Failed => core::fmt::Write::write_str(&mut off, "failed"),
                 Off::Passphrase => core::fmt::Write::write_str(&mut off, "passphrase"),
             };
@@ -1817,10 +1818,7 @@ impl Init {
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
 
-    // The link's developer mode: link.conf's word `dev`, as the bootloader read it (800-KRN-0139).
-    fn link_dev(&self) -> bool { self.link_word("dev") }
-
-    // Whether link.conf, as the bootloader read it, has `word` (`dev`, `uart`).
+    // Whether link.conf, as the bootloader read it, has `word` (`uart`); none without the file.
     fn link_word(&self, word: &str) -> bool {
         let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
         let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
@@ -1908,12 +1906,6 @@ impl Init {
         }
         // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
         if MODE_SERVICES.contains(&name) { self.placed[index].off = Off::Mode; return true; }
-        // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
-        if matches!(name, "usb_serial" | "uart_serial" | "link") && self.link.is_none() {
-            self.missing[index] = true; self.placed[index].off = Off::NoLink;
-            mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name);
-            return true;
-        }
         // The link's line: the console UART through uart_serial with link.conf's `uart`, else a USB converter (100000-KRN-0221).
         if matches!(name, "usb_serial" | "uart_serial") && (name == "uart_serial") != self.link_word("uart") {
             self.missing[index] = true; self.placed[index].off = Off::NoLink;
@@ -2010,9 +2002,8 @@ impl Init {
             match word {
                 "development" => modes.development = true,
                 "maintenance" => modes.maintenance = true,
-                // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
-                "link-console" if self.link_dev() => self.link_console = true,
-                "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
+                // The link's console (800-KRN-0155): the owner's word, whatever link.conf says (801-KRN-0247).
+                "link-console" => self.link_console = true,
                 // The owner's permissions (751-KRN-0185), each counted below only with what it needs.
                 "remote-update" => modes.remote_update = true,
                 "link-remote-update" => modes.link_remote_update = true,

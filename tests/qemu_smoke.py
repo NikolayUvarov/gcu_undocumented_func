@@ -6703,7 +6703,7 @@ def link_suite(args):
             granted = [h for h in held if h[1] != pids["link"]]
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
-            # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
+            # What init grants the cable at every start (801-KRN-0247; with `dev` before, 800-LNK-0012), each from its service: the system monitor,
             # init's reboot client, the policy broker, the Wi-Fi station, the shell's commands (800-KRN-0148) and a writable
             # scope of data/firmware/ in slot 7 (800-KRN-0173), and the input privilege in slot 8 (800-KRN-0191).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
@@ -6713,7 +6713,7 @@ def link_suite(args):
             assert count == len(held) + 1 and count - 1 - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
             assert (7, pids["vfs_server"]) in granted, caps
-            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; INPUT; data/firmware/ TO WRITE")
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; INPUT; data/firmware/ TO WRITE")
             assert re.search(r"\bfirmware\b", vm.command("ls data", raw=True)), "init made data/firmware/"
             # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
             commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
@@ -6918,7 +6918,7 @@ def link_suite(args):
         finally:
             vm.close()
     # 800-LNK-0026: with `address=5` link answers only frames to its address, so it can share an RS-485 line. No `baud=`:
-    # 460800 bit/s (801-LNK-0044); no `dev`, so init grants none of the developer mode's clients (800-KRN-0139).
+    # 460800 bit/s (801-LNK-0044); no `dev`, and init grants the cable's clients all the same (801-KRN-0247).
     with tempfile.TemporaryDirectory(prefix="smoke-link-address-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"address=5\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
@@ -6938,38 +6938,45 @@ def link_suite(args):
             link(port, "--address", "5", "put", str(Path(temp) / "mt.elf"))
             require(link(port, "--address", "5", "run", "mt.elf", "--help"), "memtest — test program of task memory")
             require(link(port, "--address", "5", "run", "memtest"), "USAGE: MEMTEST ALLOC")
-            # 800-LNK-0015: without the shell's client from init a shell line is refused as not allowed, and the log says why.
-            require(link(port, "--address", "5", "sh", "ps", ok=False), "init granted link no client for it")
-            require(vm.command("dmesg -s link", raw=True), "REFUSED, INIT GAVE LINK NO SHELL CLIENT: ps")
-            # REBOOT and REPLACE without init's lifecycle client: refused, nothing restarted.
-            require(link(port, "--address", "5", "reboot", ok=False), "not allowed")
-            require(link(port, "--address", "5", "replace", "rtc", "--back", ok=False), "not allowed")
-            require_all(vm.command("dmesg -s link", raw=True), "[LINK] REBOOT REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT",
-                        "[LINK] REPLACE rtc REFUSED: INIT GAVE LINK NO LIFECYCLE CLIENT")
-            # 800-LNK-0032: without init's input capability keys are refused DENIED and logged, and nothing reaches the focused program.
+            # 801-KRN-0247: no word on the disk narrows the cable: init grants link its clients without `dev`, and says so.
+            powers = re.search(r"\[LINK\] NO WORD IN link.conf LIMITS THE CABLE \(801-LNK-0044\); FROM INIT:([A-Z ]*)", logged)[1].split()
+            assert {"REBOOT", "SHELL", "INPUT", "FIRMWARE"} <= set(powers), powers
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; INPUT; data/firmware/ TO WRITE")
+            # 800-LNK-0015: a shell line through the shell's client.
+            require(link(port, "--address", "5", "sh", "ps"), "link")
+            # 800-KRN-0191: the input privilege, and keys that reach the focused program.
+            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
+            assert re.search(r"^SLOT=8 GEN=0 KIND=6 ", caps, re.M), caps
             vm.send("run keys\n")
             require(vm.expect("[KEYS] READY"), "[KEYS] LISTEN")
             start = len(vm.log)
-            require(link(port, "--address", "5", "key", "f6", "shift-a", ok=False), "takes no keys")
-            time.sleep(1.5)
-            vm.collect()
-            assert "[KEYS] code=" not in vm.log[start:], vm.log[start:]
+            require(link(port, "--address", "5", "key", "f7", "shift-a"), "events posted, 2 chords")
+            for _ in range(40):
+                vm.collect()
+                if "code=F(7)" in vm.log[start:] and "char=A U+0041" in vm.log[start:]:
+                    break
+                time.sleep(.25)
+            else:
+                raise AssertionError(vm.log[start:][-2000:])
             vm.send_bytes(b"\x1b")
             require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
             time.sleep(.1); vm.collect(); vm.output = ""
-            require(vm.command("dmesg -s link", raw=True), "INPUT REFUSED: INIT GAVE LINK NO INPUT CAPABILITY")
-            # 800-KRN-0191: without `dev` link holds no input privilege at all.
-            caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
-            assert "KIND=6 " not in caps, caps
+            # 800-KRN-0144: REPLACE through init's lifecycle client, rtc from a copy of its image and back.
+            rtc = ROOT / IMAGE / "rtc.elf"
+            require(link(port, "--address", "5", "replace", "rtc", str(rtc)), "started again from replace/rtc.elf")
+            require(link(port, "--address", "5", "replace", "rtc", "--back"), "from its boot image")
             # Another address and a frame with none go unanswered: bounded by the tries.
             for other in (("--address", "6"), ()):
                 r = subprocess.run([str(mindlink), "--tries", "2", "--timeout", "1000", "--payload", "256", *other, port, "hello"],
                                    capture_output=True, text=True, timeout=60)
                 assert r.returncode != 0, ("answered", other, r.stdout + r.stderr)
             require(link(port, "--address", "5", "hello"), '"MIND Core link"')
+            # The last step: REBOOT through the same client restarts the machine once the answer is out (QEMU exits: -no-reboot).
+            require(link(port, "--address", "5", "reboot"), "restarting")
+            vm.process.wait(timeout=60)
         finally:
             vm.close()
-    # 800-KRN-0191: in a safe start with `dev`, link gets its developer grants but not the input privilege, as whoever asked
+    # 800-KRN-0191: in a safe start, link gets the cable's clients but not the input privilege, as whoever asked
     # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
     with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
@@ -6982,7 +6989,7 @@ def link_suite(args):
             vm.expect("MIND> ", timeout=120)
             log = vm.command("dmesg -s init", raw=True)
             require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
-            require(log, "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
+            require(log, "[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
             caps = vm.command(f"stat caps {vm.services()['link']}", raw=True)
             assert "KIND=6 " not in caps, caps
         finally:
@@ -7052,7 +7059,7 @@ def modes_suite(args):
     if not raw_tools():
         print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
         return
-    for words, expected in ((b"# the operator's\ndevelopment\nturbo\nlink-console\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
+    for words, expected in ((b"# the operator's\ndevelopment\nturbo\nlink-console\n", "DEVELOPMENT AND LINK CONSOLE (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
             extra = {**MODES_EFFECTOR_FILES, "data/mode.conf": words} if words else None
             image, _, _ = raw_fat_image(Path(temp), extra=extra)
@@ -7062,8 +7069,8 @@ def modes_suite(args):
                 require(log, f"[INIT] MODE: {expected}")
                 if words:
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
-                    # The link's console counts only with `dev` in link.conf, which this disk has not (800-KRN-0155).
-                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: link-console (NO dev IN link.conf)")
+                    # The link's console counts with no `dev` in link.conf, which this disk has not (801-KRN-0247).
+                    assert "WORD LEFT OUT: link-console" not in log, log[-2000:]
                     effector_grants_check(vm)
                     pids = vm.services()
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
@@ -7383,7 +7390,7 @@ def gateway_stub_check(args):
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
-            stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
+            stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link-console in data/mode.conf (800-KRN-0155)
             refusals = vm.command("dmesg -s init", raw=True, timeout=60)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -7430,7 +7437,7 @@ def gateway_stub_check(args):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
     # 750-KRN-0154: the owner allows the reboot. The stub asks it at its first start; QEMU restarts the machine.
-    # 800-KRN-0155: with `dev` in link.conf the word `link-console` counts, across the reboot too.
+    # 800-KRN-0155: the word `link-console` counts, across the reboot too (with or without `dev` in link.conf, 801-KRN-0247).
     with tempfile.TemporaryDirectory(prefix="smoke-gateway-reboot-", dir=ROOT / IMAGE) as temp:
         extra = {"data/mode.conf": b"development\nlink-console\n", "link.conf": b"dev\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n",
                  "data/inbox/reboot-now": b"1\n"}
@@ -9883,13 +9890,13 @@ def linkupdate_suite(args):
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
         require(link.log(), "[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S")  # no word in link.conf (801-LNK-0044)
-        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (7, 10, 11, 19, 30, 33); slot 15
+        # 801-KRN-0247: without `dev` in link.conf, link holds the cable's clients (7, 10, 11, 19, 30, 33) all the same; slot 15
         # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         granted = {int(slot) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M) if servers.get(int(ep)) != pids["link"]}
-        assert {2, 3, 12, 15} <= granted <= {2, 3, 5, 12, 15}, caps
+        assert {2, 3, 7, 10, 11, 12, 15, 19, 30} <= granted <= {2, 3, 5, 7, 10, 11, 12, 15, 19, 30, 33}, caps
         started = time.monotonic()
         for path in files:
             link.put(server / path, path)
