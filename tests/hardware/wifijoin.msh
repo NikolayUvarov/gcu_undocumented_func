@@ -5,6 +5,7 @@ requires: file wifi network log
 # as autorun.msh, which the shell runs once at start (000-APP-0079), with data/wifijoin.txt: the network's name, then
 # its passphrase. The passphrase is read only by `wifi join` (550-APP-0078): this script prints and logs only the name.
 # A file with the name alone (build-and-write.sh --keep-wifi) joins a network keystore remembers, with no passphrase.
+# A join with the passphrase asks keystore to remember the network, as the station's automatic rejoin needs it (801).
 
 # A line on the screen and in the system log.
 fn note(text) {
@@ -39,7 +40,8 @@ try {
     let second = ""
     if len(lines(file)) > 1 { second = trim(lines(file)[1]) }
     let remembered = second == ""
-    let join = "wifi join \"{name}\" --passphrase-file data/wifijoin.txt"
+    # A join with the passphrase is remembered too, so wlan rejoins by itself after any loss (801-ASR-0015).
+    let join = "wifi join \"{name}\" --passphrase-file data/wifijoin.txt --remember"
     if remembered { join = "wifi join \"{name}\"" }
     let mark = ""
     if remembered { mark = " (REMEMBERED BY KEYSTORE)" }
