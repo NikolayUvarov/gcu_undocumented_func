@@ -1339,6 +1339,9 @@ impl Init {
                 }
                 // keystore's client that types the owner's passphrase, the shell's alone (308-KRN-0205).
                 if self.present("keystore") { grants.add(SLOT_PASSPHRASE, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_PASSPHRASE)?, CLIENT); }
+                // The Effector gateway's owner client, the shell's alone (801-KRN-0246): status, reload-policy and audit, no action.
+                // Its endpoint is kept, so this one reaches each start of the gateway and answers ERR_PEER while no mode runs it.
+                grants.add(SLOT_EFFECTOR, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_OWNER)?, CLIENT);
                 // storefs's client that writes, as vfs_server's does (BADGE_USER); the shell lends it on (311-KRN-0190).
                 if self.present("storefs") { grants.add(SLOT_STOREFS, self.badged(&mut minted, "storefs", mind::fs::BADGE_USER)?, CLIENT); }
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
