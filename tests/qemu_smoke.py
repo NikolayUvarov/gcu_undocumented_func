@@ -9021,6 +9021,8 @@ def update_suite(args):
         log = logged("[UPDATER] FETCH: REFUSED: Digest", 300)
         require(log, f"[UPDATER] FETCH: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT")
         assert "[UPDATER] RECORD" not in log, log
+        # 801-NET-0079: the device key before the update, to be the same one on trial (none without a random source).
+        before = re.search(r"\[KEYSTORE\] DEVICE KEY READY: (MIND [0-9A-F]{8}) ", vm.command("dmesg -s keystore", raw=True))
         # As published, the largest boot file cut midway: fetched, checked, applied, and the machine restarted. The
         # updater's lines of this boot go with it: the serial line, the server and the records show what it did.
         blob.write_bytes(original)
@@ -9081,6 +9083,11 @@ def update_suite(args):
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        # 801-NET-0079: keystore on the trial boot changes nothing the slot before reads, and holds the same device key.
+        keys = vm.command("dmesg -s keystore", raw=True)
+        require(keys, "[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN system/keystore THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL")
+        if before:
+            require(keys, f"[KEYSTORE] DEVICE KEY READY: {before[1]} ")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         # 351-UPD-0036: release 6's period, 7 s, in place of update.txt's 20 s: three checks after it, each ending within
         # 18 s of the one before by the log's clock (7 s and a check's own time; update.txt's would be 20 s and that).
@@ -14325,6 +14332,9 @@ def device_key_check(args, cpu):
             vm.close()
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
         assert third != first, (first, third)
+        # 801-NET-0079: the damaged key set aside whole, never written over.
+        require(log, "[KEYSTORE] system/keystore/device.key SET ASIDE AS system/keystore/device.key.before")
+        assert keystore_file(part, Path(temp), "device.key.before") == damaged.read_bytes(), "the damaged key was not kept whole"
         # The earlier files kept whole beside the new ones, for an owner who restores the earlier key by hand.
         for name, data in copies.items():
             assert keystore_file(part, Path(temp), name + ".before") == data, name
@@ -14666,6 +14676,26 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert again == plain, (plain, again)
+        # 801-NET-0079: the sealed key while no TPM answers (a release that does not reach it): no key is made or stored,
+        # nothing in system/keystore changes, and the store's secret is not set aside; TPM A back, the same key and store.
+        vm, log, lost = boot()
+        try:
+            require(log, "[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN system/keystore/device.sealed, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY, NOTHING IN system/keystore CHANGED")
+            require(service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED"), f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}")
+            kept = vm.command("dmesg -s keystore", raw=True)
+            require(kept, "[KEYSTORE] SECRETS REFUSED FOR PID")
+            assert "SET ASIDE" not in kept and "DEVICE KEY MADE" not in kept, kept
+        finally:
+            close(vm)
+        assert lost != plain, (plain, lost)
+        assert stored("device.sealed") and not stored("device.key") and stored("services/blockstore.kept") and not stored("services/blockstore.kept.before")
+        vm, log, back = boot("a")
+        try:
+            store_opens(vm, root)
+        finally:
+            close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
+        assert back == plain, (plain, back)
         # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
         try:
@@ -14678,9 +14708,13 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
         assert other != plain, (plain, other)
+        # 801-NET-0079: TPM A's blob set aside whole, never written over, so that A could open it again.
+        require(log, "[KEYSTORE] system/keystore/device.sealed SET ASIDE AS system/keystore/device.sealed.before")
+        assert keystore_file(part, temp, "device.sealed.before")[:8] == b"MINDSEL1", "TPM A's sealed key was not kept"
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
-          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
+          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal; "
+          "a boot where no TPM answers makes no key and changes nothing, and the same TPM then opens the same key and store (801-NET-0079)", flush=True)
     print(f"PASS: the store's volume key kept by keystore under the device key (308-STO-0022): its disk made at a boot without a TPM "
           f"({volume[1]}) mounts and reads back an object put then after TPM A sealed the device key, and twice under A; under "
           "TPM B's new device key it is not mounted and the object is not read", flush=True)
@@ -17519,18 +17553,29 @@ def trial_check(args, disk):
         shutil.rmtree(volume)
         shutil.rmtree(temp / "slots")
         boot_slots.write_next(image, slot="B", fallback="A", tries=1)
-        vm = VM(args, str(image.path), raw=True, prompt=False)
+        # 801-NET-0079 (the check KRN wrote for it): a damaged device key on the disk the trial boots from is kept whole.
+        for directory in ("system", "system/keystore"):
+            subprocess.run(["mmd", "-i", image.drive, f"::{directory}"], env=MTOOLS_ENV, capture_output=True)
+        damaged = b"MINDKEY1" + bytes(64)
+        image.write("system/keystore/device.key", damaged)
+        # RDRAND, so that keystore reaches the key at all (without it there is no key, and nothing to keep); the boot's
+        # writes reach the image, so that what keystore left there is read back.
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, extra=["-cpu", "qemu64,+rdrand"])
         try:
             out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
             for line in ("BOOT: SLOT B LOADED ON TRIAL", "MIND CORE KERNEL: SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT"):
                 require(out, line)
             # init's lines go to the system log, not COM1; logs 1 is the shell's own command (init is PID 1).
             require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED")
+            keys = vm.service_logs("keystore", "FOR THIS BOOT ONLY")
+            require_all(keys, "[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN system/keystore THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL",
+                        "[KEYSTORE] THE BOOT IS ON TRIAL AND THE STORED KEY IS DAMAGED: A KEY FOR THIS BOOT ONLY, THE KEY FILES LEFT AS THEY ARE FOR THE SLOT BEFORE")
             time.sleep(18)
             vm.collect()
             assert vm.process.poll() is None and "RESTARTING" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
+        assert image.read("system/keystore/device.key") == damaged and image.read("system/keystore/device.key.before") is None, "keystore wrote on a trial boot"
         boot_slots.write_next(image, slot="B", fallback="A", tries=1)
         with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
             ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
@@ -17552,7 +17597,8 @@ def trial_check(args, disk):
             finally:
                 vm.close()
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
-          "restarts at the deadline, and the next boot falls back to slot A", flush=True)
+          "restarts at the deadline, and the next boot falls back to slot A; on the trial, keystore took a key for that boot "
+          "alone and left the damaged one on the disk as it was (801-NET-0079)", flush=True)
 
 
 def loader_error(vm, name, reason):
