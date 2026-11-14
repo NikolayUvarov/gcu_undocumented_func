@@ -189,8 +189,8 @@ impl Keys {
             stored::Loaded::Missing if trial => untouched(seed, "NO DEVICE KEY IS STORED"),
             stored::Loaded::Missing => anew(made(seed, "")),
             stored::Loaded::Damaged if trial => untouched(seed, "THE STORED KEY IS DAMAGED"),
-            // A damaged file is replaced: servers that knew the old key must be told the new one.
-            stored::Loaded::Damaged => anew(made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
+            // A damaged file is set aside and a new key made: servers that knew the old key must be told the new one.
+            stored::Loaded::Damaged => replaced(seed, stored::FILE, |seed| made(seed, " ANEW: THE STORED ONE WAS DAMAGED")),
             stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
         }
     }
@@ -235,13 +235,14 @@ impl Keys {
                 }
                 stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
                 stored::Loaded::Missing if trial => untouched(seed, "NO DEVICE KEY IS STORED"),
+                stored::Loaded::Missing => anew(made(seed, "")),
                 stored::Loaded::Damaged if trial => untouched(seed, "THE STORED KEY IS DAMAGED"),
-                _ => anew(made(seed, "")),
+                stored::Loaded::Damaged => replaced(seed, stored::FILE, |seed| made(seed, "")),
             },
             stored::Unsealed::Refused if trial => untouched(seed, "THE SEALED KEY DOES NOT OPEN ON THIS TPM"),
-            stored::Unsealed::Refused => anew(made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
+            stored::Unsealed::Refused => replaced(seed, stored::SEALED, |seed| made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM")),
             stored::Unsealed::Damaged if trial => untouched(seed, "THE SEALED KEY IS DAMAGED"),
-            stored::Unsealed::Damaged => anew(made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
+            stored::Unsealed::Damaged => replaced(seed, stored::SEALED, |seed| made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
             stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
             // The sealed key is kept for the next boot: a key for this boot only.
             stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); this_boot(seed) }
@@ -311,6 +312,11 @@ impl Keys {
 fn anew(made: Option<Held>) -> Option<Held> {
     if made == Some(Held::Kept) { secrets::set_aside(); }
     made
+}
+
+// Off trial, a key file that does not open: set aside, then a new key made; if it cannot be moved, one for this boot only.
+fn replaced(seed: &mut [u8; 32], path: &str, made: impl FnOnce(&mut [u8; 32]) -> Option<Held>) -> Option<Held> {
+    if stored::set_aside(path) { anew(made(seed)) } else { this_boot(seed) }
 }
 
 // A key for this boot only: nothing is written under it.
