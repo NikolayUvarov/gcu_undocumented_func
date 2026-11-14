@@ -7188,6 +7188,9 @@ def effector_policy_edits(vm):
         vm.send_bytes(answer)
         require(vm.expect("MIND> ", timeout=30), said)
     require(vm.command("cat data/effector/policy", raw=True), "update apply")
+    # The gateway read it at once, through the shell's owner client in slot 45 (801-KRN-0246).
+    require(vm.command("dmesg -s shell", raw=True), "update apply; ")
+    assert re.search(r"EFFECTOR POLICY: \+ update apply; (\d+) RULES, KEPT IN data/effector/policy\. THE GATEWAY READ IT: \1 RULES", vm.log), vm.log[-3000:]
     vm.send("effector policy allow reboot on\n")
     vm.expect("(Y/N)", timeout=10)
     vm.send_bytes(b"y")
@@ -7202,8 +7205,9 @@ def effector_policy_edits(vm):
     require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
     require(vm.command("dmesg -s shell", raw=True), "[SHELL] EFFECTOR POLICY: + update apply; ")
     require(vm.command("effector policy edit", raw=True), "USAGE: EFFECTOR POLICY")
-    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written; deny at "
-          "once; a rule the gateway would refuse not written; no temporary file left", flush=True)
+    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written and read "
+          "by the gateway at once through the shell's owner client (801-KRN-0246); deny at once; a rule the gateway would "
+          "refuse not written; no temporary file left", flush=True)
 
 
 def effector_policy_recovery_check(args):

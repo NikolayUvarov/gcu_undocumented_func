@@ -1,6 +1,6 @@
-# 801-APP-0140 — `effector policy show | allow <line> | deny <line>` in the shell
+# 801-APP-0140 — `effector policy show | allow <line> | deny <line>` in the shell — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (the commands done and checked in QEMU, 2026-11-14; the gateway's reload at once waits for the owner client) · **Blocked by:** — for the file; the gateway reading it at once waits for the shell's owner client of `effector_gw` (`BADGE_OWNER`), asked of `KRN` · **Main task:** [801](801-the-bench-stays-manageable.md) (S7), the policy part of [750-APP-0093](750-APP-0093-the-shells-effector-command.md) · **Roadmap:** the development of MIND Core on real hardware; stage V · **Constitution:** MC-3.8, MC-3.11, MC-7.5, MC-10.7
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — (the shell's owner client of `effector_gw` is in `main` since round 136, 801-KRN-0246) · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S7), the policy part of [750-APP-0093](../issues/750-APP-0093-the-shells-effector-command.md) · **Roadmap:** the development of MIND Core on real hardware; stage V · **Constitution:** MC-3.8, MC-3.11, MC-7.5, MC-10.7
 
 **Asked by:** LNK for 801's S7 on 2026-11-14 (`ALL/2026-11-14T0847Z-LNK-801-the-bench-stays-manageable-your-parts.md`): today the policy needs hand edits of `data/effector/policy`. Numbered on 2026-11-14.
 
@@ -25,7 +25,7 @@
 - **QEMU (`modes` suite, x86):** `effector policy allow update apply` asked and written, the file parses, `deny` takes it out.
 - **Docs:** `docs/effector/policy.md` and `docs/tools/README.md` (both languages).
 
-## Progress (2026-11-14)
+## Resolution
 
 - **The code** (007ffffa, on the tools branch; `fast-test` dd18dde9):
   - `shell/src/policyedit.rs`: the command line; a rule's identity (its key, and for `service`, `package-key`, `collect` and `log` its name or root); the edit, `check`ed whole by the caller's parser; the text;
@@ -41,8 +41,11 @@
     - no `policy.new` or `policy.old` left;
   - `effector_policy_recovery_check`: a disk with no policy, a whole `policy.new` and a `policy.old`. At its start the shell gave the new one its name and removed the old one.
 - **Docs:** `docs/effector/policy.md`, `docs/tools/README.md` and `README_RU.md`, the shell's help line.
-- **Left:** the gateway reading the new policy at once, through the shell's owner client of `effector_gw` (`requests-KRN.md`). Until then it reads the file at its next start.
+- **The gateway reads it at once** (c382a0b5, after round 136 brought 801-KRN-0246):
+  - after each `allow` or `deny` the shell calls `reload-policy` through the owner's client `init` lends in `SLOT_EFFECTOR` (45), 2 s at most;
+  - the line says `THE GATEWAY READ IT: N RULES`, or why not: no mode on (`ERR_PEER`), refused, or no answer. In those cases the gateway reads the file at its next start.
+  - **Tested:** the `modes` suite, 9 PASS, on round 136's candidate (`ccf90086`) with this change and the ABI 33 fixtures. `effector_policy_edits` sees the gateway read `update apply` at once, and the same count of rules. That tree differs from c382a0b5 only in the issues' text. Host tests: `shell_host` (41).
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [750-APP-0093](750-APP-0093-the-shells-effector-command.md), [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done).
+[801](../issues/801-the-bench-stays-manageable.md), [750-APP-0093](../issues/750-APP-0093-the-shells-effector-command.md), [750-EFF-0003](750-EFF-0003-interface-and-policy.done).

@@ -1006,10 +1006,14 @@ fn effector_policy_edits_one_rule_and_never_writes_a_refused_policy() {
     assert_eq!(edit(Some("effector-policy 1\r\nagent on\r\n"), Asked::Allow("reboot on"), policy_check).unwrap().0, "effector-policy 1\nagent on\nreboot on\n");
     // The text: the question, the line after an edit, the state below the file.
     assert!(policyedit::question("update apply").starts_with("ALLOW `update apply` IN THE EFFECTOR POLICY?"));
-    assert_eq!(policyedit::done(&Change::Replaced { old: "update check".into(), new: "update apply".into() }, 3, Some(3)),
+    use policyedit::Reload;
+    assert_eq!(policyedit::done(&Change::Replaced { old: "update check".into(), new: "update apply".into() }, 3, Reload::Read(3)),
                "EFFECTOR POLICY: update apply (WAS update check); 3 RULES, KEPT IN data/effector/policy. THE GATEWAY READ IT: 3 RULES");
-    assert!(policyedit::done(&Change::Removed("reboot on".into()), 2, None).contains("- reboot on; 2 RULES") );
-    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, None).ends_with("THE GATEWAY READS IT AT ITS NEXT START (A RESTART, OR A MODE TURNED OFF AND ON); INIT'S OWN CHECKS AT ONCE"));
+    assert!(policyedit::done(&Change::Removed("reboot on".into()), 2, Reload::NoClient).contains("- reboot on; 2 RULES") );
+    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, Reload::NoClient).ends_with("THE GATEWAY READS IT AT ITS NEXT START (A RESTART, OR A MODE TURNED OFF AND ON); INIT'S OWN CHECKS AT ONCE"));
+    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, Reload::NotRunning).ends_with("THE GATEWAY DOES NOT RUN (NO MODE IS ON): IT READS IT WHEN IT STARTS"));
+    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, Reload::Refused("NOT AS ITS OWNER")).ends_with("THE GATEWAY DID NOT READ IT (NOT AS ITS OWNER): IT READS IT AT ITS NEXT START"));
+    assert!(policyedit::done(&Change::Added("reboot on".into()), 2, Reload::NoAnswer).contains("DID NOT ANSWER IN 2 S"));
     assert_eq!(policyedit::state(true, policy_check(current)), "THE POLICY PARSES: 3 RULES");
     assert_eq!(policyedit::state(true, policy_check(broken)), "THE POLICY IS REFUSED AT LINE 3 (A KEY THE GRAMMAR DOES NOT KNOW): THE GATEWAY ALLOWS NOTHING");
     assert!(policyedit::state(false, Ok(0)).starts_with("NO data/effector/policy: THE GATEWAY ALLOWS NOTHING"));

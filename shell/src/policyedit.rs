@@ -88,17 +88,24 @@ pub fn question(rule: &str) -> String {
     alloc::format!("ALLOW `{}` IN THE EFFECTOR POLICY? THE EFFECTOR SERVER MAY THEN DO ON THIS MACHINE WHAT THE RULE NAMES (DOCS/EFFECTOR/POLICY.MD).", rule)
 }
 
-/// The line after an edit, and when the gateway reads it: `reloaded` is the rules' count the gateway now has, if the
-/// shell could ask it.
-pub fn done(change: &Change, rules: u16, reloaded: Option<u16>) -> String {
+/// What the gateway said when the shell asked it to read the policy again (`reload-policy` through the owner's client in
+/// SLOT_EFFECTOR, 801-KRN-0246).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reload { NoClient, Read(u16), NotRunning, Refused(&'static str), NoAnswer }
+
+/// The line after an edit, and when the gateway reads it.
+pub fn done(change: &Change, rules: u16, reloaded: Reload) -> String {
     let what = match change {
         Change::Added(new) => alloc::format!("+ {}", new),
         Change::Replaced { old, new } => alloc::format!("{} (WAS {})", new, old),
         Change::Removed(old) => alloc::format!("- {}", old),
     };
     let when = match reloaded {
-        Some(count) => alloc::format!("THE GATEWAY READ IT: {} RULES", count),
-        None => String::from("THE GATEWAY READS IT AT ITS NEXT START (A RESTART, OR A MODE TURNED OFF AND ON); INIT'S OWN CHECKS AT ONCE"),
+        Reload::Read(count) => alloc::format!("THE GATEWAY READ IT: {} RULES", count),
+        Reload::NoClient => String::from("THE GATEWAY READS IT AT ITS NEXT START (A RESTART, OR A MODE TURNED OFF AND ON); INIT'S OWN CHECKS AT ONCE"),
+        Reload::NotRunning => String::from("THE GATEWAY DOES NOT RUN (NO MODE IS ON): IT READS IT WHEN IT STARTS"),
+        Reload::Refused(why) => alloc::format!("THE GATEWAY DID NOT READ IT ({}): IT READS IT AT ITS NEXT START", why),
+        Reload::NoAnswer => String::from("THE GATEWAY DID NOT ANSWER IN 2 S: IT READS IT AT ITS NEXT START"),
     };
     alloc::format!("EFFECTOR POLICY: {}; {} RULES, KEPT IN {}. {}", what, rules, FILE, when)
 }

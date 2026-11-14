@@ -1,7 +1,8 @@
 //! `effector policy`'s files (801-APP-0140): data/effector/policy read, edited by `policyedit.rs` and written so that a
 //! lost write never leaves the machine without a policy that parses: the new file whole and read back, the old one
 //! renamed aside, the new one given its name, the old one removed. `recover` finishes or undoes an edit a restart cut.
-use crate::policyedit::{self, Asked, DIR, FILE, NEW, OLD};
+//! After an edit the gateway reads it again at once, through the owner's client init lends in SLOT_EFFECTOR (801-KRN-0246).
+use crate::policyedit::{self, Asked, Reload, DIR, FILE, NEW, OLD};
 use alloc::string::String;
 use core::fmt::Write;
 use mind::effector::policy::{Policy, FILE_MAX};
@@ -25,6 +26,22 @@ fn read(path: &str) -> Result<Option<String>, Error> {
 }
 
 fn gone(path: &str) -> Result<(), Error> { match fs::remove(path) { Err(Error::NotFound) => Ok(()), other => other } }
+
+// The gateway asked to read the policy again: its rules' count, or why not. Without a mode no task serves the endpoint
+// and the call answers ERR_PEER (801-KRN-0246); 2 s at most, as the gateway answers at once.
+fn reload() -> Reload {
+    use mind::idl::effector::{self as wit, Error as WitError};
+    if mind::dev::cap_info(mind::abi::SLOT_EFFECTOR).0 != mind::abi::CAP_KIND_ENDPOINT { return Reload::NoClient; }
+    match mind::idl::wire::with_timeout(2000, || wit::reload_policy(mind::ipc::Endpoint(mind::abi::SLOT_EFFECTOR))) {
+        Ok(Ok(summary)) => Reload::Read(summary.rules),
+        Ok(Err(WitError::Denied)) => Reload::Refused("NOT AS ITS OWNER"),
+        Ok(Err(WitError::Audit)) => Reload::Refused("ITS AUDIT FILE NOT WRITTEN"),
+        Ok(Err(_)) => Reload::Refused("IT REFUSED THE FILE"),
+        Err(mind::sys::Error::Peer) => Reload::NotRunning,
+        Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => Reload::NoAnswer,
+        Err(_) => Reload::Refused("THE CALL FAILED"),
+    }
+}
 
 // The new policy in place of the old: written whole and read back under NEW, the old renamed to OLD, NEW renamed to
 // FILE, OLD removed.
@@ -61,7 +78,7 @@ pub fn command(shell: &mut crate::Shell, args: &[u8]) {
     }
     match write(&text) {
         Ok(()) => {
-            let line = policyedit::done(&change, rules, None);
+            let line = policyedit::done(&change, rules, reload());
             let _ = writeln!(shell.term, "{}", line);
             mind::println!("[SHELL] {}", line);
         }

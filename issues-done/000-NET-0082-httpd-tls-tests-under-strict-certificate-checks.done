@@ -1,6 +1,6 @@
-# 000-NET-0082 — `httpd`'s TLS tests under strict certificate checks (Python 3.13's default)
+# 000-NET-0082 — `httpd`'s TLS tests under strict certificate checks (Python 3.13's default) — done
 
-**Type:** network (tests) · **Owner:** `NET` · **Priority:** P2 · **Status:** open (2026-11-14) · **Blocked by:** — · **Roadmap:** — · **Constitution:** MC-12.2
+**Type:** network (tests) · **Owner:** `NET` · **Priority:** P2 · **Status:** done (2026-11-14) · **Blocked by:** — · **Roadmap:** — · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -23,6 +23,13 @@ APP's remark (`NET/2026-11-14T0955Z-APP-three-tls-host-tests-fail-under-python-3
 
 1. **Reproduced:** with the strict client alone, the two tests fail on Python 3.11 with `SSLCertVerificationError`, as on 3.13.
 2. **Fixed:** with the CA's key usage, every test of `tools/httpd` passes.
+
+## Resolution
+
+Landed in round 136 (`main` bdde60e961), from `claude/000-NET-0082-httpd-tests-under-strict-x509` 5bdb59258a.
+
+- **Reproduced:** with the strict client alone (`VERIFY_X509_STRICT`), the two tests failed on Python 3.11.18 with `SSLCertVerificationError`.
+- **Fixed:** the test CA in `tools/httpd/tests/tls.rs` carries `keyUsage=critical,keyCertSign,cRLSign`, and the client stays strict, as Python 3.13 is by default. Every test of `tools/httpd` passed, here and in round 136's host tests.
 
 ## Related
 

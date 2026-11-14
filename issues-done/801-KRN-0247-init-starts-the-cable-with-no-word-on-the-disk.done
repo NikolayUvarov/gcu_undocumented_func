@@ -1,10 +1,10 @@
-# 801-KRN-0247 — `init` starts the cable with no word on the disk: `link` without `link.conf`, its clients at every start
+# 801-KRN-0247 — `init` starts the cable with no word on the disk: `link` without `link.conf`, its clients at every start — done
 
-**Type:** kernel (`init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S6) · **Roadmap:** stage V · **Constitution:** MC-2.3, MC-9.2, MC-12.3
+**Type:** kernel (`init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S6) · **Roadmap:** stage V · **Constitution:** MC-2.3, MC-9.2, MC-12.3
 
 ## Problem
 
-LNK's request (`KRN/2026-11-14T0944Z-LNK-801-init-starts-link-with-no-link-conf-and-grants-its-clients.md`), for [801-LNK-0044](801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md).
+LNK's request (`KRN/2026-11-14T0944Z-LNK-801-init-starts-link-with-no-link-conf-and-grants-its-clients.md`), for [801-LNK-0044](../issues/801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md).
 
 The maintainer's decision of 2026-11-14 (801, S6): «effector485 должен уметь обновлять весь код, любой абсолютно без всяких разрешений». The cable updates all code with no permissions. It is for critical cases and may be absent; releases stay signed.
 
@@ -56,6 +56,18 @@ The maintainer's decision of 2026-11-14 (801, S6): «effector485 должен у
 4. **The `modes` suite:** `link-console` counts with no `link.conf`.
 5. **The documents:** `docs/profile` (`bootstrap.md` and `threat-model.md`) and the README say what `init` does now.
 
+## Resolution
+
+Landed in round 136 (`main` bdde60e961), from `claude/801-KRN-0247-the-cable-with-no-words` ec0264e037, with LNK's 801-LNK-0044 commit (`0568ece2e5`) and 801-UPD-0039.
+
+- **`init`:** `usb_serial` and `link` start whenever `usb_host` runs, with or without `link.conf`; `link` gets the cable's clients at every start, with or without `dev` (the input privilege still withheld in a safe start); `link-console` in `data/mode.conf` counts without `dev`.
+- **Criteria**, on `ec0264e037` through Effector, and again in round 136's gate:
+  1. `linkupdate`: `x86: the updater and an update through the link` on x32 (2030 s) and `aarch64: an update through the link` on acc-1 (3095 s), LNK's `cable_without_words_check` with no SKIP. In round 136's gate the aarch64 group reached the gate's limit of 3300 s on pcu, inside `cable_without_words_check`, and passed when it ran again on x32 (3054 s); [000-KRN-0249](../issues/000-KRN-0249-the-aarch64-update-through-the-link-in-two-groups.md) splits the group;
+  2. and 3. `link`: in `x86: services, storage, audio` on x32 (800 s) and `aarch64: the link` on acc-1 (222 s);
+  4. `modes`: in `x86: services, storage, audio`;
+  5. `bootstrap.md`, `threat-model.md` and the README say what `init` does.
+- **Left, not in this task:** the boot plan's `no link.conf` text and `init.wit`'s comments that say `dev` wait for the next `init.wit` version; the cable on the bench is 801's S8 (801-LNK-0045).
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-LNK-0044](801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.md) (the updater's half), 800-KRN-0139, 800-KRN-0191.
+[801](../issues/801-the-bench-stays-manageable.md), [801-LNK-0044](../issues/801-LNK-0044-the-cable-updates-everything-with-no-permission-words.md), [801-UPD-0039](801-UPD-0039-the-updater-always-reads-the-cables-directory.done) (the updater's half), 800-KRN-0139, 800-KRN-0191.
