@@ -17461,7 +17461,8 @@ def trial_check(args, disk):
         finally:
             vm.close()
         refused = (image.read("system/updater/refused") or b"").decode()
-        assert refused.startswith("refused version ") and "\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog log:boot" in refused, refused
+        # This image has no log volume, so the trial's log is `none`; one with it names `log:bootNNNN.log`.
+        assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED\nlog (none|log:boot\d{4}\.log)\n", refused), refused
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
