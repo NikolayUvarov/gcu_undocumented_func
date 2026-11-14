@@ -106,19 +106,25 @@ const RU_SHIFT: [char; 58] = ['\0', '\x1b', '!', '"', '№', ';', '%', ':', '?',
 const PAD_KEYS: [u16; 13] = [KEY_HOME, KEY_UP, KEY_PAGE_UP, 0, KEY_LEFT, 0, KEY_RIGHT, 0, KEY_END, KEY_DOWN, KEY_PAGE_DOWN, KEY_INSERT, KEY_DELETE];
 const PAD_CHARS: &[u8; 13] = b"789-456+1230.";
 
-/// PS/2 scan code set 1 decoder with modifier state, Caps/Num Lock and the layout switch.
+/// Num, Caps and Scroll Lock as a decoder keeps them: what a keyboard's lights show (000-DRV-0070).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Locks { pub num: bool, pub caps: bool, pub scroll: bool }
+
+/// PS/2 scan code set 1 decoder with modifier state, Caps, Num and Scroll Lock and the layout switch.
 pub struct Ps2 {
-    extended: bool, skip: u8, shift: [bool; 2], ctrl: [bool; 2], alt: [bool; 2], caps: bool, num: bool,
+    extended: bool, skip: u8, shift: [bool; 2], ctrl: [bool; 2], alt: [bool; 2], caps: bool, num: bool, scroll: bool,
     layout: Layout, chord: bool, switch: Switch,
 }
 
 impl Default for Ps2 { fn default() -> Self { Self::new() } }
 
 impl Ps2 {
-    pub const fn new() -> Self { Self { extended: false, skip: 0, shift: [false; 2], ctrl: [false; 2], alt: [false; 2], caps: false, num: false, layout: Layout::Us, chord: false, switch: Switch::CtrlOrAltShift } }
+    pub const fn new() -> Self { Self { extended: false, skip: 0, shift: [false; 2], ctrl: [false; 2], alt: [false; 2], caps: false, num: false, scroll: false, layout: Layout::Us, chord: false, switch: Switch::CtrlOrAltShift } }
     pub fn layout(&self) -> Layout { self.layout }
     pub fn set_layout(&mut self, layout: Layout) { self.layout = layout; }
     pub fn switch(&self) -> Switch { self.switch }
+    /// The locks now; Caps Lock as the layout switch locks nothing, so its light stays off.
+    pub fn locks(&self) -> Locks { Locks { num: self.num, caps: self.caps, scroll: self.scroll } }
     /// With Caps Lock as the switch it no longer locks capitals (a lock already on is released).
     pub fn set_switch(&mut self, switch: Switch) { self.switch = switch; self.chord = false; if switch == Switch::CapsLock { self.caps = false; } }
     fn toggle(&mut self) -> Option<Event> {
@@ -193,7 +199,7 @@ impl Ps2 {
             0x3A if self.switch == Switch::CapsLock => return self.toggle(),
             0x3A => { self.caps = !self.caps; return None; }
             0x45 => { self.num = !self.num; return None; }
-            0x46 => return None,
+            0x46 => { self.scroll = !self.scroll; return None; }
             0x3B..=0x44 => return key(KEY_F1 + (code - 0x3B) as u16),
             0x57 => return key(KEY_F1 + 10), 0x58 => return key(KEY_F12),
             0x47..=0x53 => {

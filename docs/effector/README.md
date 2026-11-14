@@ -161,7 +161,10 @@ its private `system/effector`:
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
 a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
-- **The grant lasts until the next boot.** `init` takes the grant once at the first start and keeps it for every restart (MC-3.13). When its term or volume runs out, the session is refused (`Denied`) until the machine restarts. So the line's term and volume must cover the whole time the mode is on.
+- **The grant lasts until the next boot.** `init` takes the grant once at the first start and keeps it for every restart (MC-3.13).
+  - **A line added later:** if the policy named nothing for `effector` at the first start, `init` looks at each later start whether a line names it now, and then takes the grant and keeps it as if given at the first (801-KRN-0250: `[INIT] effector: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST`). As the agent without a grant ends itself every 31 s for `init` to start it again, a line added while the system runs reaches it within about 31 s, with no restart of the machine. The updater is treated the same at its next start.
+  - **A spent grant** is not renewed at a restart: renewing it would multiply the line's budget (MC-3.13).
+- **When its term or volume runs out,** the session is refused (`Denied`) until the machine restarts. So the line's term and volume must cover the whole time the mode is on.
 - **Several lines for `effector` share the smallest term and volume of them** (`docs/network/policy.md`).
 
 **Run.** The owner writes `development` or `maintenance` in `data/mode.conf` and restarts the machine; `init` starts
@@ -250,6 +253,7 @@ every request (MC-10.6).
     server takes it.
 - **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
   again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart.
+  - **With the boot disk gone** (801-KRN-0251): when the file cannot be read now, the policy `init` last read whole and parsed decides the reboot and the gateway's `service` requests, and `init` logs `THE OWNER'S POLICY CANNOT BE READ NOW: THE ONE READ AT <s> S DECIDES`. A file that reads but is absent or unparsable still allows nothing.
 - **`exec` of `health`** (no policy line: it reads only the gateway's status), the server's `health_check` (750-EFF-0022):
   - `completed` while the owner's policy is loaded and no boot service is quarantined;
   - otherwise `failed`, exit status 1, naming why.

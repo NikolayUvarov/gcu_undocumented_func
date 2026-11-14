@@ -31,6 +31,14 @@ So `usb_host` spent nearly all its time scanning. `usb_hid`'s requests for repor
   - QEMU's hub is full speed and cannot sit on its EHCI, so the hub status endpoint on EHCI is checked only on the Mac.
 - **The MacBook Pro:** the cursor follows the trackpad and the Logitech mouse without delay, and keys appear as typed.
 
+## Progress (2026-11-13): the trackpad's cursor without delay on the MacBook Pro
+
+- **Run:** the MacBook Pro on release 202611131315 (`main` 20fba2c5).
+- **The trackpad:** the maintainer reports «курсор нормально движется», the cursor following the trackpad with no delay.
+- **Left for the criterion:**
+  - the Logitech mouse on the Mac;
+  - the keys typed there.
+
 ## Related
 
 [211-DRV-0016](../issues-done/211-DRV-0016-hid-interfaces-not-ours-claimed-once.done), [211-DRV-0004](211-DRV-0004-ehci.md), `usb_host/src/ehci.rs`, `usb_host/src/xhci.rs`.

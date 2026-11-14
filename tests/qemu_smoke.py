@@ -7140,12 +7140,14 @@ def modes_suite(args):
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
     effector_policy_recovery_check(args)
+    late_grant_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
         svc_boot_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
+        reboot_disk_gone_check(args)
         services_config_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
@@ -7166,6 +7168,9 @@ def effector_policy_edits(vm):
         vm.send_bytes(answer)
         require(vm.expect("MIND> ", timeout=30), said)
     require(vm.command("cat data/effector/policy", raw=True), "update apply")
+    # The gateway read it at once, through the shell's owner client in slot 45 (801-KRN-0246).
+    require(vm.command("dmesg -s shell", raw=True), "update apply; ")
+    assert re.search(r"EFFECTOR POLICY: \+ update apply; (\d+) RULES, KEPT IN data/effector/policy\. THE GATEWAY READ IT: \1 RULES", vm.log), vm.log[-3000:]
     vm.send("effector policy allow reboot on\n")
     vm.expect("(Y/N)", timeout=10)
     vm.send_bytes(b"y")
@@ -7180,8 +7185,9 @@ def effector_policy_edits(vm):
     require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
     require(vm.command("dmesg -s shell", raw=True), "[SHELL] EFFECTOR POLICY: + update apply; ")
     require(vm.command("effector policy edit", raw=True), "USAGE: EFFECTOR POLICY")
-    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written; deny at "
-          "once; a rule the gateway would refuse not written; no temporary file left", flush=True)
+    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written and read "
+          "by the gateway at once through the shell's owner client (801-KRN-0246); deny at once; a rule the gateway would "
+          "refuse not written; no temporary file left", flush=True)
 
 
 def effector_policy_recovery_check(args):
@@ -7206,6 +7212,56 @@ def effector_policy_recovery_check(args):
             vm.close()
     print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
           "the old file removed", flush=True)
+
+
+def late_grant_check(args):
+    """801-KRN-0250: a policy line added while the system runs reaches the program it names with no restart of the
+    machine. The Effector agent, started without a grant, gets one at its next start and keeps it for the starts after;
+    timed, not started for want of a line, starts within init's next look (30 s). Before the line, init asks the broker
+    nothing at the agent's restarts, so the broker logs one refusal, not one a restart."""
+    if not raw_tools():
+        print("SKIP: late grant check needs mkfs.fat and mtools", flush=True)
+        return
+    agent_line, time_line = "effector 10.0.2.2 tcp 9 600 1000", "timed 10.0.2.2 udp 123 600 100000"
+    with tempfile.TemporaryDirectory(prefix="smoke-late-grant-", dir=ROOT / IMAGE) as temp:
+        files = {**MODES_EFFECTOR_FILES, "netpolicy.txt": b"# no line for the agent or timed until the test adds one\n", "data/mode.conf": b"development\n",
+                 # Its server never answers: with a grant the agent ends after 30 s of silence, so init starts it again.
+                 "data/effector/effector.conf": MODES_EFFECTOR_FILES["data/effector/effector.conf"] + b"restart-after 30\n"}
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+
+        def init_log(lines, seconds=120):
+            deadline = time.monotonic() + seconds
+            while True:
+                log = vm.command("dmesg -s init", raw=True)
+                if all(re.search(line, log) for line in lines):
+                    return log
+                if time.monotonic() > deadline:
+                    raise AssertionError((lines, log[-2500:], vm.command("dmesg -s netpolicy", raw=True)[-1500:]))
+                time.sleep(2)
+        try:
+            init_log([re.escape("[INIT] effector: NO NETWORK GRANT"), re.escape("[INIT] timed NOT STARTED: THE POLICY GIVES IT NO TIME SERVER")])
+            # A restart of the agent with no line yet: init does not ask the broker.
+            require(vm.command("dmesg -s effector", raw=True), "EFFECTOR: ENDING IN 31 S, SO THAT init STARTS IT AGAIN")
+            init_log([r"\[INIT\] effector RESTARTED PID=\d+"], 60)
+            for line in (agent_line, time_line):
+                require(policy_answer(vm, f"netpolicy add {line}", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+            given = re.escape("[INIT] effector: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST")
+            log = init_log([given, r"\[INIT\] timed STARTED PID=\d+: THE POLICY NAMES IT NOW"], 90)
+            policy = vm.command("dmesg -s netpolicy", raw=True)
+            assert re.search(r"\[NETPOLICY\] GRANT \d+ TO effector:", policy) and re.search(r"\[NETPOLICY\] GRANT \d+ TO timed:", policy), policy[-2000:]
+            assert policy.count("REFUSED effector") == 1, policy[-2000:]
+            assert "timed" in vm.services(), vm.services()
+            # The grant is kept: the agent ends again (its server does not answer) and starts with it, asked for once.
+            restarts = len(re.findall(r"\[INIT\] effector RESTARTED PID=", log))
+            log = init_log([r"(?s)" + given + r".*\[INIT\] effector RESTARTED PID=\d+.*\[INIT\] effector RESTARTED PID=\d+"], 120)
+            assert len(re.findall(r"\[INIT\] effector RESTARTED PID=", log)) >= restarts + 1 and len(re.findall(given, log)) == 1, log[-2500:]
+            assert vm.command("dmesg -s netpolicy", raw=True).count("GRANT") == policy.count("GRANT"), "no grant asked for again"
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+    print("PASS: late grant (801-KRN-0250): a line added while the system runs gave the agent its grant at its next start, "
+          "kept for the starts after, and started timed; no refusal logged at the restarts before the line", flush=True)
 
 
 def remote_update_check(args):
@@ -7655,6 +7711,49 @@ def services_config_check(args):
           "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
           "boots as without it, each line named in the log; with S typed at the bootloader the file is ignored, every service "
           "starts in its order, and init says so (173-KRN-0036)", flush=True)
+
+
+def reboot_disk_gone_check(args):
+    """801-KRN-0251 (EFF's request): the boot disk's driver stopped under the gateway, whose files then cannot be written;
+    its reboot is still decided by the owner's `reboot on`, from the policy init read whole before, and the machine
+    restarts (QEMU exits: -no-reboot). Before 0251 init refused it, finding no policy on the disk. The log of that boot is
+    in logd's ring alone, gone with the restart: the serial line carries the kernel's word that init asked."""
+    if not raw_tools():
+        print("SKIP: reboot with the disk gone needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-gone-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-when-gone": b"1\n"}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            for _ in range(90):
+                if "[GATEWAY-STUB] WAITING FOR THE DISK TO GO" in vm.command("dmesg -s effector_gw", raw=True, timeout=60):
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(vm.command("dmesg -s effector_gw", raw=True, timeout=60)[-1500:])
+            log = vm.command("dmesg -s init", raw=True, timeout=60)
+            window = re.search(r"\[INIT\] (\S+) PARTITION 1: WINDOW \d+ FOR VFS_SERVER", log)
+            stopped = re.search(r"\[INIT\] STARTED (virtio_blk|ata|ahci|nvme) PID", log)
+            driver = window[1] if window else stopped[1] if stopped else "virtio_blk"
+            vm.collect()
+            mark = len(vm.log)
+            vm.send(f"svc stop {driver}\n")
+            asked = "MIND CORE KERNEL: init (PID 1) ASKED TO RESTART THE MACHINE"
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline and asked not in vm.log[mark:] and vm.process.poll() is None:
+                time.sleep(1)
+                vm.collect()
+            time.sleep(1)
+            vm.collect()
+            assert asked in vm.log[mark:], vm.log[-3000:]
+            assert f"{driver} stopped" in vm.log[mark:], vm.log[-3000:]
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-disk-gone-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: a reboot with the boot disk gone (801-KRN-0251): {driver} stopped under the gateway, the owner's `reboot on` "
+          "read before decided, and init restarted the machine", flush=True)
 
 
 def svc_boot_check(args):
@@ -10419,9 +10518,11 @@ def ehci_suite(args):
             got = re.findall(r"\[KEYS\] code=Char mods=- char=([abc])", vm.log[start:])
             assert got == ["a", "b", "c"], (name, vm.log[start:])
             vm.send_bytes(b"\x1b"); vm.expect("EXITED. SHELL RESUMED.")
+            # Its lights' output report through the controller's control transfer (000-DRV-0070).
+            require(vm.service_logs("usb_hid", "LOCK LIGHTS"), "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)")
         finally:
             vm.close()
-    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types, and the other way round", flush=True)
+    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types and takes its lights, and the other way round", flush=True)
 
 
 def hda_suite(args):
@@ -12153,14 +12254,16 @@ def wifi_join_check(vm):
     require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
     restarted, joined = "ITS COUNTRY RU AGAIN", "[WLAN] AUTO-JOIN MIND-TEST: JOINED"
     before, _, after = wlan_until(restarted, 150).rpartition(restarted)  # `logs` drains: each read holds what came since the last
-    assert "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET" in before.rpartition("\n")[2], before[-2000:]
+    # Its reason (801-NET-0083): no channel set, another channel than it took, or a call that found the driver ended.
+    first_reason = re.search(r"\[WLAN\] THE RADIO RESTARTED \(([^)]*)\)", before.rpartition("\n")[2])
+    assert first_reason, before[-2000:]
     if joined not in after:
         after += wlan_until(joined, 120)
     assert vm.services()["wlansim"] != radio, vm.services()
     require(vm.command(f"logs {vm.services()['wlansim']}", raw=True), "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY")
     run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    print("PASS: a restarted radio (wlansim started again by init, no channel and no country): the station noticed, gave it "
-          "RU again and joined MIND-TEST by itself (550-NET-0061)", flush=True)
+    print(f"PASS: a restarted radio (wlansim started again by init, no channel and no country): the station noticed "
+          f"({first_reason[1]}), gave it RU again and joined MIND-TEST by itself (550-NET-0061, 801-NET-0083)", flush=True)
     # 550-NET-0061, DRV's Ryzen run of 2026-11-13: a restart that the next tune would hide. Not joined, the radio is killed,
     # and a client's scan tunes the fresh one as soon as it is ready. The station asks the radio before that tune, so it
     # notices, gives it RU and scans again; before, the scan set a channel and nothing ever noticed (unless the 10-s
@@ -12179,11 +12282,12 @@ def wifi_join_check(vm):
     scanned = run("wifi scan", 60, "[WIFI] SCAN: ")
     assert re.search(r'\[WIFI\] NETWORK "MIND-TEST" 02:00:00:57:4C:A0 CHANNEL 6 ', scanned), scanned[-2000:]
     before = wlan_until(restarted, 30).rpartition(restarted)[0].rpartition("\n")[2]
-    assert "[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET" in before, before
+    assert "[WLAN] THE RADIO RESTARTED (" in before, before
     sim += vm.command(f"logs {fresh}", raw=True)
     assert "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY" in sim, sim[-2000:]
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    how = "before the scan's first tune" if "ASKED BEFORE A TUNE" in before else "by the 10-s check, which came before the scan"
+    how = ("before the scan's first tune" if "ASKED BEFORE A TUNE" in before else "by a call that found the old driver ended"
+           if "A CALL FOUND ITS DRIVER ENDED" in before else "by the 10-s check, which came before the scan")
     print(f"PASS: a radio restarted while the station was not joined, a client's scan at once: the station noticed {how}, "
           "gave it RU, listed MIND-TEST and joined it again (550-NET-0061)", flush=True)
 
@@ -16540,6 +16644,12 @@ def usb_suite(vm):
     # A held key repeats: the host does it for a USB keyboard (after 500 ms, every 33 ms).
     got = typed(["w"], hold=1200)
     assert len([g for g in got if "char=w " in g]) >= 10, got
+    # The lock lights (000-DRV-0070): all off when the keyboard was set up; Caps Lock and Num Lock reach them in its
+    # output report, and the letters and the keypad follow the same locks.
+    require(hid if "LOCK LIGHTS" in hid else vm.service_logs("usb_hid", "LOCK LIGHTS"), "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)")
+    in_order(typed(["caps_lock", "a", "num_lock", "kp_1"]), ["char=A U+0041", "char=1 U+0031"])
+    in_order(vm.service_logs("usb_hid", "(REPORT 03)").splitlines(), ["[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS ON, SCROLL OFF (REPORT 02)",
+                                                                     "[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS ON, SCROLL OFF (REPORT 03)"])
     # The tablet: a click on fm's first entry puts the cursor there.
     vm.send("fm /\n")
     vm.expect("[FM] READY")
@@ -16575,9 +16685,13 @@ def usb_suite(vm):
     # Unplugged and plugged in again, on another hub port: usb_hid lets it go and takes the new one.
     vm.qmp("device_del", id="kbd")
     require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
+    # Plugged in with Caps Lock and Num Lock on, it is sent them at once; both turned off again from it.
     vm.qmp("device_add", driver="usb-kbd", bus="xhci.0", port="1.2", id="kbd2")
-    require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
-    in_order(typed(["m", "n"]), ["char=m U+006D", "char=n U+006E"])
+    logs = vm.service_logs("usb_hid", "(REPORT 03)")
+    in_order(logs.splitlines(), ["[USB_HID] 0627:0001 KEYBOARD", "[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS ON, SCROLL OFF (REPORT 03)"])
+    in_order(typed(["m", "caps_lock", "num_lock", "n"]), ["char=M U+004D", "char=n U+006E"])
+    in_order(vm.service_logs("usb_hid", "(REPORT 00)").splitlines(), ["[USB_HID] 0627:0001 LOCK LIGHTS: NUM ON, CAPS OFF, SCROLL OFF (REPORT 01)",
+                                                                     "[USB_HID] 0627:0001 LOCK LIGHTS: NUM OFF, CAPS OFF, SCROLL OFF (REPORT 00)"])
     # A keyboard on the second xHCI (213-DRV-0048), the first's unplugged so the keys can come from it alone. Its
     # controller comes from init's grant (213-KRN-0099): without it usb_host names no second one.
     host = vm.command("dmesg -s usb_host", raw=True)
@@ -16595,8 +16709,8 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts, "
-          "a keyboard on a second xHCI", flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, lock lights, a click, movement, hot plug, "
+          "driver restarts, a keyboard on a second xHCI", flush=True)
 
 
 def tablet_suite(vm, wav):
@@ -18217,9 +18331,8 @@ def main():
         if suite == "linkupdate":
             linkupdate_suite(args)
             slot_applications_check(args)
-            cable_without_words_check(args)
             continue
-        if suite == "cable":  # 801-LNK-0044's check alone, also run by linkupdate
+        if suite == "cable":  # 801-LNK-0044's check, a group of its own so that each stays under the gate's limit (000-KRN-0249)
             cable_without_words_check(args)
             continue
         if suite == "modes":

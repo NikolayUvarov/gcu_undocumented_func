@@ -99,3 +99,35 @@ pub(crate) fn build(group: Group, channel: u8, limits: Constraints) -> Result<Im
     }
     Ok(image)
 }
+
+/// 75 % of a power in mW is 1.249 dB below it; the MAC's half-dB steps round that down to 3 (1.5 dB, 70.8 %).
+pub(crate) const UNKNOWN_COUNTRY_STEPS: i8 = 3;
+
+/// The most any rate of `channel` sends at under `limits`, per NTX in half-dBm: the least of its by-rate value and its
+/// section's 20 MHz non-beamformed limit, as `build` writes them for the MAC.
+pub(crate) fn maximum(group: Group, channel: u8, limits: Constraints) -> Result<[i8; 2], Error> {
+    if limits.per_ntx.iter().any(|v| !(-64..=63).contains(v)) { return Err(Error::PowerRange); }
+    let mut most = [i8::MIN; 2];
+    for streams in 1..=2u8 {
+        // Limit sections: CCK and OFDM for their own rates, MCS for MCS and HE-DCM (by-rate sections 2 and 3).
+        for (by_rate, count, limit) in [(0u8, 4u8, 0u8), (1, 8, 1), (2, 12, 2), (3, 4, 2)] {
+            let source = if by_rate < 2 { 1 } else { streams };
+            let table = defaults::default_limit_2g(0, streams, limit, false, group, channel)?;
+            let cap = defaults::rf_to_mac(table.quarter_dbm).min(limits.per_ntx[streams as usize - 1]);
+            for index in 0..count {
+                let rate = defaults::rf_to_mac(defaults::default_byrate_2g(source, by_rate, index)?.value);
+                most[streams as usize - 1] = most[streams as usize - 1].max(rate.min(cap));
+            }
+        }
+    }
+    Ok(most)
+}
+
+/// With the country unknown (00), each NTX limit held at its maximum less UNKNOWN_COUNTRY_STEPS (801-DRV-0071); the
+/// maximum is returned with the capped limits.
+pub(crate) fn unknown_country(group: Group, channel: u8, limits: Constraints) -> Result<(Constraints, [i8; 2]), Error> {
+    let most = maximum(group, channel, limits)?;
+    let mut capped = limits;
+    for (value, top) in capped.per_ntx.iter_mut().zip(most) { *value = (*value).min(top.saturating_sub(UNKNOWN_COUNTRY_STEPS).max(-64)); }
+    Ok((capped, most))
+}

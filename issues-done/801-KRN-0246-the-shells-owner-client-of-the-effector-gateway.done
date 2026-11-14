@@ -4,7 +4,7 @@
 
 ## Problem
 
-APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](../issues/801-APP-0140-effector-policy-in-the-shell.md) and 750-APP-0093:
+APP's request in `requests-KRN.md` (2026-11-14), for [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.done) and 750-APP-0093:
 - **No task holds the owner's badge.** `effector_gw` reads the owner's policy only when it starts, and on the owner's `reload-policy` (`idl/effector.wit`). Only a client badged `mind::effector::BADGE_OWNER` (2) may call that, and no task holds one.
 - **So a policy change waits for the gateway's next start.** `effector policy allow update apply` (801-APP-0140) takes effect only then.
 - **The shell's `effector status` and `audit` have nothing to ask.**
@@ -49,7 +49,7 @@ Landed in round 136 (`main` bdde60e961), from `claude/801-KRN-0246-the-shells-ow
 
 ## Related
 
-[801](../issues/801-the-bench-stays-manageable.md), [801-APP-0140](../issues/801-APP-0140-effector-policy-in-the-shell.md), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`SLOT_MODE`), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) (`SLOT_PASSPHRASE`, ABI 31).
+[801](../issues/801-the-bench-stays-manageable.md), [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.done), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`SLOT_MODE`), [308-KRN-0205](308-KRN-0205-the-boot-waits-for-keystores-passphrase.done) (`SLOT_PASSPHRASE`, ABI 31).
 
 ## Progress (2026-11-14)
 
