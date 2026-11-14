@@ -54,6 +54,12 @@ const TPM: Endpoint = Endpoint(4); // the TPM service's client with the seal bad
 
 pub enum Unsealed { Seed([u8; 32]), Missing, Damaged, Refused, Failed, Unreadable(fs::Error) }
 
+/// Whether a key sealed by a TPM is there, or may be: any answer but not-found (801-NET-0079).
+pub fn sealed_present() -> bool { !matches!(File::open(SEALED), Err(fs::Error::NotFound)) }
+
+/// Whether an unencrypted copy is there, or may be: any answer but not-found.
+pub fn plain_present() -> bool { !matches!(File::open(FILE), Err(fs::Error::NotFound)) }
+
 /// Whether the machine has a TPM the key service may seal with.
 pub fn tpm() -> bool { matches!(tpm::info(TPM), Ok(Ok(_))) }
 
