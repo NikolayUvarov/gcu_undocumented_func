@@ -224,5 +224,18 @@ MACHINE="" OLD_DISK=9 OLD_LETTER=T; read_disk
 check "a sealed key with no label in a log: said, not refused" "$status $(grep -c "public label of machine $TPM2's sealed device key is not known" "$work/out")" "0 1"
 MACHINES_KEEP=$HOME/.config/mind/machines
 
+# The bench of 2026-11-14: an old disk whose policy is only at its root (an older writer put the agent's line there),
+# with no key to keep, and a new image that ships no policy: the line still reaches the new disk's system/netpolicy.
+ROOTP=mind_00000000000000cc
+put "$work/rootp/MANIFEST" "MIND-MANIFEST 1\n"; put "$work/rootp/system/effector/agent_id" "$ROOTP\n"
+put "$work/rootp/data/effector/effector.conf" "effector-config 1\nhostname mind-rootp\n"
+put "$work/rootp/netpolicy.txt" "effector 192.0.2.7 tcp 443 31536000 10000000000\n"
+VOLUME[R]=$work/rootp
+MACHINE="" OLD_DISK=11 OLD_LETTER=R; read_disk
+check "a root-only policy is kept, all of it the machine's" "$status $(cat "$MACHINES_KEEP/$ROOTP/netpolicy/changed.txt") $(wc -c < "$MACHINES_KEEP/$ROOTP/netpolicy/shipped.txt")" "0 effector 192.0.2.7 tcp 443 31536000 10000000000 0"
+mkdir -p "$work/stick5"
+put_keystore_to "$work/stick5" S > /dev/null 2>&1
+check "with no key kept and no shipped policy, the agent's line still goes on" "$(cat "$work/stick5/system/netpolicy/netpolicy.txt" 2>&1)" "effector 192.0.2.7 tcp 443 31536000 10000000000"
+
 [[ $fail == 0 ]] && echo "build_and_write machines: all passed"
 exit "$fail"
