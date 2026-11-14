@@ -12933,6 +12933,7 @@ def effector_suite(args, disk):
     (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
                                                        "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
     (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "machine").mkdir(parents=True, exist_ok=True)  # where the shell's `hostname` keeps the name
     report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
     (disk / "data" / "reports").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "reports" / "r.bin").write_bytes(report)
@@ -13015,6 +13016,22 @@ def effector_suite(args, disk):
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
+        # 750-EFF-0018: the machine's name set by the shell's `hostname` is what the heartbeats report from the next sample
+        # on, with no restart; once removed, the agent's own name stands again.
+        def reported(name, seconds=75):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                if any(b.get("agent_id") == agent and b.get("hostname") == name for b in list(server.beats)[-5:]):
+                    return
+                time.sleep(1)
+            raise AssertionError((name, [b.get("hostname") for b in list(server.beats)[-5:]], session()[-1500:]))
+        require(vm.command("hostname mind-bench-1"), "THE MACHINE'S NAME: mind-bench-1, KEPT IN data/machine/name")
+        reported("mind-bench-1")
+        require(session(), "EFFECTOR: HOSTNAME mind-bench-1 (THE MACHINE'S NAME)")
+        require(vm.command("rm data/machine/name"), "OK")
+        reported("mind-qemu")
+        print("PASS: the machine's name set by `hostname` reached the heartbeats within a sample, no restart; removed, the "
+              "agent's own name stood again", flush=True)
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")

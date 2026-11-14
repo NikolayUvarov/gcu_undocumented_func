@@ -56,6 +56,7 @@ Everything 1.1 did stays.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).
+- **The machine's name (750-EFF-0018, `effector.wit` 1.6).** The heartbeat's `hostname` is the machine's name as `sysmon` answers it (`hostname <name>` in the shell), read again with each telemetry sample. With none set, it is `effector.conf`'s `hostname`, or the machine's own (750-EFF-0017).
 - **The agent stays reachable (801-EFF-0028).**
   - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it a new flow grant, so one whose term or volume ran out does not lose the server, and new clients of `tls` and `parse`. It does not end while a measurement runs or the machine restarts on purpose.
   - Meanwhile the gateway's mark stays grey on the screen. The log says each try and why, and `THE SERVER ANSWERS AGAIN, AFTER N S` once it does.

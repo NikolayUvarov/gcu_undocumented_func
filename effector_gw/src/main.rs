@@ -33,6 +33,14 @@ const SCREEN_HEIGHT: usize = 800;
 static mut SCRATCH: [u8; wit::REQUEST_MAX] = [0; wit::REQUEST_MAX];
 static mut OUT: [u8; 32768] = [0; 32768];
 
+// A list of services longer than effector.wit's 64 is cut; the log says so, once (effector.wit 1.6).
+fn cut_said(what: &str, kept: usize, all: usize) {
+    static SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if kept < all && !SAID.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        mind::println!("[EFFECTOR_GW] {}: {} OF {} SERVICES KEPT, effector.wit HOLDS NO MORE", what, kept, all);
+    }
+}
+
 fn present(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
 
 fn vfs_fail(e: vfs::Error) -> Fail {
@@ -363,6 +371,8 @@ impl Machine for Host {
         s.services = self.boot_services().into_iter().map(|(name, state, pid)| Load { name, state: Some(state), pid, ..Load::default() }).collect();
         if present(SLOT_SYSINFO) {
             let info = Endpoint(SLOT_SYSINFO);
+            // The machine's name (750-EFF-0018), read again for each sample so a change shows within one.
+            if let Ok(Ok(name)) = sysinfo::hostname(info) { s.hostname = String::from(name.as_str()); }
             let mut start = 0;
             while let Ok(Ok(cpus)) = sysinfo::cpus(info, start) {
                 for c in cpus.as_slice().iter().filter(|c| c.online) { s.cpus += 1; s.busy_ns += c.busy_ns; s.idle_ns += c.idle_ns; }
@@ -457,6 +467,7 @@ fn main(_info: &'static BootInfo) {
                 let s = gw.status(m);
                 let mut services = List::default();
                 for (name, st) in s.services.iter() { if !services.push(wit::Service { name: Text::new(name).unwrap_or_default(), state: state(*st) }) { break; } }
+                cut_said("STATUS", services.len(), s.services.len());
                 let status = wit::Status { release: Text::default(), uptime_ms: s.uptime_ms, memory_used: s.memory_used, memory_total: s.memory_total, services, policy: s.policy, busy: s.busy, journal_free: 0 };
                 if badge == Badge::Other { wit::reply_status(reply, &wit::Status::default()) } else { wit::reply_status(reply, &status) }
             }
@@ -485,9 +496,11 @@ fn main(_info: &'static BootInfo) {
                     let load = wit::Load { name: Text::new(&l.name).unwrap_or_default(), state: state(l.state.unwrap_or(ServiceState::Absent)), pid: l.pid, run_ns: l.run_ns, started_ns: l.started_ns, memory: l.memory };
                     if !services.push(load) { break; }
                 }
+                cut_said("SAMPLE", services.len(), s.services.len());
                 let mut volumes = List::default();
                 for (name, bytes, free) in s.volumes.iter() { if !volumes.push(wit::Space { name: Text::new(name).unwrap_or_default(), bytes: *bytes, free: *free }) { break; } }
-                let sample = wit::Sample { cpus: s.cpus, busy_ns: s.busy_ns, idle_ns: s.idle_ns, uptime_ms: s.uptime_ms, memory_total: s.memory_total, memory_free: s.memory_free, services, volumes };
+                let sample = wit::Sample { cpus: s.cpus, busy_ns: s.busy_ns, idle_ns: s.idle_ns, uptime_ms: s.uptime_ms, memory_total: s.memory_total, memory_free: s.memory_free, services, volumes,
+                    hostname: Text::new(&s.hostname).unwrap_or_default() };
                 wit::reply_sample(reply, &sample)
             }
             wit::Request::Read { handle, offset } => match gw.read(m, badge, handle, offset, out) {

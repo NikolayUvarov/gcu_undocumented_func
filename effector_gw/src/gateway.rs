@@ -46,6 +46,8 @@ pub struct Load { pub name: String, pub state: Option<ServiceState>, pub pid: u6
 pub struct Sample {
     pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64,
     pub services: Vec<Load>, pub volumes: Vec<(String, u64, u64)>,
+    /// The machine's name as `sysmon` answers it (`mindcore` when none is set); empty without `sysmon`.
+    pub hostname: String,
 }
 
 /// The updater's view (the IDL's `update-state`, 1.5): its `status` as `update.wit` gives it.

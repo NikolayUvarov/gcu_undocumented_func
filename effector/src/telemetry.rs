@@ -8,7 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const PERIOD_MS: u64 = 30_000;
-/// The longest body: 48 services, 4 volumes and 4 cards fit well within it; the server takes 64 KiB.
+/// The longest body: 64 services (effector.wit 1.6), 4 volumes and 4 cards fit well within it; the server takes 64 KiB.
 pub const BODY_MAX: usize = 24 * 1024;
 
 /// A boot service and its process: `state` is the server's word (`running`, `stopped`, `quarantined`, `not_found`).

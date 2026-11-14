@@ -22,7 +22,14 @@
 /// 1.5 (751-EFF-0023): `update-begin`, `update-commit`, `update-apply` and `update-state`, a developer's release handed
 /// to `updater` (`update.wit` 1.3's `install-…`, `apply`, `status`) under the policy's `update apply` and the owner's
 /// `remote-update`, which the gateway and the updater each ask of `init`. Nothing of it lands in a file the gateway writes.
-package mind:effector@1.5.0;
+///
+/// 1.6 (KRN's request of 2026-11-12, for 110-NET-0070): `status.services` and `sample.services` hold 64 units, as many
+/// as `init`'s `list` answers, not 48. Today's 54 units no longer leave the shell and the instances out, and the next
+/// boot image does not push `effector` out of them. The gateway logs a list it ever has to cut. `sample` also carries
+/// the machine's name as `sysmon` answers it (`sysinfo.wit` 4.2, 750-EFF-0018), so a name set by the shell's
+/// `hostname` reaches the server within a sample. Both ends are built together; a 1.5 decoder refuses a list longer
+/// than 48, and the new field, rather than reading them short.
+package mind:effector@1.6.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -49,7 +56,7 @@ interface effector {
     /// What the session reports in its heartbeat. `release`: the running release's version; `uptime-ms`;
     /// `memory-used` and `memory-total` in bytes; `services`: the boot services; `policy`: a valid policy is loaded;
     /// `busy`: a request or transfer is open; `journal-free`: how many more results the journal can keep.
-    record status { release: string<32>, uptime-ms: u64, memory-used: u64, memory-total: u64, services: list<service, 48>, policy: bool, busy: bool, journal-free: u16 }
+    record status { release: string<32>, uptime-ms: u64, memory-used: u64, memory-total: u64, services: list<service, 64>, policy: bool, busy: bool, journal-free: u16 }
 
     /// What a boot service is asked to do.
     enum service-action { start, stop, restart }
@@ -86,7 +93,7 @@ interface effector {
     /// The counters of one telemetry sample (1.1): the online processors and their busy and idle time since boot (ns),
     /// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
     /// session turns two samples into rates.
-    record sample { cpus: u16, busy-ns: u64, idle-ns: u64, uptime-ms: u64, memory-total: u64, memory-free: u64, services: list<load, 48>, volumes: list<space, 4> }
+    record sample { cpus: u16, busy-ns: u64, idle-ns: u64, uptime-ms: u64, memory-total: u64, memory-free: u64, services: list<load, 64>, volumes: list<space, 4>, hostname: string<63> }
     /// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
     /// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
     /// the last failure. All zero without the gateway's client of the updater.

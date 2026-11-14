@@ -1,6 +1,6 @@
 # 750-EFF-0018 — The machine's name, set on the machine and over the cable, reported by the agent
 
-**Type:** session · **Owner:** `EFF` · **Priority:** P2 · **Status:** open (2026-10-28) · **Blocked by:** `APP`: the machine's name as a system setting with its command; `KRN`: how a service reads it (both asked on `internal-dev-messages`, 2026-10-28) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-10.2
+**Type:** session · **Owner:** `EFF` · **Priority:** P2 · **Status:** in progress (2026-11-14) · **Blocked by:** — (000-APP-0123's `hostname` and 000-KRN-0180's `sysinfo.wit` 4.2 are in `main`) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-10.2
 
 ## Problem
 
@@ -39,3 +39,16 @@ The maintainer (2026-10-28): what is needed is not the agent's name but the mach
 ## Related
 
 [750-EFF-0017](../issues-done/750-EFF-0017-an-identity-of-the-machines-own.done), `800-LNK-0028`, `800-LNK-0015` (the shell over the link).
+
+## Progress (2026-11-14)
+
+- **The parts it waited for are in `main`:** the shell's `hostname <name>` (000-APP-0123) keeps the name in `data/machine/name`, and `sysmon` answers it as `sysinfo.wit` 4.2's `hostname` (000-KRN-0180).
+- **`effector.wit` 1.6.** `sample` gains `hostname: string<63>`, which the gateway reads from `sysmon` for each sample. The same version holds 64 services in both lists, KRN's request of 2026-11-12.
+- **The agent.**
+  - With each telemetry sample (30 s) it takes the machine's name, unless it is `mindcore`, which means none is set.
+  - Otherwise its own stands: `effector.conf`'s `hostname`, or 750-EFF-0017's name of the machine's own.
+  - A change is logged as `EFFECTOR: HOSTNAME <name> (THE MACHINE'S NAME | THE AGENT'S OWN)`, and the next heartbeat reports it.
+- **The `effector` suite.**
+  - `hostname mind-bench-1` reaches the heartbeats within a sample, with no restart.
+  - `rm data/machine/name` brings back `mind-qemu`.
+  - Not run yet.

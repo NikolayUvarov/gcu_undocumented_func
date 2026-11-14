@@ -206,7 +206,8 @@ struct Agent {
     config: config::Config,
     token: String,
     agent_id: String,
-    hostname: String, // the configuration's, or this machine's own while that was written for another (750-EFF-0017)
+    hostname: String, // what the heartbeat reports: the machine's name once one is set (750-EFF-0018), else `own_hostname`
+    own_hostname: String, // the configuration's, or this machine's own while that was written for another (750-EFF-0017)
     dir: String,
     connection: Option<Box<Connection<Link>>>,
     reconnect_at: usize,
@@ -932,6 +933,14 @@ impl Agent {
         if mind::dev::cap_info(SLOT_GATEWAY).0 != CAP_KIND_ENDPOINT { return; }
         let s = match gateway::sample(GATEWAY) { Ok(s) => s, Err(e) => return self.no_telemetry(alloc::format!("NO SAMPLE FROM THE GATEWAY: {:?}", e)) };
         // Without the system monitor there is no processor count, which the server requires.
+        // The machine's name as `sysmon` answers it (750-EFF-0018): a name set by the shell's `hostname` is reported from
+        // the next heartbeat; with none set (`mindcore`) the agent's own stands.
+        let named = s.hostname.as_str();
+        let name = if named.is_empty() || named == "mindcore" { self.own_hostname.as_str() } else { named };
+        if name != self.hostname {
+            mind::println!("EFFECTOR: HOSTNAME {} ({})", name, if name == named { "THE MACHINE'S NAME" } else { "THE AGENT'S OWN" });
+            self.hostname = String::from(name);
+        }
         if s.cpus == 0 { return self.no_telemetry(String::from("THE GATEWAY COUNTS NO PROCESSORS")); }
         let Some(unix) = mind::rtc::unix_time() else { return self.no_telemetry(String::from("NO CLOCK")) };
         let state = |st: gateway::ServiceState| match st {
@@ -1064,6 +1073,7 @@ fn machine(agent: &mut Agent) -> Option<String> {
     if !foreign_host.is_empty() && foreign_host == agent.config.hostname() {
         let mut out = [0u8; config::NAME_MAX];
         agent.hostname = String::from(config::own_hostname(&agent.cpu_model, &mut out));
+        agent.own_hostname = agent.hostname.clone();
         mind::println!("EFFECTOR: HOSTNAME {}: {}/effector.conf NAMES {}, ANOTHER MACHINE; THE OWNER MAY NAME THIS ONE THERE", agent.hostname, OWNER_DIR, foreign_host);
     }
     foreign_id
@@ -1125,7 +1135,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let hostname = String::from(config.hostname());
-    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
+    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
         answered_at: now(), problem: String::from("NOT CONNECTED YET") });

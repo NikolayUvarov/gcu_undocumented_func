@@ -108,7 +108,7 @@ impl Machine for Fake {
     fn sample(&mut self) -> Sample {
         Sample { cpus: 2, busy_ns: 5, idle_ns: 7, uptime_ms: self.now, memory_total: 1000, memory_free: 900,
                  services: vec![Load { name: "sysmon".into(), state: Some(ServiceState::Running), pid: 9, run_ns: 1, started_ns: 2, memory: 3 }],
-                 volumes: vec![(String::new(), 100, 40)] }
+                 volumes: vec![(String::new(), 100, 40)], hostname: "mind-bench-1".into() }
     }
 }
 
@@ -324,6 +324,7 @@ fn the_mark_follows_the_sessions_reports_and_the_policy() {
 fn the_sample_is_for_the_session_and_the_owner() {
     let (mut g, mut m) = ready();
     let s = g.sample(&mut m, Badge::Session);
+    assert_eq!(s.hostname, "mind-bench-1", "the machine's name as sysmon answers it (750-EFF-0018)");
     assert_eq!((s.cpus, s.memory_free, s.services.len(), s.volumes.len()), (2, 900, 1, 1));
     assert_eq!(g.sample(&mut m, Badge::Owner), s);
     assert_eq!(g.sample(&mut m, Badge::Other), Sample::default());
