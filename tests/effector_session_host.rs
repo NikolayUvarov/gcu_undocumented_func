@@ -55,15 +55,20 @@ fn every_action_is_a_durable_explicit_denial_without_dispatch() {
 }
 
 #[test]
-fn uncertain_storage_failure_stops_acks_and_new_dispatch_until_recovery() {
+fn a_journal_not_written_refuses_new_commands_but_keeps_polls_and_the_answer_it_could_not_keep() {
     let mut s = online(&[]);
     let Accepted::Store(write) = s.receive(command("one"), time(1)).unwrap() else { panic!() };
     assert_eq!(s.stored(write, false), Err(Error::Journal));
     assert_eq!(s.stored(write, true), Err(Error::Stale));
     assert!(s.journal_failed());
     assert_eq!(s.record_count(), 0);
-    assert_eq!(s.next_ack(time(100_000)), Ok(None));
-    assert_eq!(s.receive(command("two"), time(100_000)), Err(Error::Journal));
+    // 801-EFF-0032: the answer that was not kept is still sent; silence would only bring the command back after a restart.
+    let ack = s.next_ack(time(100_000)).unwrap().expect("the unkept answer is sent");
+    assert_eq!(ack.record, write.record);
+    s.ack_done(ack, Outcome::Accepted, 100_000, 0).unwrap();
+    assert!(!s.busy(), "the agent is free to take commands, which it answers unjournaled");
+    assert!(s.poll(100_000).unwrap().is_some(), "polls go on");
+    assert_eq!(s.receive(command("two"), time(100_000)), Err(Error::Journal), "a new command is never stored, so never run under it");
     assert!(s.heartbeat(1500).unwrap().is_some(), "journal failure does not stop reporting");
 }
 

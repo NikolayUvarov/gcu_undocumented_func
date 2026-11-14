@@ -176,6 +176,27 @@ fn a_failed_audit_write_refuses_the_request() {
 }
 
 #[test]
+fn with_the_audit_unwritable_only_the_restart_goes_on() {
+    // 801-EFF-0032: MC-10.6's mode for a record that cannot be written, stated before it is needed.
+    let (mut g, mut m) = ready();
+    m.policy = Some(format!("{}reboot on\n", POLICY).into_bytes());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    m.audit_fails = true;
+    assert_eq!(g.service_control(&mut m, Badge::Session, &origin("c1"), "sysmon", policy::Action::Restart), Err(Fail::Audit));
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c2"), 10_000), Ok(10_000), "the restart recovers the machine");
+    g.restart(&mut m, "c2").unwrap();
+    assert_eq!(m.reboots, 1);
+    // Still only under the policy, and for the session.
+    assert_eq!(g.reboot(&mut m, Badge::Other, &origin("c3"), 10_000), Err(Fail::Audit));
+    m.policy = Some(POLICY.as_bytes().to_vec());
+    m.audit_fails = false;
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    m.audit_fails = true;
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c4"), 10_000), Err(Fail::Audit), "no `reboot on`: refused");
+    assert_eq!(m.reboots, 1);
+}
+
+#[test]
 fn a_file_leaves_in_pieces_with_its_hash() {
     let (mut g, mut m) = ready();
     let body: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();

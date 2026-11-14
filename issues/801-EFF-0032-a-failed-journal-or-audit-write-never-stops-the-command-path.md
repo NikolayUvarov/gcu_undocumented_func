@@ -39,3 +39,30 @@ The test of that rule names it "until recovery", but only a hand at the machine 
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-EFF-0028](801-EFF-0028-the-agent-comes-back-by-itself.md), [750-EFF-0006](750-EFF-0006-session-service.md).
+
+## Progress (2026-11-14): the cause corrected, and the plan revised
+
+**LNK's correction** (`EFF/…-LNK-801-s5-correction-the-stops-came-with-the-boot-disk-taken-out.md`):
+- the Mac's agent stopped when its boot disk was taken out for a rewrite while the system ran;
+- the DEXP's did the same at 14:00 UTC.
+
+**Why the first form was wrong for that case:** with the disk gone, an agent that ends cannot read its `effector.conf` when `init` starts it again. So the machine leaves the server's view as well as its control.
+
+**The revised form** (`docs/effector/protocol.md`, "When the journal or the audit cannot be written"):
+- **A restarted `vfs_server`** (another PID in `init`'s list than at the start): the agent, or the gateway for its audit, ends as before, for new file clients.
+- **The same `vfs_server`:** both go on, the heartbeats too.
+  - Every command is answered at once, `failed` with the new code `journal`, neither journaled nor run.
+  - The answer the journal failed to keep is still sent.
+  - `reboot`, under the owner's `reboot on`, is answered `completed` and asked of `init`.
+  - The gateway refuses every audited request but that restart, whose audit line is in the system log alone (MC-10.6's mode, stated before it is needed).
+- **`session.rs`:**
+  - polls and ACKs go on with the journal failed;
+  - `busy` no longer counts the failure;
+  - `receive` still refuses every new command, so nothing is ever run without its record.
+
+**Tests:**
+- **Host:** the session's journal-failure case and the gateway's `with_the_audit_unwritable_only_the_restart_goes_on`.
+- **The `effector` suite:** the boot disk's driver is stopped under the agent in the last boot. Heartbeats go on, a `collect_logs` is refused `journal`, and a `reboot` is answered.
+
+**What `init` does with that reboot is KRN's:** it reads the owner's policy from the disk at each request, so with the disk gone it refuses the restart. Asked of KRN: keep the last policy read, for this case.
+
