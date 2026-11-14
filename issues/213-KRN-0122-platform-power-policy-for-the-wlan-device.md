@@ -43,7 +43,7 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 - **`KnownLimits` is not made yet.** A table that names any of the five is `Unknown` until its AML (a `Name` with a `Package`, or a method) is read. The Ryzen's Ubuntu read found none of the five, so `Absent` is what MIND Core should find there.
 - **`init`** reads it once at boot, while the platform privilege allows, keeps it for the radio's starts, and logs:
   - `[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT (n AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)`;
-  - or `… UNKNOWN (<reason>): A RADIO SENDS NOTHING`.
+  - or `… UNKNOWN (<reason>): HELD BACK, NOT ENFORCED; ONLY rtw89_wifi IS GIVEN THE WORD` (801-KRN-0243: the finding silences no radio).
 - **Tests:**
   - host tests in `tests/platform_power_host.rs` (6), with tables made in the test: an absence; each name in an SSDT; a cut table; a short header; a bad checksum; an unmapped table; no DSDT; too many tables;
   - QEMU: the `normal` suite requires `ABSENT`. Seen once on x86 and once on aarch64 in this session's container, each with QEMU's one DSDT.

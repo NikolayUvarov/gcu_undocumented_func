@@ -4,7 +4,12 @@
 
 The policy says what the Effector server may make this machine do. The owner writes it; the server never can.
 
-- **Where it is:** `data/effector/policy`, written with the shell's `effector policy` command ([750-APP-0093](../../issues/750-APP-0093-the-shells-effector-command.md)).
+- **Where it is:** `data/effector/policy`, written with the shell's `effector policy` command ([801-APP-0140](../../issues/801-APP-0140-effector-policy-in-the-shell.md), part of [750-APP-0093](../../issues/750-APP-0093-the-shells-effector-command.md)):
+  - `effector policy` shows the file and whether it parses;
+  - `effector policy allow <line>` adds a rule, or puts it in place of the rule with its key (`update`, `reboot`, …; for `service`, `package-key`, `collect` and `log` the key and its name or root), after the owner agrees at the console;
+  - `effector policy deny <line>` takes out the rule with that key at once;
+  - the whole new file must parse with this grammar before it is written, so an edit never leaves a refused policy; it is written as `policy.new`, read back, and given the name while the old one waits as `policy.old`; the shell finishes or undoes an edit a restart cut, at its next start;
+  - the gateway reads the edited file at its next start, until the shell holds its owner client for `reload-policy`.
 - **Who reads it:** the gateway `effector_gw`, when it starts and when the owner asks (`reload-policy` in [`idl/effector.wit`](../../idl/effector.wit)), never on the server's request.
 - **What is not named is denied.** An empty policy, a missing one or one that does not parse allows nothing.
 

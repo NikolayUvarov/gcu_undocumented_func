@@ -23,7 +23,7 @@ The maintainer (801, S1 and S4): a slot on trial is confirmed only after the ser
 
 ## Acceptance criteria
 
-- **The `boot` suite:** a trial with the development mode on and a server configured, whose agent cannot start, is refused once the agent is quarantined. The kernel's 15 s deadline does not restart it; the next boot is slot A's.
+- **The `boot` suite:** a trial with the development mode on and a server configured, whose agent cannot read its configuration and so never connects, is refused at the 10 min bound. Since 801-EFF-0028 such an agent waits 31 s before it ends and is never quarantined, so the bound is what refuses it. The kernel's 15 s deadline does not restart it; the next boot is slot A's.
 - **With EFF's call:** a trial whose agent reaches the fixture server is confirmed on `accepted` (the `effector-update` suites), and one whose agent never reaches it is refused at the bound (801-ASR-0014).
 - The groups the change touches pass on the maintainer's machines, then in a gate.
 
