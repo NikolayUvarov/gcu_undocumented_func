@@ -34,4 +34,4 @@
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [351-KRN-0052](../issues-done/351-KRN-0052-tpm-registers-from-the-firmware.done), [801-NET-0079](801-NET-0079-keystore-keeps-the-slot-befores-keys-and-networks.md) (STO's: `keystore` keeps a sealed key while no TPM answers).
+[801](801-the-bench-stays-manageable.md), [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [351-KRN-0052](../issues-done/351-KRN-0052-tpm-registers-from-the-firmware.done), [801-NET-0079](../issues-done/801-NET-0079-keystore-keeps-the-slot-befores-keys-and-networks.done) (STO's: `keystore` keeps a sealed key while no TPM answers).
