@@ -12,7 +12,7 @@ use crate::ipc::{Endpoint, Message};
 use crate::release;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// A head as parse.wit 2.0's `http-response` carries it (750-NET-0019, 000-NET-0047).
+/// A head as parse.wit 5.0's `http-response` carries it (750-NET-0019, 000-NET-0047, 801-NET-0080).
 pub fn to_response(head: &Head) -> HttpResponse {
     let (has_range, range_unsatisfied, range_start, range_end, range_total) = match head.range {
         None => (false, false, 0, 0, 0),
@@ -23,7 +23,7 @@ pub fn to_response(head: &Head) -> HttpResponse {
     let (retry, retry_after) = match head.retry_after { None => (RetryKind::None, 0), Some(RetryAfter::Seconds(s)) => (RetryKind::Seconds, s), Some(RetryAfter::Date(d)) => (RetryKind::Date, d) };
     HttpResponse { status: head.status, has_length: head.length.is_some(), length: head.length.unwrap_or(0), has_range, range_unsatisfied, range_start, range_end, range_total,
                    chunked: head.chunked, close: head.close, encoding, media: Text::new(head.media.as_str()).unwrap_or_default(),
-                   location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after }
+                   location: Text::new(head.location.as_str()).unwrap_or_default(), retry, retry_after, has_date: head.date.is_some(), date: head.date.unwrap_or(0) }
 }
 
 /// A request head as parse.wit 2.1's `http-request` carries it, or its refusal (110-NET-0070).
@@ -70,7 +70,7 @@ pub fn from_response(r: &HttpResponse) -> Option<Head> {
     let encoding = match r.encoding { ContentCoding::Identity => Encoding::Identity, ContentCoding::Gzip => Encoding::Gzip, ContentCoding::Deflate => Encoding::Deflate, ContentCoding::Other => Encoding::Other };
     let retry_after = match r.retry { RetryKind::None => None, RetryKind::Seconds => Some(RetryAfter::Seconds(r.retry_after)), RetryKind::Date => Some(RetryAfter::Date(r.retry_after)) };
     Some(Head { status: r.status, length: r.has_length.then_some(r.length), range, chunked: r.chunked, close: r.close, encoding,
-                media: Field::new(r.media.as_str())?, location: Field::new(r.location.as_str())?, retry_after })
+                media: Field::new(r.media.as_str())?, location: Field::new(r.location.as_str())?, retry_after, date: r.has_date.then_some(r.date) })
 }
 
 /// A `mind::http::Parser` that asks the parser service at the endpoint (`SLOT_PARSE` in a program that asked for it).
