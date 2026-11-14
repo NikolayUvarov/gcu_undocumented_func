@@ -7068,6 +7068,7 @@ def modes_suite(args):
                     require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
                     print("PASS: modes: the shell's mode shows the mode set by disk, turns one on after the operator agrees "
                           "and off at once; init logs the change with the shell's badge (750-EFF-0013)", flush=True)
+                    effector_policy_edits(vm)
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
@@ -7090,6 +7091,7 @@ def modes_suite(args):
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     remote_update_check(args)
+    effector_policy_recovery_check(args)
     modes_lifecycle_check(args)
     installed_apps_check(args)
     if args.arch == "aarch64":  # x86 runs it in the tools suite, which aarch64 does not run (173-APP-0092)
@@ -7102,6 +7104,60 @@ def modes_suite(args):
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
           "change, which init logs with its clause (MC-12.6)", flush=True)
+
+
+def effector_policy_edits(vm):
+    """801-APP-0140: `effector policy` shows the owner's policy and whether it parses; `allow` asks and adds a rule or puts
+    it in place of the one with its key, `deny` takes one out at once; a rule that would make the policy refused is not
+    written; no temporary file is left."""
+    shown = vm.command("effector policy", raw=True)
+    require_all(shown, "  effector-policy 1", "  service sysmon restart", "THE POLICY PARSES: ")
+    for answer, said in ((b"n", "EFFECTOR POLICY: NOT CHANGED"), (b"y", "EFFECTOR POLICY: + update apply; ")):
+        vm.send("effector policy allow update apply\n")
+        require(vm.expect("(Y/N)", timeout=10), "ALLOW `update apply` IN THE EFFECTOR POLICY?")
+        vm.send_bytes(answer)
+        require(vm.expect("MIND> ", timeout=30), said)
+    require(vm.command("cat data/effector/policy", raw=True), "update apply")
+    vm.send("effector policy allow reboot on\n")
+    vm.expect("(Y/N)", timeout=10)
+    vm.send_bytes(b"y")
+    require(vm.expect("MIND> ", timeout=30), "EFFECTOR POLICY: + reboot on; ")
+    require(vm.command("effector policy allow update everything", raw=True), "EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE ")
+    require(vm.command("effector policy deny reboot", raw=True), "EFFECTOR POLICY: - reboot on; ")
+    require(vm.command("effector policy deny screen", raw=True), "NO RULE screen TO DENY")
+    policy = vm.command("cat data/effector/policy", raw=True)
+    assert "update apply" in policy and "reboot on" not in policy and "update everything" not in policy, policy
+    listed = vm.command("ls data/effector", raw=True)
+    assert "policy.new" not in listed and "policy.old" not in listed, listed
+    require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+    require(vm.command("dmesg -s shell", raw=True), "[SHELL] EFFECTOR POLICY: + update apply; ")
+    require(vm.command("effector policy edit", raw=True), "USAGE: EFFECTOR POLICY")
+    print("PASS: effector policy (801-APP-0140): shown with its state; allow asked, answered N unchanged, Y written; deny at "
+          "once; a rule the gateway would refuse not written; no temporary file left", flush=True)
+
+
+def effector_policy_recovery_check(args):
+    """801-APP-0140: an edit a restart cut, with no data/effector/policy, its new file whole beside the old one: the shell
+    gives the new one its name at its start and removes the old one."""
+    if not raw_tools():
+        print("SKIP: effector policy recovery needs mkfs.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-policy-cut-", dir=ROOT / IMAGE) as temp:
+        files = {k: v for k, v in MODES_EFFECTOR_FILES.items() if k != "data/effector/policy"}
+        files.update({"data/effector/policy.new": GATEWAY_POLICY + b"update apply\n", "data/effector/policy.old": GATEWAY_POLICY})
+        image, _, _ = raw_fat_image(Path(temp), extra=files)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            log = vm.command("dmesg -s shell", raw=True)
+            require_all(log, "[SHELL] EFFECTOR POLICY: AN EDIT WAS CUT BY A RESTART: THE NEW ONE TOOK ITS NAME", "[SHELL] EFFECTOR POLICY: data/effector/policy.old LEFT BY A CUT EDIT, REMOVED")
+            require(vm.command("cat data/effector/policy", raw=True), "update apply")
+            listed = vm.command("ls data/effector", raw=True)
+            assert "policy.new" not in listed and "policy.old" not in listed, listed
+            require(vm.command("effector policy", raw=True), "THE POLICY PARSES: ")
+        finally:
+            vm.close()
+    print("PASS: effector policy recovery (801-APP-0140): an edit cut between its renames finished at the shell's start, "
+          "the old file removed", flush=True)
 
 
 def remote_update_check(args):
