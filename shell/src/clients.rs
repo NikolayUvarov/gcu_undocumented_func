@@ -7,7 +7,8 @@
 //! shell's window to agree: it gets at once what reads and, by the maintainer's choice of 2026-10-22, what changes the
 //! machine, but never a change of the network policy (800-NET-0038), the machine's modes or a script. In the owner's
 //! `link-console` mode (`init.wit` 1.8, 800-APP-0108) the link's line is the console's: scripts by their file and the
-//! policy's changes run too, never `mode`. An SSH session's line (112-APP-0136) is never asked on the machine's screen:
+//! policy's changes run too, never `mode` but `mode remote-update on|off` while init reports the owner's
+//! `link-remote-update` (801-APP-0139, checked when it runs). An SSH session's line (112-APP-0136) is never asked on the machine's screen:
 //! what the link runs at once, but for a file written by `>` (the key's `files` right's, through SFTP) and the TPM.
 //! Host-tested in tests/shell_host.rs.
 
@@ -20,7 +21,7 @@ pub const ASKED: [&str; 21] = ["kill", "stop", "reboot", "poweroff", "shutdown",
     "ping", "nslookup", "fetch", "https", "tpm", "netstat", "hostname"];
 
 /// Of `ASKED`, never taken from the link's client outside the `link-console` mode: the network policy's changes
-/// (800-NET-0038). `mode` is refused to every client, the link's console too.
+/// (800-NET-0038). `mode` is refused to every client, the link's console too, but for `mode remote-update on|off` there.
 pub const NOT_OVER_THE_LINK: [&str; 2] = ["netrevoke", "netpolicy"];
 
 /// Of what the link takes at once, refused to an SSH session as well: the TPM, the machine's own root of trust.
@@ -28,6 +29,11 @@ pub const NOT_REMOTE: [&str; 1] = ["tpm"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken { Refused, Now, Asked }
+
+// `remote-update on|off [reason]`, the one `mode` the link's console may send.
+fn remote_update_switch(args: &str) -> bool {
+    matches!(crate::modes::parse(args), Ok(crate::modes::Asked::Set { which: crate::modes::Which::RemoteUpdate, .. }))
+}
 
 /// Who calls: a program the shell lent its commands to, `link` in developer mode (`mind::process::BADGE_SHELL_LINK`),
 /// `link` while init reports the owner's `link-console` mode (800-APP-0108), or `sshd` for a login's console (`mind::process::BADGE_SHELL_REMOTE`).
@@ -59,6 +65,9 @@ pub fn taken_by(line: &str, client: Client) -> Taken {
         // not `-c` code or options.
         "msh" if !matches!(client, Client::Link | Client::Remote) && !args.is_empty() && !args.starts_with('-') && args.split_whitespace().count() == 1 => asked,
         "msh" => Taken::Refused,
+        // The owner's leave for the cable to switch remote-update (751-KRN-0185): taken here, and run only while init
+        // reports link-remote-update (modectl.rs); every other mode refused.
+        "mode" if client == Client::LinkConsole && remote_update_switch(args) => Taken::Now,
         _ if matches!(client, Client::Link | Client::Remote) && NOT_OVER_THE_LINK.contains(&word) => Taken::Refused,
         _ if client == Client::Remote && NOT_REMOTE.contains(&word) => Taken::Refused,
         _ if ASKED.contains(&word) => asked,

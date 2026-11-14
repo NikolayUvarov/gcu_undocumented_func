@@ -183,6 +183,27 @@ fn the_links_console_gets_scripts_and_the_policy_but_never_mode() {
 }
 
 #[test]
+fn the_links_console_switches_remote_update_only_with_the_owners_leave() {
+    // 801-APP-0139 (EFF's request of 2026-10-29): `mode remote-update on|off` is the one `mode` the link's console sends;
+    // the shell then runs it only while init reports `link-remote-update`.
+    use clients::{taken_by, Client, Taken};
+    use modes::{link_may, parse};
+    for line in ["mode remote-update on", "mode REMOTE-UPDATE off", "mode remote-update on the server's release 202611141200"] {
+        assert_eq!(taken_by(line, Client::LinkConsole), Taken::Now, "{}", line);
+        assert!(link_may(&parse(line.trim_start_matches("mode ")).unwrap(), true), "{}", line);
+        assert!(!link_may(&parse(line.trim_start_matches("mode ")).unwrap(), false), "{}: not without link-remote-update", line);
+    }
+    // Never the link's leave itself, the modes, or `mode` from the link's client, an SSH session or a lent program.
+    for line in ["mode link-remote-update on", "mode link-remote-update off", "mode development on", "mode maintenance off", "mode", "mode remote-update", "mode remote-update up"] {
+        assert_eq!(taken_by(line, Client::LinkConsole), Taken::Refused, "{:?}", line);
+    }
+    for client in [Client::Link, Client::Remote, Client::Program] {
+        assert_eq!(taken_by("mode remote-update on", client), Taken::Refused, "{:?}", client);
+    }
+    for args in ["link-remote-update on", "development on", "maintenance off"] { assert!(!link_may(&parse(args).unwrap(), true), "{}", args); }
+}
+
+#[test]
 fn an_ssh_sessions_line_runs_at_once_as_the_links_but_writes_no_file() {
     // 112-APP-0136, for 112-NET-0072: a login's console is never asked on the machine's screen.
     use clients::{taken_by, Client, Taken};
@@ -410,6 +431,34 @@ fn mode_shows_the_modes_and_turns_one_on_or_off() {
     let mut notice = String::new();
     assert!(!modes::notice(&mut notice, false, false, "disk") && notice.is_empty());
     assert!(modes::notice(&mut notice, true, false, "disk") && notice.starts_with("THE DEVELOPMENT MODE IS ON (SET BY disk)"), "{}", notice);
+}
+
+#[test]
+fn mode_switches_the_owners_remote_update_permissions() {
+    // 801-APP-0139: `mode remote-update|link-remote-update on|off [reason]` (init.wit 1.11, 751-KRN-0185).
+    use modes::{parse, Asked, Which};
+    assert_eq!(parse("remote-update on bench release"), Ok(Asked::Set { which: Which::RemoteUpdate, on: true, reason: "bench release" }));
+    assert_eq!(parse("Link-Remote-Update OFF"), Ok(Asked::Set { which: Which::LinkRemoteUpdate, on: false, reason: "" }));
+    for wrong in ["remote on", "remote-update", "remote-updates on", "link-remote-update maybe"] { assert_eq!(parse(wrong), Err(modes::USAGE), "{:?}", wrong); }
+    assert!(modes::USAGE.contains("REMOTE-UPDATE|LINK-REMOTE-UPDATE"));
+    assert_eq!((modes::name(Which::RemoteUpdate), modes::name(Which::LinkRemoteUpdate)), ("REMOTE-UPDATE", "LINK-REMOTE-UPDATE"));
+    // The state line, whether each counts now.
+    let permissions = |r, l| { let mut out = String::new(); modes::permissions(&mut out, r, l); out };
+    assert_eq!(permissions(false, false), "REMOTE UPDATE: OFF; THE LINK'S CONSOLE MAY SWITCH IT: NO\n");
+    assert_eq!(permissions(true, true), "REMOTE UPDATE: ON (A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED); THE LINK'S CONSOLE MAY SWITCH IT: YES\n");
+    // The questions say what each allows and that it lasts.
+    let question = |which| { let mut out = String::new(); modes::question(&mut out, which); out };
+    let remote = question(Which::RemoteUpdate);
+    assert!(remote.starts_with("TURN REMOTE-UPDATE ON?") && remote.contains("EFFECTOR SERVER MAY THEN BE INSTALLED") && remote.contains("MODE REMOTE-UPDATE OFF"), "{}", remote);
+    let link = question(Which::LinkRemoteUpdate);
+    assert!(link.starts_with("TURN LINK-REMOTE-UPDATE ON?") && link.contains("THE LINK'S CONSOLE (THE CABLE) MAY THEN TURN REMOTE-UPDATE ON OR OFF"), "{}", link);
+    // The notice while remote-update counts, with the test keys named; nothing while it does not.
+    let notice = |r, l, t| { let mut out = String::new(); (modes::remote_notice(&mut out, r, l, t), out) };
+    assert_eq!(notice(false, true, true), (false, String::new()));
+    let (shown, text) = notice(true, false, false);
+    assert!(shown && text == "REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED; THE LINK'S CONSOLE MAY NOT SWITCH IT. MODE REMOTE-UPDATE OFF ENDS IT.\n", "{}", text);
+    let (_, text) = notice(true, true, true);
+    assert!(text.contains("(THE TEST KEYS: ANY RELEASE FROM THE SERVER IS ACCEPTED)") && text.contains("THE LINK'S CONSOLE MAY SWITCH IT"), "{}", text);
 }
 
 #[test]
