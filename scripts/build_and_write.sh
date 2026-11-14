@@ -626,6 +626,11 @@ keep_keystore_from() {
         (umask 077; tr -d '\r' < "$dir/system/netpolicy/netpolicy.txt" > "$POLICY_KEEP/changed.txt")
         if [[ -f $dir/netpolicy.txt ]]; then (umask 077; tr -d '\r' < "$dir/netpolicy.txt" > "$POLICY_KEEP/shipped.txt"); else (umask 077; : > "$POLICY_KEEP/shipped.txt"); fi
         echo "keep-wifi: the network policy as changed on $OLD_LETTER: saved in $POLICY_KEEP ($(policy_changes added) added, $(policy_changes removed) removed)"
+    elif [[ -f $dir/netpolicy.txt ]]; then
+        # A policy at the root alone (written there by an older writer, with the agent's line): all of it is the machine's.
+        (umask 077; mkdir -p "$POLICY_KEEP") && chmod 700 "$POLICY_KEEP"
+        (umask 077; tr -d '\r' < "$dir/netpolicy.txt" > "$POLICY_KEEP/changed.txt"; : > "$POLICY_KEEP/shipped.txt")
+        echo "keep-wifi: the network policy at $OLD_LETTER:'s root saved in $POLICY_KEEP ($(policy_changes added) line(s), all the machine's)"
     elif [[ -f $POLICY_KEEP/changed.txt ]]; then
         echo "keep-wifi: $OLD_LETTER: the network policy is not changed there; the changes saved before for $MACHINE will be put back"
     fi
@@ -648,7 +653,8 @@ merge_policy() {
 put_keystore() {
     local letter dir status=0 f any=0
     for f in "${KEPT_FILES[@]}"; do [[ -f $KEEP_DIR/$f ]] && any=1; done
-    (( any )) || { echo "keep-wifi: nothing saved in $KEEP_DIR: join by hand once, then write with --keep-wifi" >&2; return 1; }
+    # No key kept (a new one, --new-device-key): the network policy and the join still go on the disk.
+    (( any )) || [[ -f $POLICY_KEEP/changed.txt || $WIFIJOIN == 1 ]] || { echo "keep-wifi: nothing saved in $KEEP_DIR: join by hand once, then write with --keep-wifi" >&2; return 1; }
     letter=$(winps "${PS_LETTER//__MANIFEST__/$(sha256sum "$MANIFEST_FILE" | cut -d' ' -f1)}" | tr -d '\r\n')
     [[ $letter =~ ^[A-Z]$ ]] || { echo "keep-wifi: no volume MIND CORE holding this build (its MANIFEST) within 60 s" >&2; return 1; }
     dir=$(mktemp -d)
