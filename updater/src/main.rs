@@ -60,6 +60,9 @@ const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 #[cfg(target_arch = "aarch64")]
 const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
+// The cable's directory, which link writes as rel/ (801-LNK-0044): a source always, whatever update.txt says (801-UPD-0039).
+const CABLE: &str = "data/link/rel";
+const CABLE_MS: usize = 20_000; // how often its channel's timestamp is looked at
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not been confirmed, the machine would have restarted
@@ -105,7 +108,7 @@ struct Config { source: Option<Source>, channel: String, automatic: Automatic, e
 // `tries N`; `#` starts a comment. A line it does not know is logged and left out.
 fn config() -> Config {
     let mut config = Config { source: None, channel: String::from("stable"), automatic: Automatic::None, every_ms: 0, tries: 3 };
-    let Ok(file) = File::open(CONFIG) else { mind::println!("[UPDATER] NO {}: IT ACTS ONLY WHEN ASKED, AND HAS NO SOURCE", CONFIG); return config };
+    let Ok(file) = File::open(CONFIG) else { mind::println!("[UPDATER] NO {}: IT ACTS BY ITSELF ONLY ON THE CABLE'S {}", CONFIG, CABLE); return config };
     let mut text = alloc::vec![0u8; file.size().min(4096)];
     if file.read_at(0, &mut text).is_err() { return config; }
     let (mut url, mut pin) = (None, None);
@@ -298,6 +301,8 @@ struct Updater {
     stamp_seen: u64,
     /// The highest recovery order applied for its channel (351-UPD-0030), and the last one refused, said once.
     order_seen: u64, order_refused: Option<(u64, String)>,
+    /// The SHA-256 of the cable's timestamp last looked at (801-UPD-0039): a release is taken again only once it changes.
+    cable_seen: [u8; 32],
 }
 
 /// Where the channel the updater holds came from.
@@ -1212,10 +1217,12 @@ impl Updater {
         written
     }
 
-    // What update.txt asks it to do by itself; whether to try again soon, since the source did not answer.
+    // What update.txt asks it to do by itself; whether to try again soon, since the source did not answer. The cable's
+    // directory, if update.txt names it, is taken by `cable` instead, whatever `automatic` says.
     fn automatic(&mut self) -> bool {
         let what = self.config.automatic;
         if what == Automatic::None || self.config.source.is_none() { return false; }
+        if matches!(&self.config.source, Some(Source::Directory(dir)) if dir.trim_end_matches('/') == CABLE) { return false; }
         let unanswered = |result: Result<(), Error>| matches!(result, Err(Error::Network | Error::NoParser));
         let checked = self.check().map(drop);
         if checked.is_err() || what == Automatic::Check { return unanswered(checked); }
@@ -1225,6 +1232,30 @@ impl Updater {
         let _ = self.apply(tries);
         false
     }
+
+    /// The cable's directory (801-UPD-0039, the maintainer's decision of 2026-11-14: the cable updates all code with no
+    /// permission word): once its channel's timestamp changed since the last look, its release is staged and applied with
+    /// every check of any source's (MC-9.2–9.4), whatever update.txt says. A directory with no timestamp costs one open; a
+    /// refused release is said once, until its timestamp changes.
+    fn cable(&mut self) {
+        let Ok(file) = File::open(&format!("{}/timestamps/{}", CABLE, self.config.channel)) else { return };
+        let mut bytes = alloc::vec![0u8; file.size().min(TIMESTAMP_MAX)];
+        if file.read_at(0, &mut bytes) != Ok(bytes.len()) { return; }
+        let digest = mind::sha256::digest(&bytes);
+        if digest == self.cable_seen { return; }
+        self.cable_seen = digest;
+        mind::println!("[UPDATER] THE CABLE'S {}: A NEW TIMESTAMP OF CHANNEL {}", CABLE, self.config.channel);
+        // Checked, fetched and applied as an automatic run is, with the cable's directory lent as the source: the same lines.
+        let own = self.config.source.replace(Source::Directory(String::from(CABLE)));
+        let staged = self.check().and_then(|_| self.fetch());
+        self.config.source = own;
+        match staged {
+            Ok(_) => { let tries = self.config.tries; let _ = self.apply(tries); }
+            // A release still being put (a file missing or short) is looked at again at the next turn.
+            Err(Error::Missing | Error::Digest | Error::Network) => self.cable_seen = [0; 32],
+            Err(_) => {}
+        }
+    }
 }
 
 mind::entry!(main);
@@ -1232,7 +1263,7 @@ fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
                                 failure: String::new(), install: None, handles: 0, store: None, trusted: None, stamp_seen: 0,
-                                order_seen: 0, order_refused: None };
+                                order_seen: 0, order_refused: None, cable_seen: [0; 32] };
     // The highest timestamp version taken before (351-UPD-0028): a lower one is refused.
     updater.stamp_seen = kept_stamp(&updater.config.channel);
     // The recovery orders applied before (351-UPD-0030): one not above them is refused.
@@ -1285,6 +1316,9 @@ fn main(info: &'static BootInfo) {
         }
     }
     let mut next_automatic = Some(0);
+    // The cable's directory, looked at from the start in a slot (801-UPD-0039).
+    let mut next_cable = (slot != 0).then_some(0);
+    if slot != 0 { mind::println!("[UPDATER] SOURCE {} (THE CABLE'S, 801-LNK-0044): ALWAYS, AUTOMATIC APPLY", CABLE); }
     let mut scratch: alloc::boxed::Box<[u8; api::REQUEST_MAX]> = alloc::vec![0u8; api::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
         let now = mind::time::uptime_ms();
@@ -1295,7 +1329,7 @@ fn main(info: &'static BootInfo) {
                 Ok(Ok(boot)) if boot.trial && boot.confirmed => { confirm_at = None; updater.confirm("INIT CONFIRMED THE TRIAL BOOT"); }
                 // Refused: the kernel restarts the machine at its deadline, into the other slot, which stays untouched.
                 Ok(Ok(boot)) if boot.trial => {
-                    (confirm_at, next_automatic) = (None, None);
+                    (confirm_at, next_automatic, next_cable) = (None, None, None);
                     mind::println!("[UPDATER] INIT REFUSED THE TRIAL BOOT: NOT CONFIRMED; THE KERNEL RESTARTS THE MACHINE AT ITS DEADLINE");
                 }
                 Err(mind::sys::Error::Other(ERR_TIMEOUT)) => ask_at = Some(now + ASK_MS),
@@ -1309,7 +1343,11 @@ fn main(info: &'static BootInfo) {
             let every = (updater.config.every_ms > 0).then_some(updater.config.every_ms);
             next_automatic = [again, every].into_iter().flatten().min().map(|ms| mind::time::uptime_ms() + ms);
         }
-        let wake = [ask_at, confirm_at, if confirm_at.is_none() { next_automatic } else { None }].into_iter().flatten().min();
+        if confirm_at.is_none() && next_cable.is_some_and(|at| now >= at) {
+            updater.cable();
+            next_cable = Some(mind::time::uptime_ms() + CABLE_MS);
+        }
+        let wake = [ask_at, confirm_at, if confirm_at.is_none() { next_automatic } else { None }, if confirm_at.is_none() { next_cable } else { None }].into_iter().flatten().min();
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
