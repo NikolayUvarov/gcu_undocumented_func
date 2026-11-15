@@ -1,6 +1,6 @@
-# 000-NET-0086 — The device key check's copies from the disk never ask on a terminal
+# 000-NET-0086 — The device key check's copies from the disk never ask on a terminal — done
 
-**Type:** tests (`tests/qemu_smoke.py`, the device key check of the `tls` suite) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-15) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`, the device key check of the `tls` suite) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-15) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -22,10 +22,22 @@ The four copies from the disk image to a local file in the device key check and 
 - `x86: network, TLS and Effector` passes on i9, where it stopped.
 - `x86` and `aarch64: network, TLS and Effector` pass on another machine.
 
+## Resolution
+
+**Landed in round 142** (`main` `7ba6dcd775`, 2026-11-15). The gate was green on six lanes, i9 among them; one group failed there and passed on its repeat. That failure was the Sound page check's, a race in APP's check, now asked of APP.
+
+**What changed:** the four copies from the disk image to a local file in the device key check pass `mcopy -n`. On i9 a background operation that reads its terminal is stopped whole (SIGTTIN). mtools asked there before overwriting a local file, even with `-o`.
+
+**The criteria:**
+- `x86: network, TLS and Effector` passed on i9, where it had stopped three times: 2081 s.
+- `x86` and `aarch64: network, TLS and Effector` passed on acc1 and acc2, then in round 142's gate: x86 on acc2 in 1907 s, aarch64 on acc1 in 1527 s.
+
+**For everyone who runs on i9:** any program that may ask on `/dev/tty` stops its whole operation there. All tracks were told (`ALL/2026-11-15T1523Z-KRN-round-142-gated-on-the-pool.md` on `internal-dev-messages`).
+
 ## Related
 
 - Round 141's gate, run without i9 for this reason (`ALL/2026-11-15T1257Z-KRN-round-141-gated-on-the-pool-without-i9.md` on `internal-dev-messages`).
-- [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done): the device key kept on the disk. 308-KRN-0183: the store's kept key.
+- [351-NET-0005](351-NET-0005-persistent-device-key.done): the device key kept on the disk. 308-KRN-0183: the store's kept key.
 
 ## Progress (2026-11-15)
 
