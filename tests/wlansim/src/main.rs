@@ -418,6 +418,13 @@ fn main(_info: &'static BootInfo) {
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
                         gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, early_probe: false, silent_until: None, gone_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
+    // 801-NET-0085: as rtw89 on the Ryzen, which took its own channel after a restart: its `info` names the channel the
+    // station tuned the one before to, so only the PID that answers tells the station it is a fresh radio.
+    #[cfg(feature = "self-tuned")]
+    {
+        sim.channel = CHANNEL;
+        mind::println!("[WLANSIM] ON CHANNEL {} BY ITSELF: A FRESH RADIO THAT TUNED ITSELF", CHANNEL);
+    }
     #[cfg(feature = "slow")]
     {
         mind::println!("[WLANSIM] SILENT FOR {} S: A RADIO THAT ANSWERS LATE", LATE_MS / 1000);

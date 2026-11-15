@@ -12357,7 +12357,8 @@ def wifi_join_check(vm):
     assert "[WLANSIM] COUNTRY RU: 13 CHANNELS, 0 TO LISTEN ON ONLY" in sim, sim[-2000:]
     run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     how = ("before the scan's first tune" if "ASKED BEFORE A TUNE" in before else "by a call that found the old driver ended"
-           if "A CALL FOUND ITS DRIVER ENDED" in before else "by the 10-s check, which came before the scan")
+           if "A CALL FOUND ITS DRIVER ENDED" in before else "by the PID that answered" if "ANSWERED BY PID" in before
+           else "by the 10-s check, which came before the scan")
     print(f"PASS: a radio restarted while the station was not joined, a client's scan at once: the station noticed {how}, "
           "gave it RU, listed MIND-TEST and joined it again (550-NET-0061)", flush=True)
     # 801-NET-0084 (DRV's Ryzen run of 2026-11-14, joined by a script without --remember): a network a client joined that
@@ -12821,6 +12822,7 @@ def net_suite(args, disk):
     late_attach_check(args)
     slow_radio_check(args)
     world_country_check(args)
+    fresh_radio_check(args)
     browse_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
@@ -13173,6 +13175,54 @@ def world_country_check(args):
             vm.close()
     print("PASS: the station's country with none chosen and none announced (550-NET-0035): 00 applied, 11 channels to send "
           "on and 2 to listen on given to the radio, the first scan sending nothing, and MIND-TEST joined on channel 6", flush=True)
+
+
+def fresh_radio_check(args):
+    """801-NET-0085, DRV's Ryzen run of 2026-11-14: a radio started again by init that is already on the channel the
+    station tuned the one before to (wlansim built with `self-tuned`, as rtw89 took its own channel). Its `info` shows no
+    restart, neither no channel nor another one: the station knows it by the PID that answers, says so, gives it the
+    country again and joins MIND-TEST again by itself. A call that found the old driver ended is the one other sign; then
+    the radio is restarted again, up to three times, until the PID is what told."""
+    if not args.self_tuned_radio_elf or not raw_tools():
+        print("SKIP: the fresh radio check needs wlansim built with `self-tuned` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+
+    def wlan_until(vm, line, timeout):  # wlan's log, read until `line` is in it; `logs` drains
+        text, deadline = "", time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            text += vm.command(f"logs {vm.services()['wlan']}", raw=True)
+            if line in text:
+                return text
+            time.sleep(1)
+        raise AssertionError((line, text[-3000:]))
+
+    with tempfile.TemporaryDirectory(prefix="smoke-fresh-radio-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.self_tuned_radio_elf}, extra={"data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
+        try:
+            require(vm.service_logs("wlansim", "BY ITSELF"), "[WLANSIM] ON CHANNEL 6 BY ITSELF: A FRESH RADIO THAT TUNED ITSELF")
+            vm.service_logs("wlan", "[WLAN] COUNTRY ")
+            require(front_command(vm, "wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            for attempt in range(1, 4):
+                vm.command(f"logs {vm.services()['wlan']}", raw=True)  # drained: what wlan logs next is this restart's
+                radio = vm.services()["wlansim"]
+                require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+                log = wlan_until(vm, "[WLAN] AUTO-JOIN MIND-TEST: JOINED", 150)
+                reason = re.search(r"\[WLAN\] THE RADIO RESTARTED \(([^)]*)\)", log)
+                assert reason, log[-2000:]
+                fresh = vm.services()["wlansim"]
+                if reason[1] == f"ANSWERED BY PID {fresh}, NOT {radio}":
+                    break
+                # The fresh radio is on the channel the station took, so neither of those can be the reason.
+                assert reason[1] == "A CALL FOUND ITS DRIVER ENDED", (reason[1], log[-2000:])
+            else:
+                raise AssertionError("three restarts, none told by the PID that answered")
+            require(vm.command(f"logs {fresh}", raw=True), "[WLANSIM] ON CHANNEL 6 BY ITSELF")
+            require(front_command(vm, "wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+        finally:
+            vm.close()
+    print(f"PASS: a fresh radio already on the station's channel (801-NET-0085): the station knew it by the PID that answered "
+          f"({reason[1]}, restart {attempt}), gave it the country again and joined MIND-TEST again by itself", flush=True)
 
 
 def slow_radio_check(args):
@@ -18866,6 +18916,8 @@ def main():
     args.slow_radio_elf = args.slow_radio_elf or (str(slow) if args.arch == "x86_64" and slow.exists() else None)
     world = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-nocountry-target/x86_64-unknown-none/release/wlansim"
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
+    tuned = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-selftuned-target/x86_64-unknown-none/release/wlansim"
+    args.self_tuned_radio_elf = str(tuned) if args.arch == "x86_64" and tuned.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.disk == "ahci":

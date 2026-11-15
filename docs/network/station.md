@@ -63,5 +63,6 @@ Each try ends in one line:
   - the access point goes away for 25 s, and the station's failed tries are logged before it joins again by itself;
   - after `wifi leave`, nothing is joined by itself;
   - MIND-TEST joined without `--remember`, its radio restarted: the station joins it again by itself with the PMK it held, and `keystore` is not asked for its keys; after `wifi leave`, a fresh `wlan` says once that a join needs the user (801-NET-0084);
+  - on x86, a fresh radio already on the station's channel (`wlansim` built with `self-tuned`): its `info` shows no restart, and the station knows it by the PID that answers, says so, gives it the country again and joins again by itself (801-NET-0085);
   - `wificheck wifi`, a program lent the changing client, takes the reading one and drops its own; through it the link and the country are read, and `join`, `leave`, `forget` and `set-country` are each denied, the station joined and under its country as before (550-NET-0058).
 - These are QEMU runs against a stand-in radio. They say nothing yet about a real radio, such as the MacBook Pro's BCM4331 (MC-12.1).

@@ -70,7 +70,7 @@ Rights: `CAP_READ` 1, `CAP_WRITE` 2, `CAP_GRANT` 4, `CAP_KEEP` 8 (may mint recei
 |---|---|---|
 | 12 | `ENDPOINT_CREATE` | → handle of a new endpoint with all rights (endpoint quota) |
 | 10 | `IPC_SEND` | `arg1` = endpoint handle, `arg2` = timeout ms << 32 (issue 172: before, in `arg1`); `msg[0]` = capability handle to transfer (0: none), `msg[1]` = rights mask \| `CAP_TRANSFER_MOVE`, `msg[2..4]` = data [write right] |
-| 22 | `IPC_CALL` | as `IPC_SEND`, `arg2` = slot for a capability in the reply \| timeout ms << 32; waits for the reply: `msg[2..4]` = reply data [write right] |
+| 22 | `IPC_CALL` | as `IPC_SEND`, `arg2` = slot for a capability in the reply \| timeout ms << 32; waits for the reply: `arg1` = the PID of the task that replied, `msg[2..4]` = reply data [write right] |
 | 11 | `IPC_RECV` | `arg1` = endpoint handle, `arg2` = slot for a received capability \| timeout ms << 32 → `arg1` = sender PID, `arg2` = badge, `msg[0]` = 1 if a capability arrived, `msg[1]` = `MSG_FLAG_*`, `msg[2..4]` = data [read right] |
 | 23 | `IPC_REPLY` | answers the last received call; `msg` as for a send |
 | 31 | `IPC_SAVE_REPLY` | → handle of a one-time reply capability for the last call (answer later) |

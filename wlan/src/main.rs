@@ -53,10 +53,19 @@ const STALL_MS: u64 = auto::LATER_MS + 70_000;
 // The radio's last answer, and whether a call found its driver ended (801-NET-0083): each radio call goes through `radio_call`.
 static ANSWERED: AtomicU64 = AtomicU64::new(0);
 static DRIVER_ENDED: AtomicBool = AtomicBool::new(false);
+// The PID that answered the station's last radio call, and the one before it when another answered (801-NET-0085):
+// `init` starts a failed driver again behind the same endpoint, so another PID is a fresh driver, whatever it reports.
+static RADIO_PID: AtomicU64 = AtomicU64::new(0);
+static FRESH: AtomicU64 = AtomicU64::new(0);
 fn radio_call<T>(deadline: Deadline, call: impl FnOnce() -> mind::sys::Result<T>) -> mind::sys::Result<T> {
     let result = deadline.call(call);
     match &result {
-        Ok(_) => ANSWERED.store(mind::time::uptime_ms() as u64, Ordering::Relaxed),
+        Ok(_) => {
+            ANSWERED.store(mind::time::uptime_ms() as u64, Ordering::Relaxed);
+            let pid = mind::idl::wire::replied_by();
+            let was = RADIO_PID.swap(pid, Ordering::Relaxed);
+            if was != 0 && pid != 0 && pid != was { FRESH.store(was, Ordering::Relaxed); }
+        }
         Err(mind::sys::Error::Peer) => DRIVER_ENDED.store(true, Ordering::Relaxed),
         Err(_) => {}
     }
@@ -64,9 +73,10 @@ fn radio_call<T>(deadline: Deadline, call: impl FnOnce() -> mind::sys::Result<T>
 }
 
 // Why the station set the radio up again (801-NET-0083): no channel set though it was tuned (550-NET-0061), a channel
-// other than the one it took, a call that found its driver ended, or the automatic join stalled.
+// other than the one it took, a call that found its driver ended, another PID answering (801-NET-0085), or the
+// automatic join stalled.
 #[derive(Clone, Copy)]
-enum Again { NoChannel, Moved(u8, u8), Ended, Stalled }
+enum Again { NoChannel, Moved(u8, u8), Ended, Fresh(u64, u64), Stalled }
 
 fn mac(value: u64) -> [u8; 6] { let b = value.to_be_bytes(); [b[2], b[3], b[4], b[5], b[6], b[7]] }
 fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -195,6 +205,7 @@ struct Wlan {
 impl Wlan {
     // The radio answered: its address, rates and own channels, over which each country is planned (550-NET-0059).
     fn radio_up(&mut self, info: &wlanhw::Info) {
+        FRESH.store(0, Ordering::Relaxed);
         self.station_up(info);
         self.country_start();
     }
@@ -249,11 +260,14 @@ impl Wlan {
             Again::NoChannel => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY {}{}", if asked { ", ASKED BEFORE A TUNE" } else { "" }, country, again),
             Again::Moved(now_on, was) => mind::println!("[WLAN] THE RADIO RESTARTED (ON CHANNEL {}, NOT THE {} IT TOOK): ITS COUNTRY {}{}", now_on, was, country, again),
             Again::Ended => mind::println!("[WLAN] THE RADIO RESTARTED (A CALL FOUND ITS DRIVER ENDED): ITS COUNTRY {}{}", country, again),
+            Again::Fresh(was, now_pid) => mind::println!("[WLAN] THE RADIO RESTARTED (ANSWERED BY PID {}, NOT {}): ITS COUNTRY {}{}", now_pid, was, country, again),
             Again::Stalled => mind::println!("[WLAN] THE AUTOMATIC JOIN BEGAN NO TRY FOR {} S: THE STATION STARTS ANEW, ITS COUNTRY {}{}", STALL_MS / 1000, country, again),
         }
         self.station_up(&info);
         self.first = false;
         match running { Some((code, source)) => self.run_under(code, source), None => self.country_start() }
+        // The station's calls to the fresh radio came from the new station: one restart for it.
+        FRESH.store(0, Ordering::Relaxed);
         // A try under way was the old station's: the next one begins at once.
         if let Some(Try::Scanning(number) | Try::Joining(_, _, number)) = self.trying.take() {
             mind::println!("[WLAN] AUTO-JOIN: TRY {} ENDED BY THE RADIO'S RESTART, AGAIN AT ONCE", number);
@@ -276,6 +290,8 @@ impl Wlan {
         let ended = DRIVER_ENDED.swap(false, Ordering::Relaxed);
         if !self.radio { return false; }
         if ended && self.again.is_none() { self.again = Some(Again::Ended); }
+        let fresh = FRESH.load(Ordering::Relaxed);
+        if fresh != 0 && self.again.is_none() { self.again = Some(Again::Fresh(fresh, RADIO_PID.load(Ordering::Relaxed))); }
         let answered = ANSWERED.load(Ordering::Relaxed);
         if now.saturating_sub(answered) >= RADIO_SILENT_MS {
             mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED FOR {} S: ASKED AGAIN AS A NEW RADIO, THE STATION STARTS ANEW", now.saturating_sub(answered) / 1000);
@@ -434,8 +450,10 @@ impl Wlan {
 
     // What the station asked of the radio: tune, filter, send; a received Ethernet frame for the stack.
     fn apply(&mut self, out: Out) {
-        // A radio found restarted gets nothing of the old station's: the next turn starts a new one (550-NET-0061).
-        if self.restarted.is_some() || (out.channel.is_some() && self.restarted_before_tune()) { return; }
+        // A radio found restarted gets nothing of the old station's: the next turn starts a new one (550-NET-0061), also
+        // once another PID answered (801-NET-0085), so the old station sends nothing to a fresh driver it never tuned.
+        let restarted = self.restarted.is_some() || (out.channel.is_some() && self.restarted_before_tune());
+        if restarted || FRESH.load(Ordering::Relaxed) != 0 { return; }
         if let Some(channel) = out.channel {
             match radio_call(self.deadline, || wlanhw::set_channel(RADIO, channel)) {
                 Ok(Ok(())) => { self.tuned = true; self.tuned_to = channel; }
