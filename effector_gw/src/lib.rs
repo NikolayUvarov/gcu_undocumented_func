@@ -3,7 +3,9 @@
 //! grants once 750-KRN-0119 gives it a boot image.
 extern crate alloc;
 pub use mind::sha256;
+pub use mind::{json, zip};
 pub mod audit;
 pub mod gateway;
+pub mod package;
 pub mod png;
 pub use mind::effector::policy;

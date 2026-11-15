@@ -1,6 +1,6 @@
 # 750-EFF-0008 — Signed application packages: install, update and remove an application
 
-**Type:** service feature · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done), [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (signed application packages: the contract, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the open Effector package metadata/non-shell entry-point requirement in `sst-test-deploy: issues/81-mindcore-02-package-metadata.task.md` · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
+**Type:** service feature · **Owner:** `EFF` track · **Priority:** P1 · **Status:** in progress (2026-11-14) · **Blocked by:** [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done), [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (signed application packages: the contract, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the open Effector package metadata/non-shell entry-point requirement in `sst-test-deploy: issues/81-mindcore-02-package-metadata.task.md` · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
 
 ## Problem
 
@@ -51,3 +51,63 @@
   - The download: only `/api/deployment/download/{id}`, bound to that size and SHA-256.
   - The result: `DeploymentResult` with `script` `mind-package-1` and one `stdout` line, then the ACK, both with the same outcome and refusal code.
 - Nothing of it is built. The install waits for the server's confirmation and for KRN's 750-KRN-0169.
+
+## Progress (2026-11-14): built to contract 1.5 draft 2; host tests pass, the QEMU check is not run yet
+
+**What the server needs is on its side:** the Effector project's `mindcore_packages.go` sends `mind-package-1` behind `mindcore_packages_enabled`, which stays off on real servers until this lands.
+
+**The agent** (`effector/src/main.rs`, `wire.rs`):
+- `deploy` with `mind-package-1:<operation>:<package_id>:<size>:<sha256>` in `new_hostport` (`wire::package`). Any other form, the host form among them, is `unsupported`. The budget is a fixed 600 s.
+- The archive comes from `/api/deployment/download/{id}` straight into the gateway: `package-begin`, `write`, `package-commit`.
+- Then `POST /api/deployment/result`, the server's `DeploymentResult` with `script` `mind-package-1` and one `stdout` line:
+  - `installed NAME VERSION ARCH FILES MANIFEST_SHA256`;
+  - `removed NAME VERSION`;
+  - `refused CODE: …`.
+- Then the ACK, with the same outcome: `completed` with that line, or `failed` with the code.
+- `session::Failure` gains `signature`, `older`, `format`, `arch`, `system` and `space`.
+
+**The gateway** (`effector_gw/src/gateway.rs`, `package.rs`, `main.rs`; `effector.wit` 1.7):
+- **At `package-begin`:** `packages on` and `max-bytes` (`Ask::Packages`), audited before any byte. An archive over 8 MiB is `unsupported`, as the gateway reads it whole in its 16 MiB heap.
+- **The archive** goes to `data/apps/.incoming.zip` in the apps scope (`SLOT_APPS`). At the commit its size and SHA-256 are checked.
+- **`package::run`:**
+  - `manifest.json`'s `mindcore` entry for this architecture, by the contract's rules;
+  - MANIFEST and MANIFEST.SIG from that directory;
+  - `apppkg::verify` under the policy's `package-key` lines for the name, this architecture and the running release. Without a `package-downgrade` line, a lower version or the same version with other bytes is `older`;
+  - each file against its MANIFEST line before it is written.
+- **Where an install writes:** `<name>/.new-<version>/`, which then becomes `<name>/<version>/`. After that, `current` is written as `current.new` and renamed. The previous version stays.
+- **A deinstall** checks the package's signature, then removes `current`, then the application's directory.
+- **Each outcome is audited.**
+
+**Host tests:**
+- `tests/effector_package_host.rs`, 6 tests: the entry's rules; install, update and the previous version kept; each refusal leaving the installed version and nothing half-written, a full disk among them; the removal;
+- the gateway's transfer, its digest and its audit (`effector_gateway_host.rs`);
+- the policy's `Ask::Packages`;
+- the command's form and the result's fields (`effector_wire_host.rs`).
+
+**The QEMU check, written but not run:** `effector_packages_check` in the effector suite, x86 and aarch64, with `memtest` signed by the public test key:
+- install, then run from `data/apps/`;
+- version 2 in its place, 1 kept;
+- refusals for another key, an older version and a changed program (`signature`, `older`, `digest`), each changing nothing;
+- the removal;
+- each command's DeploymentResult and ACK.
+
+**Not done:**
+- **The `busy` check of a running application** at `reinstall` and `deinstall`.
+- **Pruning versions older than the previous one.**
+- **An atomic `current`:** the volume has no replacing rename. So `current` is removed, then `current.new` is renamed onto it. A power loss between the two leaves the application without `current` until the next install, never a mix of versions.
+- **Archives over 8 MiB.**
+- **A run against the Effector server itself,** once its flag is on (750-EFF-0012).
+
+
+## Progress (2026-11-15): the first QEMU run, and two causes found
+
+The check ran on x86 (LEG9) and found two faults. Neither was in the package code.
+
+- **The fixture refused a package ID with a dot** (`memtest-1.zip`). It checked package IDs with its agent-ID rule. It now takes contract 1.5's grammar (`A-Z a-z 0-9 . _ -`), but not `.` or `..`, which would become a path in the download's URL (`tests/effector_server.py`, with a test).
+- **The gateway lost its scope of `data/apps/` before the first install,** so the first write of the archive answered `io`.
+  - **Why:** `vfs_server` ends a scope that nobody opened within a minute (`SCOPE_UNUSED_MS`). The gateway opened its file clients' roots at their first use, which came at about 190 s.
+  - **The delivery root's scope had the same risk.** It came through only because the first delivery came before a sweep.
+  - **The fix:** the gateway opens both roots at its start, and logs a root it could not open. It also logs an archive it could not write, and every package refusal with the reason. The agent logs the gateway's own error at a refused write or an unanswered commit. The `READY; GRANTS` line now names `APPS`.
+- **The suite's redelivery check after a restart** counted the command's `FAILED` line in the whole log. The packages' lines pushed that line out of the log's ring, so it now checks only the log after the restart.
+- **The run after the fixes** (LEG9, 2026-11-15, `d48f419c`): `effector_packages_check` passed on x86_64 and aarch64, with the whole `effector` suite. It installed and ran memtest 1 from `data/apps/`, put 2 in its place with 1 kept beside it, refused `signature`, `older` and `digest` with nothing changed, and removed it. Each step had its DeploymentResult, ACK and audit line.
+  - **Still open from the criteria:** an unsigned package and an encrypted archive are not among the suite's refusals yet, nor are the loader's refusal of changed files (KRN's part) or a run against the Effector server itself.

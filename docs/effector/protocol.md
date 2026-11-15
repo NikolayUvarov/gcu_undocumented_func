@@ -138,8 +138,12 @@ machine, and the server's health check is answered. Everything 1.2 did stays.
     boot;
   - **`failed`**, exit status 1, when the machine came back in the old slot: `stdout` `fell back: slot S runs version
     V, not W` and the updater's last failure, `error` `fell-back`;
-  - **`failed`** with `not-confirmed` if the new slot is still on trial 180 s after the agent started, `restart` if the
-    restart did not come within 60 s of the apply, `io` if the updater's state cannot be read.
+  - **nothing, and nothing kept changes, while `init` says the trial is deciding** (`init.wit` 1.13 `boot`, 801-KRN-0242),
+    however long it takes, or that it refused it: the machine then restarts into the slot before, whose agent answers
+    `fell-back` from the kept command (801-EFF-0034; 801 S3);
+  - **`failed`** with `not-confirmed` if the updater has not confirmed the slot 180 s after `init` did (or, when `init`
+    does not say, 180 s after the agent started), `restart` if the restart did not come within 60 s of the apply, `io`
+    if the updater's state cannot be read.
 - **Meanwhile** the heartbeat says the agent is busy with the command, as for any answer that waits, and no other
   command is taken.
 
@@ -287,6 +291,22 @@ with backoff, and return the saved result for redelivery; do not re-execute it.
 Conflicting reuse of an ID is an error. A permanent ACK rejection retains the
 journal entry for diagnosis/reconciliation instead of making it executable
 again. Command expiry must not erase evidence of a possibly completed action.
+
+**A redelivery of a command answered before** (750-EFF-0033, the Effector
+project's 81-01). The journal keeps every answer, but the files behind two of
+them are not kept for ever:
+- **A measured result** (`health`, `performance_measure`) stays until the next
+  one replaces it. A redelivery of the last is answered with the same result,
+  byte for byte, so a server that keeps its first result takes it as a repeat.
+- **A collected artifact** (`collect_logs`, `screenshot`) goes once its first
+  ACK has ended, since it may be megabytes.
+- **An older measured result, or any artifact,** is answered `completed`,
+  `exit_code` 0, with `stdout` `answered before: its result went with its
+  first answer and is not kept for a repeat` (or `its artifact`). The agent logs
+  `EFFECTOR: ACK <id> completed AGAIN, ITS RESULT NOT KEPT: …`. The server keeps
+  its first result; the reviewed fixture refuses the different repeat with 409.
+- **The action never runs again.** A result lost before its first ACK ended is
+  still answered `failed` with `io`, as the loss it is.
 
 ## Bounds and errors
 
