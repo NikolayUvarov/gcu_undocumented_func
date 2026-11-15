@@ -76,8 +76,19 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
   - **The link and modes suites** reach their safe start by two resets.
   - **The `boot` suite's trial check:** a trial of slot B held for the server is cut twice at the prompt, which spends its tries. Slot A then starts normally and names slot B's run.
 
+**The runs before landing** (the code at `8929b024f3`, the tests' last fixes at `1b2c788582`):
+- x86: the watchdog, on i9, 253 s;
+- x86: boot, display, shell, memory, clock, on x32, 1466 s, and on i9, 1595 s;
+- x86: services, storage, audio, on acc2, 1043 s;
+- aarch64: the link, 229 s, and aarch64: the updater and the modes, 1167 s, both on acc1;
+- host tests, on x32, 2204 s.
+
+**What the runs found and fixed:**
+- the kernel started `init` before it read the watchdog's status (`2b3fb199c2`, x32);
+- the trial kernel's 15 s deadline restarted slot B before `init` held it, on i9;
+- the trial check typed `ps` while the refused trial restarted, on x32.
+
 **Left:**
-- the suites' runs on the machines;
 - a panic as evidence (step 3), not done;
 - a bench machine's run;
 - step 5 (Effector's telemetry and the link's log), EFF's and LNK's to ask.
