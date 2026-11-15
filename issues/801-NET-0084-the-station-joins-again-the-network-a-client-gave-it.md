@@ -1,6 +1,6 @@
 # 801-NET-0084 — The station joins again, by itself, the network a client joined this boot, remembered or not; a key joins a WPA2 access point alone; a word when nothing can be joined
 
-**Type:** `wlan`, `dot11` · **Owner:** `NET` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.3, MC-11.6, MC-11.9
+**Type:** `wlan`, `dot11` · **Owner:** `NET` · **Priority:** P1 · **Status:** open (2026-11-14; landed in round 138, the Ryzen's run left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.3, MC-11.6, MC-11.9
 
 ## Problem
 
@@ -33,16 +33,30 @@ A second gap, in `dot11`. A join takes the strongest access point of the name, w
 
 ## Acceptance criteria
 
-- [ ] `dot11`'s host tests:
+- [x] `dot11`'s host tests:
   - with an open access point of the same name stronger than the WPA2 one, a key (held or kept) joins the WPA2 one;
   - no key joins the open one;
   - a key and only an open access point join nothing and send nothing.
-- [ ] The QEMU `net` suite over `wlansim`, x86 and aarch64:
+- [x] The QEMU `net` suite over `wlansim`, x86 and aarch64:
   - MIND-TEST is forgotten, then joined without `--remember`;
   - its radio is restarted, and the station joins it again by itself with the PMK it held. `keystore` is not asked for its keys;
   - after `wifi leave`, a fresh `wlan` says once that a join needs the user, and joins nothing.
-- [ ] `docs/network/station.md` says what is held, for how long, and which access point a key joins.
+- [x] `docs/network/station.md` says what is held, for how long, and which access point a key joins.
 - [ ] On the Ryzen, the machine joined by `wifijoin.msh` without `--remember` joins again by itself after `rtw89_wifi` restarts (DRV's run).
+
+## Progress (2026-11-15)
+
+Landed in round 138 (`main` `3608201700`, gate green with no group failing):
+- **`wlan`:** the held network (`Held`, wiped when dropped), the client's join that holds it once it joins, and the automatic join's try of it.
+- **`dot11`:** `List::best_of`, and a join whose access point fits the key.
+- **The checks:** `dot11`'s host test, which fails on the old station. The `net` suite's `wifi_join_check` covers the held network after a radio restart and the line said once.
+
+Before the round, on `3608201700`:
+- x86: network, TLS and Effector on acc-2, 1653 s;
+- aarch64: network, TLS and Effector on PCU, 1582 s;
+- host tests on x32, 2184 s.
+
+QEMU against `wlansim` says nothing yet of a real radio (MC-12.1). The Ryzen's run, DRV's, is the last criterion. DRV was asked in `DRV/2026-11-14T2250Z-NET-801-net-0084-…`.
 
 ## Related
 
