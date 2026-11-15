@@ -93,6 +93,18 @@ fn fail(what: core::fmt::Arguments) -> ! {
     mind::process::exit_with(1)
 }
 
+// The last heartbeat after init's stop notice is under way, and when its time ends (801-EFF-0036).
+static LAST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static LAST_UNTIL: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+// Of the notice's 2 s, what the last heartbeat may take, connection included: the agent ends within the notice either way.
+const LAST_MS: usize = 1500;
+
+// A wait for the network ends at once on a stop notice, or once the last heartbeat's time is over (801-EFF-0036).
+fn cut_short() -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    if LAST.load(Relaxed) { now() >= LAST_UNTIL.load(Relaxed) } else { workers::stop_marked().is_some() }
+}
+
 // A TLS session of the flow grant; a receive waits up to `idle_ms` for a byte, so every request is bounded.
 struct Link { session: u32, idle_ms: usize }
 impl Transport for Link {
@@ -103,7 +115,7 @@ impl Transport for Link {
             let n = match tls::send(TLS, self.session, &data[sent..end]) {
                 Ok(Ok(n)) => n as usize, Ok(Err(tls::Error::Again)) => 0, _ => return Err(http::Error::Transport),
             };
-            if n == 0 { if now() >= deadline { return Err(http::Error::Transport); } mind::time::sleep(2); }
+            if n == 0 { if now() >= deadline || cut_short() { return Err(http::Error::Transport); } mind::time::sleep(2); }
             sent += n;
         }
         Ok(())
@@ -118,7 +130,7 @@ impl Transport for Link {
                 Ok(Err(tls::Error::Closed)) => return Ok(0),
                 _ => return Err(http::Error::Transport),
             }
-            if now() >= deadline { return Err(http::Error::Transport); }
+            if now() >= deadline || cut_short() { return Err(http::Error::Transport); }
             mind::time::sleep(2);
         }
     }
@@ -309,7 +321,10 @@ impl Agent {
     #[inline(never)]
     fn connect(&mut self) -> Option<&mut Connection<Link>> {
         if self.connection.is_some() { return self.connection.as_deref_mut(); }
-        if now() < self.reconnect_at { return None; }
+        let last = LAST.load(core::sync::atomic::Ordering::Relaxed);
+        if now() < self.reconnect_at && !last { return None; }
+        // The last heartbeat's connection waits only what is left of its time.
+        let connect_ms = if last { LAST_UNTIL.load(core::sync::atomic::Ordering::Relaxed).saturating_sub(now()).max(100) as u32 } else { CONNECT_MS };
         let mut pins = mind::idl::codec::List::<tls::Pin, 2>::default();
         for p in self.config.pins() {
             let mut digest = mind::idl::codec::List::default();
@@ -324,7 +339,7 @@ impl Agent {
             self.tell_init(init::AgentStep::NoNetwork, &detail);
         }
         let attempt = attached.ok().and_then(|r| r.ok()).ok_or("attach").and_then(|session| {
-            match tls::connect_pins(TLS, session, self.config.tls_name(), address, self.config.port(), pins.as_slice(), CONNECT_MS) {
+            match tls::connect_pins(TLS, session, self.config.tls_name(), address, self.config.port(), pins.as_slice(), connect_ms) {
                 Ok(Ok(_)) => Ok(session),
                 other => {
                     let _ = tls::close(TLS, session);
@@ -365,6 +380,8 @@ impl Agent {
     /// which the server counts its traffic.
     fn send(&mut self, method: Method, route: &str, query: &str, content_type: &str, body: Option<(u64, &mut dyn http::Source)>,
             mut sink: Option<&mut dyn FnMut(&[u8]) -> bool>) -> Option<u16> {
+        // init's stop notice before a request: the last heartbeat goes instead (801-EFF-0036).
+        if !LAST.load(core::sync::atomic::Ordering::Relaxed) && workers::stop_marked().is_some() { self.stop_now(None); }
         let mut text = String::new();
         text.push_str("https://"); text.push_str(self.config.host());
         if self.config.port() != 443 { let _ = core::fmt::write(&mut text, format_args!(":{}", self.config.port())); }
@@ -411,7 +428,21 @@ impl Agent {
         }
         if result.is_none() { self.connection = None; }
         if self.connection.as_ref().is_some_and(|c| !c.open()) { self.connection = None; }
+        // A request the notice cut short: its connection is gone, and the last heartbeat goes on a new one at once.
+        if !LAST.load(core::sync::atomic::Ordering::Relaxed) && workers::stop_marked().is_some() { self.stop_now(None); }
         result
+    }
+
+    /// init's stop notice (750-KRN-0194): one last heartbeat, `shutting_down`, within the time left of the notice's 2 s,
+    /// then the end (750-EFF-0006, 801-EFF-0036). Called between two requests or from one the notice cut short.
+    fn stop_now(&mut self, reason: Option<init::StopReason>) -> ! {
+        use core::sync::atomic::Ordering::Relaxed;
+        let reason = reason.or(workers::stop_marked());
+        LAST_UNTIL.store(now() + LAST_MS, Relaxed);
+        LAST.store(true, Relaxed);
+        let outcome = self.heartbeat(true, None);
+        mind::println!("EFFECTOR: init STOPS IT ({:?}): SHUTTING_DOWN SENT ({:?}), ENDING", reason, outcome);
+        mind::process::exit_with(0)
     }
 
     /// The body as `parse.json` reads it, checked by `check`.
@@ -1459,11 +1490,8 @@ fn main(_info: &'static BootInfo) {
         }
         if session.shutdown_done() || stopped_at.is_some_and(|s| now() > s + 10_000) { break; }
         // init's stop notice (750-KRN-0194): one last heartbeat, at once, and the end within the notice's 2 s (750-EFF-0006).
-        if let workers::Event::Stop(reason) = agent.pool.poll() {
-            let outcome = agent.heartbeat(true, None);
-            mind::println!("EFFECTOR: init STOPS IT ({:?}): SHUTTING_DOWN SENT ({:?}), ENDING", reason, outcome);
-            mind::process::exit_with(0);
-        }
+        if let workers::Event::Stop(reason) = agent.pool.poll() { agent.stop_now(Some(reason)); }
+        if workers::stop_marked().is_some() { agent.stop_now(None); }
         // A journal not written (801-EFF-0032). With vfs_server started again since this start, the agent's file clients
         // answer no more: it ends, so that init starts it with new ones. With the same vfs_server the medium is gone or
         // full, and a restart could not even read the configuration: the agent goes on, its heartbeats too, answering
