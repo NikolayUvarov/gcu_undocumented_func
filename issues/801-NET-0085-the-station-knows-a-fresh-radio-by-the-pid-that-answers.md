@@ -51,7 +51,17 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
     - The station's first call then reaches the fresh radio.
   - **Why the first version restarted up to three times.** It retried on the other sign. On x32 (`41e360c4d4`) it needed the third restart: in two of three the station's call fell between the two radios.
 
-**Left:** the runs on the maintainer's machines, the gate, and a bench machine's run.
+**The runs on the maintainer's machines** (2026-11-15):
+- **On `cfd09c542a`**, the code:
+  - acc-2: `aarch64: network, TLS and Effector` passed in 1576 s;
+  - i9: `x86: boot, display, shell, memory, clock` in 1761 s, `x86: services, storage, audio` in 1306 s;
+  - x32: the host tests in 2221 s.
+- **On `41e360c4d4`**, x32: `x86: network, TLS and Effector` passed in 1770 s, but the check needed its third restart for the PID to tell. In the first two the station's call fell between the two radios.
+- **On `7f056287dd`**, the check holding the station:
+  - x32: `fresh_radio_check` alone five times, each passed in 15 s, the PID telling each time;
+  - i9: `x86: network, TLS and Effector` passed in 2186 s, the check's line naming the PID.
+
+**Left:** the gate, and a bench machine's run (DRV).
 
 ## Related
 
