@@ -38,7 +38,7 @@ mod nodes;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
-use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port};
+use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port, watchdog};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
 mod firmware;
@@ -136,6 +136,9 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
+        // The watchdog before init starts, so that init's BootInfo says whether it restarted the last run (000-KRN-0217);
+        // the boot CPU's tick, which feeds it, starts a moment later.
+        watchdog::start();
         scheduler::spawn_init().expect("init spawn");
         // Printed before any task can run, so it never lands in the middle of a task's console output.
         serial_print("MIND CORE KERNEL: INIT STARTED\n");

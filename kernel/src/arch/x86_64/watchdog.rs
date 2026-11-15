@@ -1,6 +1,6 @@
 // The chipset's watchdog (000-KRN-0076): the TCO timer of Intel's LPC bridge (ICH9 to the 7-series PCH, and QEMU's q35),
-// in its ACPI I/O space, or the AMD FCH's timer (213-KRN-0125, fch.rs). Armed with the tick and fed every second from the
-// boot CPU's tick: a machine whose boot CPU stops is reset at the timer's expiry. A halt the kernel chose (a panic, a
+// in its ACPI I/O space, or the AMD FCH's timer (213-KRN-0125, fch.rs). Armed just before init starts (000-KRN-0217) and fed
+// every second from the boot CPU's tick: a machine whose boot CPU stops is reset at the timer's expiry. A halt the kernel chose (a panic, a
 // fatal error, HALT) stops it first.
 use super::fch;
 use super::pcicfg;

@@ -6978,16 +6978,15 @@ def link_suite(args):
         finally:
             vm.close()
     # 800-KRN-0191: in a safe start, link gets the cable's clients but not the input privilege, as whoever asked
-    # for the safe start is at the machine. A reset within the minute after READY leaves the run's mark (000-KRN-0076).
+    # for the safe start is at the machine. Two resets in a row while the safe start's list starts, before it settles,
+    # leave the run's mark naming them twice (000-KRN-0076, 000-KRN-0217).
     with tempfile.TemporaryDirectory(prefix="smoke-link-safe-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 dev\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True,
                 extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
         try:
             require(vm.command(f"stat caps {vm.services()['link']}", raw=True), "KIND=6 ")  # the normal start: input held
-            vm.qmp("system_reset")
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
-            vm.expect("MIND> ", timeout=120)
+            cut_twice(vm, "qmp")
             log = vm.command("dmesg -s init", raw=True)
             require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
             require(log, "[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; NO INPUT IN A SAFE START; ")
@@ -7375,6 +7374,24 @@ MODES_EFFECTOR_FILES = {"netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
                         "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY}
 
 
+SAFE_LIST = ("bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci")
+SETTLED = "[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: A RUN CUT NOW LEAVES NOTHING OUT"
+
+
+def cut_twice(vm, via):
+    """000-KRN-0217: two runs cut in a row while the safe start's list starts (a reset at the prompt, before the starts
+    settle 30 s past READY), so the boot after them is a safe start; the boot between them is a normal one that suspects
+    them. `via`: "qmp" or "hmp"."""
+    for cut in range(2):
+        getattr(vm, via)("system_reset")
+        vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+        vm.expect("MIND> ", timeout=120)
+        if cut == 0:
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
+            assert "[INIT] SAFE START:" not in log, log[-2000:]
+
+
 def modes_lifecycle_check(args):
     """750-KRN-0143: in the development mode init starts each Effector service again after it is killed, and the mode
     holds over three reboots; a safe start (000-KRN-0076) with the maintenance mode on starts both services."""
@@ -7416,10 +7433,8 @@ def modes_lifecycle_check(args):
         image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": b"maintenance\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, extra=cpu)
         try:
-            # A reset within the minute after READY leaves the run's mark, so the next boot is a safe start.
-            vm.qmp("system_reset")
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
-            vm.expect("MIND> ", timeout=120)
+            # Two resets in a row before the safe start's list settles: the boot after them is a safe start (000-KRN-0217).
+            cut_twice(vm, "qmp")
             log = vm.command("dmesg -s init", raw=True)
             require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
             require(log, "[INIT] MODE: MAINTENANCE (data/mode.conf)")
@@ -17403,8 +17418,9 @@ def power_button_check(args, disk):
     """000-KRN-0216 (x86): QEMU's power button (`system_powerdown`, the chipset's fixed-feature event) shuts the machine
     down as asked, on pc (PIIX4's PM) and q35 (ICH9's): init stops the services, writes the volumes and turns it off (S5),
     and the next boot is no safe start. QEMU keeps the firmware's variables across a reset of the same process
-    (`-no-shutdown`), so a reset first, before a minute past READY, stands for a cut power: that boot is a safe start, which
-    shows the run's mark is kept. init's own lines go to the system log, which the off machine cannot show: the kernel names
+    (`-no-shutdown`), so a reset before a minute past READY stands for a cut power. 000-KRN-0217: one after the safe start's
+    list settled is followed by a normal start (the DEXP's, 2026-11-08); two in a row before it settles by a safe start,
+    which shows the run's mark is kept. init's own lines go to the system log, which the off machine cannot show: the kernel names
     who asked for the power-off, and a file written just before the press is there after it, its volume not left dirty
     (vfs_server writes its cache only when told)."""
     if args.arch != "x86_64":
@@ -17425,9 +17441,20 @@ def power_button_check(args, disk):
             require(log, taken)
             assert safe not in log, log[-2000:]
             assert "THE PM1 EVENTS LENT" in vm.log, vm.log[-3000:]
-            # A cut power before a minute past READY: the next boot is a safe start.
+            # A cut power once the list settled, before a minute past READY: a normal start.
+            deadline = time.monotonic() + 120
+            while SETTLED not in log:
+                assert time.monotonic() < deadline, log[-2000:]
+                time.sleep(2)
+                log = vm.command("dmesg -s init", raw=True, timeout=30)
+            assert "[INIT] A MINUTE PAST READY" not in log, log[-2000:]
             vm.hmp("system_reset")
-            require(booted(), safe)
+            log = booted()
+            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), EVERY START OF THE SAFE START'S LIST SETTLED: A NORMAL START")
+            assert safe not in log, log[-2000:]
+            # Two cut powers in a row before it settles: the next boot is a safe start.
+            cut_twice(vm, "hmp")
+            require(vm.command("dmesg -s init", raw=True, timeout=30), safe)
             # The button, in that boot, a file just written: a clean end, S5, and the boot after it a normal one.
             require(vm.command(f"write data/power-{machine}.txt kept by the button"), f"WROTE 19 BYTES TO data/power-{machine}.txt")
             since = len(vm.log)
@@ -17454,16 +17481,17 @@ def power_button_check(args, disk):
         seen.append(f"{took:.1f} s on {machine}")
     print(f"PASS: the power button (000-KRN-0216), on QEMU's pc and q35: a press shut the machine down as asked (init asked "
           f"for S5 {' and '.join(seen)} after it; a file written just before it was there next time, its volume not left "
-          f"dirty), and the boot after it was no safe start; a reset before a minute past READY, standing for a cut power, "
-          f"was followed by one", flush=True)
+          f"dirty), and the boot after it was no safe start; a reset standing for a cut power after the safe start's list "
+          f"settled was followed by a normal start, two in a row before it settled by a safe start (000-KRN-0217)", flush=True)
 
 
 def watchdog_suite(args, disk):
     """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
     boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
-    machine at its second expiry, 30 s on, and the next boot says so. init finds the mark the stopped run left in a
-    firmware variable and starts safely, without radios, cameras and sound; it clears the mark a minute after READY, and
-    the boot after a reboot is a normal one."""
+    machine at its second expiry, 30 s on, and the next boot says so. With that evidence (ABI 34's BOOT_WATCHDOG_RESTARTED)
+    init leaves out at once what the stopped run of this slot was starting of the safe start's list, prepared for `svc
+    start`; what it left out starts again by itself from 120 s past READY, one at a time (000-KRN-0217); the run's mark is
+    cleared once they settled, and the boot after a reboot is a normal one."""
     armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
     safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
@@ -17475,20 +17503,26 @@ def watchdog_suite(args, disk):
         took = time.monotonic() - frozen
         # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
         shown = vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: ([^\r\n]+)", log)
+        assert decided, [line for line in log.splitlines() if "LAST RUN" in line or "MARK" in line] or log[:3000]
+        require(log, "[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM 120 S PAST READY")
+        left = decided[1].split(", ")
+        # What the stopped run was starting: never bcm_wifi, which q35 has no device for and so never started.
+        assert left and set(left) <= set(SAFE_LIST) and "bcm_wifi" not in left, left
         # A kernel line can land inside the notice (round 132, x32: ACPI's line inside `tts`): it is taken out first (000-KRN-0241).
         notice = re.search(r"^SAFE START: THE LAST RUN DID NOT END AS ASKED\. LEFT OUT: (.*) \((.*)\)$", re.sub(r"MIND CORE KERNEL: [^\n]*\n", "", shown), re.M)
-        assert notice and {"audio_gw", "tts", "video_gw"} <= set(notice[1].split(", ")), shown[-3000:]
+        assert notice and set(notice[1].split(", ")) == set(left), (left, shown[-3000:])
         assert notice[2] == ", ".join(f"svc start {name}" for name in notice[1].split(", ")), notice[0]
         require(vm.command("dmesg -s shell", raw=True), "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
-        log = vm.command("dmesg -s init", raw=True)
-        require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
-        assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
-        # Their plans prepared before the platform privilege went: the operator starts them without it (000-KRN-0131).
-        for name in ("audio_gw", "tts", "video_gw"):
+        # Their plans prepared before the platform privilege went (000-KRN-0131), and what the run was not starting started.
+        for name in left:
             require(log, f"[INIT] {name} LEFT OUT BY THE SAFE START, PREPARED: `svc start {name}` STARTS IT")
+            assert f"[INIT] STARTED {name} PID=" not in log, log[-2000:]
         require(log, "[INIT] PLATFORM PRIVILEGE DROPPED")
-        for name in ("audio_gw", "tts"):
-            require(vm.command(f"svc start {name}"), f"{name} started: PID")
+        # One by hand without the privilege; the others start again by themselves.
+        hand, rest = left[0], left[1:]
+        require(vm.command(f"svc start {hand}"), f"{hand} started: PID")
         require(vm.command("svc start bcm_wifi"), "svc: start bcm_wifi: no such service, or its device is missing")
         # wm shows it on its status line, a click there opening the shell's window (shell.wit 1.6 boot-notice).
         vm.send("wm\n")
@@ -17497,13 +17531,15 @@ def watchdog_suite(args, disk):
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)
         log = vm.command("dmesg -s init", raw=True)
-        require(log, "[INIT] STARTED audio_gw PID=")
-        require(log, "[INIT] STARTED tts PID=")
-        deadline = time.monotonic() + 150
-        while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
+        require(log, f"[INIT] STARTED {hand} PID=")
+        cleared = "WHAT THE SAFE START LEFT OUT BACK AND SETTLED: THE RUN'S MARK CLEARED"
+        deadline = time.monotonic() + 360
+        while cleared not in log:
             assert time.monotonic() < deadline, log[-2000:]
             time.sleep(5)
             log = vm.command("dmesg -s init", raw=True)
+        back = re.findall(r"\[INIT\] (\S+) STARTED AGAIN BY ITSELF (\d+) S PAST READY, AFTER THE SAFE START: PID=", log)
+        assert sorted(name for name, _ in back) == sorted(rest) and all(int(past) >= 120 for _, past in back), (rest, back)
         uptime = int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) / 1e9
         assert uptime > 25, uptime
         vm.send("reboot\n")
@@ -17517,10 +17553,11 @@ def watchdog_suite(args, disk):
     # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
     assert took > 25, took
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
-          f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
-          f"sound or speech; sound and speech started by `svc start` from their prepared plans, without the platform "
-          f"privilege), ran past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left "
-          f"out; the boot after a reboot was a normal one", flush=True)
+          f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start leaving out only what the "
+          f"stopped run was starting ({', '.join(left)}), prepared: {hand} started by `svc start` without the platform "
+          f"privilege, {', '.join(f'{n} by itself {p} s past READY' for n, p in back) or 'none left to come back'}; it ran "
+          f"past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left out; the boot "
+          f"after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
@@ -18307,12 +18344,13 @@ def trial_check(args, disk):
         with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
             ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
                     "-device", "usb-storage,bus=ehci.0,drive=trial,bootindex=0")
-            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
+            # Nothing is typed at slot B's prompt: the restart below can come while a command's echo is half out (x32, k217c).
+            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=ehci)
             try:
-                require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
                 # 801-UPD-0037: the updater asks for the restart once init refused the trial, so it may come before the
                 # kernel's deadline; either way the next boot falls back to slot A.
-                out = vm.expect("BOOT: SLOT A LOADED", timeout=150)
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+                require(out, "BOOT: SLOT B LOADED ON TRIAL")
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
                 assert "init (PID 1) ASKED TO RESTART THE MACHINE" in out or "THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING" in out, out[-3000:]
             finally:
@@ -18350,10 +18388,46 @@ def trial_check(args, disk):
         assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING\nlog (none|log:boot\d{4}\.log)\n", refused), refused
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
+        # 000-KRN-0217: the same held trial cut twice at the prompt, before the safe start's list settles, spends both
+        # tries, and slot A boots next. What slot B's run was starting is not slot A's to suspect: A's boot is a normal
+        # one, where a third run of B would have been a safe start. The disk's own kernel, whose deadline (120 s) a slow
+        # host does not reach before init holds the trial, as the 15 s one's did on i9.
+        volume = temp / "cut"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        sign_manifest.sign_volume(volume)
+        for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+            (volume / name).parent.mkdir(parents=True, exist_ok=True)
+            (volume / name).write_bytes(data)
+        image = boot_slots.Image.create(temp / "cut.img", boot_slots.layout(volume, temp / "cut-slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "cut-slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=2)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            for cut in range(2):
+                vm.expect("MIND CORE KERNEL: SLOT B ON TRIAL", timeout=120)
+                shown = vm.expect("MIND> ", timeout=120)
+                assert "BOOT: SLOT" not in ANSI.sub("", shown) and "NOT CONFIRMED IN" not in shown, shown[-3000:]
+                log = vm.command("dmesg -s init", raw=True)
+                require(log, "[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS")
+                if cut == 1:
+                    require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
+                assert SETTLED not in log, log[-2000:]
+                vm.hmp("system_reset")
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=120)
+            require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] THE LAST RUN, OF SLOT B, DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); WHAT IT WAS STARTING IS NOT THIS SLOT'S: A NORMAL START")
+            assert "[INIT] SAFE START" not in log and "[INIT] STARTED audio_gw PID=" in log, log[-3000:]
+        finally:
+            vm.close()
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
           "restarts, and the next boot falls back to slot A; on the trial, keystore took a key for that boot alone and left "
           "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent never connects "
-          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
+          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242); "
+          "one cut twice while its radios, sound and speech started falls back to slot A, which starts normally, as what "
+          "slot B was starting is not its to suspect (000-KRN-0217)", flush=True)
 
 
 def loader_error(vm, name, reason):

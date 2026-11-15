@@ -30,6 +30,9 @@ pub fn start() {
     }
 }
 
+/// Whether this watchdog's reset ended the last run: the A31's keeps no status that says so.
+pub fn restarted() -> bool { false }
+
 /// On the boot CPU's tick, every second.
 pub fn feed() {
     let base = BASE.load(Ordering::Relaxed);
