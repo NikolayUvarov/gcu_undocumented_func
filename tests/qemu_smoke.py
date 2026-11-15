@@ -15251,7 +15251,7 @@ def locked_file_check(args, cpu, image, part, temp, store):
     is, and the key kept on disk is held."""
     def stored(name):
         out = temp / f"stored-{name}"
-        found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+        found = subprocess.run(["mcopy", "-n", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
         return out.read_bytes() if found.returncode == 0 else None
 
     def boot(files, until, waits=True):
@@ -15344,7 +15344,8 @@ def service_secrets_first_boot(vm):
 def keystore_file(part, temp, name):
     """A file of system/keystore/ read from the disk on the host; None when there is none."""
     out = temp / ("read-" + name.replace("/", "-"))
-    found = subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
+    # -n: mcopy overwrites a local file without asking on a terminal, which stops a background job (000-NET-0086).
+    found = subprocess.run(["mcopy", "-n", "-o", "-i", part, f"::/system/keystore/{name}", str(out)], env=MTOOLS_ENV, capture_output=True)
     return out.read_bytes() if found.returncode == 0 else None
 
 
@@ -15352,7 +15353,7 @@ def service_secrets_file(part, temp):
     """The block store's sealed file read from the disk on the host, then copied under the program netcopy's name, as
     which it must not open."""
     out = temp / "blockstore-service.kept"
-    subprocess.run(["mcopy", "-o", "-i", part, "::/system/keystore/services/blockstore.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+    subprocess.run(["mcopy", "-n", "-o", "-i", part, "::/system/keystore/services/blockstore.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
     assert out.read_bytes()[:8] == b"MINDSEC1", out.read_bytes()[:64]
     subprocess.run(["mcopy", "-o", "-i", part, str(out), "::/system/keystore/secrets/netcopy.kept"], env=MTOOLS_ENV, check=True, capture_output=True)
 
@@ -15392,7 +15393,7 @@ def secrets_file(part, temp, program):
     """The program's sealed file read from the disk on the host: MAGIC, no value in the clear; copied under netpeer's
     name, which must not open it. Returns its size."""
     out = temp / f"{program}.kept"
-    subprocess.run(["mcopy", "-o", "-i", part, f"::/system/keystore/secrets/{program}.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
+    subprocess.run(["mcopy", "-n", "-o", "-i", part, f"::/system/keystore/secrets/{program}.kept", str(out)], env=MTOOLS_ENV, check=True, capture_output=True)
     data = out.read_bytes()
     assert data[:8] == b"MINDSEC1" and SECRET not in data and b"token" not in data, data[:64]
     subprocess.run(["mcopy", "-o", "-i", part, str(out), "::/system/keystore/secrets/netpeer.kept"], env=MTOOLS_ENV, check=True, capture_output=True)
