@@ -180,8 +180,8 @@ struct Running {
 }
 
 /// A developer's release applied before the restart this boot may follow (751-EFF-0023): its command, whether the
-/// machine restarted since, and when the agent started looking.
-struct UpdateWait { pending: update::Pending, restarted: bool, since: usize, look_at: usize }
+/// machine restarted since, when the agent started looking, init's last word on the trial and when it confirmed it.
+struct UpdateWait { pending: update::Pending, restarted: bool, since: usize, look_at: usize, trial: Option<update::Trial>, confirmed_at: Option<usize> }
 
 /// The machine's processor time and the agent's own, from the gateway's counters.
 fn cpu_now() -> Option<bench::Cpu> {
@@ -1022,7 +1022,18 @@ impl Agent {
         let view = state.as_ref().filter(|s| s.slot != 0 || s.running != 0).map(|s| update::View {
             slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: s.failure.as_str(),
         });
-        let verdict = update::verdict(&u.pending, u.restarted, view.as_ref(), (now() - u.since) as u64);
+        // init's word on this boot (801-EFF-0034): the updater's lag is counted from its confirmation.
+        let trial = match init::boot(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(b)) => Some(update::trial(b.trial, b.deciding, b.confirmed)), _ => None };
+        if trial == Some(update::Trial::Confirmed) && u.confirmed_at.is_none() { u.confirmed_at = Some(now()); }
+        if trial != u.trial {
+            let said = match trial {
+                Some(update::Trial::Deciding) => "THE TRIAL IS DECIDING: NO ANSWER, NOTHING KEPT CHANGES", Some(update::Trial::Confirmed) => "THE TRIAL IS CONFIRMED",
+                Some(update::Trial::Refused) => "THE TRIAL IS REFUSED: THE SLOT BEFORE ANSWERS", Some(update::Trial::NoTrial) => "NO TRIAL", None => "NOTHING",
+            };
+            mind::println!("EFFECTOR: THE KEPT UPDATE {}: init SAYS {}", u.pending.id, said);
+            u.trial = trial;
+        }
+        let verdict = update::verdict(&u.pending, u.restarted, view.as_ref(), trial, (now() - u.confirmed_at.unwrap_or(u.since)) as u64);
         let update::Verdict::Answer { exit_code, stdout, error } = verdict else { return };
         let u = self.update.take().unwrap();
         let p = &u.pending;
@@ -1295,7 +1306,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
                 let boot_unix = mind::rtc::unix_time().map(|t| t.saturating_sub(now() as u64 / 1000));
                 let restarted = update::restarted(&pending, now() as u64, boot_unix);
                 mind::println!("EFFECTOR: UPDATE {} TO VERSION {}: {}", pending.id, pending.staged, if restarted { "THE MACHINE RESTARTED; ITS ANSWER FOLLOWS THE UPDATER'S STATE" } else { "NO RESTART SINCE IT WAS APPLIED" });
-                agent.update = Some(Box::new(UpdateWait { pending, restarted, since: now(), look_at: 0 }));
+                agent.update = Some(Box::new(UpdateWait { pending, restarted, since: now(), look_at: 0, trial: None, confirmed_at: None }));
             }
             None => { mind::println!("EFFECTOR: {}/update IS MALFORMED OR ANOTHER AGENT'S: REMOVED", agent.dir); let _ = fs::remove(&agent.path("update")); }
         }

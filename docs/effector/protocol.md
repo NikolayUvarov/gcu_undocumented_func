@@ -138,8 +138,12 @@ machine, and the server's health check is answered. Everything 1.2 did stays.
     boot;
   - **`failed`**, exit status 1, when the machine came back in the old slot: `stdout` `fell back: slot S runs version
     V, not W` and the updater's last failure, `error` `fell-back`;
-  - **`failed`** with `not-confirmed` if the new slot is still on trial 180 s after the agent started, `restart` if the
-    restart did not come within 60 s of the apply, `io` if the updater's state cannot be read.
+  - **nothing, and nothing kept changes, while `init` says the trial is deciding** (`init.wit` 1.13 `boot`, 801-KRN-0242),
+    however long it takes, or that it refused it: the machine then restarts into the slot before, whose agent answers
+    `fell-back` from the kept command (801-EFF-0034; 801 S3);
+  - **`failed`** with `not-confirmed` if the updater has not confirmed the slot 180 s after `init` did (or, when `init`
+    does not say, 180 s after the agent started), `restart` if the restart did not come within 60 s of the apply, `io`
+    if the updater's state cannot be read.
 - **Meanwhile** the heartbeat says the agent is busy with the command, as for any answer that waits, and no other
   command is taken.
 
