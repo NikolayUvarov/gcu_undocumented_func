@@ -156,6 +156,24 @@ The DEXP's `wlan` of d83c98c5 never sends `00`. There the radio is capped until 
 - **The MacBook Pro:** a join. Its only change is the `00` line.
 - **Then** the acceptance criteria: the three joined on one release.
 
+### A send before the station's tune is refused (2026-11-15)
+
+**The fault, on the Ryzen.** It was off its Effector server from 20:50 UTC on 2026-11-14 to 09:47 on 2026-11-15 (`fast-test` 8c067849).
+- **The restart.** rtw89 restarted after `RECEIVE STALLED`. The station, still joined, did not see the restart, and sent.
+- **What the fresh driver did:** `NO COUNTRY FROM THE STATION BEFORE ITS FIRST SEND: THE WORLD RULES (00)`, then `DATAPATH ADMITTED ON CHANNEL 1`.
+  - Channel 1 was its own receive-only channel, which the station never set; the network is on 8.
+  - `info` then said channel 1, so the station could not find the restart by channel 0.
+- **For 13 h after,** `wlan` logged `AUTO-JOIN: NO REMEMBERED NETWORK HEARD … Failed: NO ANSWER` 763 times, and rtw89 spun (10.5·10⁹ system calls).
+- **What brought it back:** killing rtw89 and `wlan` joined it at once. Its later stalls came about every 30 s, with firmware recoveries after the coexistence reconcile, and a full restart of the machine left it rejoining by itself.
+
+**The change** (`receive_service.rs`, `Send`): a send admits a channel, or takes the world rules, only after the station's own `set-channel`, that is `set`. Before it, the send is `Failed` and `info` keeps channel 0. NET pointed at this (801-NET-0083's second ask).
+
+**Tests:**
+- `tests/rtw89_receive_service_cases.rs`, `a_send_before_the_stations_tune_is_refused_and_channel_0_stays`;
+- the two tests that sent before a tune now tune first;
+- `tests/rtw89_service_host.rs`: 338 passed;
+- the driver builds for x86.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (801-KRN-0243), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0069](550-DRV-0069-rtw89-says-no-channel-until-its-client-sets-one.md), [the service notes](../hwdocs/rtl8852be-service.md#an-unknown-platform-word-an-unknown-country-and-a-stalled-receive-801-drv-0071-2026-11-14).
