@@ -13936,7 +13936,10 @@ def rollback_suite(args):
     assert "WAS NOT CONFIRMED IN" not in out and held > 600, (held, out[-3000:])
     assert not any(b.get("agent_id") == agent for b in list(server.beats)[beats_then:]), "a heartbeat reached the server"
     refused = (image.read("system/updater/refused") or b"").decode()
-    assert re.fullmatch(r"refused version 6 in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: [^\n]+\nlog [^\n]+\n", refused), refused
+    refusal = re.fullmatch(r"refused version 6 in slot B, falling back to slot A\nwhy (NO HEARTBEAT ACCEPTED IN 600 S: [^\n]+)\nlog [^\n]+\n", refused)
+    assert refusal, refused
+    # S2: the server is told this, whole: the version, the slots and init's reason with the agent's last step.
+    reason = f"version 6 in slot B, falling back to slot A: {refusal[1]}"
     chosen = boot_slots.newest(boot_slots.records(image.path))[1]
     assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
     # S3: what slot A reads is as it was; only the trial's own writes differ. Found here, said at the end with the rest.
@@ -13964,14 +13967,15 @@ def rollback_suite(args):
         while not (report := next((b for b in list(server.beats) if b.get("agent_id") == agent and (b.get("update") or {}).get("state") == "rolled_back"), None)):
             assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
             time.sleep(1)
-        assert report["update"]["build_number"] == 6 and "falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S" in report["update"]["result"], report["update"]
+        if report["update"].get("build_number") != 6 or report["update"].get("result") != reason:
+            problems.append(("the fallback's report in the heartbeat, not whole", reason, report["update"]))
         deadline = time.monotonic() + 300
         while not (result := server.operation(on)):
             assert time.monotonic() < deadline, "the update command was not answered"
             time.sleep(1)
         answer = result.get("result") or {}
         if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
-                "fell back: slot A runs version 5, not 6; the updater: version 6 in slot B, falling back to slot A" not in answer.get("stdout", ""):
+                answer.get("stdout") != f"fell back: slot A runs version 5, not 6; the updater: {reason}":
             problems.append(("the update command's answer", result))
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:

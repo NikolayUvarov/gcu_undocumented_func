@@ -146,6 +146,9 @@ fn hex<const N: usize>(text: &[u8]) -> Option<[u8; N]> {
     Some(out)
 }
 
+/// The first `max` bytes of `text`, cut at a character's edge (the state's failure, update.wit 2.0).
+fn head(text: &str, max: usize) -> &str { let mut end = text.len().min(max); while !text.is_char_boundary(end) { end -= 1; } &text[..end] }
+
 fn short(digest: &[u8; 32]) -> String { digest[..8].iter().map(|b| format!("{:02x}", b)).collect() }
 
 fn verified(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
@@ -604,7 +607,7 @@ impl Updater {
     fn state(&self) -> State {
         let recorded = plan::newest(self.records());
         State { slot: self.slot, trial: self.trial, running: self.running, recorded: recorded.map_or(0, |(_, r)| r.slot), confirmed: recorded.is_some_and(|(_, r)| r.confirmed),
-                staged: self.staged, failure: Text::new(&self.failure.chars().take(64).collect::<String>()).unwrap_or_default() }
+                staged: self.staged, failure: Text::new(head(&self.failure, 256)).unwrap_or_default() }
     }
 
     fn fail<T>(&mut self, step: &str, error: Error) -> Result<T, Error> {
