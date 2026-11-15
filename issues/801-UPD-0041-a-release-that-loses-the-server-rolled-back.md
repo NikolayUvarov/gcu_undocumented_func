@@ -44,3 +44,24 @@ The maintainer (801): «никакое обновление не ломает н
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).
+
+## Progress (2026-11-15)
+
+**The branch:** `claude/801-UPD-0041-a-release-that-loses-the-server-rolled-back`, suite as of aa5abd549f. **Where it ran:** x86 on x32-128, aarch64 on acc-1, three runs on each arch.
+
+**What passed on both arches** (S1):
+- slot A on the fixture took release 6 by `update_agent` and restarted, the command not answered before;
+- slot B's trial, with the server out of reach, was held about 610 s and refused (`NO HEARTBEAT ACCEPTED IN 600 S: …`);
+- `system/updater/refused` held the reason, the records said B with no tries left, and no heartbeat reached the server;
+- slot A booted, connected as the same agent with the same token, logged `A FALLBACK, REPORTED TO THE SERVER`, and its heartbeat carried `update: rolled_back`, build 6.
+
+**What the suite found:**
+- **S3, in EFF's agent:** 180 s into the trial (`CONFIRM_WAIT_MS`), B's agent answered the kept command `failed`, `not-confirmed`. It wrote `system/effector/result`, `executed` and `journal`, and removed `system/effector/update`, so after the fallback slot A sent that stale answer instead of `fell-back`.
+  - **Request:** `issues/requests-EFF.md`.
+  - **EFF's answer:** taken as 801-EFF-0034 (`8c53f1e2` on EFF's branch, not pushed yet).
+- **S2:** the heartbeat's report was cut at 64 bytes, `…: NO HEARTBEAT ACCEPT`, without the agent's last step. That is [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md), with EFF's part requested.
+- **A log's append:** the trial's gateway added a line to `system/effector_gw/audit`. The suite takes that as a log's append (slot A's lines unchanged) and fails a rewrite of them.
+
+**The suite now** checks the heartbeat and the command's answer against the reason in `system/updater/refused`, whole. It reports every finding at its end, after slot A's checks.
+
+**Left:** EFF's 801-EFF-0034 and its part of 801-UPD-0042; then the suite on both arches, and a gate.
