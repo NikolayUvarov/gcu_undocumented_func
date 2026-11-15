@@ -146,7 +146,6 @@ pub unsafe fn init() {
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
     super::clock::start_tick();
-    super::watchdog::start();
     asm!("sti");
 }
 

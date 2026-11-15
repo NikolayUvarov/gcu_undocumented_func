@@ -105,7 +105,6 @@ pub unsafe fn init() {
     NEXT_TICK.store(now, Ordering::Relaxed);
     rearm();
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
-    super::watchdog::start();
 }
 
 /// This CPU's redistributor: the one whose GICR_TYPER names the CPU's affinity (issue 203).
