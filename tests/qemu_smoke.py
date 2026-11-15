@@ -222,15 +222,32 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one,
-        # and the first live row is the service: its workers (750-KRN-0159), listed after it under its name, never hide it.
-        found, live = {}, set()
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        # A service's workers (750-KRN-0159) are listed under its name, and a reused PID may put one before it: where a name
+        # has several live rows, the service is the one whose parent is not another of them (`stat tasks`).
+        found, live = {}, {}
         for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
-            if name in SERVICES and name not in live:
+            if name not in SERVICES:
+                continue
+            if state != "EXITED":
+                live.setdefault(name, []).append(int(pid))
+            elif name not in live:
                 found[name] = int(pid)
-                if state != "EXITED":
-                    live.add(name)
+        parents = self.parents() if any(len(pids) > 1 for pids in live.values()) else {}
+        for name, pids in live.items():
+            found[name] = next((pid for pid in pids if parents.get(pid) not in pids), pids[0])
         return found
+
+    def parents(self):
+        # Each task's parent, from `stat tasks` page by page.
+        parents, start = {}, 0
+        while True:
+            page = self.command(f"stat tasks from {start}" if start else "stat tasks", raw=True)
+            head = re.search(r"STAT TASKS VERSION=\d+ COUNT=(\d+) TOTAL=(\d+) FROM=\d+", page)
+            parents.update({int(pid): int(parent) for pid, parent in re.findall(r"^(\d+) PARENT=(\d+) ", page, re.M)})
+            if not head or int(head[1]) == 0 or start + int(head[1]) >= int(head[2]):
+                return parents
+            start += int(head[1])
 
     def service_logs(self, name, until=None):
         # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
