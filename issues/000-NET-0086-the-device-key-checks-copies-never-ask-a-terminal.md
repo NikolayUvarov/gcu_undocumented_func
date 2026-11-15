@@ -26,3 +26,14 @@ The four copies from the disk image to a local file in the device key check and 
 
 - Round 141's gate, run without i9 for this reason (`ALL/2026-11-15T1257Z-KRN-round-141-gated-on-the-pool-without-i9.md` on `internal-dev-messages`).
 - [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done): the device key kept on the disk. 308-KRN-0183: the store's kept key.
+
+## Progress (2026-11-15)
+
+**The fix:** `0bec0bef31`, with `main` merged in at `77118bf7bf` (round 141).
+
+**What passed on the maintainer's machines:**
+- **`x86: network, TLS and Effector` on i9,** where it had stopped three times: 2081 s, on `0bec0bef31`.
+- **The same group on acc1:** 1809 s, on `77118bf7bf`.
+- **`aarch64: network, TLS and Effector` on acc2:** 1573 s, on `77118bf7bf`.
+
+**Left:** the gate. Then i9 can take the gate's lanes again.
