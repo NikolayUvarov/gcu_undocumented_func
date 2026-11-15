@@ -28,9 +28,10 @@
 ## Progress (2026-11-15): `init`'s confirmation checked in the suite
 
 - **KRN's request** of 2026-11-15 (recorded in `issues/requests-EFF.md` for 801-KRN-0242's criterion 2) is taken here, as criteria 1 and 2 of this task ask the same.
-- **The `effector-update` suite** now reads `dmesg -s init` once the kernel says the trial is confirmed, and checks:
+- **The `effector-update` suite** now reads `dmesg -s init` once the agent has answered the command `completed`, and checks:
   - `[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT` is there, and neither of `init`'s other confirmations (every boot service started; the modes turned off);
   - the last `[INIT] THE EFFECTOR AGENT: <step>` before it is `accepted`, and there are at most 8 such lines.
+- **Why then, not at the kernel's `THE TRIAL BOOT IS CONFIRMED`:** that line is the kernel's own deadline lifted, about 1 s into the boot, while `init` still holds the trial for the agent's word. The first run read `init`'s log there and found only `started`. The updater confirms only on `init`'s word (801-UPD-0037), so once the agent answers `completed`, `init` has confirmed.
 
 ## Related
 

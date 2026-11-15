@@ -13793,15 +13793,16 @@ def effector_update_suite(args):
         vm.logged("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", since, timeout=300)
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
+        log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
         # 801-KRN-0242, 801-EFF-0031: with a server configured, init confirmed the trial on the agent's `accepted` alone, and
-        # logged each step the agent told it once, as it changed.
+        # logged each step the agent told it once, as it changed. Read once the agent answered: the kernel's line above is
+        # its own deadline lifted, while init still holds the trial, and the updater confirms only on init's word.
         init_log = vm.command("dmesg -s init", raw=True)
         confirmed = init_log.find("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT")
         steps = [(m.start(), m[1]) for m in re.finditer(r"\[INIT\] THE EFFECTOR AGENT: ([a-z-]+)", init_log)]
         others = ("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED", "[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR MODES WERE TURNED OFF")
         assert confirmed >= 0 and not any(o in init_log for o in others), init_log[-2500:]
         assert steps and [n for at, n in steps if at < confirmed][-1:] == ["accepted"] and len(steps) <= 8, (steps, init_log[-2500:])
-        log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
         require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
         require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
         result = server.operation(on)
