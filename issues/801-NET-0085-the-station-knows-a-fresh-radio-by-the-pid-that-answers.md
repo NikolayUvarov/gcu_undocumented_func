@@ -1,6 +1,6 @@
 # 801-NET-0085 — The station knows a fresh radio by the PID that answers it, whatever the radio says of its channel
 
-**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-15) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
+**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-15) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
 
 ## Problem
 
@@ -31,6 +31,27 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
 - **In QEMU (wlansim), the restart DRV saw:** the station joined, the radio restarted, a send before the tune admitted, and channel 1 reported. The station notices by the PID, gives the country again and joins again, with a line saying so.
 - **The `net` suite's restart checks of 550-NET-0061 and 801-NET-0083** still pass.
 - **A bench machine's run:** the Ryzen or the DEXP, after an rtw89 restart while joined.
+
+## Progress (2026-11-15)
+
+**Made** on `claude/801-NET-0085-a-fresh-radio-by-the-pid`:
+- **`libmind`'s IDL calls keep the PID that answered:** `mind::idl::wire::replied_by()`. The kernel already gives it in a reply's `arg1`, now written in `docs/api`'s `IPC_CALL` row.
+- **`wlan` compares that PID across its radio calls** (`radio_call`).
+  - A reply from another PID marks a fresh radio.
+  - From then on the old station gives the radio nothing: no tune, no filter, no send (`apply`).
+  - At the next turn the station starts anew, as for 801-NET-0083's other signs.
+  - **The new line:** `[WLAN] THE RADIO RESTARTED (ANSWERED BY PID <new>, NOT PID <old>)`.
+  - **Which reason the line names:** where the fresh radio has no channel, or another one than the station took, that reason is named, as before. The PID is named when nothing else shows the restart.
+- **`wlansim` built with `self-tuned`** starts on the access point's channel, as rtw89 took its own. `scripts/x86_fixtures.sh` builds it.
+- **The `net` suite's `fresh_radio_check`** (x86):
+  - The station joins and the radio is killed. The PID must tell the restart, and the station joins again by itself.
+  - **The station is held across the restart.** It calls the radio every 10 ms. A call between the kill and `init`'s start of the fresh radio finds the driver ended: the kernel fails it (MC-6.4), and that is the other sign, which 801-NET-0083's restart check covers.
+    - So the check gives the station a CPU budget of 1 ms in 60 s (`budget`) and waits until its sends stop.
+    - It kills the radio and waits for the fresh one's first line, checks the station's sends unchanged, then lifts the budget.
+    - The station's first call then reaches the fresh radio.
+  - **Why the first version restarted up to three times.** It retried on the other sign. On x32 (`41e360c4d4`) it needed the third restart: in two of three the station's call fell between the two radios.
+
+**Left:** the runs on the maintainer's machines, the gate, and a bench machine's run.
 
 ## Related
 

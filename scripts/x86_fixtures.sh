@@ -20,6 +20,7 @@ done
 (cd virtio_net && cargo build --release --features late-attach --target-dir "$OUT/mind-late-attach-target") # 000-NET-0036
 (cd tests/wlansim && cargo build --release --features slow --target-dir "$OUT/mind-wlansim-slow-target") # 550-NET-0030
 (cd tests/wlansim && cargo build --release --features no-country --target-dir "$OUT/mind-wlansim-nocountry-target") # 550-NET-0035
+(cd tests/wlansim && cargo build --release --features self-tuned --target-dir "$OUT/mind-wlansim-selftuned-target") # 801-NET-0085
 for variant in panic:panic abi:abi loader-abi:loader-abi trial:trial x2apic:x2apic bar-move:bar xsave-pad:xsave-pad protection:protection tsc-skew:tsc-skew watchdog:watchdog; do
     (cd kernel && cargo build --release --features "${variant%%:*}-test" --target-dir "$OUT/mind-${variant#*:}-target")
 done

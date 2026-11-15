@@ -381,7 +381,7 @@ def unplugged(vm, booted, name):
     assert hashlib.sha256(longer.read_bytes()).hexdigest() == longer_before, "a medium of another capacity was written"
     other.unlink()
     longer.unlink()
-    print(f"unplugged: {len(times)} refusals, the slowest in {max(times):.1f} s (the limit {REFUSED_WAIT} s)")
+    print(f"unplugged: run memmap refused in {', '.join(f'{t:.1f}' for t in times)} s, the slowest {max(times):.1f} s (the limit {REFUSED_WAIT} s)")
 
 
 def refused(vm, times):
