@@ -463,7 +463,9 @@ impl Machine for Host {
 
     fn package_write(&mut self, offset: u64, data: &[u8]) -> Result<(), Fail> {
         let mode = mind::fs::MODE_WRITE | mind::fs::MODE_CREATE | if offset == 0 { mind::fs::MODE_TRUNCATE } else { 0 };
-        self.apps.write_at(INCOMING, offset, data, mode)
+        let written = self.apps.write_at(INCOMING, offset, data, mode);
+        if let Err(f) = written { mind::println!("[EFFECTOR_GW] A PACKAGE'S ARCHIVE NOT WRITTEN IN data/apps/{} AT {}: {}", INCOMING, offset, gateway::fail_name(f)); }
+        written
     }
 
     fn package_run(&mut self, size: u64, operation: Operation, policy: &Policy) -> Result<package::Report, Refused> {
@@ -568,12 +570,17 @@ fn main(_info: &'static BootInfo) {
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
     let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), apps: Client::new(SLOT_APPS), deliver: None, audit_failed: false };
     let (vfs_at_start, mut degraded) = (vfs_pid(&mut host), false);
+    // vfs_server ends a scope nobody opened within a minute: the delivery root's and data/apps/ are taken up now, not at
+    // their first use (750-EFF-0008).
+    for (client, name) in [(&mut host.writer, "THE DELIVERY ROOT"), (&mut host.apps, "data/apps/")] {
+        if let Err(f) = client.root("").map(|_| ()) { if client.granted { mind::println!("[EFFECTOR_GW] {} NOT OPENED: {}", name, gateway::fail_name(f)); } }
+    }
     // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
     let held = |slot: usize, name: &'static str| if present(slot) { name } else { "-" };
-    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
-        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"), held(SLOT_UPDATE, "UPDATER"));
+    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
+        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"), held(SLOT_UPDATE, "UPDATER"), held(SLOT_APPS, "APPS"));
     // The owner's policy as the machine starts; without it every action answers no-policy.
     if let Err(f) = gw.reload_policy(&mut host, Badge::Owner) { mind::println!("[EFFECTOR_GW] NO POLICY: {}", gateway::fail_name(f)); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
@@ -672,7 +679,7 @@ fn main(_info: &'static BootInfo) {
                 let done = gw.package_commit(m, badge, handle).map(|r| wit::PackageReport {
                     name: Text::new(&r.name).unwrap_or_default(), version: version(r.version), previous: r.previous.map(version).unwrap_or_default(),
                     arch: Text::new(r.arch).unwrap_or_default(), files: r.files, manifest: hex(&r.manifest),
-                }).map_err(|r| package_error(r.code));
+                }).map_err(|r| { mind::println!("[EFFECTOR_GW] PACKAGE REFUSED: {}", package::refusal_line(&r)); package_error(r.code) });
                 wit::reply_package_commit(reply, done.as_ref().map_err(|e| *e))
             }
             wit::Request::UpdateCheck { origin: o, apply } => {

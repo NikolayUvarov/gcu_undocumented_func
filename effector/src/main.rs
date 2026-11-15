@@ -951,7 +951,11 @@ impl Agent {
                     let room = PIECE - piece.len();
                     piece.extend_from_slice(&b[..b.len().min(room)]);
                     if piece.len() == PIECE {
-                        match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => {}, Ok(Err(e)) => { failed = Some(failure(e)); return false; } Err(_) => { failed = Some(Failure::Io); return false; } }
+                        match gateway::write(GATEWAY, handle, offset, &piece) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); failed = Some(failure(e)); return false; }
+                            Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); failed = Some(Failure::Io); return false; }
+                        }
                         offset += PIECE as u64;
                         piece.clear();
                         piece.extend_from_slice(&b[b.len().min(room)..]);
@@ -963,7 +967,11 @@ impl Agent {
         };
         match (status, failed) {
             (_, Some(f)) => Err(f),
-            (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) },
+            (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); Err(failure(e)) }
+                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); Err(Failure::Io) }
+            },
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
         }
@@ -989,7 +997,11 @@ impl Agent {
             };
             let route = alloc::format!("/api/deployment/download/{}", package_id);
             if let Err(f) = self.fetch_into(&route, "", p.size, handle) { let _ = gateway::close(GATEWAY, handle); return Err(f); }
-            match gateway::package_commit(GATEWAY, handle) { Ok(Ok(r)) => Ok(r), Ok(Err(e)) => Err(package_failure(e)), Err(_) => Err(Failure::Io) }
+            match gateway::package_commit(GATEWAY, handle) {
+                Ok(Ok(r)) => Ok(r),
+                Ok(Err(e)) => Err(package_failure(e)),
+                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER THE PACKAGE'S COMMIT: {:?}", e); Err(Failure::Io) }
+            }
         })();
         let line = match &done {
             Ok(r) if operation == "deinstall" => alloc::format!("removed {} {}", r.name.as_str(), if r.previous.as_str().is_empty() { "none" } else { r.previous.as_str() }),

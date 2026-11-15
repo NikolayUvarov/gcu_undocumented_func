@@ -13512,7 +13512,8 @@ def effector_suite(args, disk):
         until("(22 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
-        assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
+        # Not run again after the restart; the first run's line may have left the log's ring by now.
+        assert f"EFFECTOR: FAILED {restart_id}" not in out.rpartition("(22 SAVED RESULTS, 0 TO ACKNOWLEDGE)")[2], out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
         print("PASS: restarted by svc, the agent reads its journal back (22 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
@@ -13908,21 +13909,24 @@ def effector_packages_check(vm, server, agent, until, args):
         assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
         require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
 
+    def gw():  # the gateway's audit, which names why it refused, as the agent's answer does not
+        return vm.command("dmesg -s effector_gw", raw=True)[-2500:]
+
     line = deploy("install", archive(1), "memtest-1.zip")
-    assert line.startswith(f"installed memtest 1 {arch} 1 "), line
+    assert line.startswith(f"installed memtest 1 {arch} 1 "), (line, gw())
     runs("data/apps/memtest/m")
     line = deploy("reinstall", archive(2), "memtest-2.zip")
-    assert line.startswith(f"installed memtest 2 {arch} 1 "), line
+    assert line.startswith(f"installed memtest 2 {arch} 1 "), (line, gw())
     runs("data/apps/memtest/2/m")
     assert "STARTED PID=" not in vm.command("run data/apps/memtest/1/m naps 300 &")
     require(vm.command("dmesg -s loader", raw=True), "[LOADER] data/apps/memtest/1/m: NOT RUN: NOT THE CURRENT VERSION")
     refused = {"signature": archive(3, seed=hashlib.sha256(b"another key").digest()), "older": archive(1), "digest": archive(3, change="byte")}
     for code, data in refused.items():
         line = deploy("install", data, f"memtest-{code}.zip")
-        assert line.startswith(f"refused {code}: "), (code, line)
+        assert line.startswith(f"refused {code}: "), (code, line, gw())
     runs("data/apps/memtest/m")  # version 2 still
     line = deploy("deinstall", archive(2), "memtest-2-off.zip")
-    assert line == "removed memtest 2", line
+    assert line == "removed memtest 2", (line, gw())
     assert "STARTED PID=" not in vm.command("run data/apps/memtest/m naps 300 &")
     audit = vm.command("dmesg -s effector_gw", raw=True)
     assert "package-install" in audit and "package-deinstall" in audit, audit[-2000:]

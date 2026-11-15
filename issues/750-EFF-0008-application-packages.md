@@ -98,3 +98,14 @@
 - **Archives over 8 MiB.**
 - **A run against the Effector server itself,** once its flag is on (750-EFF-0012).
 
+
+## Progress (2026-11-15): the first QEMU run, and two causes found
+
+The check ran on x86 (LEG9) and found two faults. Neither was in the package code.
+
+- **The fixture refused a package ID with a dot** (`memtest-1.zip`). It checked package IDs with its agent-ID rule. It now takes contract 1.5's grammar (`A-Z a-z 0-9 . _ -`), but not `.` or `..`, which would become a path in the download's URL (`tests/effector_server.py`, with a test).
+- **The gateway lost its scope of `data/apps/` before the first install,** so the first write of the archive answered `io`.
+  - **Why:** `vfs_server` ends a scope that nobody opened within a minute (`SCOPE_UNUSED_MS`). The gateway opened its file clients' roots at their first use, which came at about 190 s.
+  - **The delivery root's scope had the same risk.** It came through only because the first delivery came before a sweep.
+  - **The fix:** the gateway opens both roots at its start, and logs a root it could not open. It also logs an archive it could not write, and every package refusal with the reason. The agent logs the gateway's own error at a refused write or an unanswered commit. The `READY; GRANTS` line now names `APPS`.
+- **The suite's redelivery check after a restart** counted the command's `FAILED` line in the whole log. The packages' lines pushed that line out of the log's ring, so it now checks only the log after the restart.
