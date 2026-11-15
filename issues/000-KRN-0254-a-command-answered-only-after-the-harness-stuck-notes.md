@@ -44,8 +44,10 @@ A line typed at the console must reach the shell, or the program in front, in th
 
 - **2026-11-15, the fix** (`claude/000-KRN-0254-a-refusal-within-its-limit`). `tests/usb_image_smoke.py`:
   - each `run memmap` refused in `unplugged()` waits up to `REFUSED_WAIT`, 15 s, 211-KRN-0050's limit;
-  - each refusal's time is kept, and the check prints the slowest beside the limit.
-- **Left:** the ten runs on x32 beside a busy lane.
+  - each refusal's time is kept, and the check prints them all, the slowest beside the limit.
+- **2026-11-15, i9** (`347b34a948`, alone): `x86: USB image` passed in 225 s. The first refusal took 5.9 s, the slowest of the four 9.8 s: the harness's 8 s would have failed it here too.
+- **Not known yet:** why a later refusal takes longer than the first.
+- **Left:** the ten runs on x32 beside a busy lane, each refusal's time recorded.
 
 ## Related
 
