@@ -47,6 +47,9 @@ A line typed at the console must reach the shell, or the program in front, in th
   - each refusal's time is kept, and the check prints them all, the slowest beside the limit.
 - **2026-11-15, i9** (`347b34a948`, alone): `x86: USB image` passed in 225 s. The first refusal took 5.9 s, the slowest of the four 9.8 s: the harness's 8 s would have failed it here too.
 - **Not known yet:** why a later refusal takes longer than the first.
+- **Round 143's gate, a second cause in the same group** (x32-2, candidate `a29ba720b3`): `debug_mode()` failed in 117 s.
+  - It looks for the `uptime` record in `cat log:<boot log>`. `cat` shows a file's first 16 KiB on the screen, and that slow boot's log was 194 bytes longer: the record was past the end shown.
+  - The fix: it reads the log whole through a pipe (`cat log:<name> | grep uptime`, `| grep DEBUG`), as `unplugged()` already did.
 - **Left:** the ten runs on x32 beside a busy lane, each refusal's time recorded.
 
 ## Related

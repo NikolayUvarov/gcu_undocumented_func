@@ -254,14 +254,15 @@ def debug_mode(vm, name):
     require(vm.command("write log:debug.txt on"), "WROTE")
     require(vm.command("run uptime"), "up ")
     require(vm.command("sync"), "OK")  # ordinary records wait up to 30 s; a flush saves them (211-KRN-0223)
+    # Read whole through a pipe: `cat` shows a file's first 16 KiB on the screen, and a slow boot's log is longer (000-KRN-0254).
     for _ in range(20):
-        saved = vm.command(f"cat log:{name}", raw=True)
+        saved = vm.command(f"cat log:{name} | grep uptime", raw=True)
         if re.search(r"uptime\(\d+\) up \d", saved):
             break
         time.sleep(.5)
     assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
     assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
-    require(saved, "DEBUG MODE ON (log:debug.txt)")
+    require(vm.command(f"cat log:{name} | grep DEBUG", raw=True), "DEBUG MODE ON (log:debug.txt)")
     # A program that asks for the log keeps the shell's client, which reads: dmesg still shows the system log.
     require(vm.command("dmesg -s loader"), "[LOADER] DEBUG MODE ON")
     require(vm.command("rm log:debug.txt"), "OK")
