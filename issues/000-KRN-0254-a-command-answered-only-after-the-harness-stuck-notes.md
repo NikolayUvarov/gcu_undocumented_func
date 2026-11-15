@@ -56,7 +56,10 @@ A line typed at the console must reach the shell, or the program in front, in th
   - The fix: the copy goes in first, and the stick comes out once `usb_host` has the copy set up. The request that finds the stick gone finds the copy at once. They are two files, so QEMU's image locks allow both at once.
   - **Left as it is:** the same stick out and in again "at once" a little earlier has the same race. It cannot overlap, since one image file cannot be attached twice. It has passed in every run so far.
   - **For DRV** (`usb_storage`): a medium of another capacity found after a loss could still be named once. It would tell the bench what a reader found.
-- **Left:** the ten runs on x32 beside a busy lane, each refusal's time recorded.
+- **2026-11-15, x32-2** (`90cbfd3154`, x32's lane running `x86: services, storage, audio` beside): `x86: USB image` passed five times in five, 163–177 s.
+  - The refusals, in order: 5.9, 2.2, 4.0, 4.5 and 0.1 s in three runs; 5.9, 2.2, 9.8 and 0.1 s in two.
+  - **The slow one** is the refusal after the copy is taken out. Its work, about 4 and 4.5 s, falls into one command or two. The limit's margin there is 5 s.
+- **Left:** five more runs on x32 beside a busy lane, and a gate.
 
 ## Related
 
