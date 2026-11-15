@@ -14108,9 +14108,16 @@ def rollback_suite(args):
     import effector_server  # noqa: E402
     temp = Path(tempfile.mkdtemp(prefix="mind-rollback-"))
     arch = args.arch
-    volume, _, server_tree, kept, _, _, _, _, _ = update_releases(temp, arch)
+    volume, _, server_tree, kept, _, forged, _, _, _ = update_releases(temp, arch)
     release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
     bundle = (temp / "release6.zip").read_bytes()
+    # 801-UPD-0043 (S4): the same bundle with its channel's signature changed, which the updater refuses at the commit.
+    import zipfile
+    with zipfile.ZipFile(temp / "release6.zip") as z:
+        entries = [(name, forged if name == "channels/stable" else z.read(name)) for name in z.namelist()]
+    release_tool.write_bundle(temp / "forged6.zip", entries)
+    bad_bundle = (temp / "forged6.zip").read_bytes()
+    bad_payload = {"size": len(bad_bundle), "sha256": hashlib.sha256(bad_bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
     # Three tries: a trial init refused is spent, so the next boot falls back at once, not after three bounds (801-UPD-0037).
     payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
     agent, token = "mind-test", "mind-effector-test-token"
@@ -14161,6 +14168,7 @@ def rollback_suite(args):
     vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
     try:
         logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        refused_release(vm, server, agent, bad_bundle, bad_payload, logged)
         on = server.queue(agent, "update_agent", payload, program="MIND Core")
         server.publish(bundle, command_id=on, bundle=True)
         logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
@@ -14252,6 +14260,40 @@ def rollback_suite(args):
           "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
           "slot A came back on the server as the same agent, reported the fallback in its heartbeat and answered the update "
           "fell-back", flush=True)
+
+
+def refused_release(vm, server, agent, bundle, payload, logged):
+    """801-UPD-0043 (801 S4): a bundle the running updater refuses (its channel's signature changed), downloaded whole
+    through the agent, leaves the machine as it was and on the server: the command answered failed with the reason, the
+    running slot, its boot record and nothing staged as before, and a heartbeat accepted after the answer."""
+    def state():
+        lines = vm.command("update status", raw=True).splitlines()
+        kept = [line.strip() for line in lines if line.strip().startswith(("UPDATE: RUNNING", "UPDATE: THE NEWER BOOT RECORD", "UPDATE: NO BOOT RECORD", "UPDATE: NOTHING STAGED", "UPDATE: STAGED"))]
+        assert len(kept) == 3, lines
+        return kept
+    before = state()
+    require_all("\n".join(before), "UPDATE: RUNNING SLOT A, VERSION 5", "UPDATE: NOTHING STAGED IN THE OTHER SLOT")
+    bad = server.queue(agent, "update_agent", payload, program="MIND Core")
+    server.publish(bundle, command_id=bad, bundle=True)
+    logged(vm, "effector", f"EFFECTOR: {bad}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+    logged(vm, "effector", f"EFFECTOR: {bad}: not staged: signature", 300)
+    deadline = time.monotonic() + 120
+    while not (result := server.operation(bad)):
+        assert time.monotonic() < deadline, "the refused update was not answered"
+        time.sleep(1)
+    answer = result.get("result") or {}
+    assert result.get("status") == "failed" and answer.get("error") == "signature" and answer.get("stdout") == "not staged: signature", result
+    after = state()
+    assert after == before, (before, after)
+    # Still on the server: a heartbeat accepted after the answer.
+    beats = sum(1 for b in list(server.beats) if b.get("agent_id") == agent)
+    deadline = time.monotonic() + 120
+    while sum(1 for b in list(server.beats) if b.get("agent_id") == agent) <= beats:
+        assert time.monotonic() < deadline, "no heartbeat after the refusal"
+        time.sleep(1)
+    print(f"PASS: a refused release (801-UPD-0043): {len(bundle)} bytes with the channel's signature changed, downloaded "
+          "through the agent, refused by the updater; the command answered failed (signature), the running slot, its boot "
+          "record and nothing staged as before, and the agent's next heartbeat accepted", flush=True)
 
 
 def effector_actions_check(vm, server, agent, until, beats):
