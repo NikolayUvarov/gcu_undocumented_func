@@ -74,11 +74,11 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
   - **The `watchdog` suite:** only what the stopped run was starting is left out. One service is started by hand, and the others must come back by themselves at 120 s or later.
   - **The power button's check:** a reset once the list settled is followed by a normal start. Two resets in a row before it settles are followed by a safe start.
   - **The link and modes suites** reach their safe start by two resets.
+  - **The `boot` suite's trial check:** a trial of slot B held for the server is cut twice at the prompt, which spends its tries. Slot A then starts normally and names slot B's run.
 
 **Left:**
 - the suites' runs on the machines;
 - a panic as evidence (step 3), not done;
-- the other slot's case in QEMU, which only the host test shows;
 - a bench machine's run;
 - step 5 (Effector's telemetry and the link's log), EFF's and LNK's to ask.
 
