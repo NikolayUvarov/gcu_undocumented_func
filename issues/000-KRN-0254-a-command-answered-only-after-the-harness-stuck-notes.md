@@ -1,6 +1,6 @@
-# 000-KRN-0254 — In the USB image check, a `run memmap` echoed and answered only after the harness's notes of a stuck wait
+# 000-KRN-0254 — In the USB image check, a `run memmap` refused later than the harness's 8 s on a loaded lane
 
-**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-11-15) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-11-15; cause found, the check's fix made, its ten runs left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -21,18 +21,31 @@ So the line the check typed was echoed and run only after the lines typed later.
 
 A line typed at the console must reach the shell, or the program in front, in the order it was typed.
 
+**Corrected on 2026-11-15** (the record above misread the log). Read again, with the stuck record (`mind-core-stuck-2284066-1.log`):
+- **No line came out of order.** `ps`, `logs 1`, `ps` and `logs 7` were the check's own commands before the `run memmap`: `service_logs("init")` and `service_logs("usb_host", "DISCONNECTED")` after the fourth unplug (`device_del usbstick5`). They are not the harness's notes, which read QEMU's monitor and type nothing.
+- **The refusal came late.** The command was `unplugged()`'s first `run memmap` after that unplug (line 355). The harness waited its default 8 s for the prompt.
+  - The record at the 8 s mark, guest time 76 s: the shell waits for the loader's reply, the loader for `vfs_server`'s, `vfs_server` for `usb_storage`'s, and `usb_storage` sleeps between its claims (up to 20, 100 ms apart, on each request to a gone device).
+  - One second later, at 78 s, every task waits to receive: the chain has answered. The log then shows the refusal and the prompt, before QEMU was stopped.
+- **That boot was slow.** Its first refusal took 5.9 s. In the 40 runs kept on x32 the first took 2.0–5.9 s: 4.0 s in 28, 5.9 s in two, this one among them.
+- **The check was stricter than its criterion.** [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md) asks for the refusal within 15 s; the check took the harness's 8 s.
+
 ## Plan
 
-1. Find where a typed line waits while background programs hold `CONSOLE=1`.
-   - Read the console's input path: `usb_serial` or the serial line, the console writer, the shell.
-   - Try to reproduce it: `run memmap &` twice, a stick unplugged, then `run memmap` repeated under load beside a busy lane.
-2. Fix the order in the component that breaks it.
-3. If the check itself races, fix the check. It must not hide a real reorder.
+1. ~~Find where a typed line waits while background programs hold `CONSOLE=1`.~~ No line waited: the reorder is ruled out (above).
+2. The check waits for each refusal up to 211-KRN-0050's 15 s, and prints the slowest, so a refusal that slows down shows in the log before it fails.
+3. Ten runs of `x86: USB image` on x32 beside a busy lane.
 
 ## Acceptance criteria
 
 - The cause named, with a run that shows it, or the reorder ruled out with the reason.
 - `x86: USB image` passes ten times on x32 beside a busy lane.
+
+## Progress
+
+- **2026-11-15, the fix** (`claude/000-KRN-0254-a-refusal-within-its-limit`). `tests/usb_image_smoke.py`:
+  - each `run memmap` refused in `unplugged()` waits up to `REFUSED_WAIT`, 15 s, 211-KRN-0050's limit;
+  - each refusal's time is kept, and the check prints the slowest beside the limit.
+- **Left:** the ten runs on x32 beside a busy lane.
 
 ## Related
 

@@ -267,18 +267,21 @@ def debug_mode(vm, name):
     require(vm.command("rm log:debug.txt"), "OK")
 
 
+# 211-KRN-0050: a program on a disk that is gone is refused within 15 s; the harness's own 8 s fell short on a loaded lane (000-KRN-0254).
+REFUSED_WAIT = 15
+
+
 def unplugged(vm, booted, name):
     # 211-KRN-0050: with the boot disk unplugged, a program on it is refused soon, with the reason, and the shell answers;
     # plugged in again, programs start again. memmap was not run before, so none of it is in vfs_server's cache.
     # Only the shell's built-in commands from here until the disk is back: dmesg is a program on the disk.
     vm.hmp("device_del usbstick")
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
-    started = time.monotonic()
-    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")  # the command's own wait is 8 s
-    took = time.monotonic() - started
+    times = []
+    refused(vm, times)
     require(vm.command("ps"), "shell")
     require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
-    print(f"unplugged: run memmap refused in {took:.1f} s")
+    print(f"unplugged: run memmap refused in {times[0]:.1f} s")
     vm.hmp(f"drive_add 0 if=none,id=usbdisk2,format=raw,file={booted}")
     vm.hmp("device_add usb-storage,drive=usbdisk2,id=usbstick")
     for _ in range(40):  # vfs_server asks the drive again after its quiet time
@@ -336,7 +339,7 @@ def unplugged(vm, booted, name):
     # (000-KRN-0085), sends one only after its wait, so the program is asked for until the copy is met.
     usb = ""
     for _ in range(15):
-        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        refused(vm, times)
         usb += vm.service_logs("usb_storage")
         if "IS NOT USED" in usb:
             break
@@ -352,7 +355,7 @@ def unplugged(vm, booted, name):
     # A device gone may answer "not found" at once: vfs_server says it does not answer once that lasts 10 s.
     log = ""
     for _ in range(20):
-        require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+        refused(vm, times)
         log += vm.service_logs("vfs_server")
         if "DRIVE DOES NOT ANSWER" in log:
             break
@@ -371,13 +374,21 @@ def unplugged(vm, booted, name):
         if "ANOTHER MEDIUM" in log:
             break
     require(log, "CAME BACK WITH ANOTHER MEDIUM")
-    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    refused(vm, times)
     vm.command("sync")
     time.sleep(3)
     assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
     assert hashlib.sha256(longer.read_bytes()).hexdigest() == longer_before, "a medium of another capacity was written"
     other.unlink()
     longer.unlink()
+    print(f"unplugged: {len(times)} refusals, the slowest in {max(times):.1f} s (the limit {REFUSED_WAIT} s)")
+
+
+def refused(vm, times):
+    # `run memmap` refused for its disk within 211-KRN-0050's limit; how long it took goes into `times`.
+    started = time.monotonic()
+    require(vm.command("run memmap", timeout=REFUSED_WAIT), "CANNOT READ THE PROGRAM")
+    times.append(time.monotonic() - started)
 
 
 def another_manifest(image, name):
