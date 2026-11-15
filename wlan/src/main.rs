@@ -260,7 +260,7 @@ impl Wlan {
             Again::NoChannel => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY {}{}", if asked { ", ASKED BEFORE A TUNE" } else { "" }, country, again),
             Again::Moved(now_on, was) => mind::println!("[WLAN] THE RADIO RESTARTED (ON CHANNEL {}, NOT THE {} IT TOOK): ITS COUNTRY {}{}", now_on, was, country, again),
             Again::Ended => mind::println!("[WLAN] THE RADIO RESTARTED (A CALL FOUND ITS DRIVER ENDED): ITS COUNTRY {}{}", country, again),
-            Again::Fresh(was, now_pid) => mind::println!("[WLAN] THE RADIO RESTARTED (ANSWERED BY PID {}, NOT {}): ITS COUNTRY {}{}", now_pid, was, country, again),
+            Again::Fresh(was, now_pid) => mind::println!("[WLAN] THE RADIO RESTARTED (ANSWERED BY PID {}, NOT PID {}): ITS COUNTRY {}{}", now_pid, was, country, again),
             Again::Stalled => mind::println!("[WLAN] THE AUTOMATIC JOIN BEGAN NO TRY FOR {} S: THE STATION STARTS ANEW, ITS COUNTRY {}{}", STALL_MS / 1000, country, again),
         }
         self.station_up(&info);

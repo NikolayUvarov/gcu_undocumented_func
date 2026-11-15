@@ -40,7 +40,7 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
   - A reply from another PID marks a fresh radio.
   - From then on the old station gives the radio nothing: no tune, no filter, no send (`apply`).
   - At the next turn the station starts anew, as for 801-NET-0083's other signs.
-  - **The new line:** `[WLAN] THE RADIO RESTARTED (ANSWERED BY PID <new>, NOT <old>)`.
+  - **The new line:** `[WLAN] THE RADIO RESTARTED (ANSWERED BY PID <new>, NOT PID <old>)`.
   - **Which reason the line names:** where the fresh radio has no channel, or another one than the station took, that reason is named, as before. The PID is named when nothing else shows the restart.
 - **`wlansim` built with `self-tuned`** starts on the access point's channel, as rtw89 took its own. `scripts/x86_fixtures.sh` builds it.
 - **The `net` suite's `fresh_radio_check`** (x86):

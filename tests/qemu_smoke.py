@@ -13211,8 +13211,8 @@ def fresh_radio_check(args):
                 reason = re.search(r"\[WLAN\] THE RADIO RESTARTED \(([^)]*)\)", log)
                 assert reason, log[-2000:]
                 fresh = vm.services()["wlansim"]
-                # The harness shows "PID <n>" in its ordinal numbering (to_ordinal), "NOT <n>" as the kernel's.
-                if reason[1] == to_ordinal(f"ANSWERED BY PID {fresh}, NOT {radio}"):
+                # The harness shows each "PID <n>" in its ordinal numbering (to_ordinal).
+                if reason[1] == to_ordinal(f"ANSWERED BY PID {fresh}, NOT PID {radio}"):
                     break
                 # The fresh radio is on the channel the station took, so neither of those can be the reason.
                 assert reason[1] == "A CALL FOUND ITS DRIVER ENDED", (reason[1], log[-2000:])
