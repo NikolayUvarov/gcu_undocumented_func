@@ -33,7 +33,7 @@ The test of that rule names it "until recovery", but only a hand at the machine 
 
 ## Acceptance criteria
 
-- [ ] **The `effector` suite, x86 and aarch64,** with `vfs_server` restarted under the agent and the gateway: a command after it is done, directly or after the services' own restarts, and a log is collected through the gateway's audit.
+- [x] **The `effector` suite, x86 and aarch64,** with `vfs_server` restarted under the agent and the gateway: a command after it is done, directly or after the services' own restarts, and a log is collected through the gateway's audit. — LEG9, 2026-11-15, `ec86ae95`: PASS on x86_64 and aarch64; and the boot disk gone under the agent, with 801-KRN-0251: heartbeats went on, a `collect_logs` refused `journal` and not run, a reboot answered `completed`, and `init` restarted the machine.
 - [ ] **On the MacBook Pro, through hesere:** after hours, and after a `vfs_server` restart, commands are taken and answered with no hand at the machine (MC-12.1).
 
 ## Related
