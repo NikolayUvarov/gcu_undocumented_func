@@ -1,6 +1,6 @@
-# 000-KRN-0253 — The request that finds a fresh block driver waits for its window, 2 s at most, instead of failing
+# 000-KRN-0253 — The request that finds a fresh block driver waits for its window, 2 s at most, instead of failing — done
 
-**Type:** `vfs_server` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** — (for 801 S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-6.6
+**Type:** `vfs_server` · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-14) · **Blocked by:** — · **Main task:** — (for 801 S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-6.6
 
 ## Problem
 
@@ -27,6 +27,17 @@ Round 136's gate passed the same group on x32, so it depends on the load.
 
 1. **The `ahci` suite passes** on x86. Its read right after the driver's restart is answered, here and in the gate.
 2. **The `store`, `storefaults` and `usb` suites still pass.** These are the returned-medium checks of 000-KRN-0079 and 000-KRN-0085.
+
+## Resolution
+
+Landed in round 137 (`main` e7580978da), from `claude/000-KRN-0253-a-request-waits-for-a-fresh-drivers-window` 4599438294.
+
+- **`vfs_server` `Disk::back_waiting`:** for a driver that answered as a fresh instance, the medium's comparison is tried every 20 ms for 2 s at most, until `init` has set its windows again. A drive that does not answer, and a medium found to be another, behave as before.
+- **Criteria:**
+  1. the `ahci` suite passed on i9 (in `x86: services, storage, audio`, 1078 s) and in round 137's gate;
+  2. `store`, `storefaults` and `usb` passed (`x86: files and block writes`, 1432 s on i9; the gate).
+
+  LEG9's failure did not appear on these machines, before or after, so DRV's run on LEG9 is the one that would show it gone.
 
 ## Related
 

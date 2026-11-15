@@ -42,7 +42,7 @@ Landed in round 136 (`main` bdde60e961), from `claude/801-UPD-0038-an-update-fro
   2. the group `x86: an update from the previous release` is in `scripts/ci_local.sh --list`, estimated in `scripts/land.py`;
   3. the profile's Article 9 names the check and what it does not cover.
 - **Split off:**
-  - aarch64, to [801-UPD-0040](../issues/801-UPD-0040-an-update-from-the-previous-release-on-aarch64.md);
+  - aarch64, to [801-UPD-0040](801-UPD-0040-an-update-from-the-previous-release-on-aarch64.done);
   - the update through the Effector server stays ASR's [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), case 5;
   - a release that cannot connect is S1's (801-KRN-0242).
 
