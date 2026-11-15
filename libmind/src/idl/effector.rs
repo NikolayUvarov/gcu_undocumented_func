@@ -23,6 +23,13 @@
 //! 1.5 (751-EFF-0023): `update-begin`, `update-commit`, `update-apply` and `update-state`, a developer's release handed
 //! to `updater` (`update.wit` 1.3's `install-…`, `apply`, `status`) under the policy's `update apply` and the owner's
 //! `remote-update`, which the gateway and the updater each ask of `init`. Nothing of it lands in a file the gateway writes.
+//!
+//! 1.6 (KRN's request of 2026-11-12, for 110-NET-0070): `status.services` and `sample.services` hold 64 units, as many
+//! as `init`'s `list` answers, not 48. Today's 54 units no longer leave the shell and the instances out, and the next
+//! boot image does not push `effector` out of them. The gateway logs a list it ever has to cut. `sample` also carries
+//! the machine's name as `sysmon` answers it (`sysinfo.wit` 4.2, 750-EFF-0018), so a name set by the shell's
+//! `hostname` reaches the server within a sample. Both ends are built together; a 1.5 decoder refuses a list longer
+//! than 48, and the new field, rather than reading them short.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -32,7 +39,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -96,9 +103,9 @@ impl Wire for Service {
 /// `memory-used` and `memory-total` in bytes; `services`: the boot services; `policy`: a valid policy is loaded;
 /// `busy`: a request or transfer is open; `journal-free`: how many more results the journal can keep.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Status { pub release: Text<32>, pub uptime_ms: u64, pub memory_used: u64, pub memory_total: u64, pub services: List<Service, 48>, pub policy: bool, pub busy: bool, pub journal_free: u16 }
+pub struct Status { pub release: Text<32>, pub uptime_ms: u64, pub memory_used: u64, pub memory_total: u64, pub services: List<Service, 64>, pub policy: bool, pub busy: bool, pub journal_free: u16 }
 impl Wire for Status {
-    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Service, 48> as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u16 as Wire>::MAX;
+    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Service, 64> as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u16 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.release.encode(w)?; self.uptime_ms.encode(w)?; self.memory_used.encode(w)?; self.memory_total.encode(w)?; self.services.encode(w)?; self.policy.encode(w)?; self.busy.encode(w)?; self.journal_free.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { release: Wire::decode(r)?, uptime_ms: Wire::decode(r)?, memory_used: Wire::decode(r)?, memory_total: Wire::decode(r)?, services: Wire::decode(r)?, policy: Wire::decode(r)?, busy: Wire::decode(r)?, journal_free: Wire::decode(r)? }) }
 }
@@ -212,11 +219,11 @@ impl Wire for Space {
 /// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
 /// session turns two samples into rates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sample { pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64, pub services: List<Load, 48>, pub volumes: List<Space, 4> }
+pub struct Sample { pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64, pub services: List<Load, 64>, pub volumes: List<Space, 4>, pub hostname: Text<63> }
 impl Wire for Sample {
-    const MAX: usize = <u16 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Load, 48> as Wire>::MAX + <List<Space, 4> as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.cpus.encode(w)?; self.busy_ns.encode(w)?; self.idle_ns.encode(w)?; self.uptime_ms.encode(w)?; self.memory_total.encode(w)?; self.memory_free.encode(w)?; self.services.encode(w)?; self.volumes.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { cpus: Wire::decode(r)?, busy_ns: Wire::decode(r)?, idle_ns: Wire::decode(r)?, uptime_ms: Wire::decode(r)?, memory_total: Wire::decode(r)?, memory_free: Wire::decode(r)?, services: Wire::decode(r)?, volumes: Wire::decode(r)? }) }
+    const MAX: usize = <u16 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Load, 64> as Wire>::MAX + <List<Space, 4> as Wire>::MAX + <Text<63> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.cpus.encode(w)?; self.busy_ns.encode(w)?; self.idle_ns.encode(w)?; self.uptime_ms.encode(w)?; self.memory_total.encode(w)?; self.memory_free.encode(w)?; self.services.encode(w)?; self.volumes.encode(w)?; self.hostname.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { cpus: Wire::decode(r)?, busy_ns: Wire::decode(r)?, idle_ns: Wire::decode(r)?, uptime_ms: Wire::decode(r)?, memory_total: Wire::decode(r)?, memory_free: Wire::decode(r)?, services: Wire::decode(r)?, volumes: Wire::decode(r)?, hostname: Wire::decode(r)? }) }
 }
 
 /// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
@@ -238,7 +245,7 @@ pub fn status(endpoint: Endpoint) -> Result<Status> {
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
-    let length = wire::buffer_reply(&reply, 976, false, false)?;
+    let length = wire::buffer_reply(&reply, 1280, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Status as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
@@ -522,7 +529,7 @@ pub fn sample(endpoint: Endpoint) -> Result<Sample> {
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 19 | MAJOR << 8, &buffer, length)?;
-    let length = wire::buffer_reply(&reply, 2630, false, false)?;
+    let length = wire::buffer_reply(&reply, 3511, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Sample as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
@@ -643,7 +650,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
     wire::header(request, cap, MAJOR)?;
     match words[0] & 0xFF {
         1 => {
-            let (call, length) = wire::take_buffer(request, cap, 976, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 1280, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
@@ -799,7 +806,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Audit { count }, call))
         }
         19 => {
-            let (call, length) = wire::take_buffer(request, cap, 2630, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 3511, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }

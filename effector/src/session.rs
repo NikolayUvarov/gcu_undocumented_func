@@ -56,15 +56,17 @@ impl Command<'_> {
 
 /// Why an action the agent handed to its gateway failed: the gateway's errors (`idl/effector.wit`) and the agent's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload }
+pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload, Journal }
 impl Failure {
-    pub const ALL: [Failure; 12] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
-                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload];
+    pub const ALL: [Failure; 13] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
+                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload, Self::Journal];
     pub fn name(self) -> &'static str {
         match self {
             Self::Denied => "denied", Self::NoPolicy => "no-policy", Self::NotFound => "not-found", Self::Bounds => "bounds",
             Self::Digest => "digest", Self::Busy => "busy", Self::Expired => "expired", Self::Audit => "audit", Self::Io => "io",
             Self::Malformed => "malformed", Self::Unsupported => "unsupported", Self::Upload => "upload",
+            // Refused, not run, while the journal cannot be written (801-EFF-0032).
+            Self::Journal => "journal",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> { Self::ALL.iter().copied().find(|f| f.name() == name) }
@@ -104,6 +106,7 @@ impl Final {
                 Failure::Bounds => failed!("bounds"), Failure::Digest => failed!("digest"), Failure::Busy => failed!("busy"),
                 Failure::Expired => failed!("expired"), Failure::Audit => failed!("audit"), Failure::Io => failed!("io"),
                 Failure::Malformed => failed!("malformed"), Failure::Unsupported => failed!("unsupported"), Failure::Upload => failed!("upload"),
+                Failure::Journal => failed!("journal"),
             },
         }
     }
@@ -193,7 +196,7 @@ impl Session {
         Ok(session)
     }
     pub fn agent_id(&self) -> &str { self.agent.as_str() }
-    pub fn busy(&self) -> bool { self.pending.is_some() || self.journal_failed || self.records.iter().flatten().any(|r| r.durable && !r.done) }
+    pub fn busy(&self) -> bool { self.pending.is_some() || self.records.iter().flatten().any(|r| r.durable && !r.done) }
     pub fn stopping(&self) -> bool { self.stopping }
     pub fn journal_failed(&self) -> bool { self.journal_failed }
     pub fn record_count(&self) -> usize { self.records.iter().flatten().filter(|r| r.durable).count() }
@@ -224,8 +227,9 @@ impl Session {
         }
         Ok(())
     }
+    /// Polls go on with the journal failed (801-EFF-0032): its commands are answered unjournaled, `receive` refusing them.
     pub fn poll(&mut self, now_ms: u64) -> Result<Option<Attempt>, Error> {
-        if !self.registered || self.stopping || self.journal_failed { return Ok(None); }
+        if !self.registered || self.stopping { return Ok(None); }
         self.poll.begin(now_ms)
     }
     pub fn poll_done(&mut self, attempt: Attempt, result: Outcome, now_ms: u64, jitter: u32) -> Result<(), Error> {
@@ -312,8 +316,10 @@ impl Session {
         self.records[store.slot].as_mut().ok_or(Error::Journal)?.durable = true;
         Ok(())
     }
+    /// The next answer to send. With the journal failed, the answer it could not keep is sent too (801-EFF-0032): its
+    /// action ran or was refused, and a silence would only have the server ask again after a restart.
     pub fn next_ack(&mut self, now: Time) -> Result<Option<Ack>, Error> {
-        if !self.registered || self.journal_failed || self.saving.is_some() { return Ok(None); }
+        if !self.registered || self.saving.is_some() { return Ok(None); }
         for _ in 0..RECORDS_MAX {
             if self.pending.is_none() {
                 let Some(slot) = self.records.iter().position(|s| s.is_some_and(|s| s.durable && !s.done)) else { return Ok(None); };

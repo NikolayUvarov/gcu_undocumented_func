@@ -166,16 +166,19 @@ impl Station {
         Ok(())
     }
 
-    /// Starts joining the strongest access point of `ssid` from the last scan; `secret` for a WPA2 network.
+    /// Starts joining the strongest access point of `ssid` from the last scan whose security fits `secret`: with a key,
+    /// a WPA2 one alone; with none, an open one alone (801-NET-0084), so an open one of the same name is never taken
+    /// for a WPA2 network. A WPA2 network heard and no key is `Invalid`.
     pub fn join(&mut self, ssid: &[u8], secret: Option<Secret>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         if self.state == State::Scanning { return Err(Error::Busy); }
         let named = self.list.iter().any(|b| b.ssid() == ssid);
-        let Some(bss) = self.list.best(ssid).copied() else {
+        let security = if secret.is_some() { Security::Wpa2 } else { Security::Open };
+        let Some(bss) = self.list.best_of(ssid, security).copied() else {
+            if secret.is_none() && self.list.best_of(ssid, Security::Wpa2).is_some() { return Err(Error::Invalid); }
             let (reason, error) = if named { (Reason::Unsupported, Error::Unsupported) } else { (Reason::NotFound, Error::NotFound) };
             self.fail(reason);
             return Err(error);
         };
-        if bss.security == Security::Wpa2 && secret.is_none() { return Err(Error::Invalid); }
         // No country applied, or one whose rules leave the station nothing to send there (550-NET-0035).
         if !self.may_join(bss.channel) { self.fail(Reason::Unsupported); return Err(Error::Unsupported); }
         if matches!(self.state, State::Joined | State::Joining) { self.leave(out, tx); }

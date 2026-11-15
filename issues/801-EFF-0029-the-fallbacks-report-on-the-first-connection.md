@@ -1,6 +1,6 @@
 # 801-EFF-0029 — The fallback's report, sent on the first connection after it
 
-**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** `UPD`: the fallback's reason record (801's S2: where it is kept and its format) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.3, MC-9.9, MC-12.3
+**Type:** session · **Owner:** `EFF` · **Priority:** P1 · **Status:** in progress (2026-11-14) · **Blocked by:** — (801-UPD-0037's record, in 801-KRN-0242's branch) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.3, MC-9.9, MC-12.3
 
 ## Problem
 
@@ -33,3 +33,18 @@
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).
+
+## Progress (2026-11-14)
+
+- **UPD's record (801-UPD-0037, on 801-KRN-0242's branch).**
+  - The updater of the slot before keeps the reason in `system/updater/refused`.
+  - It gives `update-state`'s `failure` as `version V in slot S, falling back to slot T: WHY` until a trial is confirmed.
+  - The trial's boot log is `log:bootNNNN.log`.
+- **The agent.**
+  - It reads `update-state` at its start and with each telemetry sample.
+  - While `failure` is such a line, every heartbeat carries `update: {"state": "rolled_back", "build_number": V, "result": the line}`, the server's own `UpdateStatus`, so the first connection after the fallback reports it.
+  - It is logged once: `A FALLBACK, REPORTED TO THE SERVER`.
+  - Once the updater confirms a trial, the line is gone, and so is the field.
+  - No file of the agent's own is needed: the updater keeps the record.
+- **Host test:** `a_fallback_is_reported_in_the_heartbeats_update` (`tests/effector_wire_host.rs`).
+- **The QEMU path** needs a trial refused after 801-KRN-0242's 10 min. It is asked of 801-ASR-0014's `manageable` suite, with S1. Not run yet.

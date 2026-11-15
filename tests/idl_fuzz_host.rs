@@ -427,7 +427,7 @@ types! {
     display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service Boot Mode ModeState Planned Configuration StopReason;
+    init: Error Service Boot Mode ModeState Planned Configuration StopReason AgentStep;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork KeyState;
     loader: Error Program Needs HelperKind;

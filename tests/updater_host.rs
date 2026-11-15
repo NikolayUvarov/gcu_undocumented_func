@@ -32,7 +32,7 @@ mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
 
-use plan::{confirm, expired, floor, in_slot, keeps, keys, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, keeps, keys, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, spend, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -88,6 +88,25 @@ fn a_failed_trial_leaves_the_fallback_running_and_its_slot_to_fill() {
     assert_eq!(confirm(records, b'A', 0), None, "the record names the failed slot, not the running one");
     assert!(may_stage(records, b'A', false));
     assert_eq!(trial_of_other(records, b'A', 2), Some((1, rec(7, b'B', b'A', 2, false))));
+}
+
+#[test]
+fn a_trial_init_refused_is_spent_and_the_next_boot_falls_back() {
+    // 801-UPD-0037: B on trial with two tries left after the bootloader counted one; init refused it.
+    let records = [Some(rec(3, b'B', b'A', 2, false)), Some(rec(2, b'B', b'A', 3, false))];
+    let write = spend(records, b'B').unwrap();
+    assert_eq!(write, (1, rec(4, b'B', b'A', 0, false)));
+    let records = after(records, write);
+    let boot = slots::plan(records);
+    assert_eq!((boot.order, boot.trial, boot.write), ([b'A', 0], false, None), "no try is left for B");
+    assert_eq!(spend(records, b'B'), None, "a spent trial is not spent again");
+    // Nothing to spend: a confirmed slot, another slot's record, or one with no fallback.
+    assert_eq!(spend([Some(rec(5, b'B', b'A', 0, true)), None], b'B'), None);
+    assert_eq!(spend([Some(rec(5, b'B', b'A', 2, false)), None], b'A'), None);
+    assert_eq!(spend([Some(rec(5, b'B', 0, 2, false)), None], b'B'), None);
+    // The floor and the key file version stay as the records hold them.
+    let held = Record { floor: 7, keys: 2, ..rec(5, b'B', b'A', 1, false) };
+    assert_eq!(spend([Some(held), None], b'B'), Some((1, Record { floor: 7, keys: 2, ..rec(6, b'B', b'A', 0, false) })));
 }
 
 #[test]

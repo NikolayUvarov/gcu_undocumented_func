@@ -108,7 +108,7 @@ impl Machine for Fake {
     fn sample(&mut self) -> Sample {
         Sample { cpus: 2, busy_ns: 5, idle_ns: 7, uptime_ms: self.now, memory_total: 1000, memory_free: 900,
                  services: vec![Load { name: "sysmon".into(), state: Some(ServiceState::Running), pid: 9, run_ns: 1, started_ns: 2, memory: 3 }],
-                 volumes: vec![(String::new(), 100, 40)] }
+                 volumes: vec![(String::new(), 100, 40)], hostname: "mind-bench-1".into() }
     }
 }
 
@@ -173,6 +173,27 @@ fn a_failed_audit_write_refuses_the_request() {
     m.audit_fails = true;
     assert_eq!(g.service_control(&mut m, Badge::Session, &origin("c1"), "sysmon", policy::Action::Restart), Err(Fail::Audit));
     assert!(m.controlled.is_empty(), "not done without its audit line (MC-10.6)");
+}
+
+#[test]
+fn with_the_audit_unwritable_only_the_restart_goes_on() {
+    // 801-EFF-0032: MC-10.6's mode for a record that cannot be written, stated before it is needed.
+    let (mut g, mut m) = ready();
+    m.policy = Some(format!("{}reboot on\n", POLICY).into_bytes());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    m.audit_fails = true;
+    assert_eq!(g.service_control(&mut m, Badge::Session, &origin("c1"), "sysmon", policy::Action::Restart), Err(Fail::Audit));
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c2"), 10_000), Ok(10_000), "the restart recovers the machine");
+    g.restart(&mut m, "c2").unwrap();
+    assert_eq!(m.reboots, 1);
+    // Still only under the policy, and for the session.
+    assert_eq!(g.reboot(&mut m, Badge::Other, &origin("c3"), 10_000), Err(Fail::Audit));
+    m.policy = Some(POLICY.as_bytes().to_vec());
+    m.audit_fails = false;
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    m.audit_fails = true;
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c4"), 10_000), Err(Fail::Audit), "no `reboot on`: refused");
+    assert_eq!(m.reboots, 1);
 }
 
 #[test]
@@ -324,6 +345,7 @@ fn the_mark_follows_the_sessions_reports_and_the_policy() {
 fn the_sample_is_for_the_session_and_the_owner() {
     let (mut g, mut m) = ready();
     let s = g.sample(&mut m, Badge::Session);
+    assert_eq!(s.hostname, "mind-bench-1", "the machine's name as sysmon answers it (750-EFF-0018)");
     assert_eq!((s.cpus, s.memory_free, s.services.len(), s.volumes.len()), (2, 900, 1, 1));
     assert_eq!(g.sample(&mut m, Badge::Owner), s);
     assert_eq!(g.sample(&mut m, Badge::Other), Sample::default());

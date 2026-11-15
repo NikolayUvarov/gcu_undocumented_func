@@ -9,7 +9,9 @@
 // with none, the first scan sends nothing and the station runs under the country the access points announce, or `00`
 // (the maintainer's decision of 2026-11-04: it must work, not go quiet). The radio is given the country's limits.
 // At start and after a network is lost it joins a remembered one heard by itself, trying again and logging each try,
-// until `wifi leave` (550-NET-0041): a boot service, so every release through the link brings it.
+// until `wifi leave` (550-NET-0041): a boot service, so every release through the link brings it. A network a client
+// joined that `keystore` does not keep is held here, its PMK too, and joined again the same way, after a loss or a
+// radio's restart, until `wifi leave` (801-NET-0084). A key joins a WPA2 access point alone, never an open one.
 use dot11::catalogue::{self, Source};
 use dot11::scan::{Bss, Security};
 use dot11::station::{Allowed, Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
@@ -19,6 +21,7 @@ use mind::idl::codec::List;
 use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BADGE_COUNTERS, BADGE_WIFI, BADGE_WIFI_CHANGE};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 mod auto;
 mod service_turn;
 
@@ -41,6 +44,29 @@ const RADIO_HEADER: usize = 8;
 const RADIO_MS: u32 = 2000;
 // How often, while not joined, the station asks a radio it tuned whether it still has a channel; also before each tune (550-NET-0061).
 const RESTART_CHECK_MS: u64 = 10_000;
+// A radio that answered none of the station's calls for this long is asked again as a new one, and the station starts
+// anew over it (801-NET-0083); and the longest the automatic join may go without a try while it is on and a network is
+// remembered: then the station starts anew and the log says why.
+const RADIO_SILENT_MS: u64 = 10_000;
+const STALL_MS: u64 = auto::LATER_MS + 70_000;
+
+// The radio's last answer, and whether a call found its driver ended (801-NET-0083): each radio call goes through `radio_call`.
+static ANSWERED: AtomicU64 = AtomicU64::new(0);
+static DRIVER_ENDED: AtomicBool = AtomicBool::new(false);
+fn radio_call<T>(deadline: Deadline, call: impl FnOnce() -> mind::sys::Result<T>) -> mind::sys::Result<T> {
+    let result = deadline.call(call);
+    match &result {
+        Ok(_) => ANSWERED.store(mind::time::uptime_ms() as u64, Ordering::Relaxed),
+        Err(mind::sys::Error::Peer) => DRIVER_ENDED.store(true, Ordering::Relaxed),
+        Err(_) => {}
+    }
+    result
+}
+
+// Why the station set the radio up again (801-NET-0083): no channel set though it was tuned (550-NET-0061), a channel
+// other than the one it took, a call that found its driver ended, or the automatic join stalled.
+#[derive(Clone, Copy)]
+enum Again { NoChannel, Moved(u8, u8), Ended, Stalled }
 
 fn mac(value: u64) -> [u8; 6] { let b = value.to_be_bytes(); [b[2], b[3], b[4], b[5], b[6], b[7]] }
 fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -61,8 +87,36 @@ impl wpa::handshake::Pairwise for Kept {
     }
 }
 
-// The names `keystore` keeps networks for (none without its client).
-fn remembered(deadline: Deadline) -> List<keystore::WifiNetwork, 16> { match deadline.call(|| keystore::wifi_networks(KEYSTORE)) { Ok(Ok(list)) => list, _ => List::default() } }
+// A network a client joined that `keystore` does not keep (801-NET-0084): its name and its PMK (none: an open one),
+// wiped when dropped.
+struct Held { ssid: [u8; 32], len: usize, pmk: Option<[u8; 32]> }
+
+impl Held {
+    // None for a kept network: keystore holds its key.
+    fn new(ssid: &[u8], secret: Option<Secret>) -> Option<Self> {
+        let pmk = match secret { Some(Secret::Kept) => return None, Some(Secret::Pmk(pmk)) => Some(pmk), None => None };
+        let len = ssid.len().min(32);
+        let mut held = Held { ssid: [0; 32], len, pmk };
+        held.ssid[..len].copy_from_slice(&ssid[..len]);
+        Some(held)
+    }
+    fn ssid(&self) -> &[u8] { &self.ssid[..self.len] }
+    fn secret(&self) -> Option<Secret> { self.pmk.map(Secret::Pmk) }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) { if let Some(pmk) = self.pmk.as_mut() { wipe(pmk); } }
+}
+
+// The names `keystore` keeps networks for, or why it gave none (none without its client).
+fn remembered(deadline: Deadline) -> Result<List<keystore::WifiNetwork, 16>, &'static str> {
+    match deadline.call(|| keystore::wifi_networks(KEYSTORE)) {
+        Ok(Ok(list)) => Ok(list),
+        Ok(Err(_)) => Err("REFUSED"),
+        Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => Err("DID NOT ANSWER"),
+        Err(_) => Err("NOT REACHED"),
+    }
+}
 
 // Received Ethernet frames for the stack, oldest first (on the heap: 48 KiB would not fit the 64 KiB stack).
 struct Queue { frames: Vec<u8>, lens: [usize; QUEUE], head: usize, count: usize }
@@ -123,6 +177,19 @@ struct Wlan {
     tuned: bool,
     checked: u64,
     restarted: Option<wlanhw::Info>,
+    // The channel the radio last took, a reason to set it up again that needs no word from its `info`, whether it ever
+    // answered, when the automatic join last began a try or the station joined, whether nothing is remembered or held, and
+    // whether keystore's last answer failed (801-NET-0083).
+    tuned_to: u8,
+    again: Option<Again>,
+    had_radio: bool,
+    try_began: u64,
+    nothing_kept: bool,
+    keystore_failed: bool,
+    // The network a client joined this boot that keystore does not keep, and a client's join under way, held once it
+    // joins (801-NET-0084).
+    held: Option<Held>,
+    offered: Option<Option<Held>>,
 }
 
 impl Wlan {
@@ -147,35 +214,52 @@ impl Wlan {
         self.channels.0[..n].copy_from_slice(&channels[..n]);
         self.channels.1 = n;
         self.tuned = false;
+        self.tuned_to = 0;
+        self.had_radio = true;
     }
 
     // A radio that restarted (550-NET-0061): `init` starts a failed driver again behind the same endpoint, and the fresh
     // one has no channel and no country, so it sends nothing. Its `info` says so: no channel set, though the station tuned
-    // it. The station starts anew, the radio gets the country the station ran under, and the automatic join joins again.
+    // it; or a channel other than the one it took (a fresh driver that tuned itself, 801-NET-0083). Checked joined or
+    // not. A call that found the driver ended, or a stalled automatic join, sets it up again without that word. The
+    // station starts anew, the radio gets the country the station ran under, and the automatic join joins again.
     fn radio_restarted(&mut self, now: u64) {
         let asked = self.restarted.is_some();
-        let info = match self.restarted.take() {
-            Some(info) => info,
+        let (info, why) = match self.restarted.take() {
+            Some(info) => (info, Again::NoChannel),
             None => {
-                if !self.radio || !self.tuned || now.saturating_sub(self.checked) < RESTART_CHECK_MS || matches!(self.station.state(), State::Joined) { return; }
+                if !self.radio || (!self.tuned && self.again.is_none()) { return; }
+                if self.again.is_none() && now.saturating_sub(self.checked) < RESTART_CHECK_MS { return; }
                 self.checked = now;
-                let Ok(Ok(info)) = self.deadline.call(|| wlanhw::info(RADIO)) else { return };
-                if info.channel != 0 { return; }
-                info
+                let Ok(Ok(info)) = radio_call(self.deadline, || wlanhw::info(RADIO)) else { return };
+                let why = match self.again.take() {
+                    _ if self.tuned && info.channel == 0 => Again::NoChannel,
+                    _ if self.tuned && self.tuned_to != 0 && info.channel != self.tuned_to => Again::Moved(info.channel, self.tuned_to),
+                    Some(why) => why,
+                    None => return,
+                };
+                (info, why)
             }
         };
         let running = self.running;
-        match running {
-            Some((code, _)) => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY {} AGAIN", if asked { ", ASKED BEFORE A TUNE" } else { "" }, core::str::from_utf8(&code).unwrap_or("??")),
-            None => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY CHOSEN AGAIN", if asked { ", ASKED BEFORE A TUNE" } else { "" }),
+        let code = running.map(|(code, _)| code);
+        let country = code.as_ref().and_then(|c| core::str::from_utf8(c).ok()).unwrap_or("CHOSEN");
+        let again = " AGAIN";
+        match why {
+            Again::NoChannel => mind::println!("[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET{}): ITS COUNTRY {}{}", if asked { ", ASKED BEFORE A TUNE" } else { "" }, country, again),
+            Again::Moved(now_on, was) => mind::println!("[WLAN] THE RADIO RESTARTED (ON CHANNEL {}, NOT THE {} IT TOOK): ITS COUNTRY {}{}", now_on, was, country, again),
+            Again::Ended => mind::println!("[WLAN] THE RADIO RESTARTED (A CALL FOUND ITS DRIVER ENDED): ITS COUNTRY {}{}", country, again),
+            Again::Stalled => mind::println!("[WLAN] THE AUTOMATIC JOIN BEGAN NO TRY FOR {} S: THE STATION STARTS ANEW, ITS COUNTRY {}{}", STALL_MS / 1000, country, again),
         }
         self.station_up(&info);
+        self.first = false;
         match running { Some((code, source)) => self.run_under(code, source), None => self.country_start() }
         // A try under way was the old station's: the next one begins at once.
         if let Some(Try::Scanning(number) | Try::Joining(_, _, number)) = self.trying.take() {
             mind::println!("[WLAN] AUTO-JOIN: TRY {} ENDED BY THE RADIO'S RESTART, AGAIN AT ONCE", number);
-            self.auto.next = now;
         }
+        self.auto.next = now;
+        self.try_began = now;
         // A client's scan the old station took is scanned again by the new one.
         if self.scans.iter().any(Option::is_some) && !self.first {
             let mut out = Out::default();
@@ -184,11 +268,39 @@ impl Wlan {
         }
     }
 
+    // 801-NET-0083: each turn, before the station's work. A call that found the radio's driver ended sets the radio up
+    // again; a radio that answered nothing for RADIO_SILENT_MS is asked again as a new one (the main loop's ask, which
+    // starts the station anew); an automatic join that began no try for STALL_MS while a network is remembered or held
+    // starts the station anew. Each says so in the log: the station never waits without a word.
+    fn watch(&mut self, now: u64) -> bool {
+        let ended = DRIVER_ENDED.swap(false, Ordering::Relaxed);
+        if !self.radio { return false; }
+        if ended && self.again.is_none() { self.again = Some(Again::Ended); }
+        let answered = ANSWERED.load(Ordering::Relaxed);
+        if now.saturating_sub(answered) >= RADIO_SILENT_MS {
+            mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED FOR {} S: ASKED AGAIN AS A NEW RADIO, THE STATION STARTS ANEW", now.saturating_sub(answered) / 1000);
+            self.radio = false;
+            self.restarted = None;
+            self.again = None;
+            if let Some(Try::Scanning(number) | Try::Joining(_, _, number)) = self.trying.take() {
+                mind::println!("[WLAN] AUTO-JOIN: TRY {} ENDED: THE RADIO DID NOT ANSWER", number);
+            }
+            self.auto.next = now;
+            self.try_began = now;
+            return true;
+        }
+        let joined = matches!(self.station.state(), State::Joined);
+        if self.auto.on && !self.nothing_kept && !joined && now.saturating_sub(self.try_began) >= STALL_MS && self.again.is_none() {
+            self.again = Some(Again::Stalled);
+        }
+        false
+    }
+
     // Before a tune of a radio the station tuned: whether it restarted, as a tune would set a channel and hide it.
     fn restarted_before_tune(&mut self) -> bool {
         if self.restarted.is_some() { return true; }
         if !self.tuned { return false; }
-        let Ok(Ok(info)) = self.deadline.call(|| wlanhw::info(RADIO)) else { return false };
+        let Ok(Ok(info)) = radio_call(self.deadline, || wlanhw::info(RADIO)) else { return false };
         if info.channel != 0 { return false; }
         self.restarted = Some(info);
         true
@@ -242,7 +354,7 @@ impl Wlan {
         for &(channel, eirp, listen) in plan.limits() { limits.push(wlanhw::Limit { channel, eirp, listen }); }
         let dfs = match country.dfs_region() { regdb::DfsRegion::Unspecified => 0, regdb::DfsRegion::Fcc => 1, regdb::DfsRegion::Etsi => 2, regdb::DfsRegion::Jp => 3 };
         let text = core::str::from_utf8(&code).unwrap_or("00");
-        let answer = self.deadline.call(|| wlanhw::set_country(RADIO, text, dfs, limits.as_slice()));
+        let answer = radio_call(self.deadline, || wlanhw::set_country(RADIO, text, dfs, limits.as_slice()));
         (self.confirmed, self.refused) = match answer { Ok(Ok(_)) => (true, false), Ok(Err(wlanhw::Error::Failed)) => (false, true), _ => (false, false) };
         // A radio that refuses the limits sends nothing: the station only listens, and does not fall back.
         let allowed = if self.refused { catalogue::listening(self.radio_channels()) } else { plan };
@@ -324,13 +436,18 @@ impl Wlan {
     fn apply(&mut self, out: Out) {
         // A radio found restarted gets nothing of the old station's: the next turn starts a new one (550-NET-0061).
         if self.restarted.is_some() || (out.channel.is_some() && self.restarted_before_tune()) { return; }
-        if let Some(channel) = out.channel { if let Ok(Ok(())) = self.deadline.call(|| wlanhw::set_channel(RADIO, channel)) { self.tuned = true; } }
+        if let Some(channel) = out.channel {
+            match radio_call(self.deadline, || wlanhw::set_channel(RADIO, channel)) {
+                Ok(Ok(())) => { self.tuned = true; self.tuned_to = channel; }
+                _ => {}
+            }
+        }
         if let Some(f) = out.filter {
-            let _ = self.deadline.call(|| wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 }));
+            let _ = radio_call(self.deadline, || wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 }));
         }
         if let Some((len, rate)) = out.send {
             let unicast_data = self.tx[0] & 0x0C == 0x08 && self.tx[4] & 1 == 0;
-            match self.deadline.call(|| wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
+            match radio_call(self.deadline, || wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
                 Ok(Ok(sent)) => { if unicast_data { self.station.sent(sent.acked); } }
                 _ => if unicast_data { self.station.sent(false) },
             }
@@ -343,7 +460,7 @@ impl Wlan {
 
     // Complete a started frame and its actions under the existing aggregate radio deadline.
     fn pump_frame(&mut self) -> bool {
-        let len = match self.deadline.call(|| wlanhw::receive(RADIO, &mut self.radio_frame)) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => return false };
+        let len = match radio_call(self.deadline, || wlanhw::receive(RADIO, &mut self.radio_frame)) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => return false };
         if len < RADIO_HEADER { return true; }
         let header = &self.radio_frame[..RADIO_HEADER];
         let frame_len = u16::from_le_bytes([header[0], header[1]]) as usize;
@@ -381,7 +498,7 @@ impl Wlan {
     }
 
     fn networks(&self) -> List<wifi::Network, 32> {
-        let kept = remembered(self.deadline);
+        let kept = remembered(self.deadline).unwrap_or_default();
         let mut list = List::default();
         for bss in self.station.networks().iter() {
             let mut n = network(bss);
@@ -481,14 +598,20 @@ impl Wlan {
                 let mut out = Out::default();
                 self.station.leave(&mut out, &mut self.tx);
                 self.apply(out);
-                // The user's word: no automatic join until the station next joins a network.
+                // The user's word: no automatic join until the station next joins a network, and nothing held.
                 self.auto.left();
                 self.trying = None;
+                self.held = None;
+                self.offered = None;
                 mind::println!("[WLAN] LEFT THE NETWORK: NO AUTOMATIC JOIN UNTIL THE NEXT ONE");
                 wifi::reply_leave(call, Ok(()))
             }
             wifi::Request::Forget { ssid } => {
                 let forgotten = match self.deadline.call(|| keystore::wifi_forget(KEYSTORE, ssid.as_slice())) { Ok(Ok(found)) => Ok(found), _ => Err(wifi::Error::Unsupported) };
+                // A network held since a client's join is forgotten too (801-NET-0084).
+                let dropped = self.held.as_ref().is_some_and(|h| h.ssid() == ssid.as_slice());
+                if dropped { self.held = None; }
+                let forgotten = forgotten.map(|found| found || dropped);
                 if forgotten == Ok(true) { mind::println!("[WLAN] FORGOT {}", Name(ssid.as_slice())); }
                 wifi::reply_forget(call, forgotten)
             }
@@ -499,8 +622,7 @@ impl Wlan {
     // dropped here once kept; one not to remember stays here as a PMK for this join and its rejoins.
     fn secret(&self, ssid: &[u8], passphrase: &str, remember: bool) -> Result<Secret, wifi::Error> {
         if passphrase.is_empty() {
-            let kept = remembered(self.deadline).as_slice().iter().any(|k| k.ssid.as_slice() == ssid);
-            return if kept && !remember { Ok(Secret::Kept) } else { Err(wifi::Error::Invalid) };
+            return if !remember && self.kept(ssid) { Ok(Secret::Kept) } else { Err(wifi::Error::Invalid) };
         }
         let bytes = passphrase.as_bytes();
         let mut pmk = wpa::keys::psk_hex(bytes).or_else(|| wpa::keys::pmk(bytes, ssid)).ok_or(wifi::Error::Invalid)?;
@@ -521,25 +643,40 @@ impl Wlan {
             if self.station.state() == State::Scanning { let mut out = Out::default(); self.station.leave(&mut out, &mut self.tx); self.apply(out); }
         }
         self.auto.idle(now);
-        self.join_kept(ssid, passphrase, remember, now)
+        let secret = self.join_kept(ssid, passphrase, remember, now)?;
+        // One keystore does not keep is held once it joins (801-NET-0084).
+        self.offered = Some(Held::new(ssid, secret));
+        Ok(())
     }
 
-    fn join_kept(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
-        let bss = self.station.networks().best(ssid).copied();
-        let secret = match bss.map(|b| b.security) {
-            Some(Security::Wpa2) => {
-                // Without RDRAND there is no SNonce to trust: fail closed (issue 103).
-                if !mind::random::available() { mind::println!("[WLAN] NO {}: WPA2 REFUSED", mind::random::SOURCE); return Err(wifi::Error::Unsupported); }
-                Some(self.secret(ssid, passphrase, remember)?)
+    // A client's join: a passphrase, or a network keystore keeps, over WPA2 alone; neither, an open network alone
+    // (801-NET-0084). The key it joins with comes back.
+    fn join_kept(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<Option<Secret>, wifi::Error> {
+        let kept = passphrase.is_empty() && !remember && self.kept(ssid);
+        let secret = if !passphrase.is_empty() || remember || kept {
+            if self.station.networks().best_of(ssid, Security::Wpa2).is_none() {
+                let named = self.station.networks().iter().any(|b| b.ssid() == ssid);
+                return Err(if named { wifi::Error::Unsupported } else { wifi::Error::NotFound });
             }
+            // Without RDRAND there is no SNonce to trust: fail closed (issue 103).
+            if !mind::random::available() { mind::println!("[WLAN] NO {}: WPA2 REFUSED", mind::random::SOURCE); return Err(wifi::Error::Unsupported); }
+            Some(if kept { Secret::Kept } else { self.secret(ssid, passphrase, remember)? })
+        } else {
             // An open network has no key to remember.
-            _ => None,
+            None
         };
+        self.join_with(ssid, secret, now)?;
+        Ok(secret)
+    }
+
+    // The station joins `ssid` with `secret`, none for an open network.
+    fn join_with(&mut self, ssid: &[u8], secret: Option<Secret>, now: u64) -> Result<(), wifi::Error> {
+        if secret.is_some() && !mind::random::available() { mind::println!("[WLAN] NO {}: WPA2 REFUSED", mind::random::SOURCE); return Err(wifi::Error::Unsupported); }
         let mut out = Out::default();
         let joined = self.station.join(ssid, secret, now, &mut out, &mut self.tx);
         self.apply(out);
         match joined {
-            Ok(()) => { mind::println!("[WLAN] JOINING {} ON CHANNEL {}", Name(ssid), bss.map_or(0, |b| b.channel)); Ok(()) }
+            Ok(()) => { mind::println!("[WLAN] JOINING {} ON CHANNEL {}", Name(ssid), self.station.network().map_or(0, |b| b.channel)); Ok(()) }
             Err(dot11::Error::NotFound) => Err(wifi::Error::NotFound),
             Err(dot11::Error::Unsupported) => Err(wifi::Error::Unsupported),
             Err(dot11::Error::Busy) => Err(wifi::Error::Busy),
@@ -547,36 +684,65 @@ impl Wlan {
         }
     }
 
-    // The automatic join (550-NET-0041): when the station is not joined, a scan, then the remembered network heard (the
-    // one last joined first, else the strongest) with its kept key; each try ends in one line of the log.
+    // Whether keystore keeps `ssid` (no when it does not answer).
+    fn kept(&self, ssid: &[u8]) -> bool { remembered(self.deadline).unwrap_or_default().as_slice().iter().any(|k| k.ssid.as_slice() == ssid) }
+
+    // The networks keystore keeps; a failure is logged once until it answers again, and the automatic join waits its
+    // first wait, as with none kept (801-NET-0083).
+    fn remembered(&mut self) -> List<keystore::WifiNetwork, 16> {
+        match remembered(self.deadline) {
+            Ok(list) => { if core::mem::replace(&mut self.keystore_failed, false) { mind::println!("[WLAN] AUTO-JOIN: KEYSTORE ANSWERS AGAIN, {} NETWORKS KEPT", list.as_slice().len()); } list }
+            Err(why) => {
+                if !core::mem::replace(&mut self.keystore_failed, true) { mind::println!("[WLAN] AUTO-JOIN WAITS: KEYSTORE {} FOR THE REMEMBERED NETWORKS, ASKED AGAIN IN {} S", why, auto::FIRST_MS / 1000); }
+                List::default()
+            }
+        }
+    }
+
+    // The automatic join (550-NET-0041): when the station is not joined, a scan, then the remembered network heard, or
+    // the one a client joined this boot (801-NET-0084), the one last joined first, else the strongest; the held key
+    // first, else the kept one. Each try ends in one line of the log.
     fn auto_join(&mut self, now: u64) {
         // The first scan decides the country before anything is joined.
         if self.first { return; }
         let state = self.station.state();
         if state == State::Joined {
+            // A client's join that joined: its network is held from now on, unless keystore keeps it (801-NET-0084).
+            if let Some(next) = self.offered.take() { self.held = next; }
             if let Some(Try::Joining(name, len, number)) = self.trying.take() {
                 mind::println!("[WLAN] AUTO-JOIN {}: JOINED (TRY {})", Name(&name[..len]), number);
             }
             if let Some(bss) = self.station.network() { let s = bss.ssid(); self.previous.0[..s.len()].copy_from_slice(s); self.previous.1 = s.len(); }
             self.auto.joined();
+            self.try_began = now;
+            self.nothing_kept = false;
             return;
         }
+        // A client's join that ended without joining: nothing of it is held.
+        if state != State::Joining { self.offered = None; }
         match self.trying {
             Some(Try::Scanning(number)) if state != State::Scanning => {
                 self.trying = None;
-                let kept = remembered(self.deadline);
+                let kept = self.remembered();
                 let heard = self.station.networks().iter().filter(|b| matches!(b.security, Security::Wpa2 | Security::Open)).map(|b| (b.ssid(), b.weakness));
+                let held = self.held.as_ref().map_or(&[][..], Held::ssid);
                 let mut name = ([0u8; 32], 0);
-                if let Some(ssid) = auto::choose(heard, |s| kept.as_slice().iter().any(|k| k.ssid.as_slice() == s), &self.previous.0[..self.previous.1]) {
+                if let Some(ssid) = auto::choose(heard, |s| s == held || kept.as_slice().iter().any(|k| k.ssid.as_slice() == s), &self.previous.0[..self.previous.1]) {
                     name.0[..ssid.len()].copy_from_slice(ssid);
                     name.1 = ssid.len();
                 }
                 if name.1 == 0 {
                     let wait = self.auto.ended(now) / 1000;
-                    mind::println!("[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK HEARD, {} KEPT (TRY {}), AGAIN IN {} S", kept.as_slice().len(), number, wait);
+                    let joined = if self.held.is_some() { " OR JOINED THIS BOOT" } else { "" };
+                    mind::println!("[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK{} HEARD, {} KEPT (TRY {}), AGAIN IN {} S", joined, kept.as_slice().len(), number, wait);
                     return;
                 }
-                match self.join_kept(&name.0[..name.1], "", false, now) {
+                // The held key of the network a client joined, else keystore's: a key joins a WPA2 access point alone.
+                let secret = match self.held.as_ref().filter(|h| h.ssid() == &name.0[..name.1]) {
+                    Some(held) => { mind::println!("[WLAN] AUTO-JOIN {}: THE NETWORK A CLIENT JOINED THIS BOOT, NOT REMEMBERED (TRY {})", Name(&name.0[..name.1]), number); held.secret() }
+                    None => Some(Secret::Kept),
+                };
+                match self.join_with(&name.0[..name.1], secret, now) {
                     Ok(()) => self.trying = Some(Try::Joining(name.0, name.1, number)),
                     Err(error) => {
                         let wait = self.auto.ended(now) / 1000;
@@ -593,14 +759,23 @@ impl Wlan {
             // A client's scan, or the station's own rejoin of a network just lost, goes first.
             None if !self.radio || !self.auto.due(now) || matches!(state, State::Scanning | State::Joining) => {}
             None => {
-                if remembered(self.deadline).is_empty() { self.auto.idle(now); return; }
+                let kept = self.remembered();
+                let nothing = kept.is_empty() && self.held.is_none();
+                let told = core::mem::replace(&mut self.nothing_kept, nothing && !self.keystore_failed);
+                if nothing {
+                    // Said once a loss (DRV, 2026-11-14): the Ryzen was silent three hours with nothing kept.
+                    if self.nothing_kept && !told { mind::println!("[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK; A JOIN NEEDS THE USER"); }
+                    self.auto.idle(now);
+                    return;
+                }
                 // A remembered network is WPA2's: without a random source its handshake is refused (issue 103), so no try.
-                if !mind::random::available() {
+                if !mind::random::available() && self.held.as_ref().is_none_or(|h| h.pmk.is_some()) {
                     mind::println!("[WLAN] AUTO-JOIN OFF: NO {}, WHICH A REMEMBERED NETWORK'S HANDSHAKE NEEDS", mind::random::SOURCE);
                     self.auto.left();
                     return;
                 }
                 let number = self.auto.begin(now);
+                self.try_began = now;
                 let mut out = Out::default();
                 let started = self.station.scan(now, &mut out, &mut self.tx);
                 self.apply(out);
@@ -682,7 +857,9 @@ fn main(_info: &'static BootInfo) {
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
                           channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false,
-                          reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok(), tuned: false, checked: 0, restarted: None };
+                          reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok(), tuned: false, checked: 0, restarted: None,
+                          tuned_to: 0, again: None, had_radio: false, try_began: 0, nothing_kept: false, keystore_failed: false,
+                          held: None, offered: None };
     if wlan.reader.is_none() { mind::println!("[WLAN] NO READING CLIENT: THE STATION'S ENDPOINT HAS NO RIGHT TO BADGE (wifi.wit's reader answers unsupported)"); }
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;
@@ -691,12 +868,17 @@ fn main(_info: &'static BootInfo) {
         let now = mind::time::uptime_ms() as u64;
         // Pump and client dispatch share the remaining time, including radio and key-store calls.
         wlan.deadline = Deadline::after(mind::time::monotonic_ns() / 1_000_000, RADIO_MS);
+        if wlan.watch(now) { (asked, waited) = (0, false); }
         if !wlan.radio && (asked == 0 || now - asked >= RADIO_MS as u64) {
             asked = now.max(1);
-            match wlan.deadline.call(|| wlanhw::info(RADIO)) {
+            match radio_call(wlan.deadline, || wlanhw::info(RADIO)) {
                 Ok(Ok(info)) => wlan.radio_up(&info),
                 Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => if !core::mem::replace(&mut waited, true) {
                     mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED IN {} S: SERVING WITHOUT IT, ASKING AGAIN", RADIO_MS / 1000);
+                },
+                // A radio that answered before, whose driver init starts again: asked again, as one that does not answer (801-NET-0083).
+                Err(mind::sys::Error::Peer) if wlan.had_radio => if !core::mem::replace(&mut waited, true) {
+                    mind::println!("[WLAN] THE RADIO'S DRIVER IS NOT THERE: SERVING WITHOUT IT, ASKING AGAIN");
                 },
                 // No device, another major version of wlanhw.wit, or a client that fails: nothing to drive.
                 _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE (NO DEVICE, OR NOT A WLANHW {}.X RADIO)", wlanhw::VERSION.0); mind::process::exit_with(1) }
@@ -719,8 +901,12 @@ fn main(_info: &'static BootInfo) {
                 }
             }
         }, |wlan| wlan.radio && wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some(), Wlan::pump);
-        if wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some() { wlan.radio_restarted(mind::time::uptime_ms() as u64); }
-        if wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some() { wlan.auto_join(mind::time::uptime_ms() as u64); }
+        // Each with a deadline of its own: a turn whose radio calls spent theirs still checks the radio and the automatic
+        // join, which a hung radio would otherwise starve for ever without a line (801-NET-0083).
+        wlan.deadline = Deadline::after(mind::time::monotonic_ns() / 1_000_000, RADIO_MS);
+        wlan.radio_restarted(mind::time::uptime_ms() as u64);
+        wlan.deadline = Deadline::after(mind::time::monotonic_ns() / 1_000_000, RADIO_MS);
+        wlan.auto_join(mind::time::uptime_ms() as u64);
         let state = wlan.station.state();
         if last == State::Scanning && state != State::Scanning { wlan.scanned(); }
         let state = wlan.station.state();

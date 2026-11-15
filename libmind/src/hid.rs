@@ -1,8 +1,9 @@
 //! USB HID reports (issue 164): a boot-protocol keyboard's reports become PS/2 set 1 scan codes for the shared decoder
-//! (mind::keys), as virtio_input does for VirtIO keyboards; a mouse's or tablet's reports, laid out by its report
-//! descriptor, become pointer events (relative, or absolute as a share of the screen). No system calls:
-//! tests/hid_host.rs.
+//! (mind::keys), as virtio_input does for VirtIO keyboards, and the decoder's locks its lights' output report
+//! (000-DRV-0070); a mouse's or tablet's reports, laid out by its report descriptor, become pointer events (relative,
+//! or absolute as a share of the screen). No system calls: tests/hid_host.rs, tests/lock_lights_host.rs.
 use crate::abi::{pointer_absolute, pointer_event, pointer_scroll, POINTER_LEFT, POINTER_RIGHT, POINTER_SCALE};
+use crate::keys::Locks;
 
 /// PS/2 set 1 code of a keyboard-page usage (press; a release adds 0x80): (E0 prefix, code). None for keys without one.
 pub fn scancode(usage: u8) -> Option<(bool, u8)> {
@@ -33,10 +34,19 @@ const MODIFIERS: [(bool, u8); 8] = [(false, 0x1D), (false, 0x2A), (false, 0x38),
 /// Key repeat, which a USB keyboard leaves to the host: after `REPEAT_DELAY_MS`, every `REPEAT_MS`.
 pub const REPEAT_DELAY_MS: u64 = 500;
 pub const REPEAT_MS: u64 = 33;
+// Caps, Scroll and Num Lock: a press toggles its lock once, so they do not repeat (held, one toggled 30 times a second).
+const LOCK_KEYS: [u8; 3] = [0x39, 0x47, 0x53];
 
-/// A boot-protocol keyboard (8-byte reports: modifiers, reserved, six key usages) between reports.
+/// The boot protocol's output report (HID 1.11, appendix B.1): one byte, a light a bit in the LED page's order (Num
+/// Lock 1, Caps Lock 2, Scroll Lock 3; Compose and Kana stay off).
+pub fn lights(locks: Locks) -> u8 { locks.num as u8 | (locks.caps as u8) << 1 | (locks.scroll as u8) << 2 }
+/// SET_REPORT of it to the keyboard's interface: a class request, report type 2 (output), report ID 0.
+pub const LIGHTS_REQUEST: (u8, u8, u16) = (0x21, 0x09, 0x0200);
+
+/// A boot-protocol keyboard (8-byte reports: modifiers, reserved, six key usages) between reports; `lit`: the output
+/// report it was last sent.
 #[derive(Default)]
-pub struct Keyboard { modifiers: u8, keys: [u8; 6], held: Option<u8>, since: u64 }
+pub struct Keyboard { modifiers: u8, keys: [u8; 6], held: Option<u8>, since: u64, lit: Option<u8> }
 
 impl Keyboard {
     pub fn new() -> Self { Self::default() }
@@ -56,7 +66,7 @@ impl Keyboard {
             if self.held == Some(key) { self.held = None; }
         }
         for &key in keys.iter().filter(|&&k| k > 3 && !self.keys.contains(&k)) {
-            if let Some((extended, code)) = scancode(key) { emit(extended, code, out); self.held = Some(key); self.since = now; }
+            if let Some((extended, code)) = scancode(key) { emit(extended, code, out); self.held = (!LOCK_KEYS.contains(&key)).then_some(key); self.since = now; }
         }
         (self.modifiers, self.keys) = (modifiers, keys);
     }
@@ -71,6 +81,13 @@ impl Keyboard {
 
     /// Releases of everything held (the keyboard went away).
     pub fn release_all(&mut self, out: &mut impl FnMut(u8)) { self.feed(&[0; 8], 0, out); self.held = None; }
+
+    /// The output report that makes its lights show `locks`, taken as sent; None when it was sent them already (a
+    /// keyboard just set up gets them at once).
+    pub fn show(&mut self, locks: Locks) -> Option<u8> {
+        let report = lights(locks);
+        (self.lit != Some(report)).then(|| { self.lit = Some(report); report })
+    }
 }
 
 fn emit(extended: bool, code: u8, out: &mut impl FnMut(u8)) { if extended { out(0xE0); } out(code); }

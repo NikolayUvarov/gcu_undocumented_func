@@ -51,15 +51,27 @@ Everything 1.1 did stays.
   and `effector_seqio_v1`, run a slice at a time between heartbeats; the result carries the fields the server's
   `AcceptPerformance` checks. The copy moves two 8 MiB buffers and `memory_latency` chases
   `effector_pointer_chase_v1` over exactly 16 MiB, as on Linux, in the session's 48 MiB quota (750-KRN-0158); a phase
-  whose memory cannot be had is left out. No `cpu_parallel` yet: the session may not start workers. `load` gives the
+  whose memory cannot be had is left out. `cpu_parallel` runs the batch on every CPU at once, on the session's workers (750-KRN-0159) and its own thread, and reports them as `worker_threads`, at most the logical processors; without workers it is left out. `load` gives the
   conditions: a baseline second's busy share, the run's, and the run's less the agent's own, from the gateway's counters.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).
+- **The machine's name (750-EFF-0018, `effector.wit` 1.6).** The heartbeat's `hostname` is the machine's name as `sysmon` answers it (`hostname <name>` in the shell), read again with each telemetry sample. With none set, it is `effector.conf`'s `hostname`, or the machine's own (750-EFF-0017).
+- **Time by the server (801-EFF-0027).** The agent keeps the offset of each answer's `Date` from its own clock, and judges a command's term, the ACK's retries and the journal by the server's time. An RTC in local time, or one hours or years off, then runs every command. The heartbeat's `agent_time` stays the device's own.
+- **The trial's word (801-EFF-0031).** The agent tells `init` how far it got: `started`, `no-network`, `no-tls`, `refused`, then `accepted` on the first heartbeat the server accepts, which confirms a trial boot (801-KRN-0242).
+- **The last heartbeat when `init` stops it (750-EFF-0006).** A worker of the session waits for `init`'s stop notice (`init.wit` 1.12), which `init` takes from any holder of the agent's notice client while the agent runs (750-KRN-0248). On it, the session sends one heartbeat with `system_state` `shutting_down` and ends within the notice's 2 s. A worker `init` refuses tells the session, which logs it; that stop then sends no `shutting_down` heartbeat.
 - **The agent stays reachable (801-EFF-0028).**
-  - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it a new flow grant, so one whose term or volume ran out does not lose the server, and new clients of `tls` and `parse`. It does not end while a measurement runs or the machine restarts on purpose.
+  - With no answer from the server for `restart-after` (300 s unless `effector.conf` says otherwise), the agent ends itself, and `init` starts it again. That gives it new clients of `tls` and `parse` and a new connection, so a restarted service does not lose the server. It does not give a new flow grant: `init` keeps the one it took at boot (MC-3.13), so the owner's `netpolicy` line must cover the whole mode ([README](README.md)). It does not end while a measurement runs or the machine restarts on purpose.
   - Meanwhile the gateway's mark stays grey on the screen. The log says each try and why, and `THE SERVER ANSWERS AGAIN, AFTER N S` once it does.
   - A start that fails waits 31 s before it ends, so `init`'s restart budget (3 in 60 s) never quarantines the agent. Only a deliberate switch-off stops it (801, S5).
+- **When the journal or the audit cannot be written (801-EFF-0032; MC-6.6, MC-10.6).** This mode is stated here before it is needed.
+  - **If `vfs_server` was started again since the agent's start** (its PID in `init`'s list differs), the file clients answer no more. The agent ends, or the gateway for its audit, and `init` starts it with new ones.
+  - **If it is the same `vfs_server`,** the medium is gone or full. A restart could not even read `effector.conf`, so both go on and the heartbeats too:
+    - every command is answered at once, `failed` with `journal`, neither journaled nor run, so a delivery after the restart runs it once;
+    - `reboot` alone, under the owner's `reboot on`, is answered `completed` and asked of `init`. Its record is the system log's line and the server's ACK; a second delivery only restarts the machine again;
+    - the gateway refuses every audited request but that restart, whose audit line is in the system log alone;
+    - the answer the journal failed to keep is still sent.
+  - **The agent logs** `EFFECTOR: THE JOURNAL CANNOT BE WRITTEN (…), vfs_server THE SAME (PID n): …` once, and each answer it gives so.
 - **The server's rules for reservations and runtime** (its `ahelp`, build 229, 2026-10-23):
   - a command's `expires_at` is its term in the server's queue, not a deadline for its run or its report: once delivered,
     its answer is sent until the server takes it or refuses it for good, and the server keeps a late one

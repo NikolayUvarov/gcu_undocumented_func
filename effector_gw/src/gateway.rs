@@ -46,6 +46,8 @@ pub struct Load { pub name: String, pub state: Option<ServiceState>, pub pid: u6
 pub struct Sample {
     pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64,
     pub services: Vec<Load>, pub volumes: Vec<(String, u64, u64)>,
+    /// The machine's name as `sysmon` answers it (`mindcore` when none is set); empty without `sysmon`.
+    pub hostname: String,
 }
 
 /// The updater's view (the IDL's `update-state`, 1.5): its `status` as `update.wit` gives it.
@@ -179,11 +181,16 @@ impl Gateway {
 
     /// The common path of a request from the session: its badge, its deadline, the policy's decision, the audit.
     /// `Ok(())` lets the caller do it; the caller audits the outcome when it differs from `allow`.
+    // Why a request is refused, before its audit; none when it is allowed.
+    fn refusal(&self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, ask: Option<Ask<'_>>) -> Option<Fail> {
+        if badge != Badge::Session { Some(Fail::Denied) }
+        else if o.deadline_ms <= m.uptime_ms() { Some(Fail::Expired) }
+        else if self.policy.is_none() { Some(Fail::NoPolicy) }
+        else { ask.and_then(|a| self.policy.as_ref().unwrap().decide(a).err()).map(deny) }
+    }
+
     fn admit(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, request: &str, ask: Option<Ask<'_>>) -> Result<(), Fail> {
-        let refusal = if badge != Badge::Session { Some(Fail::Denied) }
-            else if o.deadline_ms <= m.uptime_ms() { Some(Fail::Expired) }
-            else if self.policy.is_none() { Some(Fail::NoPolicy) }
-            else { ask.and_then(|a| self.policy.as_ref().unwrap().decide(a).err()).map(deny) };
+        let refusal = self.refusal(m, badge, o, ask);
         let decision = match refusal { None => "allow", Some(f) => fail_name(f) };
         if !self.audited(m, Some(o), request, decision, if refusal.is_none() { "admitted" } else { "refused" }) { return Err(Fail::Audit); }
         refusal.map_or(Ok(()), Err)
@@ -294,8 +301,13 @@ impl Gateway {
     pub fn reboot(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, delay_ms: u32) -> Result<u32, Fail> {
         let request = alloc::format!("reboot in {} ms", delay_ms);
         if delay_ms > 600_000 { let _ = self.audited(m, Some(o), &request, "bounds", "refused"); return Err(Fail::Bounds); }
-        self.admit(m, badge, o, &request, Some(Ask::Reboot))?;
-        Ok(delay_ms)
+        match self.admit(m, badge, o, &request, Some(Ask::Reboot)) {
+            // MC-10.6's mode for an audit that cannot be written, stated before it is needed (801-EFF-0032): every audited
+            // request is refused but the restart, which recovers the machine; its line is in the system log alone, as
+            // `Machine::audit` writes it there before the file. `init` decides it again under the owner's policy.
+            Err(Fail::Audit) if self.refusal(m, badge, o, Some(Ask::Reboot)).is_none() => Ok(delay_ms),
+            r => r.map(|()| delay_ms),
+        }
     }
 
     /// The restart `reboot` admitted: `init` checks the owner's policy again and restarts the machine, or refuses.

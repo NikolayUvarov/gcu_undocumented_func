@@ -91,6 +91,7 @@ const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; l
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
+const EFFECTOR_CONF: &str = "data/effector/effector.conf"; // the owner's server for the agent (801-KRN-0242)
 // The services that need the device key, and the store's file face after the store: where keystore holds the key sealed
 // under the owner's passphrase (308-NET-0055), they are prepared at boot and started once it is typed (308-KRN-0205).
 const KEYED: [&str; 5] = ["blockstore", "storefs", "wlan", "tls", "ssh"];
@@ -99,6 +100,12 @@ const NN_MODELS_DIR: &str = "data/models"; // the owner's models on the boot vol
 // nnd's task quota with its line: a ceiling on its live workers, which the kernel bounds by the online CPUs too; init
 // starts before the other CPUs and cannot count them (262-KRN-0178).
 const NND_TASKS: u16 = 32;
+// The units that start only with a flow the policy names (801-KRN-0250), how often init looks whether a line names one
+// it did not start, and how many pages of 16 lines it reads at most.
+const FLOW_ONLY: [&str; 3] = ["timed", "httpd", "sshd"];
+const FLOW_LOOK_MS: usize = 30_000;
+const POLICY_PAGES_MAX: usize = 64;
+const POLICY_LOOK_MS: u32 = 1000;
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -184,10 +191,22 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               test_key: bool,
               // A safe start, after an unfinished run or asked at the bootloader: link gets no input (800-KRN-0191).
               safe: bool,
+              // When init last looked for a policy line naming a unit it did not start for want of one (801-KRN-0250).
+              flow_looked: usize,
+              // The owner's Effector policy last read whole and parsed, and when: it decides the gateway's lifecycle
+              // requests and reboot while the file cannot be read (801-KRN-0251).
+              owner_kept: Option<(Policy, usize)>,
               // The held `stop-notice` call of each service that asked, answered when init decides to stop it (750-KRN-0194).
               notices: [Option<wire::Call>; UNITS],
               // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
-              power: mind::platform_power::Policy }
+              power: mind::platform_power::Policy,
+              // A trial that waits for the Effector server's word (801-KRN-0242).
+              trial: Trial }
+
+// A trial held for the Effector agent's word (801-KRN-0242): READY's time, the agent's last step and its detail, and
+// when a refused trial restarts the machine.
+#[derive(Default)]
+struct Trial { ready: usize, step: Option<idl_init::AgentStep>, detail: mind::util::FixedBuf<64>, restart_at: Option<usize> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -201,6 +220,11 @@ fn unit_image(unit: usize) -> (usize, usize) {
 // Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
 const RESTART_BUDGET: usize = 3;
 const RESTART_WINDOW_MS: u64 = 60_000;
+// A trial where the Effector agent runs with a server configured is confirmed on that server's accepted heartbeat, within
+// this long of READY, and refused otherwise (801-KRN-0242, MC-9.9); a refused trial restarts the machine into the slot
+// before this long after, unless the updater, which spends the trial first, asks sooner.
+const TRIAL_CONNECT_MS: usize = 600_000;
+const REFUSED_RESTART_MS: usize = 30_000;
 // A service its restart budget quarantined is started again after a cool-down, 1 min doubling to 30 min, so that none on
 // the path to the Effector server stays down for good (801-KRN-0245); one start a cool-down keeps MC-6.5's bound.
 const COOL_FIRST_MS: usize = 60_000;
@@ -244,6 +268,69 @@ impl Init {
         let slot = slot?;
         minted.slots[minted.count] = slot; minted.count += 1;
         Some(slot)
+    }
+    // Which of `programs` a line of the policy in force is for (a rule, `listen` or `browse` line naming it, as the broker
+    // reads them), read through `lines` (netpolicy.wit 1.1), which the broker does not log: init asks for a grant again
+    // only once one is (801-KRN-0250). Each call waits POLICY_LOOK_MS at most, as these looks are init's own, between its
+    // lifecycle work: a broker that does not answer gives None, and costs init no more than that.
+    fn policy_names<const N: usize>(&mut self, programs: [&str; N]) -> Option<[bool; N]> {
+        if !self.running(service_index("netpolicy")) { return None; }
+        let client = self.keeper("netpolicy").ok().and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).ok())?;
+        let (mut start, mut named, mut answered) = (0, [false; N], false);
+        for _ in 0..POLICY_PAGES_MAX {
+            let Ok(page) = wire::with_timeout(POLICY_LOOK_MS, || netpolicy::lines(Endpoint(client), start)) else { break };
+            answered = true;
+            for line in page.as_slice() {
+                let line = line.as_str().split('#').next().unwrap_or("").trim();
+                let owner = mind::network::browse_line(line).map(|l| l.0).or_else(|| mind::network::listen_line(line).map(|l| l.0));
+                let Some(owner) = owner.or_else(|| line.split_ascii_whitespace().next()) else { continue };
+                for (i, program) in programs.iter().enumerate() { named[i] |= owner.eq_ignore_ascii_case(program); }
+            }
+            if page.len() < 16 { break; }
+            start += page.len() as u32;
+        }
+        let _ = ipc::drop_cap(client);
+        answered.then_some(named)
+    }
+    // A unit that takes a flow when the policy names one and started without (the effector agent, the updater): at each
+    // later start a line added since gets it its grant, kept from then on as one given at the first (801-KRN-0250).
+    fn late_flow(&mut self, index: usize, plan: &mut Plan) {
+        let name = unit_name(index);
+        if !matches!(name, "effector" | "updater") || plan.grants.count >= SPAWN_GRANTS_MAX { return; }
+        if plan.grants.list[..plan.grants.count].iter().any(|g| g.child as usize == SLOT_NETWORK) || self.policy_names([name]) != Some([true]) { return; }
+        let mut minted = Minted::new();
+        let Some(flow) = self.flow(&mut minted, name) else { return };
+        minted.count = 0; // kept for restarts
+        plan.grants.add(SLOT_NETWORK, flow, CLIENT);
+        self.plans[index] = Some(*plan);
+        mind::println!("[INIT] {}: A NETWORK GRANT AT THIS START, FROM A LINE THE POLICY GAINED SINCE ITS FIRST", name);
+    }
+    // A unit that starts only with a flow (timed, httpd, sshd) and was not started because the policy named nothing for it.
+    fn waits_flow(&self, index: usize) -> bool {
+        index != 0 && self.missing[index] && self.placed[index].off == Off::NoDevice && self.plans[index].is_none() && !self.stopped[index] && !self.running(index)
+    }
+    fn flowless(&self) -> bool { FLOW_ONLY.iter().any(|&name| self.waits_flow(service_index(name))) }
+    // Each such unit started once a line names it, looked at every FLOW_LOOK_MS; a start that fails is not tried again
+    // until `svc start` (801-KRN-0250).
+    fn flows_named(&mut self) {
+        let now = mind::time::uptime_ms();
+        if now.wrapping_sub(self.flow_looked) < FLOW_LOOK_MS || !self.flowless() { return; }
+        self.flow_looked = now;
+        let Some(named) = self.policy_names(FLOW_ONLY) else { return };
+        for (name, named) in FLOW_ONLY.into_iter().zip(named) {
+            let index = service_index(name);
+            if !self.waits_flow(index) || !named { continue; }
+            match self.start(index) {
+                Ok(pid) => {
+                    (self.missing[index], self.placed[index].off) = (false, Off::No);
+                    mind::println!("[INIT] {} STARTED PID={}: THE POLICY NAMES IT NOW", name, pid);
+                }
+                Err(error) => {
+                    self.placed[index].off = Off::Failed;
+                    mind::println!("[INIT] {} NOT STARTED THOUGH THE POLICY NAMES IT NOW: {:?}", name, error);
+                }
+            }
+        }
     }
     // The block store's own disk (300-KRN-0025) and its copy's (309-KRN-0209): the first and the next VirtIO disk that is
     // blank or starts with the store's superblock; looked at once, through a client of init's own, before vfs_server or
@@ -537,14 +624,16 @@ impl Init {
     fn start(&mut self, index: usize) -> Result<u64> {
         let name = unit_name(index);
         if index == 0 || self.running(index) { return Err(Error::Other(ERR_BUSY)); }
-        if let Some(plan) = self.plans[index] {
-            // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
+        if let Some(mut plan) = self.plans[index] {
+            // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted, and
+            // a flow the policy names since (801-KRN-0250).
             if let Some(device) = self.devices[index] {
                 if matches!(services::base(name), "rtl8168" | "rtw89_wifi" | "rtw88_wifi") {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
             if let Some(device) = self.others[index] { platform::resume(device)?; }
+            self.late_flow(index, &mut plan);
             let pid = self.spawn(index, plan)?;
             // A block driver started again holds no window: the store's is set again once its partition is checked (307-KRN-0177).
             if let Some(store) = self.store_part.flatten().filter(|store| store.driver == name) { self.store_window_again(store); }
@@ -791,8 +880,8 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
             }
-            // The link to another machine (800-KRN-0128), started only with link.conf at the boot volume's root: the
-            // serial converters' driver holds usb_host's client badged for them, and its endpoint.
+            // The link to another machine (800-KRN-0128), started whether or not the boot volume holds link.conf (801-KRN-0247):
+            // the serial converters' driver holds usb_host's client badged for them, and its endpoint.
             "usb_serial" => {
                 if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
                 grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_SERIAL)?, CLIENT);
@@ -819,10 +908,11 @@ impl Init {
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
                 let words = core::str::from_utf8(&words[..length]).unwrap_or("");
                 let _ = core::fmt::Write::write_str(&mut args, words);
-                // Developer mode, link.conf's word `dev` (800-KRN-0139, the maintainer's decision of 2026-10-21): what the
-                // shell lends its programs without asking, so whoever holds the cable may debug the machine as its user.
-                // The servers start after link: their keepers are made now and reached once they run.
-                if self.link_dev() {
+                // The cable's clients at every start (801-KRN-0247, the maintainer's decision of 2026-11-14: the cable is
+                // physical access, and no word on the disk narrows it): what the shell lends its programs without asking, so
+                // whoever holds the cable may debug and restore the machine as its user. The servers start after link: their
+                // keepers are made now and reached once they run.
+                {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                     // The policy broker's client that may only launch (800-KRN-0142): link has no user to ask before a change.
                     grants.add(SLOT_NETPOLICY, self.badged(&mut minted, "netpolicy", mind::network::BADGE_LAUNCH)?, CLIENT);
@@ -834,7 +924,7 @@ impl Init {
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
                     // Keys and the pointer from the cable (800-KRN-0191); not in a safe start, whose asker is at the machine.
                     if !self.safe { grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0); }
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
+                    mind::println!("[INIT] link: THE CABLE'S CLIENTS (801-LNK-0044): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}{}/ TO WRITE",
                                    if self.safe { "NO INPUT IN A SAFE START; " } else { "INPUT; " }, FIRMWARE_DIR);
                 }
             }
@@ -1339,6 +1429,9 @@ impl Init {
                 }
                 // keystore's client that types the owner's passphrase, the shell's alone (308-KRN-0205).
                 if self.present("keystore") { grants.add(SLOT_PASSPHRASE, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_PASSPHRASE)?, CLIENT); }
+                // The Effector gateway's owner client, the shell's alone (801-KRN-0246): status, reload-policy and audit, no action.
+                // Its endpoint is kept, so this one reaches each start of the gateway and answers ERR_PEER while no mode runs it.
+                grants.add(SLOT_EFFECTOR, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_OWNER)?, CLIENT);
                 // storefs's client that writes, as vfs_server's does (BADGE_USER); the shell lends it on (311-KRN-0190).
                 if self.present("storefs") { grants.add(SLOT_STOREFS, self.badged(&mut minted, "storefs", mind::fs::BADGE_USER)?, CLIENT); }
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
@@ -1423,9 +1516,9 @@ impl Init {
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
             }
         }
-        // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
-        // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
-        if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
+        // link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file goes over the cable,
+        // not by writing the disk again (800-KRN-0173, for 800-LNK-0027; at every start since 801-KRN-0247). The user's badge writes there.
+        if name == "link" && grants.count < SPAWN_GRANTS_MAX {
             match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true, true) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
@@ -1688,7 +1781,7 @@ impl Init {
                 Off::NoImage => core::fmt::Write::write_str(&mut off, "no image"),
                 Off::Safe => core::fmt::Write::write_str(&mut off, "safe start"),
                 Off::Mode => core::fmt::Write::write_str(&mut off, "mode"),
-                Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"),
+                Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"), // the line link.conf did not choose (init.wit)
                 Off::Failed => core::fmt::Write::write_str(&mut off, "failed"),
                 Off::Passphrase => core::fmt::Write::write_str(&mut off, "passphrase"),
             };
@@ -1746,15 +1839,27 @@ impl Init {
                 idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
             }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
-            // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
+            // Answered at once: a trial that waits for the Effector server says so (801-KRN-0242).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
+            // Only the running agent's own client says how far it got (801-KRN-0242).
+            Request::AgentStep { step, detail } => {
+                // BADGE_NOTICE is the agent's alone, lent only to its own worker (750-KRN-0159), which may make the call.
+                let agent = Self::index("effector").is_some_and(|i| self.running(i));
+                if badge != mind::process::BADGE_NOTICE || !agent {
+                    return idl_init::reply_agent_step(call, Err(refused(sender, badge, "AGENT-STEP", format_args!("SPEAK FOR THE EFFECTOR AGENT"), "MC-3.4")));
+                }
+                self.agent_said(step, detail.as_str());
+                idl_init::reply_agent_step(call, Ok(()))
+            }
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
             Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
             Request::BootPlan => idl_init::reply_boot_plan(call, Ok(&self.boot_plan()[..])),
             Request::Configuration => idl_init::reply_configuration(call, Ok(self.configuration)),
             // A running boot service asks to be told before it is stopped: the call is held until then (750-KRN-0194).
             Request::StopNotice => {
-                let Some(index) = (1..UNITS).find(|&i| self.pids[i] == sender && self.running(i)) else {
+                // The Effector agent's call may come from its worker, which holds its BADGE_NOTICE copy (750-KRN-0248).
+                let agent = (badge == mind::process::BADGE_NOTICE).then(|| Self::index("effector")).flatten().filter(|&i| self.running(i));
+                let Some(index) = agent.or_else(|| (1..UNITS).find(|&i| self.pids[i] == sender && self.running(i))) else {
                     return idl_init::reply_stop_notice(call, Err(E::Denied));
                 };
                 let mut call = call;
@@ -1817,10 +1922,7 @@ impl Init {
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
 
-    // The link's developer mode: link.conf's word `dev`, as the bootloader read it (800-KRN-0139).
-    fn link_dev(&self) -> bool { self.link_word("dev") }
-
-    // Whether link.conf, as the bootloader read it, has `word` (`dev`, `uart`).
+    // Whether link.conf, as the bootloader read it, has `word` (`uart`); none without the file.
     fn link_word(&self, word: &str) -> bool {
         let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
         let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
@@ -1828,26 +1930,102 @@ impl Init {
     }
 
     // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
-    // too large or refused, which allows nothing.
-    fn effector_policy(&mut self) -> Option<Policy> {
-        let mut text = [0u8; mind::effector::policy::FILE_MAX + 1];
-        let mut length = 0;
-        let client = self.user_files().ok()?;
-        let files = Endpoint(client);
-        if let Ok(Ok(root)) = vfs::root(files, "") {
-            if let Ok(Ok(file)) = vfs::open(files, root, mind::effector::POLICY_FILE, 0) {
-                while length < text.len() {
-                    match vfs::read(files, file, length as u32, (text.len() - length) as u32, &mut text[length..]) {
-                        Ok(Ok(n)) if n > 0 => length += n,
-                        _ => break,
-                    }
-                }
-                let _ = vfs::close(files, file);
+    // too large, refused or cannot be read now, which allows nothing. One read whole and parsed is kept, and an absent or
+    // unparsable file drops it (801-KRN-0251).
+    fn effector_policy(&mut self) -> Option<Policy> { let read = self.read_effector_policy(); self.decided_by(read, false) }
+    // The same for the gateway's lifecycle requests and its reboot (801-KRN-0251): when the file cannot be read now (the
+    // boot disk gone, an I/O error, vfs_server not answering), the last one read whole and parsed decides, and the log says
+    // so. So the owner's `reboot on` still restarts a machine whose disk was taken out, and nothing the owner removed
+    // from a file that reads is allowed by an older copy.
+    fn owner_policy(&mut self) -> Option<Policy> { let read = self.read_effector_policy(); self.decided_by(read, true) }
+    fn decided_by(&mut self, read: Owner, kept: bool) -> Option<Policy> {
+        match read {
+            Owner::Policy(policy) => { self.owner_kept = Some((policy, mind::time::uptime_ms())); Some(policy) }
+            Owner::None => { self.owner_kept = None; None }
+            Owner::Unreadable if kept => {
+                let (policy, at) = self.owner_kept?;
+                mind::println!("[INIT] THE OWNER'S POLICY CANNOT BE READ NOW: THE ONE READ AT {} S DECIDES", at / 1000);
+                Some(policy)
             }
+            Owner::Unreadable => None,
+        }
+    }
+    #[inline(never)]
+    fn read_effector_policy(&mut self) -> Owner {
+        let mut text = [0u8; mind::effector::policy::FILE_MAX + 1];
+        let Ok(client) = self.user_files() else { return Owner::Unreadable };
+        let files = Endpoint(client);
+        let read = read_policy_file(files, &mut text);
+        let _ = ipc::drop_cap(client);
+        match read {
+            Some(Some(length)) => Policy::parse(&text[..length]).map_or(Owner::None, Owner::Policy),
+            Some(None) => Owner::None,
+            None => Owner::Unreadable,
+        }
+    }
+
+    // Whether the Effector agent runs with a server configured (801-KRN-0242): a mode on, the agent in this build and
+    // the owner's data/effector/effector.conf on the disk, whatever this release makes of it.
+    fn agent_configured(&mut self) -> bool {
+        if !(self.modes.development || self.modes.maintenance) || Self::index("effector").is_none() { return false; }
+        let Ok(client) = self.user_files() else { return false };
+        let files = Endpoint(client);
+        let mut present = false;
+        if let Ok(Ok(root)) = vfs::root(files, "") {
+            if let Ok(Ok(file)) = vfs::open(files, root, EFFECTOR_CONF, 0) { present = true; let _ = vfs::close(files, file); }
             let _ = vfs::close(files, root);
         }
         let _ = ipc::drop_cap(client);
-        Policy::parse(&text[..length]).ok()
+        if !present { mind::println!("[INIT] NO {}: THE TRIAL DOES NOT WAIT FOR AN EFFECTOR SERVER", EFFECTOR_CONF); }
+        present
+    }
+
+    // The Effector agent's word (init.wit 1.13 `agent-step`): logged when the step changes; `accepted` confirms a trial
+    // that waits for it (801-KRN-0242).
+    fn agent_said(&mut self, step: idl_init::AgentStep, detail: &str) {
+        if self.trial.step != Some(step) || self.trial.detail.as_str() != detail {
+            mind::println!("[INIT] THE EFFECTOR AGENT: {}{}{}", step_name(step), if detail.is_empty() { "" } else { ": " }, detail);
+        }
+        self.trial.step = Some(step);
+        self.trial.detail = mind::util::FixedBuf::new();
+        let _ = core::fmt::Write::write_str(&mut self.trial.detail, detail);
+        if step == idl_init::AgentStep::Accepted && self.boot.deciding {
+            (self.boot.deciding, self.boot.confirmed) = (false, true);
+            mind::println!("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT {} S AFTER READY", (mind::time::uptime_ms() - self.trial.ready) / 1000);
+        }
+    }
+
+    // A trial that waits for the Effector server (801-KRN-0242), looked at each tick: refused once the agent is
+    // quarantined or the bound passed, and the machine restarted after a refusal; confirmed as before the wait if the
+    // owner turned the modes off, which stops the agent.
+    fn trial_due(&mut self) {
+        let now = mind::time::uptime_ms();
+        if self.trial.restart_at.is_some_and(|at| now >= at) {
+            mind::println!("[INIT] THE REFUSED TRIAL: RESTARTING INTO THE SLOT BEFORE");
+            self.reboot();
+        }
+        if !self.boot.deciding { return; }
+        if !(self.modes.development || self.modes.maintenance) {
+            (self.boot.deciding, self.boot.confirmed) = (false, true);
+            return mind::println!("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR MODES WERE TURNED OFF; EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED");
+        }
+        let mut why = mind::util::FixedBuf::<96>::new();
+        let agent = Self::index("effector");
+        if agent.is_some_and(|i| self.quarantined[i]) {
+            let _ = core::fmt::Write::write_str(&mut why, "THE EFFECTOR AGENT DID NOT KEEP RUNNING: QUARANTINED");
+        } else if now - self.trial.ready >= TRIAL_CONNECT_MS {
+            let _ = core::fmt::Write::write_fmt(&mut why, format_args!("NO HEARTBEAT ACCEPTED IN {} S: ", TRIAL_CONNECT_MS / 1000));
+            match self.trial.step {
+                None => { let _ = core::fmt::Write::write_str(&mut why, "THE AGENT SAID NOTHING"); }
+                Some(step) => { let _ = core::fmt::Write::write_fmt(&mut why, format_args!("{} {}", step_name(step), self.trial.detail.as_str())); }
+            }
+        } else {
+            return;
+        }
+        self.boot.deciding = false;
+        self.boot.why = wire_text(why.as_str());
+        self.trial.restart_at = Some(now + REFUSED_RESTART_MS);
+        mind::println!("[INIT] TRIAL BOOT REFUSED: {}; THE MACHINE RESTARTS INTO THE SLOT BEFORE WITHIN {} S", why.as_str(), REFUSED_RESTART_MS / 1000);
     }
 
     // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
@@ -1860,7 +2038,7 @@ impl Init {
         }
         if badge != mind::process::BADGE_NAMED { return true; }
         let name = unit_name(index);
-        let why = match self.effector_policy() {
+        let why = match if Self::kept(index) { None } else { self.owner_policy() } {
             _ if Self::kept(index) => Some("KEPT BY INIT"),
             None => Some("NO OWNER'S POLICY"),
             Some(policy) => match policy.decide(Ask::Service(name, action)) {
@@ -1879,7 +2057,7 @@ impl Init {
     // The gateway's named client restarts the machine only when the owner's policy says `reboot on`, read at the request.
     fn named_reboot(&mut self, sender: u64) -> bool {
         let badge = mind::process::BADGE_NAMED;
-        let why = match self.effector_policy() {
+        let why = match self.owner_policy() {
             None => Some("NO OWNER'S POLICY"),
             Some(policy) => policy.decide(Ask::Reboot).err().map(|_| "NOT IN THE OWNER'S POLICY"),
         };
@@ -1908,12 +2086,6 @@ impl Init {
         }
         // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
         if MODE_SERVICES.contains(&name) { self.placed[index].off = Off::Mode; return true; }
-        // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
-        if matches!(name, "usb_serial" | "uart_serial" | "link") && self.link.is_none() {
-            self.missing[index] = true; self.placed[index].off = Off::NoLink;
-            mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name);
-            return true;
-        }
         // The link's line: the console UART through uart_serial with link.conf's `uart`, else a USB converter (100000-KRN-0221).
         if matches!(name, "usb_serial" | "uart_serial") && (name == "uart_serial") != self.link_word("uart") {
             self.missing[index] = true; self.placed[index].off = Off::NoLink;
@@ -2010,9 +2182,8 @@ impl Init {
             match word {
                 "development" => modes.development = true,
                 "maintenance" => modes.maintenance = true,
-                // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
-                "link-console" if self.link_dev() => self.link_console = true,
-                "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
+                // The link's console (800-KRN-0155): the owner's word, whatever link.conf says (801-KRN-0247).
+                "link-console" => self.link_console = true,
                 // The owner's permissions (751-KRN-0185), each counted below only with what it needs.
                 "remote-update" => modes.remote_update = true,
                 "link-remote-update" => modes.link_remote_update = true,
@@ -2156,7 +2327,41 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
     idl_init::Error::Denied
 }
 
+// The Effector agent's step as init.wit names it (801-KRN-0242).
+fn step_name(step: idl_init::AgentStep) -> &'static str {
+    match step {
+        idl_init::AgentStep::Started => "started",
+        idl_init::AgentStep::NoNetwork => "no-network",
+        idl_init::AgentStep::NoTls => "no-tls",
+        idl_init::AgentStep::Refused => "refused",
+        idl_init::AgentStep::Accepted => "accepted",
+    }
+}
+
 // Why a service whose plan found nothing to drive is not started: its device, or for timed its time servers.
+// What reading data/effector/policy gave (801-KRN-0251): a policy, no policy (absent or unparsable), or no answer now.
+enum Owner { Policy(Policy), None, Unreadable }
+
+// The policy file read whole into `text` through `files`: Some(Some(length)), Some(None) when it is absent, None when the
+// volume, the file or a read fails otherwise (801-KRN-0251).
+fn read_policy_file(files: Endpoint, text: &mut [u8]) -> Option<Option<usize>> {
+    let root = match vfs::root(files, "") { Ok(Ok(root)) => root, _ => return None };
+    let opened = vfs::open(files, root, mind::effector::POLICY_FILE, 0);
+    let _ = vfs::close(files, root);
+    let file = match opened { Ok(Ok(file)) => file, Ok(Err(vfs::Error::NotFound)) => return Some(None), _ => return None };
+    let mut length = 0;
+    let mut failed = false;
+    while length < text.len() {
+        match vfs::read(files, file, length as u32, (text.len() - length) as u32, &mut text[length..]) {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => length += n,
+            _ => { failed = true; break; }
+        }
+    }
+    let _ = vfs::close(files, file);
+    (!failed).then_some(Some(length))
+}
+
 fn not_found(name: &str) -> &'static str {
     match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
 }
@@ -2337,10 +2542,10 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], cool: [(0, 0); UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None, store_part: None,
                          vfs_parts: [None; VFS_PARTS], vfs_whole: [false; UNITS], boot_volume: info.boot_volume,
                          link: (info.link_present != 0).then_some(info.link_words),
-                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
+                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, ..Default::default() },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
-                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, notices: [const { None }; UNITS],
-                         power: hardware::power_policy(), nodes: hardware::Nodes::default() };
+                         configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, owner_kept: None, notices: [const { None }; UNITS],
+                         power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default() };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
@@ -2389,14 +2594,26 @@ fn boot(info: &'static BootInfo) {
     // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
     // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
-    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
+    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); init.boot.log = hardware::boot_log(keeper); }
     let mounted = mounted.unwrap_or_else(|| wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted()));
     // The machine's modes, once the boot volume is there; the Effector services follow them (750-KRN-0143).
     if mounted { init.read_modes(); init.follow_modes(); }
+    // Where the Effector agent runs with a server configured, the kernel's deadline is lifted the same way, but the trial
+    // waits for the server's accepted heartbeat (801-KRN-0242): a release that cannot reach it is not a working one.
     if healthy && mounted {
-        if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
+        if platform::confirm_boot() == Ok(true) {
+            if init.agent_configured() {
+                init.boot.deciding = true;
+                mind::println!("[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS THE AGENT'S HEARTBEAT, WITHIN {} S OF READY", TRIAL_CONNECT_MS / 1000);
+            } else {
+                init.boot.confirmed = true;
+                mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED");
+            }
+        }
     } else if info.boot_slot.trial != 0 {
-        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
+        let why = if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" };
+        init.boot.why = wire_text(why); // the reason the updater keeps (801-UPD-0037)
+        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", why);
     }
     // The power button (000-KRN-0216): its ports and the SCI taken while the platform privilege allows it.
     let button = power_button();
@@ -2406,15 +2623,21 @@ fn boot(info: &'static BootInfo) {
     }
     mind::println!("[INIT] READY");
     let ready = mind::time::uptime_ms();
+    init.trial.ready = ready;
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
         // A look every second too while keyed services wait for the passphrase (308-KRN-0205).
-        // And while a quarantined service waits for its cool-down (801-KRN-0245).
-        let ticks = mark.is_some() || init.passphrase_waits() || init.cool.iter().any(|&(at, _)| at != 0);
-        let received = if ticks { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        // And while a trial waits for the Effector server, or a refused one for its restart (801-KRN-0242), or a quarantined
+        // service for its cool-down (801-KRN-0245).
+        let ticks = mark.is_some() || init.passphrase_waits() || init.boot.deciding || init.trial.restart_at.is_some() || init.cool.iter().any(|&(at, _)| at != 0);
+        // And every FLOW_LOOK_MS while a unit waits for a policy line naming it (801-KRN-0250).
+        let received = if ticks { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) }
+            else if init.flowless() { Endpoint::SERVICE.recv_timeout(RECEIVED, FLOW_LOOK_MS as u32) } else { Endpoint::SERVICE.recv(RECEIVED) };
         init.key_opened();
         init.cooled();
+        init.flows_named();
+        init.trial_due();
         if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
             let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
             let _ = ipc::drop_cap(f);
