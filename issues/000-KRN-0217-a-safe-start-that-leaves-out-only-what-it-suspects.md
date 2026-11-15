@@ -88,6 +88,11 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
 - the trial kernel's 15 s deadline restarted slot B before `init` held it, on i9;
 - the trial check typed `ps` while the refused trial restarted, on x32.
 
+**Landed in round 140** (`main` `e919c24512`, 2026-11-15). The gate was green on the pool, with one failure on i9 that was not this task's:
+- **The failure:** x86: network, TLS and Effector. The Effector agent was killed after `init`'s stop notice, 5 s after its restart. A request the suite's outage had left hanging held its pass past the notice's 2 s.
+- **Whose:** the agent's, and EFF took it as 801-EFF-0036. Neither `init`'s notice nor the agent changed in this task.
+- **The repeat:** the group alone on x32 passed, in 1671 s.
+
 **Left:**
 - a panic as evidence (step 3), not done;
 - a bench machine's run;
