@@ -74,3 +74,12 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
+
+## KRN's request (2026-11-15): `init`'s confirmation asserted in the `effector-update` suite
+
+For [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), criterion 2 (801, S1).
+
+- **What is shown now:** in round 139's gate, both `effector-update` suites passed (x86 on i9, aarch64 on acc-1). Their trial of release 6, with the mode on and `data/effector/effector.conf` on the disk, was confirmed.
+- **What is not shown yet:** that `init` confirmed it on the agent's `accepted`. With a server configured that is `init`'s only way, but the suite does not check it.
+- **The request:** once the trial is confirmed, the suite checks `init`'s log (`dmesg -s init`) for `[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT`, on both arches.
+- **Blocks:** 801-KRN-0242's close.
