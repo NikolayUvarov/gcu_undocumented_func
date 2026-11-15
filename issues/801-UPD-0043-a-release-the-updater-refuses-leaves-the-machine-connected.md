@@ -30,6 +30,22 @@
 - The `rollback` suites, x86 and aarch64, pass with the refused bundle first.
 - The gate passes.
 
+## Progress (2026-11-15)
+
+**Made** on `claude/801-UPD-0043-a-refused-release-keeps-the-machine-connected`: `tests/qemu_smoke.py`'s `refused_release`, called by the `rollback` suite before release 6 is sent.
+- **The first runs** (`ca479e8c1e`) expected `signature`. The updater refused the bundle as `digest`: the timestamp names the channel file by SHA-256 (351-UPD-0028), so a changed channel is refused before its signature is read. The check now expects that, and the updater's line `… NAMES ANOTHER FILE THAN channels/stable`.
+- **On `95fff7af36`:**
+  - i9: `x86: a release that loses the server, rolled back` passed in 767 s;
+  - acc-2: `aarch64: a release that loses the server, rolled back` passed in 760 s.
+- **What the runs show:**
+  - the whole bundle (28.8 MB on aarch64) was downloaded through the agent;
+  - it was refused, and the command was answered failed (digest);
+  - `update status` read the same before and after;
+  - the next heartbeat was accepted;
+  - then release 6 as published took the suite's old path.
+
+**Left:** the gate.
+
 ## Related
 
 - [801](801-the-bench-stays-manageable.md), S4
