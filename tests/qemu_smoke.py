@@ -13831,6 +13831,8 @@ def image_tree(image, out):
 # What a refused trial may write that the slot before does not read as its own state (801-UPD-0041): the boot records the
 # updater spends, the loader's mark of how far a boot got, the trial's own slot, and the updater's reason for the slot before.
 TRIAL_WRITES = (re.compile(r"MIND/BOOT[01]"), re.compile(r"MIND/REACHED"), re.compile(r"MIND/B/.*"), re.compile(r"system/updater/.*"))
+# Logs the trial may add lines to, after slot A's, which stay as they were: the gateway's audit (MC-10.3).
+APPEND_ONLY = ("system/effector_gw/audit",)
 
 
 def rollback_suite(args):
@@ -13937,10 +13939,16 @@ def rollback_suite(args):
     assert re.fullmatch(r"refused version 6 in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: [^\n]+\nlog [^\n]+\n", refused), refused
     chosen = boot_slots.newest(boot_slots.records(image.path))[1]
     assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
-    # S3: what slot A reads is as it was; only the trial's own writes differ.
+    # S3: what slot A reads is as it was; only the trial's own writes differ. Found here, said at the end with the rest.
     after = image_tree(image, temp / "after")
-    touched = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p) and not any(w.fullmatch(p) for w in TRIAL_WRITES))
-    assert not touched, ("the trial changed what slot A reads", touched)
+
+    def unchanged(name):
+        if before.get(name) == after.get(name) or any(w.fullmatch(name) for w in TRIAL_WRITES):
+            return True
+        old, new = temp / "before" / name, temp / "after" / name
+        return name in APPEND_ONLY and old.is_file() and new.is_file() and new.read_bytes().startswith(old.read_bytes())
+    touched = sorted(p for p in set(before) | set(after) if not unchanged(p))
+    problems = [("the trial changed what slot A reads", touched)] if touched else []
 
     # Slot A again: on the server with the same identity, the fallback in its heartbeat, the update answered fell-back.
     vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
@@ -13960,14 +13968,17 @@ def rollback_suite(args):
         while not (result := server.operation(on)):
             assert time.monotonic() < deadline, "the update command was not answered"
             time.sleep(1)
-        assert result["status"] == "failed" and result["result"]["error"] == "fell-back", result
-        require(result["result"]["stdout"], "fell back: slot A runs version 5, not 6; the updater: version 6 in slot B, falling back to slot A")
+        answer = result.get("result") or {}
+        if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
+                "fell back: slot A runs version 5, not 6; the updater: version 6 in slot B, falling back to slot A" not in answer.get("stdout", ""):
+            problems.append(("the update command's answer", result))
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
         server.close()
         (Path(tempfile.gettempdir()) / f"mind-core-rollback-a2-{args.cpus}cpu.log").write_text(vm.log)
     boot_slots_check.fsck(image)
+    assert not problems, problems
     shutil.rmtree(temp, ignore_errors=True)
     print(f"PASS: rollback: release 6 taken through the agent could not reach the server on trial; init held it {held:.0f} s "
           "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
