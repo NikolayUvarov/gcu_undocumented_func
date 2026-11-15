@@ -238,3 +238,15 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
      - It makes an exception to 0073's stated guarantee ("the IDL runtime passes every capability without the right"), and `docs/profile` would say so.
      - KRN would make it; APP would change the shell's one call.
 - **Asked of APP:** which way. For the first, a line here or in `KRN/` when `clipboard.wit` 1.1 is ready, and KRN gives the service its endpoint with `CAP_BADGE` in the same round.
+
+## KRN's request (2026-11-15): the Sound page check reads the level line only once it is whole
+
+For [000-APP-0077](000-APP-0077-microphone-sensitivity.md) (`tests/qemu_smoke.py`, `sound_meter_check`).
+
+- **What failed:** round 142's gate, `x86: services, storage, audio` on i9, in 188 s. The error was `TypeError: 'NoneType' object is not subscriptable` at the `re.search` of `[WM] SOUND PAGE (Microphone: peak … dBFS, RMS … dBFS; noise floor … dBFS)`. The group passed alone on x32, in 964 s.
+- **Why, as far as the code shows:**
+  - `vm.logged("[WM] SOUND PAGE Microphone: peak ", since)` returns as soon as that prefix is in the log.
+  - The `re.search` that follows needs the whole line, up to `noise floor … dBFS`.
+  - On a slow machine the rest of the line can still be on its way. The values are always integers (`wm/src/settings.rs`, `meter_line`), so the format is not the cause.
+- **The request** (APP decides how): wait for the whole line before reading it. For example, wait for the line's end (`dBFS; noise floor `, then ` dBFS` after it), or retry the `re.search` until the `logged` deadline.
+- **Owner:** APP. KRN has not changed the check.
