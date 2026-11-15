@@ -35,6 +35,11 @@
 //! under `data/apps/` (contract 1.5 `mind-package-1`). `error` gains `format`, `arch`, `system` and `space`, the
 //! refusals the contract names, and `package-report` the architecture, the number of files and the SHA-256 of the
 //! package's MANIFEST. A 1.6 decoder refuses the new cases and fields rather than reading them short.
+//!
+//! 2.0 (801-EFF-0035, for UPD's 801-UPD-0042): `update-state`'s `failure` holds 256 bytes, not 64, as `update.wit` 2.0's
+//! does: a refused trial's line and `init`'s reason reach the server whole (801 S2). The gateway passes the updater's
+//! line on whole, cut at a character's edge only past 256. A larger bound in a record is a new major version: a 1.x
+//! decoder refuses a longer line rather than reading it short. Both ends are built together.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -44,8 +49,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 7, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
 /// `not-found`: no such service, log source, file or handle; `busy`: a transfer or a request is already open;
@@ -238,9 +243,9 @@ impl Wire for Sample {
 /// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
 /// the last failure. All zero without the gateway's client of the updater.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct UpdateState { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: Text<64> }
+pub struct UpdateState { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: Text<256> }
 impl Wire for UpdateState {
-    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <Text<64> as Wire>::MAX;
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <Text<256> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.running.encode(w)?; self.recorded.encode(w)?; self.confirmed.encode(w)?; self.staged.encode(w)?; self.failure.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, running: Wire::decode(r)?, recorded: Wire::decode(r)?, confirmed: Wire::decode(r)?, staged: Wire::decode(r)?, failure: Wire::decode(r)? }) }
 }
@@ -611,7 +616,7 @@ pub fn update_state(endpoint: Endpoint) -> Result<UpdateState> {
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 25 | MAJOR << 8, &buffer, length)?;
-    let length = wire::buffer_reply(&reply, 86, false, false)?;
+    let length = wire::buffer_reply(&reply, 278, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <UpdateState as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
@@ -852,7 +857,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::UpdateApply { origin, tries }, call))
         }
         25 => {
-            let (call, length) = wire::take_buffer(request, cap, 86, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 278, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }

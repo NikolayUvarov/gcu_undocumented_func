@@ -271,6 +271,16 @@ fn a_fallback_is_reported_in_the_heartbeats_update() {
                         busy: None, load: None, update: Some(f) };
     let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
     assert!(body.contains(r#""update":{"state":"rolled_back","build_number":6,"result":"version 6 in slot B, falling back to slot A: no-tls: TLS CONNECT"}"#), "{body}");
+    // 801-EFF-0035: a line of 256 bytes, most of them escaped, with the longest IDs and name fits the agent's 2048 bytes.
+    let long = format!("version 6 in slot B, falling back to slot A: x{}", "\"\\".repeat(105));
+    assert_eq!(long.len(), 256);
+    let (agent, command) = ("a".repeat(128), "c".repeat(128));
+    let busy = Busy { since: "2026-11-15T00:00:00Z", command: &command, action: "update_agent" };
+    let h = Heartbeat { agent_id: &agent, hostname: &"h".repeat(63), arch: "aarch64", agent_version: "0.1.0", stopping: true,
+                        agent_time: Some("2026-11-15T00:00:00Z"), busy: Some(busy), load: None, update: fallback(&long) };
+    let mut buf = [0u8; 2048];
+    let body = core::str::from_utf8(heartbeat(&mut buf, &h).expect("fits")).unwrap().to_owned();
+    assert!(body.contains(&long.replace('\\', "\\\\").replace('"', "\\\"")), "{body}");
 }
 
 #[test]

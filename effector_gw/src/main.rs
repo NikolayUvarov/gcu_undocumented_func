@@ -704,7 +704,10 @@ fn main(_info: &'static BootInfo) {
             wit::Request::UpdateApply { origin: o, tries } => wit::reply_update_apply(reply, gw.update_apply(m, badge, &origin(&o), tries).map_err(error)),
             wit::Request::UpdateState => {
                 let s = gw.update_state(m, badge);
-                let state = wit::UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: Text::new(&s.failure).unwrap_or_default() };
+                // The updater's line whole (801-EFF-0035): cut at a character's edge only past the record's 256 bytes.
+                let mut end = s.failure.len().min(256);
+                while !s.failure.is_char_boundary(end) { end -= 1; }
+                let state = wit::UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: Text::new(&s.failure[..end]).unwrap_or_default() };
                 wit::reply_update_state(reply, &state)
             }
             wit::Request::ReloadPolicy => {

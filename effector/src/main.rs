@@ -456,7 +456,8 @@ impl Agent {
         // A benchmark under way, or an update waiting for its restart, holds the one slot as an answer waiting does.
         let own = self.running.as_ref().map(|r| (r.id.as_str(), r.action.as_str())).or(self.update.as_ref().map(|u| (u.pending.id.as_str(), u.pending.action.as_str())));
         let waiting = waiting.or_else(|| own.and_then(|(id, _)| session::Id::command(id).ok()));
-        let mut buf = [0u8; 1536];
+        // Room for the longest IDs, the machine's name and a fallback's line of 256 bytes, escaped (801-EFF-0035).
+        let mut buf = [0u8; 2048];
         let mut stamp = [0u8; 20];
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
         // Busy from the first heartbeat that finds an answer waiting, until the server takes it.

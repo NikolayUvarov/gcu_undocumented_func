@@ -34,7 +34,12 @@
 /// under `data/apps/` (contract 1.5 `mind-package-1`). `error` gains `format`, `arch`, `system` and `space`, the
 /// refusals the contract names, and `package-report` the architecture, the number of files and the SHA-256 of the
 /// package's MANIFEST. A 1.6 decoder refuses the new cases and fields rather than reading them short.
-package mind:effector@1.7.0;
+///
+/// 2.0 (801-EFF-0035, for UPD's 801-UPD-0042): `update-state`'s `failure` holds 256 bytes, not 64, as `update.wit` 2.0's
+/// does: a refused trial's line and `init`'s reason reach the server whole (801 S2). The gateway passes the updater's
+/// line on whole, cut at a character's edge only past 256. A larger bound in a record is a new major version: a 1.x
+/// decoder refuses a longer line rather than reading it short. Both ends are built together.
+package mind:effector@2.0.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -105,7 +110,7 @@ interface effector {
     /// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
     /// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
     /// the last failure. All zero without the gateway's client of the updater.
-    record update-state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<64> }
+    record update-state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<256> }
 
     /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
     status: func() -> status;
