@@ -254,14 +254,15 @@ def debug_mode(vm, name):
     require(vm.command("write log:debug.txt on"), "WROTE")
     require(vm.command("run uptime"), "up ")
     require(vm.command("sync"), "OK")  # ordinary records wait up to 30 s; a flush saves them (211-KRN-0223)
+    # Read whole through a pipe: `cat` shows a file's first 16 KiB on the screen, and a slow boot's log is longer (000-KRN-0254).
     for _ in range(20):
-        saved = vm.command(f"cat log:{name}", raw=True)
+        saved = vm.command(f"cat log:{name} | grep uptime", raw=True)
         if re.search(r"uptime\(\d+\) up \d", saved):
             break
         time.sleep(.5)
     assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
     assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
-    require(saved, "DEBUG MODE ON (log:debug.txt)")
+    require(vm.command(f"cat log:{name} | grep DEBUG", raw=True), "DEBUG MODE ON (log:debug.txt)")
     # A program that asks for the log keeps the shell's client, which reads: dmesg still shows the system log.
     require(vm.command("dmesg -s loader"), "[LOADER] DEBUG MODE ON")
     require(vm.command("rm log:debug.txt"), "OK")
@@ -331,10 +332,15 @@ def unplugged(vm, booted, name):
     with longer.open("ab") as f:
         f.write(bytes(1 << 20))
     longer_sectors, longer_before = longer.stat().st_size // 512, hashlib.sha256(longer.read_bytes()).hexdigest()
-    for command in ("device_del usbstick4", f"drive_add 0 if=none,id=usbdisk5,format=raw,file={longer}", "device_add usb-storage,drive=usbdisk5,id=usbstick5"):
+    # The copy goes in before the stick comes out, so the request that finds the stick gone finds the copy set up: a
+    # request between them found neither in usb_storage's 2 s of claims, which then names no other medium (000-KRN-0254).
+    for command in (f"drive_add 0 if=none,id=usbdisk5,format=raw,file={longer}", "device_add usb-storage,drive=usbdisk5,id=usbstick5"):
         answer = vm.hmp(command)
         assert answer.strip() in ("", "OK"), (command, answer)
     require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    answer = vm.hmp("device_del usbstick4")
+    assert answer.strip() in ("", "OK"), ("device_del usbstick4", answer)
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
     # usb_storage meets the copy at a request that reads; vfs_server, which compares the medium before it asks again
     # (000-KRN-0085), sends one only after its wait, so the program is asked for until the copy is met.
     usb = ""

@@ -47,6 +47,15 @@ A line typed at the console must reach the shell, or the program in front, in th
   - each refusal's time is kept, and the check prints them all, the slowest beside the limit.
 - **2026-11-15, i9** (`347b34a948`, alone): `x86: USB image` passed in 225 s. The first refusal took 5.9 s, the slowest of the four 9.8 s: the harness's 8 s would have failed it here too.
 - **Not known yet:** why a later refusal takes longer than the first.
+- **Round 143's gate, a second cause in the same group** (x32-2, candidate `a29ba720b3`): `debug_mode()` failed in 117 s.
+  - It looks for the `uptime` record in `cat log:<boot log>`. `cat` shows a file's first 16 KiB on the screen, and that slow boot's log was 194 bytes longer: the record was past the end shown.
+  - The fix: it reads the log whole through a pipe (`cat log:<name> | grep uptime`, `| grep DEBUG`), as `unplugged()` already did.
+- **Round 143's gate, a third cause:** the repeat alone on x32 failed in `unplugged()`, at the copy one MiB longer.
+  - `device_del` of the stick and `device_add` of the copy went at once. A request reached `usb_storage` before `usb_host` had the copy set up: `usb_storage` was asleep in its claims before the check's first `run memmap`.
+  - In its 2 s of claims it found neither, said `THE DEVICE IS GONE`, and from then on it names no other medium: its `lost` mark covers both lines. So `ANOTHER MEDIUM (... SECTORS) IS NOT USED` never came, in 15 tries.
+  - The fix: the copy goes in first, and the stick comes out once `usb_host` has the copy set up. The request that finds the stick gone finds the copy at once. They are two files, so QEMU's image locks allow both at once.
+  - **Left as it is:** the same stick out and in again "at once" a little earlier has the same race. It cannot overlap, since one image file cannot be attached twice. It has passed in every run so far.
+  - **For DRV** (`usb_storage`): a medium of another capacity found after a loss could still be named once. It would tell the bench what a reader found.
 - **Left:** the ten runs on x32 beside a busy lane, each refusal's time recorded.
 
 ## Related
