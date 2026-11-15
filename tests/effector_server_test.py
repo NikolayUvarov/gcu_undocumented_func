@@ -152,6 +152,7 @@ class EffectorServerTests(unittest.TestCase):
             time.sleep(0.005)
         self.heartbeat()
         self.assertTrue(worker.is_alive(), "heartbeat waited for delayed poll")
+        self.assertEqual(self.fixture.delayed, 1, "the held poll is counted while it waits")
         worker.join(timeout=3)
         self.assertEqual(answers, [{"commands": [], "parallel_limit": 1}])
         self.fixture.inject("/api/commands/poll", "drop")
