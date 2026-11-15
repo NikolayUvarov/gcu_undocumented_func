@@ -13958,7 +13958,8 @@ def rollback_suite(args):
         # The agent reads the updater's word at its start, so its fallback line may come before or after the connection.
         logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
         log = logged(vm, "effector", "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER", 120)
-        require(log, "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER: version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S")
+        # The line is cut at the log's width; the heartbeat below carries the reason whole.
+        require(log, "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER: version 6 in slot B, falling back to slot A")
         deadline = time.monotonic() + 120
         while not (report := next((b for b in list(server.beats) if b.get("agent_id") == agent and (b.get("update") or {}).get("state") == "rolled_back"), None)):
             assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
