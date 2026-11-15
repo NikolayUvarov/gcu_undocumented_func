@@ -7388,8 +7388,7 @@ def cut_twice(vm, via):
         vm.expect("MIND> ", timeout=120)
         if cut == 0:
             log = vm.command("dmesg -s init", raw=True)
-            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED WHILE ")
-            require(log, " STARTED, WITH NO SIGN OF A FREEZE (A CUT POWER OR A RESET): A NORMAL START; A SECOND SUCH RUN LEAVES THEM OUT")
+            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
             assert "[INIT] SAFE START:" not in log, log[-2000:]
 
 
@@ -17302,9 +17301,9 @@ def watchdog_suite(args, disk):
         # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
         shown = vm.expect("MIND> ", timeout=120)
         log = vm.command("dmesg -s init", raw=True)
-        decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED: THE WATCHDOG RESTARTED IT WHILE THESE "
-                            r"STARTED; NOT STARTED: ([^;\n]+); THEY START AGAIN BY THEMSELVES FROM 120 S PAST READY", log)
-        assert decided, log[-3000:]
+        decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: ([^\r\n]+)", log)
+        assert decided, [line for line in log.splitlines() if "LAST RUN" in line or "MARK" in line] or log[:3000]
+        require(log, "[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM 120 S PAST READY")
         left = decided[1].split(", ")
         # What the stopped run was starting: never bcm_wifi, which q35 has no device for and so never started.
         assert left and set(left) <= set(SAFE_LIST) and "bcm_wifi" not in left, left
@@ -18207,7 +18206,7 @@ def trial_check(args, disk):
                 log = vm.command("dmesg -s init", raw=True)
                 require(log, "[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS")
                 if cut == 1:
-                    require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED WHILE ")
+                    require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
                 assert SETTLED not in log, log[-2000:]
                 vm.hmp("system_reset")
             out = vm.expect("BOOT: SLOT A LOADED", timeout=120)
