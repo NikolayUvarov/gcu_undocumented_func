@@ -4,7 +4,7 @@
 
 ## Problem
 
-UPD's request of 2026-11-15, for [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md), which lands with it. It was recorded in `issues/requests-EFF.md` and is taken here.
+UPD's request of 2026-11-15, for [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done), which lands with it. It was recorded in `issues/requests-EFF.md` and is taken here.
 
 - **What the `rollback` suite saw** (x86 and aarch64): slot A's heartbeat reported `version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPT`.
 - **What was lost:** the reason and the agent's last step, which S2 asks for, were cut off.
@@ -27,4 +27,4 @@ UPD's request of 2026-11-15, for [801-UPD-0042](801-UPD-0042-a-refused-trials-re
 
 ## Related
 
-[801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [801-EFF-0034](801-EFF-0034-the-kept-update-waits-for-inits-word.md).
+[801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [801-EFF-0034](801-EFF-0034-the-kept-update-waits-for-inits-word.md).

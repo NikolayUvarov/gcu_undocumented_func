@@ -1,6 +1,6 @@
-# 801-UPD-0041 — A release that loses the server, rolled back: the slot before back on the server as it was
+# 801-UPD-0041 — A release that loses the server, rolled back: the slot before back on the server as it was — done
 
-**Type:** update (tests: the `rollback` QEMU suite) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-15) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S1, S2, S3) · **Roadmap:** stage V · **Constitution:** MC-9.4, MC-9.9, MC-12.1
+**Type:** update (tests: the `rollback` QEMU suite) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-15) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S1, S2, S3) · **Roadmap:** stage V · **Constitution:** MC-9.4, MC-9.9, MC-12.1
 
 ## Problem
 
@@ -41,9 +41,30 @@ The maintainer (801): «никакое обновление не ломает н
 - It fails if the trial is confirmed without the server: a held trial that is confirmed is never refused, so the third step's restart never comes.
 - The profile's Article 9 names it as the evidence for S1 to S3 in QEMU.
 
+## Resolution
+
+**Landed in round 141** (`main` `b8b39e620e`, 2026-11-15), with EFF's request (801-EFF-0034, 0035, 0031, 750-EFF-0008) and DRV's 801-DRV-0071. The gate was green on five lanes. i9 was left out: its terminal stopped another check (000-NET-0086).
+
+**What the suite does** (`tests/qemu_smoke.py` `rollback_suite`, groups `x86: a release that loses the server, rolled back` and its aarch64 twin):
+1. Slot A, release 5, on the Effector fixture, takes release 6 by `update_agent`, stages it in slot B and restarts.
+2. Slot B's trial finds the server out of reach. `init` holds it for its 10 min bound and refuses it. The updater keeps the reason in `system/updater/refused`, spends the trial and restarts.
+3. Every file slot A reads is as it was, but for the trial's own writes. On x86 the suite reads OVMF's `NvVars` by MIND's variables in it.
+4. Slot A comes back on the server as the same agent. Its heartbeat carries the reason whole, and it answers the update command `fell-back`.
+
+**The criteria:**
+- **Passes on both arches:** on the maintainer's machines first (x86 on x32 in 648 s, aarch64 on acc1 in 673 s, on `72e59d5685`). Then in round 141's gate: x86 on acc1 in 664 s, aarch64 on acc1 in 669 s.
+- **Fails when the trial is confirmed without the server:** with the fixture never out of reach, the suite failed at `no restart` (x32, 946 s).
+- **The profile's Article 9** names the suites as the evidence for 801 S1 to S3, in QEMU.
+
+**What the suite found on the way, now fixed:**
+- **EFF's agent** answered a kept command `failed` while the trial was still deciding (801-EFF-0034).
+- **The fallback's reason** was cut at 64 bytes (801-UPD-0042, 801-EFF-0035).
+
+**Not done:** the bench machines. QEMU only.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).
+[801](../issues/801-the-bench-stays-manageable.md), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.done), [801-UPD-0037](801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-EFF-0029](../issues/801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md), [751-EFF-0023](../issues/751-EFF-0023-the-agent-installs-a-developers-release.md).
 
 ## Progress (2026-11-15)
 
@@ -59,7 +80,7 @@ The maintainer (801): «никакое обновление не ломает н
 - **S3, in EFF's agent:** 180 s into the trial (`CONFIRM_WAIT_MS`), B's agent answered the kept command `failed`, `not-confirmed`. It wrote `system/effector/result`, `executed` and `journal`, and removed `system/effector/update`, so after the fallback slot A sent that stale answer instead of `fell-back`.
   - **Request:** `issues/requests-EFF.md`.
   - **EFF's answer:** taken as 801-EFF-0034 (`8c53f1e2` on EFF's branch, not pushed yet).
-- **S2:** the heartbeat's report was cut at 64 bytes, `…: NO HEARTBEAT ACCEPT`, without the agent's last step. That is [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md), with EFF's part requested.
+- **S2:** the heartbeat's report was cut at 64 bytes, `…: NO HEARTBEAT ACCEPT`, without the agent's last step. That is [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done), with EFF's part requested.
 - **A log's append:** the trial's gateway added a line to `system/effector_gw/audit`. The suite takes that as a log's append (slot A's lines unchanged) and fails a rewrite of them.
 
 **The suite now** checks the heartbeat and the command's answer against the reason in `system/updater/refused`, whole. It reports every finding at its end, after slot A's checks.
