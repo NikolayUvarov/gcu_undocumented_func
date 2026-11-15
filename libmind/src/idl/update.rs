@@ -9,7 +9,8 @@
 //! client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source. It
 //! keeps releases in the block store, and `rollback` writes the last known good back from there into a slot not as its
 //! manifest lists it (1.4, 351-UPD-0033); `apply` writes the staged release back from there in the same way, and
-//! `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035).
+//! `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035). The state's failure is up to 256 bytes, so a refused
+//! trial's reason reaches the server whole (2.0, 801-UPD-0042); 1.x's of 64 is refused as another major version.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -19,8 +20,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
 /// `trial`: the running slot is on trial, so the other one is its fallback and stays as it is; `network`: the
@@ -57,11 +58,12 @@ impl Wire for Offer {
 
 /// The updater's view: the running slot (`A`, `B`, or 0 when the system booted from the volume's root), whether it
 /// runs on trial, its version (0: not known); the slot the newer boot record names (0: none) and whether that
-/// record is confirmed; the version staged in the other slot (0: none); the last failure (empty: none).
+/// record is confirmed; the version staged in the other slot (0: none); the last failure (empty: none), its first 256
+/// bytes (2.0).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct State { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: Text<64> }
+pub struct State { pub slot: u8, pub trial: bool, pub running: u64, pub recorded: u8, pub confirmed: bool, pub staged: u64, pub failure: Text<256> }
 impl Wire for State {
-    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <Text<64> as Wire>::MAX;
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <Text<256> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.running.encode(w)?; self.recorded.encode(w)?; self.confirmed.encode(w)?; self.staged.encode(w)?; self.failure.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, running: Wire::decode(r)?, recorded: Wire::decode(r)?, confirmed: Wire::decode(r)?, staged: Wire::decode(r)?, failure: Wire::decode(r)? }) }
 }
@@ -147,7 +149,7 @@ pub fn status(endpoint: Endpoint) -> Result<State> {
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
-    let length = wire::buffer_reply(&reply, 86, false, false)?;
+    let length = wire::buffer_reply(&reply, 278, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <State as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
@@ -272,7 +274,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Rollback, Call::words(request, cap)))
         }
         5 => {
-            let (call, length) = wire::take_buffer(request, cap, 86, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 278, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }

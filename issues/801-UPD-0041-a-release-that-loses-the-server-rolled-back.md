@@ -65,3 +65,27 @@ The maintainer (801): «никакое обновление не ломает н
 **The suite now** checks the heartbeat and the command's answer against the reason in `system/updater/refused`, whole. It reports every finding at its end, after slot A's checks.
 
 **Left:** EFF's 801-EFF-0034 and its part of 801-UPD-0042; then the suite on both arches, and a gate.
+
+## Progress (2026-11-15, the full tree)
+
+**The tree:** `72e59d5685`, this branch with `main` `b10ff53d07` (000-KRN-0217, ABI 34) and EFF's `claude/EFF-effector-agent` `a736c064` merged in (801-EFF-0031, 0034, 0035, 750-EFF-0008). The merges had no conflict. The rollback suite is at `dccfa70541`: on x86 it reads OVMF's `NvVars` by MIND's variables in it, since the firmware rewrites that file at every boot (EFF's finding).
+
+**What passed on the maintainer's machines** (each machine running one group at a time):
+
+| Group | Where | Time |
+|---|---|---|
+| x86: a release that loses the server, rolled back | x32 | 648 s |
+| aarch64: a release that loses the server, rolled back | acc1 | 673 s |
+| x86: the updater and an update through the link | x32 | 1367 s |
+| aarch64: the updater and the modes | acc2 | 1298 s |
+| x86: an update from the previous release | x32 | 157 s |
+| aarch64: an update from the previous release | acc2 | 643 s |
+| aarch64: an update through the link | acc1 | 1573 s |
+| x86: a developer's release through the Effector agent | i9 | 140 s |
+| aarch64: a developer's release through the Effector agent | acc1 | 89 s |
+| aarch64: network, TLS and Effector | acc2 | 1577 s |
+| host tests | x32 | 2217 s |
+| x86: network, TLS and Effector | acc1 | 1775 s |
+
+**One run that did not end:** the same x86 group on i9 reached its operation's 3500 s bound, after the TLS suite's `PASS` and before any of the checks that follow it printed theirs. No QEMU or test process was left, and the run's logs are written only at a VM's close. It is being run again on i9 with a note of its QEMU each minute, to name the check.
+**The suite fails when it should** (criterion 2): on x32 it ran with the fixture never out of reach, so the trial was confirmed. It failed at its wait for the restart (`no restart`, 946 s).
