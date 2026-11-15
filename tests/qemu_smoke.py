@@ -18141,12 +18141,13 @@ def trial_check(args, disk):
         with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
             ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
                     "-device", "usb-storage,bus=ehci.0,drive=trial,bootindex=0")
-            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
+            # Nothing is typed at slot B's prompt: the restart below can come while a command's echo is half out (x32, k217c).
+            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=ehci)
             try:
-                require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
                 # 801-UPD-0037: the updater asks for the restart once init refused the trial, so it may come before the
                 # kernel's deadline; either way the next boot falls back to slot A.
-                out = vm.expect("BOOT: SLOT A LOADED", timeout=150)
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+                require(out, "BOOT: SLOT B LOADED ON TRIAL")
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
                 assert "init (PID 1) ASKED TO RESTART THE MACHINE" in out or "THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING" in out, out[-3000:]
             finally:
