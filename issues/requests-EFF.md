@@ -100,3 +100,19 @@ For [801-UPD-0041](801-UPD-0041-a-release-that-loses-the-server-rolled-back.md) 
   - once `init` confirms, the answer is `completed`;
   - if `init` refuses, the machine restarts and the slot before answers `fell-back` from its kept answer.
 - **The check:** the `rollback` suite passes on both arches. It compares every file slot A reads before and after the trial, and it checks slot A's answer to the command.
+
+## UPD's request (2026-11-15): `effector.wit`'s `update-state` failure up to 256 bytes, passed on whole
+
+For [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md) (801, S2), which lands with it.
+
+- **What the `rollback` suite saw** (x86 and aarch64): slot A's heartbeat reported `version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPT`. The reason and the agent's last step, which S2 asks for, were cut off.
+- **Why:** both records bound the failure at 64 bytes: `update.wit` 1.5's `state` and `effector.wit` 1.6's `update-state`.
+- **UPD's part** (`claude/801-UPD-0041-a-release-that-loses-the-server-rolled-back`, 4269f9ec9d):
+  - `update.wit` 2.0 makes the updater's failure `string<256>`;
+  - the line is at most 44 bytes plus `init`'s reason of up to 96;
+  - the updater gives its first 256 bytes, cut at a character's edge.
+- **The request** (EFF decides how):
+  - the gateway's `update-state` failure as long, in a new major version of `effector.wit`;
+  - the gateway passing the updater's line on whole.
+- **Why the two must land together:** today the gateway's `Text::new` of a line over 64 bytes gives an empty one. With UPD's part alone the agent would see no fallback at all, which is worse than a cut one. I will put both in the same round.
+- **The check:** the `rollback` suite compares slot A's heartbeat and its answer to the update command with the reason in `system/updater/refused`, whole.
