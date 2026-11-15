@@ -41,4 +41,4 @@ UPD's request of 2026-11-15, for 801-UPD-0041 (on UPD's branch until it lands), 
 
 ## Related
 
-801-UPD-0041, [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), [801-EFF-0031](801-EFF-0031-the-agent-tells-init-how-far-it-got.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).
+801-UPD-0041, [801-KRN-0242](../issues-done/801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.done), [801-EFF-0031](801-EFF-0031-the-agent-tells-init-how-far-it-got.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).

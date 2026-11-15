@@ -1,6 +1,6 @@
-# 801-KRN-0242 — A trial confirmed on the Effector server's word: `init` holds it for the agent's accepted heartbeat
+# 801-KRN-0242 — A trial confirmed on the Effector server's word: `init` holds it for the agent's accepted heartbeat — done
 
-**Type:** kernel (`init`, `init.wit` 1.13) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** EFF: the agent's `agent-step` call · **Main task:** [801](801-the-bench-stays-manageable.md) (S1) · **Roadmap:** stage V · **Constitution:** MC-9.4, MC-9.9, MC-12.4
+**Type:** kernel (`init`, `init.wit` 1.13) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-15) · **Blocked by:** EFF: the agent's `agent-step` call · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S1) · **Roadmap:** stage V · **Constitution:** MC-9.4, MC-9.9, MC-12.4
 
 ## Problem
 
@@ -27,9 +27,20 @@ The maintainer (801, S1 and S4): a slot on trial is confirmed only after the ser
 - **With EFF's call:** a trial whose agent reaches the fixture server is confirmed on `accepted` (the `effector-update` suites), and one whose agent never reaches it is refused at the bound (801-ASR-0014).
 - The groups the change touches pass on the maintainer's machines, then in a gate.
 
+## Resolution
+
+**Landed in round 139** (`main` `e62d7fc506`). Its last criterion was shown in round 141 (`main` `b8b39e620e`, 2026-11-15).
+
+- **Criterion 1** was met in round 139's gate (the `boot` suite's held trial).
+- **Criterion 2, confirmed on `accepted`:** EFF's 801-EFF-0031 makes both `effector-update` suites check `init`'s `[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT`, after the agent's `accepted`. They passed in round 141's gate: x86 on acc2 in 81 s, aarch64 on acc2 in 109 s.
+- **Criterion 2, refused at the bound:** the `rollback` suites (801-UPD-0041) run a trial whose agent never reaches the server. `init` held it about 610 s and refused it. They passed on both arches in round 141's gate. ASR's 801-ASR-0014 is no longer needed for this point.
+- **Criterion 3:** the groups passed on the machines and in the gates of rounds 139 and 141.
+
+**Not done:** the bench machines. The profile says QEMU only.
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), [750-KRN-0194](750-KRN-0194-init-warns-a-service-before-it-stops-it.md), [750-KRN-0248](../issues-done/750-KRN-0248-the-agents-stop-notice-from-its-worker.done), [801-ASR-0014](801-ASR-0014-the-stages-conditions-as-checks.md).
+[801](../issues/801-the-bench-stays-manageable.md), [801-UPD-0037](801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.done), [750-KRN-0194](../issues/750-KRN-0194-init-warns-a-service-before-it-stops-it.md), [750-KRN-0248](750-KRN-0248-the-agents-stop-notice-from-its-worker.done), [801-ASR-0014](../issues/801-ASR-0014-the-stages-conditions-as-checks.md).
 
 ## Progress (2026-11-15)
 
