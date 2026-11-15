@@ -74,3 +74,45 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
+
+## KRN's request (2026-11-15): `init`'s confirmation asserted in the `effector-update` suite
+
+For [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), criterion 2 (801, S1).
+
+- **What is shown now:** in round 139's gate, both `effector-update` suites passed (x86 on i9, aarch64 on acc-1). Their trial of release 6, with the mode on and `data/effector/effector.conf` on the disk, was confirmed.
+- **What is not shown yet:** that `init` confirmed it on the agent's `accepted`. With a server configured that is `init`'s only way, but the suite does not check it.
+- **The request:** once the trial is confirmed, the suite checks `init`'s log (`dmesg -s init`) for `[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT`, on both arches.
+- **Blocks:** 801-KRN-0242's close.
+
+## UPD's request (2026-11-15): the trial's agent waits for `init`'s word on the kept update, and leaves slot A's state as it was
+
+For [801-UPD-0041](801-UPD-0041-a-release-that-loses-the-server-rolled-back.md) (801, S1 to S3), which it blocks.
+
+- **What the `rollback` suite found** (x86 on x32, aarch64 on acc-1, `claude/801-UPD-0041-a-release-that-loses-the-server-rolled-back` 19fb97b17f):
+  - **The update and the trial:** slot A took release 6 by `update_agent` and restarted. Slot B came up on trial with the server out of reach, and `init` held it for its 600 s bound and refused it; that part passed.
+  - **What B's agent did in the meantime:** 180 s into the trial (`CONFIRM_WAIT_MS`) it answered the kept command `failed`, `not-confirmed` ("version 6 runs in slot B on trial, not confirmed"), wrote it to `system/effector/result`, `executed` and `journal`, and removed `system/effector/update`.
+  - **So:** after the fallback, slot A no longer has its kept answer. It holds B's stale answer instead of "fell back".
+- **Why it matters:**
+  - **S3:** a trial changes nothing the slot before reads until it is confirmed.
+  - **The successful case:** a trial whose first accepted heartbeat comes after 180 s is confirmed by `init`, but its command is answered `failed`.
+- **The request** (a proposal; EFF decides how):
+  - while `init` says the trial is `deciding` (`init.wit` 1.13 `boot`), the kept update's verdict waits, with no limit of its own, and nothing under `system/effector/` changes for it;
+  - once `init` confirms, the answer is `completed`;
+  - if `init` refuses, the machine restarts and the slot before answers `fell-back` from its kept answer.
+- **The check:** the `rollback` suite passes on both arches. It compares every file slot A reads before and after the trial, and it checks slot A's answer to the command.
+
+## UPD's request (2026-11-15): `effector.wit`'s `update-state` failure up to 256 bytes, passed on whole
+
+For [801-UPD-0042](801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.md) (801, S2), which lands with it.
+
+- **What the `rollback` suite saw** (x86 and aarch64): slot A's heartbeat reported `version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPT`. The reason and the agent's last step, which S2 asks for, were cut off.
+- **Why:** both records bound the failure at 64 bytes: `update.wit` 1.5's `state` and `effector.wit` 1.6's `update-state`.
+- **UPD's part** (`claude/801-UPD-0041-a-release-that-loses-the-server-rolled-back`, 4269f9ec9d):
+  - `update.wit` 2.0 makes the updater's failure `string<256>`;
+  - the line is at most 44 bytes plus `init`'s reason of up to 96;
+  - the updater gives its first 256 bytes, cut at a character's edge.
+- **The request** (EFF decides how):
+  - the gateway's `update-state` failure as long, in a new major version of `effector.wit`;
+  - the gateway passing the updater's line on whole.
+- **Why the two must land together:** today the gateway's `Text::new` of a line over 64 bytes gives an empty one. With UPD's part alone the agent would see no fallback at all, which is worse than a cut one. I will put both in the same round.
+- **The check:** the `rollback` suite compares slot A's heartbeat and its answer to the update command with the reason in `system/updater/refused`, whole.
