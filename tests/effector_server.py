@@ -35,6 +35,8 @@ MAX_REQUESTS = 4096
 FINAL_STATES = {"completed", "failed", "timeout", "expired", "cancelled", "rollback",
                 "run_as_unavailable", "interactive_session_unavailable", "denied"}
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+# A package ID as contract 1.5 names it: 1-128 of A-Z a-z 0-9 . _ - (docs/effector/packages-draft.md).
+PACKAGE_ID = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 
 def encoded(value):
@@ -61,6 +63,10 @@ def decoded(data):
 
 def identifier(value):
     return isinstance(value, str) and IDENTIFIER.fullmatch(value) is not None
+
+
+def package_identifier(value):
+    return isinstance(value, str) and PACKAGE_ID.fullmatch(value) is not None and value not in (".", "..")
 
 
 @dataclasses.dataclass
@@ -285,7 +291,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._download(fixture.files.get("command:" + command_id), fault)
         elif self.route.startswith("/api/deployment/download/"):
             package = self.route.rsplit("/", 1)[1]
-            if not identifier(package):
+            if not package_identifier(package):
                 raise ValueError("invalid package id")
             with fixture.lock:
                 self._download(fixture.files.get("package:" + package), fault)
@@ -540,7 +546,7 @@ class EffectorFixture:
         if (command_id is None) == (package_id is None) or not isinstance(data, bytes) or len(data) > limit:
             raise ValueError("one fixture file id and at most 1 MiB (a command's bundle: 64 MiB) required")
         name = command_id if command_id is not None else package_id
-        if not identifier(name):
+        if not (identifier(name) if command_id is not None else package_identifier(name)):
             raise ValueError("invalid fixture file id")
         key = ("command:" if command_id is not None else "package:") + name
         with self.lock:

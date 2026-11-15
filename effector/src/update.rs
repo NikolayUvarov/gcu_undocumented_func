@@ -6,9 +6,18 @@ use alloc::{format, string::String};
 
 pub const HEADER: &str = "effector-update 1\n";
 pub const FILE_MAX: usize = 2048;
-/// How long a trial boot of the staged version may stay unconfirmed: past the kernel's deadline (120 s) and the
-/// updater's margin, the machine has restarted into the fallback or the updater has confirmed it.
+/// How long the updater may lag behind the confirmation once `init` gave it, or, when `init` does not say, how long a
+/// trial boot of the staged version may stay unconfirmed.
 pub const CONFIRM_WAIT_MS: u64 = 180_000;
+
+/// What `init` says of this boot (`init.wit` 1.13 `boot`), for a trial that waits for the server's word (801-KRN-0242).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trial { NoTrial, Deciding, Confirmed, Refused }
+
+/// The trial as `init`'s `boot` record gives it.
+pub fn trial(trial: bool, deciding: bool, confirmed: bool) -> Trial {
+    match (trial, deciding, confirmed) { (false, ..) => Trial::NoTrial, (true, true, _) => Trial::Deciding, (true, false, true) => Trial::Confirmed, _ => Trial::Refused }
+}
 
 /// The command kept across the restart, as it came (its journal identity is computed again from it), and what the
 /// agent knew when it asked for the apply: the uptime and the boot's wall time, the running and staged versions.
@@ -63,10 +72,14 @@ pub fn restarted(p: &Pending, now_ms: u64, boot_unix: Option<u64>) -> bool {
 
 fn slot(s: u8) -> char { if s == 0 { '-' } else { s as char } }
 
-/// The answer from the updater's view (`None`: it could not be read), `waited_ms` after the agent started.
-pub fn verdict(p: &Pending, restarted: bool, view: Option<&View<'_>>, waited_ms: u64) -> Verdict {
+/// The answer from the updater's view (`None`: it could not be read) and `init`'s word on the trial (`None`: it did not
+/// say), `waited_ms` after `init` confirmed the trial, or after the agent started when it did not say.
+/// While `init` decides, or has refused and restarts the machine, nothing is answered and nothing kept changes, with no
+/// limit: a trial changes nothing the slot before reads (801 S3), whose agent answers from the kept command (801-EFF-0034).
+pub fn verdict(p: &Pending, restarted: bool, view: Option<&View<'_>>, init: Option<Trial>, waited_ms: u64) -> Verdict {
     let answer = |exit_code, stdout: String, error| Verdict::Answer { exit_code, stdout, error };
     if !restarted { return answer(1, format!("the restart did not come: version {} stays staged", p.staged), "restart"); }
+    if matches!(init, Some(Trial::Deciding | Trial::Refused)) { return Verdict::Wait; }
     let Some(v) = view else {
         return if waited_ms < CONFIRM_WAIT_MS { Verdict::Wait } else { answer(1, String::from("the updater's state could not be read"), "io") };
     };

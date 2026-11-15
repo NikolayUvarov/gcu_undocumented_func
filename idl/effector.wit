@@ -29,7 +29,17 @@
 /// the machine's name as `sysmon` answers it (`sysinfo.wit` 4.2, 750-EFF-0018), so a name set by the shell's
 /// `hostname` reaches the server within a sample. Both ends are built together; a 1.5 decoder refuses a list longer
 /// than 48, and the new field, rather than reading them short.
-package mind:effector@1.6.0;
+///
+/// 1.7 (750-EFF-0008): `package-begin`, `write` and `package-commit` install, update and remove a signed application
+/// under `data/apps/` (contract 1.5 `mind-package-1`). `error` gains `format`, `arch`, `system` and `space`, the
+/// refusals the contract names, and `package-report` the architecture, the number of files and the SHA-256 of the
+/// package's MANIFEST. A 1.6 decoder refuses the new cases and fields rather than reading them short.
+///
+/// 2.0 (801-EFF-0035, for UPD's 801-UPD-0042): `update-state`'s `failure` holds 256 bytes, not 64, as `update.wit` 2.0's
+/// does: a refused trial's line and `init`'s reason reach the server whole (801 S2). The gateway passes the updater's
+/// line on whole, cut at a character's edge only past 256. A larger bound in a record is a new major version: a 1.x
+/// decoder refuses a longer line rather than reading it short. Both ends are built together.
+package mind:effector@2.0.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -40,8 +50,10 @@ interface effector {
     /// nothing was done; `io`: a file or service call failed; `signature`: a package not signed by a key the policy
     /// trusts for its name; `older`: a package not above the installed version; `malformed`: a field the gateway
     /// refuses (a path with `..`, an unknown action); `cancelled`: cancelled before it ended; `unsupported`: this build
-    /// does not do it yet; `no-policy`: no valid policy is loaded, so everything is denied.
-    enum error { denied, not-found, busy, bounds, digest, exists, expired, audit, io, signature, older, malformed, cancelled, unsupported, no-policy }
+    /// does not do it yet; `no-policy`: no valid policy is loaded, so everything is denied; `format`: a package's ZIP,
+    /// `manifest.json` or MANIFEST breaks a rule (1.7); `arch`: a package for another architecture; `system`: a package
+    /// for a newer release than this one; `space`: `data/apps/` has no room.
+    enum error { denied, not-found, busy, bounds, digest, exists, expired, audit, io, signature, older, malformed, cancelled, unsupported, no-policy, format, arch, system, space }
 
     /// Who asked and why, as the server gave it, and until when it may still run. `command`: the server's command ID
     /// (1–64 bytes of `[A-Za-z0-9._-]`); `initiator` and `reason`: the operator and the reason recorded with the
@@ -68,8 +80,9 @@ interface effector {
     /// What is done with a package. `install` and `reinstall` install the package's application (reinstall: also the
     /// same version); `uninstall` removes the application the package names.
     enum package-action { install, reinstall, uninstall }
-    /// A package's result: the application's name and version, and the version it replaced (empty: none).
-    record package-report { name: string<32>, version: string<32>, previous: string<32> }
+    /// A package's result: the application's name and version, the version it replaced or removed (empty: none), its
+    /// architecture, how many files it holds, and the SHA-256 of its MANIFEST (64 hex digits; 1.7).
+    record package-report { name: string<32>, version: string<32>, previous: string<32>, arch: string<8>, files: u32, manifest: string<64> }
 
     /// What `update-check` found: the version offered (0: none newer), the running version, whether it was fetched
     /// into the other slot, and whether the restart into it was asked of `init`.
@@ -97,7 +110,7 @@ interface effector {
     /// The updater's view (1.5), as its `status` gives it: the running slot (`A`, `B`, or 0), whether it runs on trial, its
     /// version; the slot the newer boot record names and whether that is confirmed; the version staged in the other slot;
     /// the last failure. All zero without the gateway's client of the updater.
-    record update-state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<64> }
+    record update-state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<256> }
 
     /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
     status: func() -> status;

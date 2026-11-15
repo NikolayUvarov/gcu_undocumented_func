@@ -10,6 +10,7 @@ name = "effector_gw"
 
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
+apppkg = { path = "../apppkg" } # signed application packages (750-UPD-0019, 750-EFF-0008)
 
 [profile.release]
 panic = "abort"
