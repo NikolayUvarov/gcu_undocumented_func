@@ -3,10 +3,12 @@
 //! - `BENCH`: `effector_bogomips_v1` until a deadline, its count in a page the session shares (`cpu_parallel`,
 //!   750-EFF-0016).
 //! - `NOTICE`: waits for `init`'s stop notice (`init.wit` 1.12, 750-KRN-0194) and tells the session, which sends its
-//!   last heartbeat and ends within the notice (750-EFF-0006).
+//!   last heartbeat and ends within the notice (750-EFF-0006). It marks the notice's reason on a page the session
+//!   shares first, which the session's waits for the network read, so a request that hangs never holds it (801-EFF-0036).
 //!
 //! Each worker's end arrives on the session's one endpoint as an exit notice, and the stop notice as a message on it.
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use effector::bench;
 use mind::abi::SLOT_LIFECYCLE;
 use mind::ipc::{Endpoint, Message};
@@ -16,6 +18,7 @@ const BENCH: u64 = 1;
 const NOTICE: u64 = 2;
 const PAGE_SLOT: usize = 9; // a benchmark worker's slot for the shared page
 const BACK_SLOT: usize = 9; // the notice worker's slot for the session's endpoint
+const MARK_SLOT: usize = 10; // the notice worker's slot for the page it marks the notice on
 const NOTICE_TAG: usize = 0x4E4F_5449; // a stop notice's first word ("NOTI"); the second is the reason
 const REFUSED_TAG: usize = 0x5245_4655; // init's refusal of the notice's call ("REFU"); the second word is its error
 const MAX: usize = 32; // workers, at most: init's task quota for `effector`
@@ -54,9 +57,15 @@ fn bench_worker(place: usize) {
 
 fn notice_worker() {
     let (lifecycle, back) = (Endpoint(SLOT_LIFECYCLE), Endpoint(BACK_SLOT));
+    let mark = Mapping::new(MARK_SLOT).ok();
     loop {
         match mind::idl::init::stop_notice(lifecycle) {
-            Ok(Ok(reason)) => { let _ = back.send(&Message::new(NOTICE_TAG, reason as usize)); return; }
+            Ok(Ok(reason)) => {
+                // The page first: the session sees it in the middle of a request, the message between two.
+                if let Some(page) = &mark { unsafe { page.as_ptr::<u64>().write_volatile(reason as u64 + 1); } }
+                let _ = back.send(&Message::new(NOTICE_TAG, reason as usize));
+                return;
+            }
             // Replaced by a later call, or refused: this worker has nothing more to wait for.
             // A worker has no log of its own: the session says it.
             Ok(Err(e)) => { let _ = back.send(&Message::new(REFUSED_TAG, e as usize)); return }
@@ -66,8 +75,19 @@ fn notice_worker() {
     }
 }
 
-/// The session's side: its endpoint, the benchmark's page and workers, and the notice worker.
-pub struct Pool { endpoint: Option<Endpoint>, page: Option<Pages>, bench: Vec<u64>, ended: usize, notice: Option<u64>, said: bool,
+// The page the notice worker marks, as the session maps it; 0 until it is made.
+static MARK_AT: AtomicUsize = AtomicUsize::new(0);
+
+/// The stop notice's reason as soon as the notice worker has it (801-EFF-0036): read by the session's waits for the
+/// network, which a message on its endpoint would reach only between two requests.
+pub fn stop_marked() -> Option<mind::idl::init::StopReason> {
+    let at = MARK_AT.load(Relaxed);
+    if at == 0 { return None; }
+    match unsafe { (at as *const u64).read_volatile() } { 0 => None, word => mind::idl::init::StopReason::from_code(word as usize - 1) }
+}
+
+/// The session's side: its endpoint, the benchmark's page and workers, and the notice worker with its page.
+pub struct Pool { endpoint: Option<Endpoint>, page: Option<Pages>, bench: Vec<u64>, ended: usize, notice: Option<u64>, mark: Option<Pages>, said: bool,
     /// The online CPUs, from the gateway's last sample.
     pub cpus: u16 }
 
@@ -75,7 +95,7 @@ pub struct Pool { endpoint: Option<Endpoint>, page: Option<Pages>, bench: Vec<u6
 pub enum Event { Stop(mind::idl::init::StopReason), None }
 
 impl Pool {
-    pub fn new() -> Self { Pool { endpoint: None, page: None, bench: Vec::new(), ended: 0, notice: None, said: false, cpus: 1 } }
+    pub fn new() -> Self { Pool { endpoint: None, page: None, bench: Vec::new(), ended: 0, notice: None, mark: None, said: false, cpus: 1 } }
 
     // The one endpoint `init` lets the session make (750-KRN-0159), made once.
     fn endpoint(&mut self) -> Option<Endpoint> {
@@ -92,10 +112,18 @@ impl Pool {
     pub fn start_notice(&mut self) {
         if self.notice.is_some() || mind::dev::cap_info(SLOT_LIFECYCLE).0 != mind::abi::CAP_KIND_ENDPOINT { return; }
         let Some(endpoint) = self.endpoint() else { return };
-        let grants = [mind::process::grant(SLOT_LIFECYCLE, SLOT_LIFECYCLE, u8::MAX), mind::process::grant(BACK_SLOT, endpoint.0, u8::MAX)];
-        match mind::process::start_worker(NOTICE, 0, &grants) {
+        // The page the worker marks the notice on; without it the message alone tells the session, between requests.
+        let mark = Pages::new(4096);
+        if let Some(page) = &mark { unsafe { (page.address() as *mut u64).write_volatile(0); } }
+        let object = mark.as_ref().and_then(|p| p.share().ok());
+        let mut grants = Vec::from([mind::process::grant(SLOT_LIFECYCLE, SLOT_LIFECYCLE, u8::MAX), mind::process::grant(BACK_SLOT, endpoint.0, u8::MAX)]);
+        if let Some(object) = object { grants.push(mind::process::grant(MARK_SLOT, object, u8::MAX)); }
+        let started = mind::process::start_worker(NOTICE, 0, &grants);
+        if let Some(object) = object { let _ = mind::ipc::drop_cap(object); }
+        match started {
             Ok(pid) => {
                 let _ = mind::process::watch(pid, endpoint);
+                if let (Some(page), Some(_)) = (mark, object) { MARK_AT.store(page.address(), Relaxed); self.mark = Some(page); }
                 self.notice = Some(pid);
                 mind::println!("EFFECTOR: init'S STOP NOTICE AWAITED (WORKER PID={})", pid);
             }

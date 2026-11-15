@@ -193,6 +193,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 faults = fixture.faults.get(self.route)
                 fault = faults.popleft() if faults else None
             if fault and fault.kind == "delay":
+                # Counted while it waits, so a test can act while a request hangs (801-EFF-0036).
+                with fixture.lock:
+                    fixture.delayed += 1
                 fixture.stopped.wait(float(fault.value))
             elif fault and fault.kind == "drop":
                 self.record["fault"] = "drop"
@@ -464,6 +467,7 @@ class EffectorFixture:
         self.beats = collections.deque(maxlen=MAX_REQUESTS)
         self.activated = True
         self.down_until = 0.0
+        self.delayed = 0  # requests a `delay` fault has held, counted as each one starts its wait
         self.server = self.thread = self.directory = None
 
     def start(self):

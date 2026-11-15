@@ -13590,15 +13590,23 @@ def effector_suite(args, disk):
             print("SKIP: init's stop notice to the agent (750-EFF-0006): init refuses the call from the agent's worker "
                   "(asked of KRN)", flush=True)
         else:
-            beats_then = len(server.beats)
+            # 801-EFF-0036: the stop comes while a poll hangs (the fixture holds it 5 s, past the notice's 2 s), as a
+            # request no answer comes to did on i9 in round 140; the agent cuts it short and sends its last heartbeat.
+            pid = vm.services()["effector"]
+            beats_then, held = len(server.beats), server.delayed
+            server.inject("/api/commands/poll", "delay", 5)
+            deadline = time.monotonic() + 60
+            while server.delayed == held and time.monotonic() < deadline:
+                time.sleep(0.1)
+            assert server.delayed > held, ("no poll held", session()[-1500:])
             require(vm.command("svc stop effector"), "effector")
-            init_log = ""
+            # Only init's lines after this stop's notice, which names the PID: an earlier stop's lines decide nothing.
+            notice, after = f"[INIT] STOP NOTICE TO effector (PID {pid})", ""
             deadline = time.monotonic() + 30
-            while "effector ENDED WITHIN THE NOTICE" not in init_log and time.monotonic() < deadline:
-                time.sleep(1)
-                init_log = vm.command("dmesg -s init", raw=True)
-            require(init_log, "[INIT] STOP NOTICE TO effector")
-            require(init_log, "[INIT] effector ENDED WITHIN THE NOTICE")
+            while not re.search(r"\[INIT\] effector (ENDED WITHIN|KILLED AFTER) THE NOTICE", after) and time.monotonic() < deadline:
+                time.sleep(0.5)
+                after = vm.command("dmesg -s init", raw=True).rpartition(notice)[2]
+            assert "[INIT] effector ENDED WITHIN THE NOTICE" in after and "KILLED AFTER THE NOTICE" not in after, (notice, after[-2000:], session()[-2000:])
             assert any(b.get("agent_id") == agent and b.get("system_state") == "shutting_down" for b in list(server.beats)[beats_then:]), \
                 [b.get("system_state") for b in list(server.beats)[beats_then:]]
             starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
@@ -13607,8 +13615,8 @@ def effector_suite(args, disk):
             while session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector") == starts and time.monotonic() < deadline:
                 time.sleep(1)
             until("EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", 60)
-            print("PASS: stopped by init, the agent heard the stop notice on its worker, sent shutting_down and ended within "
-                  "the notice; started again, it is back", flush=True)
+            print("PASS: stopped by init while a poll hung past the notice, the agent heard the stop notice on its worker, cut "
+                  "the poll short, sent shutting_down and ended within the notice; started again, it is back", flush=True)
         # 801-EFF-0032: vfs_server restarted under the agent and the gateway, whose file clients of the old instance answer
         # no more. A journal or audit line not written ends the service, init starts it again with new clients, and the
         # commands after it are done; the agent never stays busy for good (the MacBook Pro, 2026-11-14).
