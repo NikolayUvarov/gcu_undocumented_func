@@ -25,6 +25,13 @@
 - [ ] **`init`'s log** shows the steps, with no flood while the agent retries.
 - [ ] **S8 on the bench** (801): one release built to lose the network is refused on the agent's last step, and falls back.
 
+## Progress (2026-11-15): `init`'s confirmation checked in the suite
+
+- **KRN's request** of 2026-11-15 (recorded in `issues/requests-EFF.md` for 801-KRN-0242's criterion 2) is taken here, as criteria 1 and 2 of this task ask the same.
+- **The `effector-update` suite** now reads `dmesg -s init` once the kernel says the trial is confirmed, and checks:
+  - `[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT` is there, and neither of `init`'s other confirmations (every boot service started; the modes turned off);
+  - the last `[INIT] THE EFFECTOR AGENT: <step>` before it is `accepted`, and there are at most 8 such lines.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md), [751-EFF-0023](751-EFF-0023-the-agent-installs-a-developers-release.md).

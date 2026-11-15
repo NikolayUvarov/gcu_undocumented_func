@@ -13793,6 +13793,14 @@ def effector_update_suite(args):
         vm.logged("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", since, timeout=300)
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
+        # 801-KRN-0242, 801-EFF-0031: with a server configured, init confirmed the trial on the agent's `accepted` alone, and
+        # logged each step the agent told it once, as it changed.
+        init_log = vm.command("dmesg -s init", raw=True)
+        confirmed = init_log.find("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT")
+        steps = [(m.start(), m[1]) for m in re.finditer(r"\[INIT\] THE EFFECTOR AGENT: ([a-z-]+)", init_log)]
+        others = ("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED", "[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR MODES WERE TURNED OFF")
+        assert confirmed >= 0 and not any(o in init_log for o in others), init_log[-2500:]
+        assert steps and [n for at, n in steps if at < confirmed][-1:] == ["accepted"] and len(steps) <= 8, (steps, init_log[-2500:])
         log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
         require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
         require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
@@ -13817,8 +13825,8 @@ def effector_update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: effector-update with remote-update on: the agent downloads release 6's bundle into the gateway, which "
           "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
-          "and once it is confirmed the agent answers the command it kept across the restart: completed, updated 6, slot B "
-          "confirmed", flush=True)
+          "init confirms it on the agent's accepted (its steps logged as they changed, 801-KRN-0242), and once it is confirmed the "
+          "agent answers the command it kept across the restart: completed, updated 6, slot B confirmed", flush=True)
 
 
 def effector_actions_check(vm, server, agent, until, beats):
