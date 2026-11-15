@@ -13947,9 +13947,10 @@ def rollback_suite(args):
     try:
         boot = ANSI.sub("", vm.log)
         require_all(boot, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED")
-        log = logged(vm, "effector", "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER", 180)
-        require(log, "EFFECTOR: CONNECTED TO 10.0.2.2")
-        require(log, "version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S")
+        # The agent reads the updater's word at its start, so its fallback line may come before or after the connection.
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        log = logged(vm, "effector", "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER", 120)
+        require(log, "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER: version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S")
         deadline = time.monotonic() + 120
         while not (report := next((b for b in list(server.beats) if b.get("agent_id") == agent and (b.get("update") or {}).get("state") == "rolled_back"), None)):
             assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
