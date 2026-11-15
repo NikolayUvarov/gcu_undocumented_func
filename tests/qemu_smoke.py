@@ -18208,10 +18208,10 @@ def trial_check(args, disk):
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
         # 000-KRN-0217: the same held trial cut twice at the prompt, before the safe start's list settles, spends both
         # tries, and slot A boots next. What slot B's run was starting is not slot A's to suspect: A's boot is a normal
-        # one, where a third run of B would have been a safe start.
+        # one, where a third run of B would have been a safe start. The disk's own kernel, whose deadline (120 s) a slow
+        # host does not reach before init holds the trial, as the 15 s one's did on i9.
         volume = temp / "cut"
         shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
-        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
         sign_manifest.sign_volume(volume)
         for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
             (volume / name).parent.mkdir(parents=True, exist_ok=True)
@@ -18224,7 +18224,8 @@ def trial_check(args, disk):
         try:
             for cut in range(2):
                 vm.expect("MIND CORE KERNEL: SLOT B ON TRIAL", timeout=120)
-                vm.expect("MIND> ", timeout=120)
+                shown = vm.expect("MIND> ", timeout=120)
+                assert "BOOT: SLOT" not in ANSI.sub("", shown) and "NOT CONFIRMED IN" not in shown, shown[-3000:]
                 log = vm.command("dmesg -s init", raw=True)
                 require(log, "[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS")
                 if cut == 1:
