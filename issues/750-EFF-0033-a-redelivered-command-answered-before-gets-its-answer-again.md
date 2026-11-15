@@ -29,7 +29,7 @@ An artifact (`collect_logs`, `screenshot`) is removed the same way, with the sam
 ## Acceptance criteria
 
 - [x] **Host test** (`tests/effector_session_host.rs`): a command is known as answered only once its first ACK ended, and stays so through a redelivery.
-- [ ] **The `effector` suite, x86 and aarch64, after the agent's restart:**
+- [x] **The `effector` suite, x86 and aarch64, after the agent's restart:** LEG9, 2026-11-15, `d48f419c`: PASS on both.
   - the last measured command redelivered: the same result, taken;
   - an older one: completed again, not kept, and the server's first result unchanged;
   - neither run again.

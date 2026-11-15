@@ -22,8 +22,8 @@ UPD's request of 2026-11-15, for [801-UPD-0042](801-UPD-0042-a-refused-trials-re
 
 ## Acceptance criteria
 
-- [ ] Host tests: `tests/effector_wire_host.rs`. A 256-byte line, mostly escaped, fits a heartbeat with the longest fields.
-- [ ] UPD's `rollback` suite, x86 and aarch64, with UPD's `update.wit` 2.0: slot A's heartbeat and its answer carry the reason kept in `system/updater/refused`, whole.
+- [x] Host tests: `tests/effector_wire_host.rs`. A 256-byte line, mostly escaped, fits a heartbeat with the longest fields. LEG9, 2026-11-15, `d48f419c`: the host tests group passed.
+- [x] UPD's `rollback` suite, x86 and aarch64, with UPD's `update.wit` 2.0: slot A's heartbeat and its answer carry the reason kept in `system/updater/refused`, whole. LEG9, 2026-11-15, `d48f419c` with UPD's `5e0c3453`: these checks held on both arches; x86's only finding was the firmware's `NvVars` (801-EFF-0034).
 
 ## Related
 

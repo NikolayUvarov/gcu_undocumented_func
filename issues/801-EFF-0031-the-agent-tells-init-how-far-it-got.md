@@ -21,8 +21,8 @@
 
 ## Acceptance criteria
 
-- [ ] **The `effector-update` suite, x86 and aarch64,** with 801-KRN-0242's `init`: the trial is confirmed on the agent's `accepted`, and the command is answered `updated 6, slot B confirmed`.
-- [ ] **`init`'s log** shows the steps, with no flood while the agent retries.
+- [x] **The `effector-update` suite, x86 and aarch64,** with 801-KRN-0242's `init`: the trial is confirmed on the agent's `accepted`, and the command is answered `updated 6, slot B confirmed`. LEG9, 2026-11-15, `d48f419c`: PASS on both.
+- [x] **`init`'s log** shows the steps, with no flood while the agent retries. LEG9, 2026-11-15, `d48f419c`, on both: the last step before `init`'s confirmation is `accepted`, at most 8 step lines.
 - [ ] **S8 on the bench** (801): one release built to lose the network is refused on the agent's last step, and falls back.
 
 ## Progress (2026-11-15): `init`'s confirmation checked in the suite

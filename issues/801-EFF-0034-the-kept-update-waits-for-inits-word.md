@@ -28,9 +28,16 @@ UPD's request of 2026-11-15, for 801-UPD-0041 (on UPD's branch until it lands), 
 
 ## Acceptance criteria
 
-- [ ] Host tests: `tests/effector_update_host.rs`, `while_init_decides_the_kept_update_waits_with_no_limit`.
+- [x] Host tests: `tests/effector_update_host.rs`, `while_init_decides_the_kept_update_waits_with_no_limit`. LEG9, 2026-11-15, `d48f419c`: the host tests group passed.
 - [ ] UPD's `rollback` suite, x86 and aarch64, with this change: every file slot A reads is the same before and after the trial, and slot A answers the command `fell-back`.
-- [ ] The `effector-update` suite, x86 and aarch64: the confirmed case still answers `completed`, `updated 6, slot B confirmed`.
+- [x] The `effector-update` suite, x86 and aarch64: the confirmed case still answers `completed`, `updated 6, slot B confirmed`. LEG9, 2026-11-15, `d48f419c`: PASS on both.
+
+## Progress (2026-11-15): UPD's `rollback` suite with this change
+
+- **The tree:** `d48f419c` merged with UPD's `5e0c3453` (`update.wit` 2.0), run on LEG9.
+- **aarch64: PASS.** Nothing slot A reads was changed, and slot A answered the update `fell-back`.
+- **x86: one finding, `NvVars`.** That is OVMF's own file of EFI variables, which it writes at the ESP's root at each boot when it has no flash for them. The `fell-back` answer and the rest held.
+  - The second criterion stays open until UPD's suite leaves that file out, or runs x86 with a pflash variable store. That suite is UPD's, and UPD has been told.
 
 ## Related
 
