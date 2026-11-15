@@ -26,3 +26,13 @@
 ## Related
 
 [801](801-the-bench-stays-manageable.md), [801-UPD-0041](801-UPD-0041-a-release-that-loses-the-server-rolled-back.md), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-EFF-0029](801-EFF-0029-the-fallbacks-report-on-the-first-connection.md).
+
+## Progress (2026-11-15)
+
+- **UPD's part:** 4269f9ec9d, on 801-UPD-0041's branch.
+  - **What changed:** `update.wit` 2.0, the updater's head of 256 bytes, the generated `libmind/src/idl/update.rs`, `docs/update/updater.md` and _RU 0.17, and docs/idl.
+  - **What passed on the maintainer's machines:**
+    - `host tests` on x32-128, with `tests/idl_test.py`;
+    - `x86: the updater and an update through the link` on x32-128;
+    - `aarch64: the updater and the modes` on acc-1.
+- **With UPD's part alone** the `rollback` suite saw no fallback report at all on both arches: the gateway's `effector.wit` 1.6 bound of 64 bytes turns the longer line into an empty one. So this lands only with EFF's part, in the same round. It is not in `fast-test`, for the same reason.
