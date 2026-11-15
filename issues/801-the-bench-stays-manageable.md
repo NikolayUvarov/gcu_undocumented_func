@@ -126,4 +126,5 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
   - the station joins again a network a client gave it (801-NET-0084, round 138; the Ryzen's run left, DRV);
   - commands are judged by the server's time (801-EFF-0027, round 139);
   - a safe start leaves out only what the cut run of the same slot was starting, and brings it back by itself 120 s past `READY` (000-KRN-0217, round 140);
-  - rtw89 takes no channel before the station's own tune (801-DRV-0071, round 141). 801-NET-0085 is open: the station knows a fresh radio by the PID that answers it.
+  - rtw89 takes no channel before the station's own tune (801-DRV-0071, round 141);
+  - the station knows a fresh radio by the PID that answers it, whatever the radio reports of its channel (801-NET-0085, round 144). A bench machine's run is left (DRV).

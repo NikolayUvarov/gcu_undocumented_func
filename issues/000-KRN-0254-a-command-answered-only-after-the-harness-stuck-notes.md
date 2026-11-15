@@ -1,6 +1,6 @@
 # 000-KRN-0254 — In the USB image check, a `run memmap` refused later than the harness's 8 s on a loaded lane
 
-**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-11-15; cause found, the check's fix made, its ten runs left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-11-15; landed in round 144, four of its ten runs left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -59,7 +59,8 @@ A line typed at the console must reach the shell, or the program in front, in th
 - **2026-11-15, x32-2** (`90cbfd3154`, x32's lane running `x86: services, storage, audio` beside): `x86: USB image` passed five times in five, 163–177 s.
   - The refusals, in order: 5.9, 2.2, 4.0, 4.5 and 0.1 s in three runs; 5.9, 2.2, 9.8 and 0.1 s in two.
   - **The slow one** is the refusal after the copy is taken out. Its work, about 4 and 4.5 s, falls into one command or two. The limit's margin there is 5 s.
-- **Left:** five more runs on x32 beside a busy lane, and a gate.
+- **Landed in round 144** (`main` `dccd68c81e`, gate GREEN): `x86: USB image` passed on x32-2 in 179 s beside the gate's other lanes. The request returned in round 143 is the first part of this one.
+- **Left:** four more runs on x32 beside a busy lane, for ten.
 
 ## Related
 

@@ -250,3 +250,15 @@ For [000-APP-0077](000-APP-0077-microphone-sensitivity.md) (`tests/qemu_smoke.py
   - On a slow machine the rest of the line can still be on its way. The values are always integers (`wm/src/settings.rs`, `meter_line`), so the format is not the cause.
 - **The request** (APP decides how): wait for the whole line before reading it. For example, wait for the line's end (`dBFS; noise floor `, then ` dBFS` after it), or retry the `re.search` until the `logged` deadline.
 - **Owner:** APP. KRN has not changed the check.
+
+## KRN's request (2026-11-15): the `svc` check waits more than the harness's 8 s for a write on a loaded machine
+
+For [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done) (`tests/qemu_smoke.py`, `svc_boot_check`).
+
+- **What failed:** round 143's gate, `x86: keys, shell, tools` on x32 beside x32-2's lane, in 191 s: `Timeout waiting for 'MIND> ': svc after windows sysmon`. Alone on x32 it passed, in 466 s. The logs are on x32, `~/mind-core/KRN/logs/land-r143/x32-08/`.
+- **What the stuck record shows** (`mind-core-stuck-635980-1.log`), at the 8 s mark and one second later alike:
+  - `svc` waits for `vfs_server`'s reply;
+  - `vfs_server` waits for `ata`'s, and `ata` runs.
+  So the write of `data/services.txt`, the check's second, had not reached the disk in 8 s. The host's disk was busy with the gate's other lane.
+- **The request** (APP decides how): give the commands that write `data/services.txt` a wait the write can take on a loaded host. For example, pass `timeout=` to `vm.command` for `svc disable` and `svc after`, as `dmesg` has `DMESG_WAIT`.
+- **Owner:** APP. KRN has not changed the check.
