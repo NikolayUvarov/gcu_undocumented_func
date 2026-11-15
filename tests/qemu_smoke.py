@@ -13821,6 +13821,159 @@ def effector_update_suite(args):
           "confirmed", flush=True)
 
 
+def image_tree(image, out):
+    """{path: sha256} of every file on a raw image, read out through mtools into `out`."""
+    out.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["mcopy", "-s", "-n", "-i", image.drive, "::*", str(out)], check=True, env=MTOOLS_ENV, capture_output=True)
+    return {p.relative_to(out).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.rglob("*")) if p.is_file()}
+
+
+# What a refused trial may write that the slot before does not read as its own state (801-UPD-0041): the boot records the
+# updater spends, the loader's mark of how far a boot got, the trial's own slot, and the updater's reason for the slot before.
+TRIAL_WRITES = (re.compile(r"MIND/BOOT[01]"), re.compile(r"MIND/REACHED"), re.compile(r"MIND/B/.*"), re.compile(r"system/updater/.*"))
+
+
+def rollback_suite(args):
+    """801-UPD-0041 (801, S1 to S3): a developer's release through the Effector agent that cannot reach the server is
+    rolled back with its reason, and the slot before is back on the server as it was. Release 5 in slot A, connected,
+    takes release 6 by `update_agent`; while slot B is on trial the fixture answers nothing. init holds the trial for the
+    server's word for its whole bound and refuses it; the updater keeps the reason, spends the trial with tries left and
+    restarts (QEMU exits). Every file slot A reads is then as it was before the trial. Slot A boots, its agent connects with
+    the same identity, its heartbeat carries the fallback (801-EFF-0029), and it answers the update command fell-back."""
+    if not raw_tools():
+        print("SKIP: rollback suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    sys.path.insert(0, str(ROOT / "tests"))
+    import effector_server  # noqa: E402
+    temp = Path(tempfile.mkdtemp(prefix="mind-rollback-"))
+    arch = args.arch
+    volume, _, server_tree, kept, _, _, _, _, _ = update_releases(temp, arch)
+    release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
+    bundle = (temp / "release6.zip").read_bytes()
+    # Three tries: a trial init refused is spent, so the next boot falls back at once, not after three bounds (801-UPD-0037).
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
+    agent, token = "mind-test", "mind-effector-test-token"
+    server = effector_server.EffectorFixture(token=token).start()
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server_tree / "keys/current").read_bytes())
+    files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\nremote-update\n",
+             "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
+             "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),
+             "data/effector/policy": b"effector-policy 1\nagent on\nupdate apply\n"}
+    for name, data in files.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    image = boot_slots.Image.create(temp / "rollback.img", layout, megabytes=256)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+
+    def logged(vm, name, line, timeout=120):
+        # A service's lines through dmesg; a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(1)
+        raise AssertionError((name, line, log[-3000:]))
+
+    def restarted(vm, timeout, step=None):
+        # QEMU exits at the machine's restart (-no-reboot); `step` runs every few seconds meanwhile.
+        deadline = time.monotonic() + timeout
+        while vm.process.poll() is None:
+            if time.monotonic() > deadline:
+                vm.collect()
+                raise AssertionError(("no restart", ANSI.sub("", vm.log)[-3000:]))
+            if step:
+                step()
+            time.sleep(5)
+        vm.collect()
+
+    # Slot A, release 5, on the server; it takes release 6, stages it in slot B and restarts.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+
+        def unanswered():
+            assert not server.operation(on), ("answered before the restart", server.operation(on))
+        restarted(vm, 1500, unanswered)
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-a-{args.cpus}cpu.log").write_text(vm.log)
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["confirmed"]) == ("B", "A", False) and chosen["tries"] > 1, chosen
+    before = image_tree(image, temp / "before")
+    assert "data/effector/token" in before and "data/effector/agent_id" in before, sorted(before)
+
+    # Slot B on trial with the server out of reach: every request ends unanswered until the machine restarts.
+    beats_then = len(server.beats)
+    server.outage(600)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    started = time.monotonic()
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=120)
+        restarted(vm, 600 + 300, lambda: server.outage(600))
+    finally:
+        vm.close()
+        with server.lock:
+            server.down_until = 0.0
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-b-{args.cpus}cpu.log").write_text(vm.log)
+    held = time.monotonic() - started
+    out = ANSI.sub("", vm.log)
+    assert "WAS NOT CONFIRMED IN" not in out and held > 600, (held, out[-3000:])
+    assert not any(b.get("agent_id") == agent for b in list(server.beats)[beats_then:]), "a heartbeat reached the server"
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version 6 in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: [^\n]+\nlog [^\n]+\n", refused), refused
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
+    # S3: what slot A reads is as it was; only the trial's own writes differ.
+    after = image_tree(image, temp / "after")
+    touched = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p) and not any(w.fullmatch(p) for w in TRIAL_WRITES))
+    assert not touched, ("the trial changed what slot A reads", touched)
+
+    # Slot A again: on the server with the same identity, the fallback in its heartbeat, the update answered fell-back.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        boot = ANSI.sub("", vm.log)
+        require_all(boot, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED")
+        log = logged(vm, "effector", "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER", 180)
+        require(log, "EFFECTOR: CONNECTED TO 10.0.2.2")
+        require(log, "version 6 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S")
+        deadline = time.monotonic() + 120
+        while not (report := next((b for b in list(server.beats) if b.get("agent_id") == agent and (b.get("update") or {}).get("state") == "rolled_back"), None)):
+            assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
+            time.sleep(1)
+        assert report["update"]["build_number"] == 6 and "falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S" in report["update"]["result"], report["update"]
+        deadline = time.monotonic() + 300
+        while not (result := server.operation(on)):
+            assert time.monotonic() < deadline, "the update command was not answered"
+            time.sleep(1)
+        assert result["status"] == "failed" and result["result"]["error"] == "fell-back", result
+        require(result["result"]["stdout"], "fell back: slot A runs version 5, not 6; the updater: version 6 in slot B, falling back to slot A")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        server.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-a2-{args.cpus}cpu.log").write_text(vm.log)
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print(f"PASS: rollback: release 6 taken through the agent could not reach the server on trial; init held it {held:.0f} s "
+          "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
+          "slot A came back on the server as the same agent, reported the fallback in its heartbeat and answered the update "
+          "fell-back", flush=True)
+
+
 def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
@@ -18409,7 +18562,7 @@ def main():
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -18493,6 +18646,9 @@ def main():
             continue
         if suite == "effector-update":
             effector_update_suite(args)
+            continue
+        if suite == "rollback":
+            rollback_suite(args)
             continue
         if suite == "update":
             update_suite(args)
