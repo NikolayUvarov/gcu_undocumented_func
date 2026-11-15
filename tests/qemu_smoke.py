@@ -8328,6 +8328,35 @@ def firmware_sectors(image, start):
     return sectors | {data + (cluster - 2) * spc + s for cluster in chain for s in range(spc)}
 
 
+# The vendor of MIND's own EFI variables (common/abi.rs RUN_MARK_GUID), as the firmware stores its bytes.
+MIND_VARIABLE_GUID = bytes([0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52])
+EFI_GLOBAL_GUID = bytes.fromhex("61dfe48bca93d211aa0d00e098032b8c")
+
+
+def nv_vars(data):
+    """The EFI variables in OVMF's file NvVars, {(vendor GUID bytes, name): (attributes, data)}: each one its name's size
+    (u32), its UCS-2 name, its vendor GUID, its attributes (u32), its data's size (u32) and its data."""
+    at, found = 0, {}
+    while at < len(data):
+        size, = struct.unpack_from("<I", data, at)
+        name = data[at + 4:at + 4 + size].decode("utf-16-le").rstrip("\0")
+        at += 4 + size
+        guid, (attributes, length) = data[at:at + 16], struct.unpack_from("<II", data, at + 16)
+        at += 24
+        assert at + length <= len(data), ("NvVars cut short", name, at, length, len(data))
+        found[(guid, name)] = (attributes, data[at:at + length])
+        at += length
+    return found
+
+
+def mind_variables(data):
+    """Of NvVars, the variables MIND writes that a later boot would read as state: its own vendor's but the run's mark
+    (000-KRN-0217, read as another slot's), and BootNext (efivar). The rest are the firmware's, rewritten at every boot
+    (its monotonic counter, its boot options for the devices it finds)."""
+    return {key: value for key, value in nv_vars(data).items()
+            if (key[0] == MIND_VARIABLE_GUID and key[1] != "MindCoreRun") or key == (EFI_GLOBAL_GUID, "BootNext")}
+
+
 def dirty_volume_check(args, temp):
     """000-KRN-0215: a boot volume its last writer left dirty, with an entry whose clusters are free in the FAT (a remove
     cut short), is checked at the mount and held: the log says so, files read, every write is refused, and nothing on
@@ -13949,6 +13978,10 @@ def rollback_suite(args):
         if before.get(name) == after.get(name) or any(w.fullmatch(name) for w in TRIAL_WRITES):
             return True
         old, new = temp / "before" / name, temp / "after" / name
+        if name == "NvVars" and arch == "x86_64":
+            # OVMF's variables on x86, where QEMU gives it no flash: it writes the file at every boot; MIND's must hold.
+            read = lambda path: mind_variables(path.read_bytes()) if path.is_file() else {}
+            return read(old) == read(new)
         return name in APPEND_ONLY and old.is_file() and new.is_file() and new.read_bytes().startswith(old.read_bytes())
     touched = sorted(p for p in set(before) | set(after) if not unchanged(p))
     problems = [("the trial changed what slot A reads", touched)] if touched else []
