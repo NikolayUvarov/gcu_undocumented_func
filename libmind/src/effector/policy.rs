@@ -50,6 +50,9 @@ pub enum Ask<'a> {
     Collect(&'a str, u64),
     Deliver(&'a str, u64),
     Package(&'a str, u64),
+    /// A package's archive of this size, before its application's name is read (750-EFF-0008): `packages on` and
+    /// `max-bytes`; the key for the name is asked with `Package` once the name is known.
+    Packages(u64),
     Update(Update),
     Reboot,
     Screen,
@@ -308,6 +311,7 @@ impl Policy {
                 if !self.packages || !name_ok(name, NAME_MAX) || self.keys_for(name).next().is_none() { return Err(Deny::NotNamed); }
                 size(n)
             }
+            Ask::Packages(n) => if self.packages { size(n) } else { Err(Deny::NotNamed) },
             Ask::Update(step) => if step != Update::None && step <= self.update { Ok(()) } else { Err(Deny::NotNamed) },
             Ask::Reboot => if self.reboot { Ok(()) } else { Err(Deny::NotNamed) },
             Ask::Screen => if self.screen { Ok(()) } else { Err(Deny::NotNamed) },

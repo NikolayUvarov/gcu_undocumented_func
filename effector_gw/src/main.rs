@@ -14,9 +14,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use effector_gw::gateway::{self, Badge, Fail, Gateway, Load, Machine, Mark, Origin, Sample, ServiceState, UpdateState};
-use effector_gw::policy::{self, Ask};
+use effector_gw::package::{self, Code, Operation, Refused};
+use effector_gw::policy::{self, Ask, Policy};
 use effector_gw::png;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_UPDATE, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_APPS, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_UPDATE, SLOT_VFS};
 use mind::effector::{BADGE_OWNER, BADGE_SESSION, GATEWAY_DIR, POLICY_FILE, SLOT_READER};
 use mind::idl::codec::{List, Text};
 use mind::idl::effector as wit;
@@ -25,6 +26,9 @@ use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 
 const RECEIVED: usize = 9; // an unexpected capability lands here and is dropped; the screen's copy too, while encoded
+const INCOMING: &str = ".incoming.zip"; // a package's archive while it is received, at the root of the apps scope
+#[cfg(target_arch = "x86_64")] const APP_ARCH: (apppkg::Arch, &str) = (apppkg::Arch::X86_64, "x64");
+#[cfg(target_arch = "aarch64")] const APP_ARCH: (apppkg::Arch, &str) = (apppkg::Arch::Aarch64, "arm64");
 const PIECE: usize = 16384; // vfs reads and writes at most this much per call
 const AUDIT_MAX: u32 = 256 * 1024; // the audit file is renamed to `audit.old` beyond this
 const MARK_MS: usize = 1000; // the agent's mark is lit this often; the compositor keeps it 3 s (750-EFF-0015)
@@ -152,6 +156,45 @@ impl Client {
         call(vfs::remove(self.endpoint, root, rest))
     }
 
+    // Each directory of `dir`, made where missing.
+    fn make_dirs(&mut self, dir: &str) -> Result<(), Fail> {
+        let root = self.root("")?;
+        let mut end = 0;
+        for part in dir.split('/') {
+            end += part.len();
+            let h = call(vfs::open_dir(self.endpoint, root, &dir[..end], true))?;
+            self.close(h);
+            end += 1;
+        }
+        Ok(())
+    }
+
+    fn is_dir(&mut self, path: &str) -> bool {
+        let Ok(root) = self.root("") else { return false };
+        match vfs::open_dir(self.endpoint, root, path, false) { Ok(Ok(h)) => { self.close(h); true } _ => false }
+    }
+
+    // A file, or a directory with all it holds; nothing there is no error.
+    fn remove_tree(&mut self, path: &str) -> Result<(), Fail> {
+        let root = self.root("")?;
+        if self.is_dir(path) {
+            let h = call(vfs::open_dir(self.endpoint, root, path, false))?;
+            let mut names: Vec<String> = Vec::new();
+            let listed = loop {
+                match call(vfs::list(self.endpoint, h, names.len() as u32)) {
+                    Ok(page) if page.as_slice().is_empty() => break Ok(()),
+                    Ok(page) => names.extend(page.as_slice().iter().map(|e| String::from(e.name.as_str())).filter(|n| n != "." && n != "..")),
+                    Err(e) => break Err(e),
+                }
+                if names.len() > 4096 { break Err(Fail::Bounds); }
+            };
+            self.close(h);
+            listed?;
+            for name in names { self.remove_tree(&format!("{}/{}", path, name))?; }
+        }
+        match call(vfs::remove(self.endpoint, root, path)) { Ok(()) | Err(Fail::NotFound) => Ok(()), Err(e) => Err(e) }
+    }
+
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Fail> {
         let ((v1, r1), (v2, r2)) = (mind::fs::split(from), mind::fs::split(to));
         if !v1.eq_ignore_ascii_case(v2) { return Err(Fail::Malformed); }
@@ -163,9 +206,67 @@ impl Client {
 // vfs_server's PID as init lists it; 0 when init does not say.
 fn vfs_pid(host: &mut Host) -> u64 { host.boot_services().iter().find(|(n, s, _)| n == "vfs_server" && *s == ServiceState::Running).map_or(0, |(_, _, p)| *p) }
 
+// A file error as a package's refusal code.
+fn code(f: Fail) -> Code {
+    match f { Fail::Bounds => Code::Space, Fail::Denied => Code::Denied, Fail::Unsupported => Code::Unsupported, Fail::Digest => Code::Digest, _ => Code::Io }
+}
+
+// The gateway's scope of data/apps/ (SLOT_APPS, 750-KRN-0169), as the package's install sees it. A rename onto an existing
+// file removes it first: the volume has no replacing rename.
+struct AppsScope<'a>(&'a mut Client);
+
+impl package::Apps for AppsScope<'_> {
+    fn read(&mut self, path: &str, max: usize) -> Result<Option<Vec<u8>>, Code> {
+        match self.0.size(path) {
+            Err(Fail::NotFound) => Ok(None),
+            Err(f) => Err(code(f)),
+            Ok(_) => self.0.read_whole(path, max).map(Some).map_err(code),
+        }
+    }
+    fn write(&mut self, path: &str, data: &[u8]) -> Result<(), Code> {
+        if let Some((dir, _)) = path.rsplit_once('/') { self.0.make_dirs(dir).map_err(code)?; }
+        self.0.write_at(path, 0, data, mind::fs::MODE_WRITE | mind::fs::MODE_CREATE | mind::fs::MODE_TRUNCATE).map_err(code)
+    }
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), Code> {
+        if self.0.size(to).is_ok() { self.0.remove(to).map_err(code)?; }
+        self.0.rename(from, to).map_err(code)
+    }
+    fn remove(&mut self, path: &str) -> Result<(), Code> { self.0.remove_tree(path).map_err(code) }
+    fn exists(&mut self, path: &str) -> bool { self.0.size(path).is_ok() || self.0.is_dir(path) }
+}
+
+// apppkg's checks under the owner's policy: the keys it trusts for the package's name (`package-key`), this machine's
+// architecture and release; no `package-downgrade` line exists, so an older version is refused.
+struct Keys<'a> { policy: &'a Policy, system: u64 }
+
+fn format_refusal(e: apppkg::Error) -> Refused {
+    Refused { code: Code::Format, what: format!("MANIFEST: {:?}", e) }
+}
+
+impl package::Verify for Keys<'_> {
+    fn name(&mut self, manifest: &[u8]) -> Result<String, Refused> {
+        apppkg::parse(manifest).map(|m| String::from(m.name)).map_err(format_refusal)
+    }
+    fn verify(&mut self, manifest: &[u8], signature: &[u8; 64], installed: Option<package::Installed>) -> Result<package::Checked, Refused> {
+        let name = apppkg::parse(manifest).map_err(format_refusal)?.name;
+        let trusted: Vec<apppkg::Trusted> = self.policy.keys_for(name).map(|k| apppkg::Trusted { key: *k, name }).collect();
+        if trusted.is_empty() { return Err(Refused { code: Code::Denied, what: format!("no package-key for {} in the owner's policy", name) }); }
+        let installed = installed.map(|i| apppkg::Installed { version: i.version, manifest: i.manifest });
+        let checked = apppkg::verify(manifest, signature, &trusted, APP_ARCH.0, self.system, installed, false).map_err(|e| match e {
+            apppkg::Error::Untrusted | apppkg::Error::Signature => Refused { code: Code::Signature, what: format!("MANIFEST.SIG under no key the policy trusts for {}", name) },
+            apppkg::Error::Arch => Refused { code: Code::Arch, what: format!("{} is built for another architecture", name) },
+            apppkg::Error::System => Refused { code: Code::System, what: format!("{} needs a newer release than {}", name, self.system) },
+            apppkg::Error::Older => Refused { code: Code::Older, what: format!("{} is not above the installed version", name) },
+            e => format_refusal(e),
+        })?;
+        Ok(package::Checked { name: String::from(name), version: checked.version,
+            files: checked.files().map(|f| package::File { path: String::from(f.path), size: f.size, sha256: f.sha256 }).collect() })
+    }
+}
+
 /// The machine as `init`'s grants show it to the gateway. `writer` is the scope `init` made of the policy's `deliver`
 /// root at this start (750-KRN-0120): its root is that directory, so paths are named below it.
-struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String>, audit_failed: bool }
+struct Host { reader: Client, writer: Client, private: Client, apps: Client, deliver: Option<String>, audit_failed: bool }
 
 fn temporary(path: &str) -> String { format!("{}.part", path) }
 
@@ -360,6 +461,25 @@ impl Machine for Host {
         updater(update::apply(Endpoint(SLOT_UPDATE), tries))
     }
 
+    fn package_write(&mut self, offset: u64, data: &[u8]) -> Result<(), Fail> {
+        let mode = mind::fs::MODE_WRITE | mind::fs::MODE_CREATE | if offset == 0 { mind::fs::MODE_TRUNCATE } else { 0 };
+        let written = self.apps.write_at(INCOMING, offset, data, mode);
+        if let Err(f) = written { mind::println!("[EFFECTOR_GW] A PACKAGE'S ARCHIVE NOT WRITTEN IN data/apps/{} AT {}: {}", INCOMING, offset, gateway::fail_name(f)); }
+        written
+    }
+
+    fn package_run(&mut self, size: u64, operation: Operation, policy: &Policy) -> Result<package::Report, Refused> {
+        let archive = self.apps.read_whole(INCOMING, size as usize);
+        let _ = self.apps.remove(INCOMING);
+        let archive = archive.map_err(|f| Refused { code: code(f), what: String::from("the received archive not read back") })?;
+        if archive.len() as u64 != size { return Err(Refused { code: Code::Digest, what: String::from("the received archive read back short") }); }
+        // The running release, for a package's `system` line; 0 when the updater does not say.
+        let system = self.update_state().map_or(0, |u| u.running);
+        package::run(&archive, operation, APP_ARCH.1, &mut Keys { policy, system }, &mut AppsScope(&mut self.apps))
+    }
+
+    fn package_discard(&mut self) { let _ = self.apps.remove(INCOMING); }
+
     fn update_state(&mut self) -> Option<UpdateState> {
         if !present(SLOT_UPDATE) { return None; }
         let s = update::status(Endpoint(SLOT_UPDATE)).ok()?;
@@ -405,12 +525,22 @@ impl Machine for Host {
     }
 }
 
+// A package's refusal code as effector.wit's error (1.7).
+fn package_error(c: Code) -> wit::Error {
+    match c {
+        Code::Unsupported => wit::Error::Unsupported, Code::Denied => wit::Error::Denied, Code::Digest => wit::Error::Digest, Code::Format => wit::Error::Format,
+        Code::Signature => wit::Error::Signature, Code::Arch => wit::Error::Arch, Code::System => wit::Error::System, Code::Older => wit::Error::Older,
+        Code::Space => wit::Error::Space, Code::Busy => wit::Error::Busy, Code::Io => wit::Error::Io,
+    }
+}
+
 fn error(f: Fail) -> wit::Error {
     match f {
         Fail::Denied => wit::Error::Denied, Fail::NotFound => wit::Error::NotFound, Fail::Busy => wit::Error::Busy, Fail::Bounds => wit::Error::Bounds,
         Fail::Digest => wit::Error::Digest, Fail::Exists => wit::Error::Exists, Fail::Expired => wit::Error::Expired, Fail::Audit => wit::Error::Audit,
         Fail::Io => wit::Error::Io, Fail::Signature => wit::Error::Signature, Fail::Older => wit::Error::Older, Fail::Malformed => wit::Error::Malformed,
         Fail::Cancelled => wit::Error::Cancelled, Fail::Unsupported => wit::Error::Unsupported, Fail::NoPolicy => wit::Error::NoPolicy,
+        Fail::Format => wit::Error::Format, Fail::Arch => wit::Error::Arch, Fail::System => wit::Error::System, Fail::Space => wit::Error::Space,
     }
 }
 
@@ -438,14 +568,19 @@ fn main(_info: &'static BootInfo) {
     // init starts it with `--service` in a mode (750-KRN-0119, 0143); started any other way it serves nothing.
     let service = mind::process::args_str().split_whitespace().any(|a| a == "--service");
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
-    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None, audit_failed: false };
+    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), apps: Client::new(SLOT_APPS), deliver: None, audit_failed: false };
     let (vfs_at_start, mut degraded) = (vfs_pid(&mut host), false);
+    // vfs_server ends a scope nobody opened within a minute: the delivery root's and data/apps/ are taken up now, not at
+    // their first use (750-EFF-0008).
+    for (client, name) in [(&mut host.writer, "THE DELIVERY ROOT"), (&mut host.apps, "data/apps/")] {
+        if let Err(f) = client.root("").map(|_| ()) { if client.granted { mind::println!("[EFFECTOR_GW] {} NOT OPENED: {}", name, gateway::fail_name(f)); } }
+    }
     // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
     if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
     let held = |slot: usize, name: &'static str| if present(slot) { name } else { "-" };
-    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
-        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"), held(SLOT_UPDATE, "UPDATER"));
+    mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),
+        held(SLOT_READER, "READER"), held(SLOT_FILE, "WRITER"), held(SLOT_VFS, "PRIVATE"), held(SLOT_DISPLAY, "DISPLAY"), held(SLOT_UPDATE, "UPDATER"), held(SLOT_APPS, "APPS"));
     // The owner's policy as the machine starts; without it every action answers no-policy.
     if let Err(f) = gw.reload_policy(&mut host, Badge::Owner) { mind::println!("[EFFECTOR_GW] NO POLICY: {}", gateway::fail_name(f)); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
@@ -530,13 +665,23 @@ fn main(_info: &'static BootInfo) {
             wit::Request::Close { handle } => wit::reply_close(reply, gw.close(m, badge, handle).map_err(error)),
             wit::Request::DeliverBegin { origin: o, path, size, sha256, replace } =>
                 wit::reply_deliver_begin(reply, gw.deliver_begin(m, badge, &origin(&o), path.as_str(), size, sha256.as_str(), replace).map_err(error)),
-            wit::Request::PackageBegin { origin: o, size, .. } => wit::reply_package_begin(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "package-begin", Ask::Package("", size))))),
+            wit::Request::PackageBegin { origin: o, action, size, sha256 } => {
+                let operation = match action { wit::PackageAction::Install => Operation::Install, wit::PackageAction::Reinstall => Operation::Reinstall, wit::PackageAction::Uninstall => Operation::Deinstall };
+                wit::reply_package_begin(reply, gw.package_begin(m, badge, &origin(&o), operation, size, sha256.as_str()).map_err(error))
+            }
             wit::Request::Write { handle, offset, data } => wit::reply_write(reply, gw.write(m, badge, handle, offset, data).map_err(error)),
             wit::Request::DeliverCommit { handle } => {
                 let delivered = gw.deliver_commit(m, badge, handle).map(|d| wit::Delivered { path: Text::new(&d.path).unwrap_or_default(), size: d.size, sha256: hex(&d.sha256) });
                 wit::reply_deliver_commit(reply, delivered.as_ref().map_err(|f| error(*f)))
             }
-            wit::Request::PackageCommit { .. } => wit::reply_package_commit(reply, Err(wit::Error::NotFound)),
+            wit::Request::PackageCommit { handle } => {
+                let version = |v: u64| Text::new(&format!("{}", v)).unwrap_or_default();
+                let done = gw.package_commit(m, badge, handle).map(|r| wit::PackageReport {
+                    name: Text::new(&r.name).unwrap_or_default(), version: version(r.version), previous: r.previous.map(version).unwrap_or_default(),
+                    arch: Text::new(r.arch).unwrap_or_default(), files: r.files, manifest: hex(&r.manifest),
+                }).map_err(|r| { mind::println!("[EFFECTOR_GW] PACKAGE REFUSED: {}", package::refusal_line(&r)); package_error(r.code) });
+                wit::reply_package_commit(reply, done.as_ref().map_err(|e| *e))
+            }
             wit::Request::UpdateCheck { origin: o, apply } => {
                 let step = if apply { policy::Update::Apply } else { policy::Update::Check };
                 wit::reply_update_check(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "update-check", Ask::Update(step)))))
@@ -559,7 +704,10 @@ fn main(_info: &'static BootInfo) {
             wit::Request::UpdateApply { origin: o, tries } => wit::reply_update_apply(reply, gw.update_apply(m, badge, &origin(&o), tries).map_err(error)),
             wit::Request::UpdateState => {
                 let s = gw.update_state(m, badge);
-                let state = wit::UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: Text::new(&s.failure).unwrap_or_default() };
+                // The updater's line whole (801-EFF-0035): cut at a character's edge only past the record's 256 bytes.
+                let mut end = s.failure.len().min(256);
+                while !s.failure.is_char_boundary(end) { end -= 1; }
+                let state = wit::UpdateState { slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: Text::new(&s.failure[..end]).unwrap_or_default() };
                 wit::reply_update_state(reply, &state)
             }
             wit::Request::ReloadPolicy => {

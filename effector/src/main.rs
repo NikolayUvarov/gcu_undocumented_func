@@ -36,6 +36,7 @@ const BENCH_SLICE_MS: u64 = 200; // performance_measure runs this long between h
 const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
 const QUIET_MS: usize = 40_000; // after the last heartbeat, how long the agent waits for the restart before it goes on
 const UPDATE_S: u64 = 1800; // an update's budget when the command names none: the download, the staging and the apply
+const PACKAGE_S: u64 = 600; // a package's fixed budget: the download, the checks and the install (contract 1.5)
 const RESTART_WAIT_MS: usize = 60_000; // after an apply the updater accepted, the restart comes within this or not at all
 const UPDATE_LOOK_MS: usize = 2000; // after the restart, the updater's view is read this often until it answers
 const BODY_MAX: usize = 16384;
@@ -180,8 +181,8 @@ struct Running {
 }
 
 /// A developer's release applied before the restart this boot may follow (751-EFF-0023): its command, whether the
-/// machine restarted since, and when the agent started looking.
-struct UpdateWait { pending: update::Pending, restarted: bool, since: usize, look_at: usize }
+/// machine restarted since, when the agent started looking, init's last word on the trial and when it confirmed it.
+struct UpdateWait { pending: update::Pending, restarted: bool, since: usize, look_at: usize, trial: Option<update::Trial>, confirmed_at: Option<usize> }
 
 /// The machine's processor time and the agent's own, from the gateway's counters.
 fn cpu_now() -> Option<bench::Cpu> {
@@ -216,6 +217,37 @@ fn vfs_pid() -> u64 {
     match init::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => list.as_slice().iter().find(|s| s.name.as_str() == "vfs_server" && s.running).map_or(0, |s| s.pid),
         _ => 0,
+    }
+}
+
+/// A gateway's error for a package, as contract 1.5 names its refusals.
+fn package_failure(e: gateway::Error) -> session::Failure {
+    use session::Failure as F;
+    match e {
+        gateway::Error::Signature => F::Signature, gateway::Error::Older => F::Older, gateway::Error::Format => F::Format,
+        gateway::Error::Arch => F::Arch, gateway::Error::System => F::System, gateway::Error::Space => F::Space,
+        gateway::Error::Denied | gateway::Error::NoPolicy => F::Denied, gateway::Error::Bounds => F::Denied,
+        gateway::Error::Digest => F::Digest, gateway::Error::Busy => F::Busy, gateway::Error::Unsupported => F::Unsupported,
+        _ => F::Io,
+    }
+}
+
+/// What each refusal checked, for the result's `refused CODE: …` line; the gateway's audit holds the particulars.
+fn refusal_text(f: session::Failure) -> &'static str {
+    use session::Failure as F;
+    match f {
+        F::Unsupported => "the command or the archive is not one this build takes (mind-package-1, at most 8 MiB)",
+        F::Denied => "the owner's policy has no packages on, no package-key for the application, or a lower max-bytes",
+        F::Digest => "the archive's size or SHA-256, or a file's, is not what was announced",
+        F::Format => "the ZIP, manifest.json or MANIFEST breaks contract 1.5",
+        F::Signature => "MANIFEST.SIG does not verify under a key the owner's policy trusts for the name",
+        F::Arch => "the package is not for this machine's architecture",
+        F::System => "the package needs a newer release than this one",
+        F::Older => "the version is not above the installed one",
+        F::Space => "data/apps/ has no room; the installed version stays",
+        F::Busy => "another transfer is open in the gateway",
+        F::Upload => "the archive was not downloaded",
+        _ => "the disk or the gateway failed; the installed version stays",
     }
 }
 
@@ -424,7 +456,8 @@ impl Agent {
         // A benchmark under way, or an update waiting for its restart, holds the one slot as an answer waiting does.
         let own = self.running.as_ref().map(|r| (r.id.as_str(), r.action.as_str())).or(self.update.as_ref().map(|u| (u.pending.id.as_str(), u.pending.action.as_str())));
         let waiting = waiting.or_else(|| own.and_then(|(id, _)| session::Id::command(id).ok()));
-        let mut buf = [0u8; 1536];
+        // Room for the longest IDs, the machine's name and a fallback's line of 256 bytes, escaped (801-EFF-0035).
+        let mut buf = [0u8; 2048];
         let mut stamp = [0u8; 20];
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
         // Busy from the first heartbeat that finds an answer waiting, until the server takes it.
@@ -451,14 +484,17 @@ impl Agent {
         session::outcome(status, ok)
     }
 
+    // `answered`: the command was answered before for good, and this is a redelivery of it (750-EFF-0033).
     #[inline(never)]
-    fn ack(&mut self, ack: &session::Ack) -> Outcome {
+    fn ack(&mut self, ack: &session::Ack, answered: bool) -> Outcome {
         if ack.record.result == session::Final::Reported {
             if let Some(outcome) = self.ack_result(ack) { return outcome; }
+            if answered { return self.ack_again(ack, "RESULT", "its result"); }
             mind::println!("EFFECTOR: THE RESULT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
         }
         if let session::Final::Captured(kind) = ack.record.result {
             if let Some(outcome) = self.ack_artifact(ack, kind) { return outcome; }
+            if answered { return self.ack_again(ack, "ARTIFACT", "its artifact"); }
             mind::println!("EFFECTOR: THE ARTIFACT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
         }
         let mut buf = [0u8; 1024];
@@ -507,6 +543,23 @@ impl Agent {
         Some(session::outcome(status, ok))
     }
 
+    /// A redelivered command answered before whose result or artifact is no longer kept: completed, as it was, saying its
+    /// first answer carried it. The action is not run again; the server keeps its first result (750-EFF-0033).
+    #[inline(never)]
+    fn ack_again(&mut self, ack: &session::Ack, what: &str, said: &str) -> Outcome {
+        let line = alloc::format!("answered before: {} went with its first answer and is not kept for a repeat", said);
+        let mut buf = [0u8; 1024];
+        let Ok(result) = wire::exec_result(&mut buf, 0, &line, "") else { return Outcome::Permanent };
+        let Ok(result) = core::str::from_utf8(result) else { return Outcome::Permanent };
+        let mut body = [0u8; 1536];
+        let Ok(body) = wire::ack(&mut body, ack.record.id.as_str(), result) else { return Outcome::Permanent };
+        let body: Vec<u8> = body.to_vec();
+        let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Outcome::Retry };
+        let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
+        mind::println!("EFFECTOR: ACK {} completed AGAIN, ITS {} NOT KEPT: {}", ack.record.id.as_str(), what, if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+        session::outcome(status, ok)
+    }
+
     /// The ACK of a measured result, from the private file it was kept in; `None` if that file does not hold it.
     #[inline(never)]
     fn ack_result(&mut self, ack: &session::Ack) -> Option<Outcome> {
@@ -522,7 +575,8 @@ impl Agent {
         Some(session::outcome(status, ok))
     }
 
-    /// An answer that needs no more ACK: its `done` line, and its artifact removed.
+    /// An answer that needs no more ACK: its `done` line, and its artifact removed. A measured result stays until the next
+    /// one replaces it, so a redelivery of the last gets the same answer again (750-EFF-0033).
     #[inline(never)]
     fn finished(&self, record: &session::Record) {
         let mut line = [0u8; journal::LINE_MAX];
@@ -531,7 +585,6 @@ impl Agent {
         let written = File::open_mode(&path, MODE_WRITE).and_then(|mut f| { let at = f.size(); f.write_at(at, &line[..n])?; f.flush() });
         if written.is_err() { mind::println!("EFFECTOR: JOURNAL: THE DONE LINE OF {} WAS NOT WRITTEN", record.id.as_str()); }
         if matches!(record.result, session::Final::Captured(_)) { let _ = fs::remove(&self.path("artifact")); }
-        if record.result == session::Final::Reported { let _ = fs::remove(&self.path("result")); }
     }
 
     /// The journal written again whole (a record was dropped to make room): to `journal.new`, then put in its place.
@@ -732,7 +785,8 @@ impl Agent {
     fn act(&mut self, id: &str, action: &str, program: &str, payload: &str, expires_unix: Option<u64>, initiator: &str, reason: &str) -> Option<session::Final> {
         use session::{Failure, Final};
         // The command's own budget, else the server's default for its kind (services 180 s, screenshots 30 s).
-        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, "update_agent" => UPDATE_S, _ => ACTION_S };
+        // `deploy` in its MIND form: a fixed 600 s (contract 1.5, `mind-package-1`).
+        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, "update_agent" => UPDATE_S, "deploy" => PACKAGE_S, _ => ACTION_S };
         let budget = if payload.trim_start().starts_with('{') { self.parsed(payload.as_bytes(), wire::timeout_seconds).ok().flatten() } else { None }.unwrap_or(default);
         let o = origin(id, initiator, reason, budget);
         let service = |a| {
@@ -743,6 +797,7 @@ impl Agent {
         Some(match action {
             "collect_file" => self.collect_file(id, payload, &o),
             "deliver_file" => self.deliver_file(id, payload, &o),
+            "deploy" => self.deploy(id, payload, &o),
             "update_agent" => self.update_agent(id, program, payload, expires_unix, &o),
             "collect_logs" => self.collect_logs(id, payload, &o),
             "screenshot" => {
@@ -881,8 +936,14 @@ impl Agent {
     /// in order; more than `size` bytes is `digest`.
     #[inline(never)]
     fn download(&mut self, id: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
-        use session::Failure;
         let query = alloc::format!("?agent_id={}&command_id={}", self.agent_id, id);
+        self.fetch_into("/api/commands/file", &query, size, handle)
+    }
+
+    /// `route`'s body into the gateway's incoming transfer `handle` in its pieces, in order; more than `size` is `digest`.
+    #[inline(never)]
+    fn fetch_into(&mut self, route: &str, query: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
+        use session::Failure;
         let (mut piece, mut offset, mut failed) = (Vec::with_capacity(PIECE), 0u64, None);
         let status = {
             let mut sink = |data: &[u8]| -> bool {
@@ -891,7 +952,11 @@ impl Agent {
                     let room = PIECE - piece.len();
                     piece.extend_from_slice(&b[..b.len().min(room)]);
                     if piece.len() == PIECE {
-                        match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => {}, Ok(Err(e)) => { failed = Some(failure(e)); return false; } Err(_) => { failed = Some(Failure::Io); return false; } }
+                        match gateway::write(GATEWAY, handle, offset, &piece) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); failed = Some(failure(e)); return false; }
+                            Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); failed = Some(Failure::Io); return false; }
+                        }
                         offset += PIECE as u64;
                         piece.clear();
                         piece.extend_from_slice(&b[b.len().min(room)..]);
@@ -899,13 +964,69 @@ impl Agent {
                 }
                 true
             };
-            self.send(Method::Get, "/api/commands/file", &query, "application/json", None, Some(&mut sink))
+            self.send(Method::Get, route, query, "application/json", None, Some(&mut sink))
         };
         match (status, failed) {
             (_, Some(f)) => Err(f),
-            (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) { Ok(Ok(())) => Ok(()), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) },
+            (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); Err(failure(e)) }
+                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); Err(Failure::Io) }
+            },
             (Some(200), None) => Ok(()),
             _ => Err(Failure::Upload),
+        }
+    }
+
+    /// `deploy` in its MIND form (750-EFF-0008, contract 1.5 `mind-package-1`): the archive from
+    /// `/api/deployment/download/{id}` straight into the gateway, which checks its size and SHA-256, then the package's
+    /// signature, version and files, and installs or removes it under `data/apps/`. The outcome goes to the server's
+    /// `/api/deployment/result` first, then in the ACK; both say the same.
+    #[inline(never)]
+    fn deploy(&mut self, id: &str, payload: &str, o: &gateway::Origin) -> session::Final {
+        use session::{Failure, Final};
+        let started = server_unix().unwrap_or(0);
+        let Some(p) = wire::package(payload) else {
+            mind::println!("EFFECTOR: DEPLOY {} REFUSED: NOT mind-package-1", id);
+            return Final::Failed(Failure::Unsupported);
+        };
+        let action = match p.operation { "install" => gateway::PackageAction::Install, "reinstall" => gateway::PackageAction::Reinstall, _ => gateway::PackageAction::Uninstall };
+        let (package_id, operation) = (String::from(p.id), String::from(p.operation));
+        let done = (|| {
+            let handle = match gateway::package_begin(GATEWAY, o, action, p.size, p.sha256) {
+                Ok(Ok(h)) => h, Ok(Err(e)) => return Err(package_failure(e)), Err(_) => return Err(Failure::Unsupported),
+            };
+            let route = alloc::format!("/api/deployment/download/{}", package_id);
+            if let Err(f) = self.fetch_into(&route, "", p.size, handle) { let _ = gateway::close(GATEWAY, handle); return Err(f); }
+            match gateway::package_commit(GATEWAY, handle) {
+                Ok(Ok(r)) => Ok(r),
+                Ok(Err(e)) => Err(package_failure(e)),
+                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER THE PACKAGE'S COMMIT: {:?}", e); Err(Failure::Io) }
+            }
+        })();
+        let line = match &done {
+            Ok(r) if operation == "deinstall" => alloc::format!("removed {} {}", r.name.as_str(), if r.previous.as_str().is_empty() { "none" } else { r.previous.as_str() }),
+            Ok(r) => alloc::format!("installed {} {} {} {} {}", r.name.as_str(), r.version.as_str(), r.arch.as_str(), r.files, r.manifest.as_str()),
+            Err(f) => alloc::format!("refused {}: {}", f.name(), refusal_text(*f)),
+        };
+        mind::println!("EFFECTOR: DEPLOY {} {} {}: {}", id, operation, package_id, line);
+        // The server's DeploymentResult, then the ACK (contract 1.5, section 3).
+        let mut buf = [0u8; 2048];
+        let d = wire::Deployed { agent_id: &self.agent_id, package_id: &package_id, operation: &operation, success: done.is_ok(), stdout: &line, started, finished: server_unix().unwrap_or(0) };
+        match wire::deployment_result(&mut buf, &d).map(|b| b.to_vec()) {
+            Ok(body) => match self.request(Method::Post, "/api/deployment/result", "", Some(&body)) {
+                Some(200) if self.answer(wire::ok_answer).is_ok() => {}
+                status => mind::println!("EFFECTOR: DEPLOYMENT RESULT OF {} ANSWERED {:?}", id, status),
+            },
+            Err(e) => mind::println!("EFFECTOR: DEPLOYMENT RESULT OF {} NOT WRITTEN: {:?}", id, e),
+        }
+        match done {
+            Ok(_) => {
+                let mut buf = [0u8; 1024];
+                let kept = wire::completed_result(&mut buf, &line).ok().is_some_and(|json| self.keep_result(id, json));
+                if kept { Final::Reported } else { Final::Completed }
+            }
+            Err(f) => Final::Failed(f),
         }
     }
 
@@ -1022,7 +1143,18 @@ impl Agent {
         let view = state.as_ref().filter(|s| s.slot != 0 || s.running != 0).map(|s| update::View {
             slot: s.slot, trial: s.trial, running: s.running, recorded: s.recorded, confirmed: s.confirmed, staged: s.staged, failure: s.failure.as_str(),
         });
-        let verdict = update::verdict(&u.pending, u.restarted, view.as_ref(), (now() - u.since) as u64);
+        // init's word on this boot (801-EFF-0034): the updater's lag is counted from its confirmation.
+        let trial = match init::boot(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(b)) => Some(update::trial(b.trial, b.deciding, b.confirmed)), _ => None };
+        if trial == Some(update::Trial::Confirmed) && u.confirmed_at.is_none() { u.confirmed_at = Some(now()); }
+        if trial != u.trial {
+            let said = match trial {
+                Some(update::Trial::Deciding) => "THE TRIAL IS DECIDING: NO ANSWER, NOTHING KEPT CHANGES", Some(update::Trial::Confirmed) => "THE TRIAL IS CONFIRMED",
+                Some(update::Trial::Refused) => "THE TRIAL IS REFUSED: THE SLOT BEFORE ANSWERS", Some(update::Trial::NoTrial) => "NO TRIAL", None => "NOTHING",
+            };
+            mind::println!("EFFECTOR: THE KEPT UPDATE {}: init SAYS {}", u.pending.id, said);
+            u.trial = trial;
+        }
+        let verdict = update::verdict(&u.pending, u.restarted, view.as_ref(), trial, (now() - u.confirmed_at.unwrap_or(u.since)) as u64);
         let update::Verdict::Answer { exit_code, stdout, error } = verdict else { return };
         let u = self.update.take().unwrap();
         let p = &u.pending;
@@ -1295,7 +1427,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
                 let boot_unix = mind::rtc::unix_time().map(|t| t.saturating_sub(now() as u64 / 1000));
                 let restarted = update::restarted(&pending, now() as u64, boot_unix);
                 mind::println!("EFFECTOR: UPDATE {} TO VERSION {}: {}", pending.id, pending.staged, if restarted { "THE MACHINE RESTARTED; ITS ANSWER FOLLOWS THE UPDATER'S STATE" } else { "NO RESTART SINCE IT WAS APPLIED" });
-                agent.update = Some(Box::new(UpdateWait { pending, restarted, since: now(), look_at: 0 }));
+                agent.update = Some(Box::new(UpdateWait { pending, restarted, since: now(), look_at: 0, trial: None, confirmed_at: None }));
             }
             None => { mind::println!("EFFECTOR: {}/update IS MALFORMED OR ANOTHER AGENT'S: REMOVED", agent.dir); let _ = fs::remove(&agent.path("update")); }
         }
@@ -1375,7 +1507,7 @@ fn main(_info: &'static BootInfo) {
         }
         match session.next_ack(time()) {
             Ok(Some(ack)) => {
-                let outcome = agent.ack(&ack);
+                let outcome = agent.ack(&ack, session.answered(ack.record.id));
                 let _ = session.ack_done(ack, outcome, now() as u64, jitter());
                 if outcome != Outcome::Retry { agent.finished(&ack.record); }
                 // The agent is free again: ask for the next command at once.

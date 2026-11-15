@@ -84,6 +84,20 @@ fn repeat_id_returns_original_result_without_a_second_store() {
 }
 
 #[test]
+fn a_repeat_is_known_as_answered_once_its_first_ack_ended() {
+    let mut s = online(&[]);
+    let record = store(&mut s, command("one"), time(0));
+    // Before its first ACK ends, a lost result is a loss (io); after it, a redelivery of an answer sent (750-EFF-0033).
+    assert!(!s.answered(record.id));
+    acknowledge(&mut s, time(2));
+    assert!(s.answered(record.id));
+    assert_eq!(s.receive(command("one"), time(3)), Ok(Accepted::Replay));
+    assert!(s.answered(record.id), "the repeat waits for its ACK as one answered before");
+    acknowledge(&mut s, time(4));
+    assert!(!s.answered(Id::command("two").unwrap()), "an unknown ID was never answered");
+}
+
+#[test]
 fn changed_payload_action_program_or_term_cannot_reuse_an_id() {
     let mut s = online(&[]);
     store(&mut s, command("one"), time(0)); acknowledge(&mut s, time(0));

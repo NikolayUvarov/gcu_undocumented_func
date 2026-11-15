@@ -204,6 +204,11 @@ class EffectorServerTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/deployment/download/package-1")[1], data)
         self.assertEqual(self.request("POST", "/api/deployment/result", {"agent_id": "mind-test", "package_id": "package-1", "success": True})[0], 200)
         self.assertEqual(len(self.fixture.deployment_results), 1)
+        # A package ID with a dot, as contract 1.5 allows; a path is not one.
+        self.fixture.publish(data, package_id="memtest-1.zip")
+        self.assertEqual(self.request("GET", "/api/deployment/download/memtest-1.zip")[1], data)
+        with self.assertRaises(ValueError):
+            self.fixture.publish(data, package_id="..")
 
     def test_unknown_fields_redirect_and_another_certificate(self):
         self.heartbeat()

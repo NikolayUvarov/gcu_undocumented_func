@@ -3,7 +3,8 @@ target = "x86_64-unknown-none"
 rustflags = [
     "-C", "relocation-model=pic",
     "-Z", "relax-elf-relocations=yes",
-    "-C", "link-arg=-Tlinker.ld"
+    "-C", "link-arg=-Tlinker.ld",
+    "--cfg", "curve25519_dalek_backend=\"serial\""
 ]
 
 # aarch64 (issue 201): the same static PIE with 4 KiB segment alignment.
@@ -14,5 +15,6 @@ rustflags = [
     "-C", "link-arg=-pie",
     "-C", "link-arg=-zmax-page-size=4096",
     "-C", "link-arg=--no-dynamic-linker",
-    "-C", "link-arg=-znotext"
+    "-C", "link-arg=-znotext",
+    "--cfg", "curve25519_dalek_backend=\"serial\""
 ]
