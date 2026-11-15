@@ -58,14 +58,14 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
   - no start unsettled: a normal start (the DEXP's case);
   - unsettled starts with the watchdog's evidence: those are left out at once;
   - unsettled starts without evidence: they are suspected, and left out only when the run before suspected them too.
-- **The evidence:** the kernel sets `BOOT_WATCHDOG_RESTARTED` in the tasks' `BootInfo.boot_flags` when the TCO or FCH watchdog restarted the last run (ABI 34; aarch64's watchdog keeps no such status).
+- **The evidence:** the kernel sets `BOOT_WATCHDOG_RESTARTED` in the tasks' `BootInfo.boot_flags` when the TCO or FCH watchdog restarted the last run (ABI 34; aarch64's watchdog keeps no such status). The kernel now arms the watchdog just before it starts `init`, not with the tick a moment later: the first run on `x32` (`2b3fb199c2`) showed `init`'s copy was written before the watchdog had read its status.
 - **Back by itself:** what a safe start left out starts again from `RETURN_MS` (120 s) past `READY`.
   - One at a time, each once the start before settled, the radios first, and `wlan` after its radio.
   - The 5 min of the plan became 120 s, so that a trial's agent still reaches its server within 801-KRN-0242's 600 s.
   - No fault of another service keeps them out.
 - **The mark is cleared** a minute past `READY`, once every start settled and what was left out came back.
 - **The lines:**
-  - `[INIT] SAFE START: …` keeps the prefix the shell reads (000-APP-0086);
+  - `[INIT] SAFE START: …` keeps the prefix the shell reads (000-APP-0086). Each line fits `logd`'s 200-byte record with all seven names;
   - each normal start after an early end says why it is one;
   - `[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: …`;
   - `[INIT] <service> STARTED AGAIN BY ITSELF <n> S PAST READY, …`.
@@ -74,11 +74,11 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
   - **The `watchdog` suite:** only what the stopped run was starting is left out. One service is started by hand, and the others must come back by themselves at 120 s or later.
   - **The power button's check:** a reset once the list settled is followed by a normal start. Two resets in a row before it settles are followed by a safe start.
   - **The link and modes suites** reach their safe start by two resets.
+  - **The `boot` suite's trial check:** a trial of slot B held for the server is cut twice at the prompt, which spends its tries. Slot A then starts normally and names slot B's run.
 
 **Left:**
 - the suites' runs on the machines;
 - a panic as evidence (step 3), not done;
-- the other slot's case in QEMU, which only the host test shows;
 - a bench machine's run;
 - step 5 (Effector's telemetry and the link's log), EFF's and LNK's to ask.
 

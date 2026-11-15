@@ -2679,12 +2679,14 @@ fn boot(info: &'static BootInfo) {
         (safe::Why::Unknown, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); ITS MARK IS DAMAGED AND NAMES NO SERVICE: A NORMAL START"),
         (safe::Why::OtherSlot(other), _) => mind::println!("[INIT] THE LAST RUN, OF {}, DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); WHAT IT WAS STARTING IS NOT THIS SLOT'S: A NORMAL START", slot_name(other as u32)),
         (safe::Why::Nothing, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), EVERY START OF THE SAFE START'S LIST SETTLED: A NORMAL START"),
-        (safe::Why::Once, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED WHILE {} STARTED, WITH NO SIGN OF A FREEZE (A CUT POWER OR A RESET): A NORMAL START; A SECOND SUCH RUN LEAVES THEM OUT", named.as_str()),
-        (safe::Why::Twice, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), THE SECOND RUN IN A ROW WHILE THESE STARTED; NOT STARTED: {}; THEY START AGAIN BY THEMSELVES FROM {} S PAST READY", named.as_str(), back),
-        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED: THE WATCHDOG RESTARTED IT WHILE THESE STARTED; NOT STARTED: {}; THEY START AGAIN BY THEMSELVES FROM {} S PAST READY", named.as_str(), back),
+        // Each line fits logd's 200-byte record with every name of the list.
+        (safe::Why::Once, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: {}", named.as_str()),
+        (safe::Why::Twice, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE SECOND IN A ROW WHILE THESE STARTED; NOT STARTED: {}", named.as_str()),
+        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: {}", named.as_str()),
     }
+    if decision.left_out != 0 { mind::println!("[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM {} S PAST READY", back); }
     let first = decision.suspected & !decision.left_out;
-    if decision.left_out != 0 && first != 0 { mind::println!("[INIT] {} ALSO STARTED WHEN THE LAST RUN ENDED, THE FIRST TIME: STARTED; A SECOND SUCH RUN LEAVES THEM OUT", names_of(first).as_str()); }
+    if decision.left_out != 0 && first != 0 { mind::println!("[INIT] ALSO STARTING WHEN IT ENDED, THE FIRST TIME, SO STARTED: {}", names_of(first).as_str()); }
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     init.run_mark = firmware.filter(|_| marked);
     if init.run_mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }

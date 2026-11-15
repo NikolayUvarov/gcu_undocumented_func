@@ -7410,8 +7410,7 @@ def cut_twice(vm, via):
         vm.expect("MIND> ", timeout=120)
         if cut == 0:
             log = vm.command("dmesg -s init", raw=True)
-            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED WHILE ")
-            require(log, " STARTED, WITH NO SIGN OF A FREEZE (A CUT POWER OR A RESET): A NORMAL START; A SECOND SUCH RUN LEAVES THEM OUT")
+            require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
             assert "[INIT] SAFE START:" not in log, log[-2000:]
 
 
@@ -17324,9 +17323,9 @@ def watchdog_suite(args, disk):
         # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
         shown = vm.expect("MIND> ", timeout=120)
         log = vm.command("dmesg -s init", raw=True)
-        decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED: THE WATCHDOG RESTARTED IT WHILE THESE "
-                            r"STARTED; NOT STARTED: ([^;\n]+); THEY START AGAIN BY THEMSELVES FROM 120 S PAST READY", log)
-        assert decided, log[-3000:]
+        decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: ([^\r\n]+)", log)
+        assert decided, [line for line in log.splitlines() if "LAST RUN" in line or "MARK" in line] or log[:3000]
+        require(log, "[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM 120 S PAST READY")
         left = decided[1].split(", ")
         # What the stopped run was starting: never bcm_wifi, which q35 has no device for and so never started.
         assert left and set(left) <= set(SAFE_LIST) and "bcm_wifi" not in left, left
@@ -18207,10 +18206,45 @@ def trial_check(args, disk):
         assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING\nlog (none|log:boot\d{4}\.log)\n", refused), refused
         chosen = boot_slots.newest(boot_slots.records(image.path))[1]
         assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
+        # 000-KRN-0217: the same held trial cut twice at the prompt, before the safe start's list settles, spends both
+        # tries, and slot A boots next. What slot B's run was starting is not slot A's to suspect: A's boot is a normal
+        # one, where a third run of B would have been a safe start.
+        volume = temp / "cut"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+            (volume / name).parent.mkdir(parents=True, exist_ok=True)
+            (volume / name).write_bytes(data)
+        image = boot_slots.Image.create(temp / "cut.img", boot_slots.layout(volume, temp / "cut-slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "cut-slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=2)
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            for cut in range(2):
+                vm.expect("MIND CORE KERNEL: SLOT B ON TRIAL", timeout=120)
+                vm.expect("MIND> ", timeout=120)
+                log = vm.command("dmesg -s init", raw=True)
+                require(log, "[INIT] TRIAL BOOT: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED; CONFIRMED ONCE THE EFFECTOR SERVER ACCEPTS")
+                if cut == 1:
+                    require(log, "[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: ")
+                assert SETTLED not in log, log[-2000:]
+                vm.hmp("system_reset")
+            out = vm.expect("BOOT: SLOT A LOADED", timeout=120)
+            require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] THE LAST RUN, OF SLOT B, DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); WHAT IT WAS STARTING IS NOT THIS SLOT'S: A NORMAL START")
+            assert "[INIT] SAFE START" not in log and "[INIT] STARTED audio_gw PID=" in log, log[-3000:]
+        finally:
+            vm.close()
     print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
           "restarts, and the next boot falls back to slot A; on the trial, keystore took a key for that boot alone and left "
           "the damaged one on the disk as it was (801-NET-0079); one held for the Effector server whose agent never connects "
-          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242)", flush=True)
+          "is refused at the bound, spent with a try left and its reason kept, and the next boot is slot A's (801-KRN-0242); "
+          "one cut twice while its radios, sound and speech started falls back to slot A, which starts normally, as what "
+          "slot B was starting is not its to suspect (000-KRN-0217)", flush=True)
 
 
 def loader_error(vm, name, reason):
