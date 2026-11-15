@@ -1,6 +1,6 @@
-# 000-KRN-0254 — In the USB image check, a `run memmap` refused later than the harness's 8 s on a loaded lane
+# 000-KRN-0254 — In the USB image check, a `run memmap` refused later than the harness's 8 s on a loaded lane — done
 
-**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-11-15; landed in round 144, four of its ten runs left) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
+**Type:** shell, console (`tests/usb_image_smoke.py`'s unplug check, 000-KRN-0085) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-11-15) · **Blocked by:** — · **Main task:** — · **Roadmap:** the landing gate · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -27,7 +27,7 @@ A line typed at the console must reach the shell, or the program in front, in th
   - The record at the 8 s mark, guest time 76 s: the shell waits for the loader's reply, the loader for `vfs_server`'s, `vfs_server` for `usb_storage`'s, and `usb_storage` sleeps between its claims (up to 20, 100 ms apart, on each request to a gone device).
   - One second later, at 78 s, every task waits to receive: the chain has answered. The log then shows the refusal and the prompt, before QEMU was stopped.
 - **That boot was slow.** Its first refusal took 5.9 s. In the 40 runs kept on x32 the first took 2.0–5.9 s: 4.0 s in 28, 5.9 s in two, this one among them.
-- **The check was stricter than its criterion.** [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md) asks for the refusal within 15 s; the check took the harness's 8 s.
+- **The check was stricter than its criterion.** [211-KRN-0050](../issues/211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md) asks for the refusal within 15 s; the check took the harness's 8 s.
 
 ## Plan
 
@@ -62,6 +62,24 @@ A line typed at the console must reach the shell, or the program in front, in th
 - **Landed in round 144** (`main` `dccd68c81e`, gate GREEN): `x86: USB image` passed on x32-2 in 179 s beside the gate's other lanes. The request returned in round 143 is the first part of this one.
 - **Left:** four more runs on x32 beside a busy lane, for ten.
 
+## Resolution
+
+- **The reorder is ruled out.** The lines before the late `run memmap` were the check's own commands, and the answer came in order, later than the harness's 8 s. The chain it waited on: the shell, the loader, `vfs_server`, then `usb_storage`'s claims of a gone device, 2 s each request.
+- **Three races of `tests/usb_image_smoke.py` fixed,** in `main` since round 144 (`dccd68c81e`):
+  - each `run memmap` refused for an unplugged disk waits up to 211-KRN-0050's 15 s, and the check prints each refusal's time;
+  - `debug_mode()` reads the boot log whole through a pipe: `cat` shows only a file's first 16 KiB;
+  - the copy one MiB longer goes in before the stick comes out, so no request finds neither in `usb_storage`'s claims.
+- **Ten runs of `x86: USB image` on x32 beside a busy lane, ten passed:**
+  - five on `90cbfd3154`;
+  - round 144's gate;
+  - four on `main` `91413b6468`.
+
+  The slowest refusal took 9.8 s, the one after the copy is taken out.
+- **Not done here:**
+  - the same stick out and in again "at once" keeps its race, since one image file cannot be attached twice;
+  - why a later refusal does the work of two is not known;
+  - `usb_storage` naming another medium after a loss is DRV's to decide.
+
 ## Related
 
-- [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md), the unplug check's task.
+- [000-KRN-0085](../issues/000-KRN-0085-a-returned-device-reported-to-its-block-client.md), the unplug check's task.
