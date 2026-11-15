@@ -119,6 +119,7 @@ fn before_a_country_the_first_send_takes_the_world_rules() { serve(true, Vec::ne
     let mut probe = management(4); probe[4..10].fill(0xff); probe[16..22].fill(0xff);
     let id = ipc::buffer(4, &send_frame(&probe)); step(service, phy, events);
     error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none()); assert!(service.limits().is_none());
+    let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     let id = ipc::buffer(4, &send_body()); step(service, phy, events);
     error(id, wlanhw::Error::Busy); assert!(matches!(service.take_ask(), Some(Ask::Admit(1))));
     assert_eq!(events.as_slice(), &[Event::NoCountry { channels: 13, listen_only: 2 }]);
@@ -127,6 +128,21 @@ fn before_a_country_the_first_send_takes_the_world_rules() { serve(true, Vec::ne
     // A country given later replaces it and is numbered after it.
     let id = ipc::buffer(9, &country("UZ", &all(20))); step(service, phy, events); info(id);
     assert_eq!((service.limits().unwrap().code(), service.settings()), (*b"UZ", 2));
+});}
+
+// 801-DRV-0071: a fresh driver, as after a restart, refuses a send before the station tunes it. It takes no rules or channel, and
+// `info` keeps channel 0, so a station that still thinks itself joined sees the restart (the Ryzen, 2026-11-14: 13 h on channel 1).
+#[test]
+fn a_send_before_the_stations_tune_is_refused_and_channel_0_stays() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+    let id = ipc::buffer(4, &send_body()); step(service, phy, events);
+    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none()); assert!(service.limits().is_none());
+    assert!(events.is_empty(), "{:?}", events);
+    let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 0);
+    // Under a country given by the station, still nothing before its tune.
+    let id = ipc::buffer(9, &country("RU", &all(20))); step(service, phy, events); info(id);
+    let id = ipc::buffer(4, &send_body()); step(service, phy, events);
+    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none());
+    let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 0);
 });}
 
 // 801 S5: init's unknown word, or none, is held back: the country's limits alone, as with no platform limit.
@@ -174,6 +190,7 @@ fn under_a_country_the_first_send_asks_admission_and_listen_only_channels_ask_no
         let us: Vec<_> = (1..=11).map(|ch| (ch, 30, false)).collect();
         let id = ipc::buffer(9, &country("US", &us)); step(service, phy, events); assert_eq!(info(id).channels.len(), 11);
         let id = ipc::words(2, 12); step(service, phy, events); error(id, wlanhw::Error::Invalid);
+        let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
         let id = ipc::buffer(4, &send_body()); step(service, phy, events);
         error(id, wlanhw::Error::Busy);
         assert!(matches!(service.take_ask(), Some(Ask::Admit(1))));

@@ -221,10 +221,12 @@ impl ReceiveOnly {
             // channel: `busy` now, and the station's next try goes out through the data service. A probe request admits
             // nothing: a scan visits every channel, and Linux too calibrates a channel when the station joins there
             // (rtw89_core_sta_add), not on each scan hop; the scan stays receive-only.
+            // A send before the station tuned this driver is refused: the fresh driver of a restart keeps channel 0 in `info`,
+            // so the station sees the restart, and no channel or rules are taken that it never set (801-DRV-0071).
             wlanhw::Request::Send { frame, .. } => {
                 let probe = frame.first().is_some_and(|control| control & 0xfc == 0x40);
-                if !probe && self.limits.is_none() && self.admits { self.world(events); }
-                let admit = !probe && self.sends_on(self.channel) && self.ask.is_none();
+                if !probe && self.set && self.limits.is_none() && self.admits { self.world(events); }
+                let admit = !probe && self.set && self.sends_on(self.channel) && self.ask.is_none();
                 let _ = wlanhw::reply_send(call, Err(if admit { wlanhw::Error::Busy } else { wlanhw::Error::Failed }));
                 if admit { self.ask = Some(Ask::Admit(self.channel)); }
             }
