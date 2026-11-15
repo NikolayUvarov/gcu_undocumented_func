@@ -45,7 +45,11 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
 - **`wlansim` built with `self-tuned`** starts on the access point's channel, as rtw89 took its own. `scripts/x86_fixtures.sh` builds it.
 - **The `net` suite's `fresh_radio_check`** (x86):
   - The station joins and the radio is killed. The PID must tell the restart, and the station joins again by itself.
-  - The one other possible sign, a call that found the old driver ended, makes the check restart the radio again, up to three times.
+  - **The station is held across the restart.** It calls the radio every 10 ms. A call between the kill and `init`'s start of the fresh radio finds the driver ended: the kernel fails it (MC-6.4), and that is the other sign, which 801-NET-0083's restart check covers.
+    - So the check gives the station a CPU budget of 1 ms in 60 s (`budget`) and waits until its sends stop.
+    - It kills the radio and waits for the fresh one's first line, checks the station's sends unchanged, then lifts the budget.
+    - The station's first call then reaches the fresh radio.
+  - **Why the first version restarted up to three times.** It retried on the other sign. On x32 (`41e360c4d4`) it needed the third restart: in two of three the station's call fell between the two radios.
 
 **Left:** the runs on the maintainer's machines, the gate, and a bench machine's run.
 

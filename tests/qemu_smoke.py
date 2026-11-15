@@ -13181,8 +13181,9 @@ def fresh_radio_check(args):
     """801-NET-0085, DRV's Ryzen run of 2026-11-14: a radio started again by init that is already on the channel the
     station tuned the one before to (wlansim built with `self-tuned`, as rtw89 took its own channel). Its `info` shows no
     restart, neither no channel nor another one: the station knows it by the PID that answers, says so, gives it the
-    country again and joins MIND-TEST again by itself. A call that found the old driver ended is the one other sign; then
-    the radio is restarted again, up to three times, until the PID is what told."""
+    country again and joins MIND-TEST again by itself. The station calls the radio every 10 ms, and a call between the
+    kill and init's start of the fresh one finds the driver ended, the other sign (801-NET-0083's restart check): so the
+    station is held by a CPU budget, its sends counted unchanged, from before the kill until the fresh radio is up."""
     if not args.self_tuned_radio_elf or not raw_tools():
         print("SKIP: the fresh radio check needs wlansim built with `self-tuned` (scripts/x86_fixtures.sh) and mtools", flush=True)
         return
@@ -13196,6 +13197,16 @@ def fresh_radio_check(args):
             time.sleep(1)
         raise AssertionError((line, text[-3000:]))
 
+    def sends(vm, pid):  # how many messages task `pid` has sent, from `stat tasks` page by page
+        start = 0
+        while True:
+            page = vm.command(f"stat tasks from {start}" if start else "stat tasks", raw=True)
+            if found := re.search(rf"^{pid} PARENT=\d+ .* SENDS=(\d+) ", page, re.M):
+                return int(found[1])
+            head = re.search(r"STAT TASKS VERSION=\d+ COUNT=(\d+) TOTAL=(\d+) FROM=\d+", page)
+            assert head and int(head[1]) and start + int(head[1]) < int(head[2]), f"no task {pid} in stat tasks: {page[-1500:]}"
+            start += int(head[1])
+
     with tempfile.TemporaryDirectory(prefix="smoke-fresh-radio-", dir=ROOT / IMAGE) as temp:
         image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.self_tuned_radio_elf}, extra={"data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
@@ -13203,27 +13214,40 @@ def fresh_radio_check(args):
             require(vm.service_logs("wlansim", "BY ITSELF"), "[WLANSIM] ON CHANNEL 6 BY ITSELF: A FRESH RADIO THAT TUNED ITSELF")
             vm.service_logs("wlan", "[WLAN] COUNTRY ")
             require(front_command(vm, "wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-            for attempt in range(1, 4):
-                vm.command(f"logs {vm.services()['wlan']}", raw=True)  # drained: what wlan logs next is this restart's
-                radio = vm.services()["wlansim"]
-                require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
-                log = wlan_until(vm, "[WLAN] AUTO-JOIN MIND-TEST: JOINED", 150)
-                reason = re.search(r"\[WLAN\] THE RADIO RESTARTED \(([^)]*)\)", log)
-                assert reason, log[-2000:]
-                fresh = vm.services()["wlansim"]
-                # The harness shows each "PID <n>" in its ordinal numbering (to_ordinal).
-                if reason[1] == to_ordinal(f"ANSWERED BY PID {fresh}, NOT PID {radio}"):
+            vm.command(f"logs {vm.services()['wlan']}", raw=True)  # drained: what wlan logs next is this restart's
+            wlan, radio = vm.services()["wlan"], vm.services()["wlansim"]
+            # 1 ms in 60 s: the station spends it in a few of its turns, then runs no more until the budget is lifted.
+            require(vm.command(f"budget {wlan} 1 60000", raw=True), " 1 MS PER 60000 MS")
+            for _ in range(30):
+                held = sends(vm, wlan)
+                time.sleep(.5)
+                if sends(vm, wlan) == held:
                     break
-                # The fresh radio is on the channel the station took, so neither of those can be the reason.
-                assert reason[1] == "A CALL FOUND ITS DRIVER ENDED", (reason[1], log[-2000:])
             else:
-                raise AssertionError("three restarts, none told by the PID that answered")
-            require(vm.command(f"logs {fresh}", raw=True), "[WLANSIM] ON CHANNEL 6 BY ITSELF")
+                raise AssertionError("the station still sends under a budget of 1 ms in 60 s")
+            require(vm.command(f"kill {radio}", raw=True), "KILLED PID=")
+            fresh, started = None, ""
+            for _ in range(60):
+                fresh = vm.services().get("wlansim")
+                if fresh not in (None, radio) and "BY ITSELF" in (started := started + vm.command(f"logs {fresh}", raw=True)):
+                    break
+                time.sleep(.5)
+            else:
+                raise AssertionError(f"init did not start the radio again: {started[-1500:]}")
+            assert sends(vm, wlan) == held, "the station sent while it was held"
+            require(vm.command(f"budget {wlan} 0 0", raw=True), " 0 MS PER 0 MS")
+            log = wlan_until(vm, "[WLAN] AUTO-JOIN MIND-TEST: JOINED", 150)
+            reason = re.search(r"\[WLAN\] THE RADIO RESTARTED \(([^)]*)\)", log)
+            assert reason, log[-2000:]
+            # The harness shows each "PID <n>" in its ordinal numbering (to_ordinal).
+            assert reason[1] == to_ordinal(f"ANSWERED BY PID {fresh}, NOT PID {radio}"), (reason[1], log[-2000:])
+            require(started, "[WLANSIM] ON CHANNEL 6 BY ITSELF")
             require(front_command(vm, "wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
         finally:
             vm.close()
-    print(f"PASS: a fresh radio already on the station's channel (801-NET-0085): the station knew it by the PID that answered "
-          f"({reason[1]}, restart {attempt}), gave it the country again and joined MIND-TEST again by itself", flush=True)
+    print(f"PASS: a fresh radio already on the station's channel (801-NET-0085): the station, held by a CPU budget while init "
+          f"started the radio again, knew it by the PID that answered ({reason[1]}), gave it the country again and joined "
+          f"MIND-TEST again by itself", flush=True)
 
 
 def slow_radio_check(args):
