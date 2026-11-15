@@ -14111,7 +14111,8 @@ def rollback_suite(args):
     volume, _, server_tree, kept, _, forged, _, _, _ = update_releases(temp, arch)
     release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
     bundle = (temp / "release6.zip").read_bytes()
-    # 801-UPD-0043 (S4): the same bundle with its channel's signature changed, which the updater refuses at the commit.
+    # 801-UPD-0043 (S4): the same bundle with its channel's signature changed: its timestamp names another file, and the
+    # updater refuses it at the commit (351-UPD-0028).
     import zipfile
     with zipfile.ZipFile(temp / "release6.zip") as z:
         entries = [(name, forged if name == "channels/stable" else z.read(name)) for name in z.namelist()]
@@ -14263,9 +14264,10 @@ def rollback_suite(args):
 
 
 def refused_release(vm, server, agent, bundle, payload, logged):
-    """801-UPD-0043 (801 S4): a bundle the running updater refuses (its channel's signature changed), downloaded whole
-    through the agent, leaves the machine as it was and on the server: the command answered failed with the reason, the
-    running slot, its boot record and nothing staged as before, and a heartbeat accepted after the answer."""
+    """801-UPD-0043 (801 S4): a bundle the running updater refuses, downloaded whole through the agent, leaves the machine
+    as it was and on the server. Its channel's signature is changed, so its timestamp names another file (351-UPD-0028):
+    the command is answered failed (digest), the running slot, its boot record and nothing staged are as before, and a
+    heartbeat is accepted after the answer."""
     def state():
         lines = vm.command("update status", raw=True).splitlines()
         kept = [line.strip() for line in lines if line.strip().startswith(("UPDATE: RUNNING", "UPDATE: THE NEWER BOOT RECORD", "UPDATE: NO BOOT RECORD", "UPDATE: NOTHING STAGED", "UPDATE: STAGED"))]
@@ -14276,13 +14278,14 @@ def refused_release(vm, server, agent, bundle, payload, logged):
     bad = server.queue(agent, "update_agent", payload, program="MIND Core")
     server.publish(bundle, command_id=bad, bundle=True)
     logged(vm, "effector", f"EFFECTOR: {bad}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
-    logged(vm, "effector", f"EFFECTOR: {bad}: not staged: signature", 300)
+    logged(vm, "effector", f"EFFECTOR: {bad}: not staged: digest", 300)
+    require(vm.command("dmesg -s updater", raw=True), "NAMES ANOTHER FILE THAN channels/stable")
     deadline = time.monotonic() + 120
     while not (result := server.operation(bad)):
         assert time.monotonic() < deadline, "the refused update was not answered"
         time.sleep(1)
     answer = result.get("result") or {}
-    assert result.get("status") == "failed" and answer.get("error") == "signature" and answer.get("stdout") == "not staged: signature", result
+    assert result.get("status") == "failed" and answer.get("error") == "digest" and answer.get("stdout") == "not staged: digest", result
     after = state()
     assert after == before, (before, after)
     # Still on the server: a heartbeat accepted after the answer.
@@ -14292,7 +14295,8 @@ def refused_release(vm, server, agent, bundle, payload, logged):
         assert time.monotonic() < deadline, "no heartbeat after the refusal"
         time.sleep(1)
     print(f"PASS: a refused release (801-UPD-0043): {len(bundle)} bytes with the channel's signature changed, downloaded "
-          "through the agent, refused by the updater; the command answered failed (signature), the running slot, its boot "
+          "through the agent, refused by the updater as its timestamp names another channel; the command answered failed "
+          "(digest), the running slot, its boot "
           "record and nothing staged as before, and the agent's next heartbeat accepted", flush=True)
 
 

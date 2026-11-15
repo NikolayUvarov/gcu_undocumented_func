@@ -19,7 +19,7 @@
 
 1. **In the `rollback` suite, before release 6 is sent:** an `update_agent` command with release 6's bundle whose channel signature is changed.
 2. **The check:**
-   - the agent logs `not staged: signature`;
+   - the updater refuses it as its timestamp names another channel file (351-UPD-0028), so the agent logs `not staged: digest`;
    - the server's result is failed, with that reason;
    - `update status` names the same running slot, boot record and nothing staged as before the command;
    - a heartbeat is accepted after the answer.
