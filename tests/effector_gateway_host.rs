@@ -8,6 +8,10 @@ extern crate alloc;
 #[path = "../libmind/src/sha256.rs"] mod sha256;
 #[path = "../libmind/src/effector/policy.rs"] mod policy;
 #[path = "../effector_gw/src/audit.rs"] mod audit;
+#[path = "../libmind/src/json.rs"] mod json;
+#[path = "../libmind/src/inflate.rs"] mod inflate;
+#[path = "../libmind/src/zip.rs"] mod zip;
+#[path = "../effector_gw/src/package.rs"] mod package;
 #[path = "../effector_gw/src/gateway.rs"] mod gateway;
 use gateway::*;
 use std::collections::HashMap;
@@ -34,6 +38,10 @@ struct Fake {
     commits: usize,
     applied: Vec<u8>,
     apply_refused: Option<Fail>,
+    archive: Vec<u8>,
+    package_runs: Vec<(u64, package::Operation)>,
+    package_refusal: Option<package::Refused>,
+    package_discards: usize,
 }
 
 impl Machine for Fake {
@@ -102,6 +110,22 @@ impl Machine for Fake {
         self.staged.unwrap_or(Ok(6))
     }
     fn apply(&mut self, tries: u8) -> Result<(), Fail> { self.applied.push(tries); self.apply_refused.map_or(Ok(()), Err) }
+    fn package_write(&mut self, offset: u64, data: &[u8]) -> Result<(), Fail> {
+        if offset == 0 { self.archive.clear(); }
+        if offset != self.archive.len() as u64 { return Err(Fail::Io); }
+        self.archive.extend_from_slice(data);
+        Ok(())
+    }
+    fn package_run(&mut self, size: u64, operation: package::Operation, _policy: &policy::Policy) -> Result<package::Report, package::Refused> {
+        assert_eq!(self.archive.len() as u64, size);
+        self.package_runs.push((size, operation));
+        self.archive.clear();
+        match self.package_refusal.clone() {
+            Some(r) => Err(r),
+            None => Ok(package::Report { name: "demo".into(), version: 3, previous: Some(2), arch: "x86_64", files: 1, manifest: [0xab; 32] }),
+        }
+    }
+    fn package_discard(&mut self) { self.archive.clear(); self.package_discards += 1; }
     fn update_state(&mut self) -> Option<UpdateState> {
         Some(UpdateState { slot: b'A', trial: false, running: 5, recorded: b'A', confirmed: true, staged: if self.commits > 0 { 6 } else { 0 }, failure: String::new() })
     }
@@ -480,4 +504,51 @@ fn a_short_or_changed_bundle_is_not_staged() {
     g.update_begin(&mut m, Badge::Session, &origin("u4"), 1000, &sha).unwrap();
     g.cancel(&mut m, Badge::Session, "u4").unwrap();
     assert!(!g.status(&mut m).busy);
+}
+
+#[test]
+fn a_package_is_received_under_packages_on_checked_by_its_digest_then_run_and_audited() {
+    use package::{Code, Operation, Refused};
+    let archive = b"PK an archive of seven-and-twenty".to_vec();
+    let sha = hex(&sha256::digest(&archive));
+    let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let on = format!("{}packages on\npackage-key demo {}\n", POLICY, key);
+    let o = Origin { command: "pkg-1", initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
+    // Without `packages on`: refused and audited before any byte.
+    let (mut m, mut g) = (Fake { policy: Some(POLICY.as_bytes().to_vec()), ..Fake::default() }, Gateway::new());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    assert_eq!(g.package_begin(&mut m, Badge::Session, &o, Operation::Install, archive.len() as u64, &sha), Err(Fail::Denied));
+    assert!(m.audit.last().unwrap().contains("package-install"), "{:?}", m.audit);
+    // Under it: written in pieces, then run once its size and SHA-256 are the command's.
+    let (mut m, mut g) = (Fake { policy: Some(on.as_bytes().to_vec()), ..Fake::default() }, Gateway::new());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    let h = g.package_begin(&mut m, Badge::Session, &o, Operation::Reinstall, archive.len() as u64, &sha).unwrap();
+    assert_eq!(g.package_begin(&mut m, Badge::Session, &o, Operation::Install, 1, &sha), Err(Fail::Busy), "one transfer at a time");
+    g.write(&mut m, Badge::Session, h, 0, &archive[..10]).unwrap();
+    g.write(&mut m, Badge::Session, h, 10, &archive[10..]).unwrap();
+    let report = g.package_commit(&mut m, Badge::Session, h).unwrap();
+    assert_eq!((report.name.as_str(), report.version), ("demo", 3));
+    assert_eq!(m.package_runs, vec![(archive.len() as u64, Operation::Reinstall)]);
+    // The audit line holds the outcome, its spaces escaped and its end cut to the field's bound.
+    assert!(m.audit.last().unwrap().contains("package-reinstall?33?bytes commit installed?demo?3?x86_64?1?abab"), "{:?}", m.audit.last());
+    // Bytes that are not the command's: digest, the archive discarded, nothing run.
+    let h = g.package_begin(&mut m, Badge::Session, &o, Operation::Install, archive.len() as u64, &sha).unwrap();
+    let mut other = archive.clone(); other[3] ^= 1;
+    g.write(&mut m, Badge::Session, h, 0, &other).unwrap();
+    assert_eq!(g.package_commit(&mut m, Badge::Session, h).unwrap_err().code, Code::Digest);
+    assert_eq!((m.package_runs.len(), m.package_discards), (1, 1));
+    // A refusal from the package's own checks is the answer, and audited as its line.
+    m.package_refusal = Some(Refused { code: Code::Signature, what: "MANIFEST.SIG under no key the policy trusts for demo".into() });
+    let h = g.package_begin(&mut m, Badge::Session, &o, Operation::Install, archive.len() as u64, &sha).unwrap();
+    g.write(&mut m, Badge::Session, h, 0, &archive).unwrap();
+    assert_eq!(g.package_commit(&mut m, Badge::Session, h).unwrap_err().code, Code::Signature);
+    assert!(m.audit.last().unwrap().contains("commit refused?signature:?MANIFEST.SIG"), "{:?}", m.audit.last());
+    // More than the policy's max-bytes, or than the gateway holds: refused before a byte.
+    assert_eq!(g.package_begin(&mut m, Badge::Session, &o, Operation::Install, 200_000, &sha), Err(Fail::Bounds));
+    let big = format!("{}packages on\npackage-key demo {}\nmax-bytes 67108864\n", POLICY.replace("max-bytes 100000\n", ""), key);
+    let (mut m, mut g) = (Fake { policy: Some(big.as_bytes().to_vec()), ..Fake::default() }, Gateway::new());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    assert_eq!(g.package_begin(&mut m, Badge::Session, &o, Operation::Install, package::ARCHIVE_MAX + 1, &sha), Err(Fail::Unsupported));
+    // Only the session's client.
+    assert_eq!(g.package_begin(&mut m, Badge::Owner, &o, Operation::Install, 10, &sha), Err(Fail::Denied));
 }

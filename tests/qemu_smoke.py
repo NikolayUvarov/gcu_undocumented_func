@@ -222,15 +222,32 @@ class VM:
             time.sleep(wait)
 
     def services(self):
-        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one,
-        # and the first live row is the service: its workers (750-KRN-0159), listed after it under its name, never hide it.
-        found, live = {}, set()
+        # Real service PIDs from the ps table (the harness does not translate its rows); an exited row never hides a live one.
+        # A service's workers (750-KRN-0159) are listed under its name, and a reused PID may put one before it: where a name
+        # has several live rows, the service is the one whose parent is not another of them (`stat tasks`).
+        found, live = {}, {}
         for pid, name, state in re.findall(r"^(\d+) ([\w#-]+) (\S+)", self.command("ps", raw=True), re.M):
-            if name in SERVICES and name not in live:
+            if name not in SERVICES:
+                continue
+            if state != "EXITED":
+                live.setdefault(name, []).append(int(pid))
+            elif name not in live:
                 found[name] = int(pid)
-                if state != "EXITED":
-                    live.add(name)
+        parents = self.parents() if any(len(pids) > 1 for pids in live.values()) else {}
+        for name, pids in live.items():
+            found[name] = next((pid for pid in pids if parents.get(pid) not in pids), pids[0])
         return found
+
+    def parents(self):
+        # Each task's parent, from `stat tasks` page by page.
+        parents, start = {}, 0
+        while True:
+            page = self.command(f"stat tasks from {start}" if start else "stat tasks", raw=True)
+            head = re.search(r"STAT TASKS VERSION=\d+ COUNT=(\d+) TOTAL=(\d+) FROM=\d+", page)
+            parents.update({int(pid): int(parent) for pid, parent in re.findall(r"^(\d+) PARENT=(\d+) ", page, re.M)})
+            if not head or int(head[1]) == 0 or start + int(head[1]) >= int(head[2]):
+                return parents
+            start += int(head[1])
 
     def service_logs(self, name, until=None):
         # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
@@ -8343,6 +8360,35 @@ def firmware_sectors(image, start):
     return sectors | {data + (cluster - 2) * spc + s for cluster in chain for s in range(spc)}
 
 
+# The vendor of MIND's own EFI variables (common/abi.rs RUN_MARK_GUID), as the firmware stores its bytes.
+MIND_VARIABLE_GUID = bytes([0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52])
+EFI_GLOBAL_GUID = bytes.fromhex("61dfe48bca93d211aa0d00e098032b8c")
+
+
+def nv_vars(data):
+    """The EFI variables in OVMF's file NvVars, {(vendor GUID bytes, name): (attributes, data)}: each one its name's size
+    (u32), its UCS-2 name, its vendor GUID, its attributes (u32), its data's size (u32) and its data."""
+    at, found = 0, {}
+    while at < len(data):
+        size, = struct.unpack_from("<I", data, at)
+        name = data[at + 4:at + 4 + size].decode("utf-16-le").rstrip("\0")
+        at += 4 + size
+        guid, (attributes, length) = data[at:at + 16], struct.unpack_from("<II", data, at + 16)
+        at += 24
+        assert at + length <= len(data), ("NvVars cut short", name, at, length, len(data))
+        found[(guid, name)] = (attributes, data[at:at + length])
+        at += length
+    return found
+
+
+def mind_variables(data):
+    """Of NvVars, the variables MIND writes that a later boot would read as state: its own vendor's but the run's mark
+    (000-KRN-0217, read as another slot's), and BootNext (efivar). The rest are the firmware's, rewritten at every boot
+    (its monotonic counter, its boot options for the devices it finds)."""
+    return {key: value for key, value in nv_vars(data).items()
+            if (key[0] == MIND_VARIABLE_GUID and key[1] != "MindCoreRun") or key == (EFI_GLOBAL_GUID, "BootNext")}
+
+
 def dirty_volume_check(args, temp):
     """000-KRN-0215: a boot volume its last writer left dirty, with an entry whose clusters are free in the FAT (a remove
     cut short), is checked at the mount and held: the log says so, files read, every write is refused, and nothing on
@@ -13403,8 +13449,12 @@ def effector_suite(args, disk):
     (disk / "data" / "effector" / "token").write_text(token + "\n")
     # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
     # the screen; deliveries go to data/inbox/; sysmon may be restarted. Nothing else.
+    # 750-EFF-0008: packages, of `memtest` under the public test key only.
+    import app_package
+    package_key = sign_manifest.public_key(app_package.TEST_SEED).hex()
     (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
-                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
+                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n"
+                                                       f"packages on\npackage-key memtest {package_key}\n")
     (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "machine").mkdir(parents=True, exist_ok=True)  # where the shell's `hostname` keeps the name
     report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
@@ -13491,6 +13541,7 @@ def effector_suite(args, disk):
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
+        effector_packages_check(vm, server, agent, until, args)
         # 801-EFF-0027: a command with a 10-minute term by the server's clock is run, not `command_expired`, though the
         # device's clock is 3 h past it; the log names the offset.
         term_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
@@ -13519,13 +13570,37 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(16 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(22 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
-        assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
+        # Not run again after the restart; the first run's line may have left the log's ring by now.
+        assert f"EFFECTOR: FAILED {restart_id}" not in out.rpartition("(22 SAVED RESULTS, 0 TO ACKNOWLEDGE)")[2], out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (16 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (22 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
+        # 750-EFF-0033 (the Effector project's 81-01): redelivered commands answered before. The last measured result is
+        # kept and sent again the same, which the server takes; an older one's is not kept, so it is answered completed
+        # again, saying so, and the server keeps its first result. No action runs again.
+        reported = re.findall(r"EFFECTOR: ACK (\S+) completed WITH ITS RESULT ACCEPTED", session())
+        assert reported and reported[-1] == term_id and any(r != term_id for r in reported), reported
+        older = next(r for r in reported if r != term_id)
+        first = server.operation(older)
+        def times(line, count, timeout=60):
+            deadline = time.monotonic() + timeout
+            while (seen := session().count(line)) < count and time.monotonic() < deadline:
+                time.sleep(1)
+            assert seen >= count, (line, seen, session()[-2000:])
+        server.redeliver(term_id)
+        times(f"EFFECTOR: REPEATED {term_id}: THE SAVED ANSWER AGAIN", 1)
+        times(f"EFFECTOR: ACK {term_id} completed WITH ITS RESULT ACCEPTED", 2)
+        server.redeliver(older)
+        times(f"EFFECTOR: REPEATED {older}: THE SAVED ANSWER AGAIN", 1)
+        times(f"EFFECTOR: ACK {older} completed AGAIN, ITS RESULT NOT KEPT: ", 1)
+        assert server.operation(older) == first, (server.operation(older), first)
+        assert session().count(f"EFFECTOR: COMPLETED {term_id}") <= 1 and session().count(f"EFFECTOR: COMPLETED {older}") <= 1, session()[-3000:]
+        print(f"PASS: redelivered after their ACKs: the last measured command ({term_id}) answered with its kept result again, "
+              f"taken; an older one ({older}) answered completed again, its result not kept, the server's first result "
+              "unchanged; neither run again", flush=True)
         # 801-EFF-0028: the server out of reach for longer than restart-after (40 s here). The agent ends itself, init
         # starts it again with new clients, and it is back once the server is; it is never quarantined.
         starts = session().count("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector")
@@ -13809,6 +13884,15 @@ def effector_update_suite(args):
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         log = logged(vm, "effector", f"EFFECTOR: ACK {on} completed WITH ITS RESULT ACCEPTED", 300)
+        # 801-KRN-0242, 801-EFF-0031: with a server configured, init confirmed the trial on the agent's `accepted` alone, and
+        # logged each step the agent told it once, as it changed. Read once the agent answered: the kernel's line above is
+        # its own deadline lifted, while init still holds the trial, and the updater confirms only on init's word.
+        init_log = vm.command("dmesg -s init", raw=True)
+        confirmed = init_log.find("[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR SERVER ACCEPTED THE AGENT'S HEARTBEAT")
+        steps = [(m.start(), m[1]) for m in re.finditer(r"\[INIT\] THE EFFECTOR AGENT: ([a-z-]+)", init_log)]
+        others = ("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED", "[INIT] TRIAL BOOT CONFIRMED: THE EFFECTOR MODES WERE TURNED OFF")
+        assert confirmed >= 0 and not any(o in init_log for o in others), init_log[-2500:]
+        assert steps and [n for at, n in steps if at < confirmed][-1:] == ["accepted"] and len(steps) <= 8, (steps, init_log[-2500:])
         require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
         require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
         result = server.operation(on)
@@ -13832,8 +13916,259 @@ def effector_update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: effector-update with remote-update on: the agent downloads release 6's bundle into the gateway, which "
           "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
-          "and once it is confirmed the agent answers the command it kept across the restart: completed, updated 6, slot B "
-          "confirmed", flush=True)
+          "init confirms it on the agent's accepted (its steps logged as they changed, 801-KRN-0242), and once it is confirmed the "
+          "agent answers the command it kept across the restart: completed, updated 6, slot B confirmed", flush=True)
+
+
+def effector_packages_check(vm, server, agent, until, args):
+    """750-EFF-0008 (contract 1.5 `mind-package-1`): signed application packages through the server's `deploy`, the owner's
+    policy holding `packages on` and the public test key for `memtest`. An install puts it under data/apps/memtest/1/ and
+    it runs from there; version 2 takes its place, 1 staying; one signed by another key, an older version and one whose
+    program differs from its MANIFEST are refused with their codes and change nothing; a deinstall removes it. Each command
+    gets the server's DeploymentResult with the line its ACK carries."""
+    import app_package
+    import io
+    import zipfile
+    arch = "aarch64" if args.arch == "aarch64" else "x86_64"
+    beat_arch = "arm64" if args.arch == "aarch64" else "x64"
+    program = (ROOT / IMAGE / "memtest.elf").read_bytes()
+
+    def archive(version, seed=app_package.TEST_SEED, change=None):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "m").write_bytes(program)
+            text = app_package.manifest(Path(temp), "memtest", version, arch, 0, sign_manifest.public_key(seed))
+        signature = sign_manifest.sign(seed, app_package.PREFIX + text)
+        data = bytearray(program)
+        if change == "byte":
+            data[-1] ^= 1
+        entry = {"when": {"os": "mindcore", "arch": beat_arch}, "package": f"mindcore/{arch}"}
+        manifest = {"manifest_version": 1, "package": {"name": "memtest", "version": str(version)},
+                    "entrypoints": {"install": [{"when": {"os": "windows", "arch": "x64"}, "cmd": "setup.exe"}, entry], "deinstall": [entry]}}
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("manifest.json", json.dumps(manifest))
+            z.writestr(f"mindcore/{arch}/MANIFEST", text)
+            z.writestr(f"mindcore/{arch}/MANIFEST.SIG", signature)
+            z.writestr(f"mindcore/{arch}/m", bytes(data))
+        return out.getvalue()
+
+    def deploy(operation, data, package_id):
+        server.publish(data, package_id=package_id)
+        command = server.queue(agent, "deploy", f"mind-package-1:{operation}:{package_id}:{len(data)}:{hashlib.sha256(data).hexdigest()}")
+        out = until(f"EFFECTOR: DEPLOY {command} {operation} {package_id}: ", 180)
+        line = re.search(rf"EFFECTOR: DEPLOY {command} {operation} {re.escape(package_id)}: ([^\r\n]*)", out)[1]
+        until(f"EFFECTOR: ACK {command} ", 60)
+        results = [r for r in list(server.deployment_results) if r.get("package_id") == package_id and r.get("operation") == operation]
+        assert results and results[-1]["stdout"] == line and results[-1]["script"] == "mind-package-1" \
+            and results[-1]["success"] == line.startswith(("installed ", "removed ")) and results[-1]["exit_code"] == (0 if results[-1]["success"] else 1), (results, line)
+        answer = server.operation(command)
+        assert answer and answer["status"] == ("completed" if results[-1]["success"] else "failed"), answer
+        return line
+
+    def runs(path):
+        started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
+        assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
+        require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
+
+    def gw():  # the gateway's audit, which names why it refused, as the agent's answer does not
+        return vm.command("dmesg -s effector_gw", raw=True)[-2500:]
+
+    line = deploy("install", archive(1), "memtest-1.zip")
+    assert line.startswith(f"installed memtest 1 {arch} 1 "), (line, gw())
+    runs("data/apps/memtest/m")
+    line = deploy("reinstall", archive(2), "memtest-2.zip")
+    assert line.startswith(f"installed memtest 2 {arch} 1 "), (line, gw())
+    runs("data/apps/memtest/2/m")
+    assert "STARTED PID=" not in vm.command("run data/apps/memtest/1/m naps 300 &")
+    require(vm.command("dmesg -s loader", raw=True), "[LOADER] data/apps/memtest/1/m: NOT RUN: NOT THE CURRENT VERSION")
+    refused = {"signature": archive(3, seed=hashlib.sha256(b"another key").digest()), "older": archive(1), "digest": archive(3, change="byte")}
+    for code, data in refused.items():
+        line = deploy("install", data, f"memtest-{code}.zip")
+        assert line.startswith(f"refused {code}: "), (code, line, gw())
+    runs("data/apps/memtest/m")  # version 2 still
+    line = deploy("deinstall", archive(2), "memtest-2-off.zip")
+    assert line == "removed memtest 2", (line, gw())
+    assert "STARTED PID=" not in vm.command("run data/apps/memtest/m naps 300 &")
+    audit = vm.command("dmesg -s effector_gw", raw=True)
+    assert "package-install" in audit and "package-deinstall" in audit, audit[-2000:]
+    print(f"PASS: packages through deploy (750-EFF-0008, mind-package-1): memtest 1 installed and run from data/apps/, 2 in "
+          "its place with 1 kept beside it, a package signed by another key, an older one and one whose program differs "
+          "from its MANIFEST refused as signature, older and digest with nothing changed, then removed; each with its "
+          "DeploymentResult and ACK, each in the gateway's audit", flush=True)
+
+
+def image_tree(image, out):
+    """{path: sha256} of every file on a raw image, read out through mtools into `out`."""
+    out.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["mcopy", "-s", "-n", "-i", image.drive, "::*", str(out)], check=True, env=MTOOLS_ENV, capture_output=True)
+    return {p.relative_to(out).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.rglob("*")) if p.is_file()}
+
+
+# What a refused trial may write that the slot before does not read as its own state (801-UPD-0041): the boot records the
+# updater spends, the loader's mark of how far a boot got, the trial's own slot, and the updater's reason for the slot before.
+TRIAL_WRITES = (re.compile(r"MIND/BOOT[01]"), re.compile(r"MIND/REACHED"), re.compile(r"MIND/B/.*"), re.compile(r"system/updater/.*"))
+# Logs the trial may add lines to, after slot A's, which stay as they were: the gateway's audit (MC-10.3).
+APPEND_ONLY = ("system/effector_gw/audit",)
+
+
+def rollback_suite(args):
+    """801-UPD-0041 (801, S1 to S3): a developer's release through the Effector agent that cannot reach the server is
+    rolled back with its reason, and the slot before is back on the server as it was. Release 5 in slot A, connected,
+    takes release 6 by `update_agent`; while slot B is on trial the fixture answers nothing. init holds the trial for the
+    server's word for its whole bound and refuses it; the updater keeps the reason, spends the trial with tries left and
+    restarts (QEMU exits). Every file slot A reads is then as it was before the trial. Slot A boots, its agent connects with
+    the same identity, its heartbeat carries the fallback (801-EFF-0029), and it answers the update command fell-back."""
+    if not raw_tools():
+        print("SKIP: rollback suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    sys.path.insert(0, str(ROOT / "tests"))
+    import effector_server  # noqa: E402
+    temp = Path(tempfile.mkdtemp(prefix="mind-rollback-"))
+    arch = args.arch
+    volume, _, server_tree, kept, _, _, _, _, _ = update_releases(temp, arch)
+    release_tool.bundle(server_tree, temp / "release6.zip", arches=[arch])
+    bundle = (temp / "release6.zip").read_bytes()
+    # Three tries: a trial init refused is spent, so the next boot falls back at once, not after three bounds (801-UPD-0037).
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 6, "tries": 3, "timeout_seconds": 1800}
+    agent, token = "mind-test", "mind-effector-test-token"
+    server = effector_server.EffectorFixture(token=token).start()
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "MIND/A/KEYS").write_bytes((server_tree / "keys/current").read_bytes())
+    files = {"netpolicy.txt": f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\n".encode(), "data/mode.conf": b"development\nremote-update\n",
+             "data/effector/effector.conf": f"effector-config 1\nserver https://10.0.2.2:{server.port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n".encode(),
+             "data/effector/token": (token + "\n").encode(), "data/effector/agent_id": (agent + "\n").encode(),
+             "data/effector/policy": b"effector-policy 1\nagent on\nupdate apply\n"}
+    for name, data in files.items():
+        (layout / name).parent.mkdir(parents=True, exist_ok=True)
+        (layout / name).write_bytes(data)
+    image = boot_slots.Image.create(temp / "rollback.img", layout, megabytes=256)
+    cpu = ["-cpu", "max" if arch == "aarch64" else "qemu64,+rdrand"]
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+
+    def logged(vm, name, line, timeout=120):
+        # A service's lines through dmesg; a read a kernel line lands in is made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command(f"dmesg -s {name}", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(1)
+        raise AssertionError((name, line, log[-3000:]))
+
+    def restarted(vm, timeout, step=None):
+        # QEMU exits at the machine's restart (-no-reboot); `step` runs every few seconds meanwhile.
+        deadline = time.monotonic() + timeout
+        while vm.process.poll() is None:
+            if time.monotonic() > deadline:
+                vm.collect()
+                raise AssertionError(("no restart", ANSI.sub("", vm.log)[-3000:]))
+            if step:
+                step()
+            time.sleep(5)
+        vm.collect()
+
+    # Slot A, release 5, on the server; it takes release 6, stages it in slot B and restarts.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+
+        def unanswered():
+            assert not server.operation(on), ("answered before the restart", server.operation(on))
+        restarted(vm, 1500, unanswered)
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-a-{args.cpus}cpu.log").write_text(vm.log)
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["confirmed"]) == ("B", "A", False) and chosen["tries"] > 1, chosen
+    before = image_tree(image, temp / "before")
+    assert "data/effector/token" in before and "data/effector/agent_id" in before, sorted(before)
+
+    # Slot B on trial with the server out of reach: every request ends unanswered until the machine restarts.
+    beats_then = len(server.beats)
+    server.outage(600)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    started = time.monotonic()
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=120)
+        restarted(vm, 600 + 300, lambda: server.outage(600))
+    finally:
+        vm.close()
+        with server.lock:
+            server.down_until = 0.0
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-b-{args.cpus}cpu.log").write_text(vm.log)
+    held = time.monotonic() - started
+    out = ANSI.sub("", vm.log)
+    assert "WAS NOT CONFIRMED IN" not in out and held > 600, (held, out[-3000:])
+    assert not any(b.get("agent_id") == agent for b in list(server.beats)[beats_then:]), "a heartbeat reached the server"
+    refused = (image.read("system/updater/refused") or b"").decode()
+    refusal = re.fullmatch(r"refused version 6 in slot B, falling back to slot A\nwhy (NO HEARTBEAT ACCEPTED IN 600 S: [^\n]+)\nlog [^\n]+\n", refused)
+    assert refusal, refused
+    # S2: the server is told this, whole: the version, the slots and init's reason with the agent's last step.
+    reason = f"version 6 in slot B, falling back to slot A: {refusal[1]}"
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 0, False), chosen
+    # S3: what slot A reads is as it was; only the trial's own writes differ. Found here, said at the end with the rest.
+    after = image_tree(image, temp / "after")
+
+    def unchanged(name):
+        if before.get(name) == after.get(name) or any(w.fullmatch(name) for w in TRIAL_WRITES):
+            return True
+        old, new = temp / "before" / name, temp / "after" / name
+        if name == "NvVars" and arch == "x86_64":
+            # OVMF's variables on x86, where QEMU gives it no flash: it writes the file at every boot; MIND's must hold.
+            read = lambda path: mind_variables(path.read_bytes()) if path.is_file() else {}
+            return read(old) == read(new)
+        return name in APPEND_ONLY and old.is_file() and new.is_file() and new.read_bytes().startswith(old.read_bytes())
+    touched = sorted(p for p in set(before) | set(after) if not unchanged(p))
+    problems = [("the trial changed what slot A reads", touched)] if touched else []
+
+    # Slot A again: on the server with the same identity, the fallback in its heartbeat, the update answered fell-back.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, *network])
+    try:
+        boot = ANSI.sub("", vm.log)
+        require_all(boot, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED")
+        # The agent reads the updater's word at its start, so its fallback line may come before or after the connection.
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        log = logged(vm, "effector", "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER", 120)
+        # The line is cut at the log's width; the heartbeat below carries the reason whole.
+        require(log, "EFFECTOR: A FALLBACK, REPORTED TO THE SERVER: version 6 in slot B, falling back to slot A")
+        deadline = time.monotonic() + 120
+        while not (report := next((b for b in list(server.beats) if b.get("agent_id") == agent and (b.get("update") or {}).get("state") == "rolled_back"), None)):
+            assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
+            time.sleep(1)
+        if report["update"].get("build_number") != 6 or report["update"].get("result") != reason:
+            problems.append(("the fallback's report in the heartbeat, not whole", reason, report["update"]))
+        deadline = time.monotonic() + 300
+        while not (result := server.operation(on)):
+            assert time.monotonic() < deadline, "the update command was not answered"
+            time.sleep(1)
+        answer = result.get("result") or {}
+        if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
+                answer.get("stdout") != f"fell back: slot A runs version 5, not 6; the updater: {reason}":
+            problems.append(("the update command's answer", result))
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        server.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-rollback-a2-{args.cpus}cpu.log").write_text(vm.log)
+    boot_slots_check.fsck(image)
+    assert not problems, problems
+    shutil.rmtree(temp, ignore_errors=True)
+    print(f"PASS: rollback: release 6 taken through the agent could not reach the server on trial; init held it {held:.0f} s "
+          "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
+          "slot A came back on the server as the same agent, reported the fallback in its heartbeat and answered the update "
+          "fell-back", flush=True)
 
 
 def effector_actions_check(vm, server, agent, until, beats):
@@ -18484,7 +18819,7 @@ def main():
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -18568,6 +18903,9 @@ def main():
             continue
         if suite == "effector-update":
             effector_update_suite(args)
+            continue
+        if suite == "rollback":
+            rollback_suite(args)
             continue
         if suite == "update":
             update_suite(args)

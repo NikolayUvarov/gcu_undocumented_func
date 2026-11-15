@@ -4,6 +4,7 @@
 //! release goes to `updater` as it arrives (751-EFF-0023), which checks it and asks `init` for `remote-update` itself.
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 use crate::audit;
+use crate::package::{self, Operation, Refused};
 use crate::policy::{self, Ask, Deny, Policy};
 use crate::sha256::Sha256;
 
@@ -20,7 +21,7 @@ pub enum Badge { Session, Owner, Other }
 
 /// Why a request was not done; the IDL's `error`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fail { Denied, NotFound, Busy, Bounds, Digest, Exists, Expired, Audit, Io, Signature, Older, Malformed, Cancelled, Unsupported, NoPolicy }
+pub enum Fail { Denied, NotFound, Busy, Bounds, Digest, Exists, Expired, Audit, Io, Signature, Older, Malformed, Cancelled, Unsupported, NoPolicy, Format, Arch, System, Space }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceState { Running, Stopped, Quarantined, Absent }
@@ -103,12 +104,18 @@ pub trait Machine {
     fn apply(&mut self, tries: u8) -> Result<(), Fail>;
     /// The updater's `status`; `None` without the gateway's client of it.
     fn update_state(&mut self) -> Option<UpdateState>;
+    /// Writes at `offset` of the package archive being received, in the scope of `data/apps/` (created at offset 0).
+    fn package_write(&mut self, offset: u64, data: &[u8]) -> Result<(), Fail>;
+    /// The archive received, of `size` bytes, read back and done (`package::run`, with `apppkg` and the policy's keys),
+    /// then removed.
+    fn package_run(&mut self, size: u64, operation: Operation, policy: &Policy) -> Result<package::Report, Refused>;
+    fn package_discard(&mut self);
 }
 
 enum Out { Bytes(Vec<u8>), File(String) }
 struct Outgoing { handle: u32, command: String, size: u64, source: Out }
 /// Where incoming bytes go: a file under the delivery root, hashed as they come, or the updater's own staging (its handle).
-enum Sink { File { path: String, replace: bool, hash: Sha256 }, Updater(u32) }
+enum Sink { File { path: String, replace: bool, hash: Sha256 }, Updater(u32), Package { operation: Operation, hash: Sha256 } }
 struct Incoming { handle: u32, command: String, size: u64, sha256: [u8; 32], written: u64, sink: Sink }
 
 /// A delivered file as read back under its name (750-EFF-0021): what the server is told is what is there.
@@ -341,7 +348,10 @@ impl Gateway {
         if badge != Badge::Session { return Err(Fail::Denied); }
         if self.out.as_ref().is_some_and(|t| t.handle == handle) { self.out = None; return Ok(()); }
         if let Some(i) = self.inc.take() {
-            if i.handle == handle { if let Sink::File { path, .. } = &i.sink { m.discard_temporary(path); } return Ok(()); }
+            if i.handle == handle {
+                match &i.sink { Sink::File { path, .. } => m.discard_temporary(path), Sink::Package { .. } => m.package_discard(), Sink::Updater(_) => {} }
+                return Ok(());
+            }
             self.inc = Some(i);
         }
         Err(Fail::NotFound)
@@ -367,6 +377,7 @@ impl Gateway {
         match &mut i.sink {
             Sink::File { path, hash, .. } => { m.write_temporary(path, offset, data)?; hash.update(data); }
             Sink::Updater(h) => m.install_write(*h, offset, data)?,
+            Sink::Package { hash, .. } => { m.package_write(offset, data)?; hash.update(data); }
         }
         i.written += data.len() as u64;
         Ok(())
@@ -377,7 +388,7 @@ impl Gateway {
         if badge != Badge::Session { return Err(Fail::Denied); }
         let Some(i) = self.inc.take() else { return Err(Fail::NotFound) };
         if i.handle != handle || matches!(i.sink, Sink::Updater(_)) { self.inc = Some(i); return Err(Fail::NotFound); }
-        let Sink::File { path, replace, hash } = i.sink else { unreachable!() };
+        let Sink::File { path, replace, hash } = i.sink else { self.inc = Some(i); return Err(Fail::NotFound) };
         let request = alloc::format!("deliver {} {} bytes", path, i.size);
         let o = Origin { command: &i.command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
         let published = if i.written != i.size || hash.finish() != i.sha256 { Err(Fail::Digest) } else { m.publish(&path, replace) };
@@ -391,6 +402,44 @@ impl Gateway {
         if !self.audited(m, Some(&o), &request, "commit", &outcome) && result.is_ok() {
             // Published but not audited: the file stays, the request is reported as the audit failure it is.
             return Err(Fail::Audit);
+        }
+        result
+    }
+
+    /// A package's archive (750-EFF-0008): the policy's `packages on` and `max-bytes`, audited before any byte; the
+    /// application's name and its key are checked at the commit, once its MANIFEST is read.
+    pub fn package_begin(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, operation: Operation, size: u64, sha256: &str) -> Result<u32, Fail> {
+        let request = alloc::format!("package-{} {} bytes", operation_name(operation), size);
+        if self.out.is_some() || self.inc.is_some() { self.audited(m, Some(o), &request, "busy", "refused"); return Err(Fail::Busy); }
+        let Some(sha) = unhex(sha256) else { self.audited(m, Some(o), &request, "malformed", "refused"); return Err(Fail::Malformed) };
+        self.admit(m, badge, o, &request, Some(Ask::Packages(size)))?;
+        // Read whole in memory at the commit: a larger archive is refused before a byte comes.
+        if size > package::ARCHIVE_MAX { let _ = self.audited(m, Some(o), &request, "unsupported", "larger than the gateway takes"); return Err(Fail::Unsupported); }
+        let handle = self.handle();
+        self.inc = Some(Incoming { handle, command: String::from(o.command), size, sha256: sha, written: 0, sink: Sink::Package { operation, hash: Sha256::new() } });
+        Ok(handle)
+    }
+
+    /// The archive's size and SHA-256 checked, then its package checked and installed or removed (`package::run`), each
+    /// step's outcome audited. The transfer ends either way, and a refusal leaves the installed version as it was.
+    pub fn package_commit(&mut self, m: &mut dyn Machine, badge: Badge, handle: u32) -> Result<package::Report, Refused> {
+        let refused = |code, what: &str| Refused { code, what: String::from(what) };
+        if badge != Badge::Session { return Err(refused(package::Code::Denied, "not the session's client")); }
+        let Some(i) = self.inc.take() else { return Err(refused(package::Code::Io, "no such transfer")) };
+        let Sink::Package { operation, hash } = i.sink else { self.inc = Some(i); return Err(refused(package::Code::Io, "no such transfer")) };
+        if i.handle != handle { self.inc = Some(Incoming { sink: Sink::Package { operation, hash }, ..i }); return Err(refused(package::Code::Io, "no such transfer")); }
+        let request = alloc::format!("package-{} {} bytes", operation_name(operation), i.size);
+        let o = Origin { command: &i.command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
+        let result = if i.written != i.size || hash.finish() != i.sha256 {
+            m.package_discard();
+            Err(refused(package::Code::Digest, "the archive's size or SHA-256 is not the command's"))
+        } else {
+            match self.policy.as_ref() { Some(p) => m.package_run(i.size, operation, p), None => { m.package_discard(); Err(refused(package::Code::Denied, "no policy")) } }
+        };
+        let outcome = match &result { Ok(r) => r.line(operation), Err(r) => package::refusal_line(r) };
+        if !self.audited(m, Some(&o), &request, "commit", &outcome) && result.is_ok() {
+            // Done but not audited: the application stays, the request is reported as the audit failure it is.
+            return Err(refused(package::Code::Io, "the audit record was not written"));
         }
         result
     }
@@ -458,7 +507,11 @@ impl Gateway {
         if badge != Badge::Session { return Err(Fail::Denied); }
         if self.out.as_ref().is_some_and(|t| t.command == command) { self.out = None; }
         else if self.inc.as_ref().is_some_and(|i| i.command == command) {
-            if let Some(Incoming { sink: Sink::File { path, .. }, .. }) = self.inc.take() { m.discard_temporary(&path); }
+            match self.inc.take() {
+                Some(Incoming { sink: Sink::File { path, .. }, .. }) => m.discard_temporary(&path),
+                Some(Incoming { sink: Sink::Package { .. }, .. }) => m.package_discard(),
+                _ => {}
+            }
         }
         else { return Err(Fail::NotFound); }
         let o = Origin { command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
@@ -492,5 +545,9 @@ pub fn fail_name(f: Fail) -> &'static str {
         Fail::Denied => "denied", Fail::NotFound => "not-found", Fail::Busy => "busy", Fail::Bounds => "bounds", Fail::Digest => "digest",
         Fail::Exists => "exists", Fail::Expired => "expired", Fail::Audit => "audit", Fail::Io => "io", Fail::Signature => "signature",
         Fail::Older => "older", Fail::Malformed => "malformed", Fail::Cancelled => "cancelled", Fail::Unsupported => "unsupported", Fail::NoPolicy => "no-policy",
+        Fail::Format => "format", Fail::Arch => "arch", Fail::System => "system", Fail::Space => "space",
     }
 }
+
+/// The contract's name of a package operation.
+pub fn operation_name(o: Operation) -> &'static str { match o { Operation::Install => "install", Operation::Reinstall => "reinstall", Operation::Deinstall => "deinstall" } }

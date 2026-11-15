@@ -100,4 +100,4 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S5), [801-KRN-0242](801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.md), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md), 000-KRN-0075 (`init` waits for every service with a limit), 173-KRN-0036 (a safe start asked by a key), [000-KRN-0216](000-KRN-0216-the-power-button-shuts-down-cleanly.md).
+[801](801-the-bench-stays-manageable.md) (S5), [801-KRN-0242](../issues-done/801-KRN-0242-a-trial-confirmed-on-the-effector-servers-word.done), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md), 000-KRN-0075 (`init` waits for every service with a limit), 173-KRN-0036 (a safe start asked by a key), [000-KRN-0216](000-KRN-0216-the-power-button-shuts-down-cleanly.md).

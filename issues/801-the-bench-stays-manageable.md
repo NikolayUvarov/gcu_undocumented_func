@@ -112,7 +112,18 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
     - the `boot` suite's agent that never connects is refused at the bound;
     - both `effector-update` suites' trials are confirmed with a server configured.
   - **On the bench machines:** not shown yet.
-  - **Left:** `init`'s confirmation line asserted in the `effector-update` suite (EFF), and 801-ASR-0014.
+  - **Round 141** (`main` `b8b39e620e`): the `effector-update` suites check `init`'s confirmation line after the agent's `accepted` (801-EFF-0031), and 801-KRN-0242 is closed.
+- **S1 to S3 together, in QEMU, since round 141** (gate GREEN):
+  - **The `rollback` suites,** x86 and aarch64 ([801-UPD-0041](../issues-done/801-UPD-0041-a-release-that-loses-the-server-rolled-back.done)):
+    - a release taken through the agent finds the server out of reach on its trial;
+    - it is held for the bound and refused;
+    - every file slot A reads is as it was, but the trial's own writes;
+    - slot A is back on the server as the same agent, with the reason whole in its heartbeat (S2, [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done), 801-EFF-0035), and answers the update `fell-back`.
+  - **The kept update waits for `init`'s word** and changes nothing slot A reads (S3, 801-EFF-0034).
+  - **The suite fails if the trial is confirmed without the server.**
+  - **On the bench machines:** not shown yet.
 - **S5, in part:**
   - the station joins again a network a client gave it (801-NET-0084, round 138; the Ryzen's run left, DRV);
-  - commands are judged by the server's time (801-EFF-0027, round 139).
+  - commands are judged by the server's time (801-EFF-0027, round 139);
+  - a safe start leaves out only what the cut run of the same slot was starting, and brings it back by itself 120 s past `READY` (000-KRN-0217, round 140);
+  - rtw89 takes no channel before the station's own tune (801-DRV-0071, round 141). 801-NET-0085 is open: the station knows a fresh radio by the PID that answers it.

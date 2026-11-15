@@ -8,8 +8,9 @@
 /// client alone may hand it a release as a bundle (`install-…`, 1.3, 751-UPD-0032), which it checks as any source. It
 /// keeps releases in the block store, and `rollback` writes the last known good back from there into a slot not as its
 /// manifest lists it (1.4, 351-UPD-0033); `apply` writes the staged release back from there in the same way, and
-/// `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035).
-package mind:update@1.5.0;
+/// `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035). The state's failure is up to 256 bytes, so a refused
+/// trial's reason reaches the server whole (2.0, 801-UPD-0042); 1.x's of 64 is refused as another major version.
+package mind:update@2.0.0;
 
 interface update {
     /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -30,8 +31,9 @@ interface update {
 
     /// The updater's view: the running slot (`A`, `B`, or 0 when the system booted from the volume's root), whether it
     /// runs on trial, its version (0: not known); the slot the newer boot record names (0: none) and whether that
-    /// record is confirmed; the version staged in the other slot (0: none); the last failure (empty: none).
-    record state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<64> }
+    /// record is confirmed; the version staged in the other slot (0: none); the last failure (empty: none), its first 256
+    /// bytes (2.0).
+    record state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<256> }
 
     /// The channel the updater holds, checked with the release key: the one it last read from the source, or else the
     /// one kept in the running slot (`channel` empty: none). `expired`: its expiry has passed or the clock cannot be

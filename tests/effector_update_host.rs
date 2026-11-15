@@ -47,17 +47,42 @@ fn a_restart_is_a_lower_uptime_or_another_boot_time() {
 fn the_answer_follows_the_updaters_view() {
     let p = pending();
     let answer = |v: Verdict| match v { Verdict::Answer { exit_code, stdout, error } => (exit_code, stdout, error), Verdict::Wait => panic!("waits") };
-    assert_eq!(answer(verdict(&p, true, Some(&view(b'B', p.staged, b'B', true, "")), 3000)), (0, "updated 202610301200, slot B confirmed".into(), ""));
+    assert_eq!(answer(verdict(&p, true, Some(&view(b'B', p.staged, b'B', true, "")), None, 3000)), (0, "updated 202610301200, slot B confirmed".into(), ""));
     // On trial, not yet confirmed: it waits, up to the kernel's deadline and the updater's margin.
-    assert_eq!(verdict(&p, true, Some(&view(b'B', p.staged, b'B', false, "")), 3000), Verdict::Wait);
-    assert_eq!(answer(verdict(&p, true, Some(&view(b'B', p.staged, b'B', false, "")), CONFIRM_WAIT_MS)).2, "not-confirmed");
+    assert_eq!(verdict(&p, true, Some(&view(b'B', p.staged, b'B', false, "")), None, 3000), Verdict::Wait);
+    assert_eq!(answer(verdict(&p, true, Some(&view(b'B', p.staged, b'B', false, "")), None, CONFIRM_WAIT_MS)).2, "not-confirmed");
     // Back in the old slot: the trial failed and the kernel fell back.
-    let (code, stdout, error) = answer(verdict(&p, true, Some(&view(b'A', p.running, b'B', false, "apply: Trial")), 3000));
+    let (code, stdout, error) = answer(verdict(&p, true, Some(&view(b'A', p.running, b'B', false, "apply: Trial")), None, 3000));
     assert_eq!((code, error), (1, "fell-back"));
     assert_eq!(stdout, "fell back: slot A runs version 202610290937, not 202610301200; the updater: apply: Trial");
     // No restart since the apply: the agent alone restarted.
-    assert_eq!(answer(verdict(&p, false, Some(&view(b'A', p.running, b'B', false, "")), 0)).2, "restart");
+    assert_eq!(answer(verdict(&p, false, Some(&view(b'A', p.running, b'B', false, "")), None, 0)).2, "restart");
     // No view yet: it waits, then says so.
-    assert_eq!(verdict(&p, true, None, 1000), Verdict::Wait);
-    assert_eq!(answer(verdict(&p, true, None, CONFIRM_WAIT_MS)).2, "io");
+    assert_eq!(verdict(&p, true, None, None, 1000), Verdict::Wait);
+    assert_eq!(answer(verdict(&p, true, None, None, CONFIRM_WAIT_MS)).2, "io");
+}
+
+#[test]
+fn while_init_decides_the_kept_update_waits_with_no_limit() {
+    // 801-EFF-0034: init's word on the trial (801-KRN-0242) rules over the updater's view and the time.
+    let p = pending();
+    let answer = |v: Verdict| match v { Verdict::Answer { exit_code, stdout, error } => (exit_code, stdout, error), Verdict::Wait => panic!("waits") };
+    let on_trial = view(b'B', p.staged, b'B', false, "");
+    assert_eq!(trial(true, true, false), Trial::Deciding);
+    assert_eq!(trial(true, false, true), Trial::Confirmed);
+    assert_eq!(trial(true, false, false), Trial::Refused);
+    assert_eq!(trial(false, false, true), Trial::NoTrial);
+    // Deciding, or refused while the machine restarts: no answer, however long, nor with no view of the updater.
+    for t in [Trial::Deciding, Trial::Refused] {
+        assert_eq!(verdict(&p, true, Some(&on_trial), Some(t), CONFIRM_WAIT_MS * 100), Verdict::Wait);
+        assert_eq!(verdict(&p, true, None, Some(t), CONFIRM_WAIT_MS * 100), Verdict::Wait);
+    }
+    // Confirmed by init: the updater's confirmation is awaited for CONFIRM_WAIT_MS from then, then answered.
+    assert_eq!(verdict(&p, true, Some(&on_trial), Some(Trial::Confirmed), 3000), Verdict::Wait);
+    assert_eq!(answer(verdict(&p, true, Some(&view(b'B', p.staged, b'B', true, "")), Some(Trial::Confirmed), 3000)).0, 0);
+    assert_eq!(answer(verdict(&p, true, Some(&on_trial), Some(Trial::Confirmed), CONFIRM_WAIT_MS)).2, "not-confirmed");
+    // Back in the slot before, which is no trial: it answers from the kept command at once.
+    assert_eq!(answer(verdict(&p, true, Some(&view(b'A', p.running, b'B', false, "")), Some(Trial::NoTrial), 0)).2, "fell-back");
+    // The agent alone restarted: no restart since the apply, whatever init says.
+    assert_eq!(answer(verdict(&p, false, Some(&view(b'A', p.running, b'B', false, "")), Some(Trial::Deciding), 0)).2, "restart");
 }
