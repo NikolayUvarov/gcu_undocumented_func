@@ -206,8 +206,8 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The run's mark (000-KRN-0217): its firmware privilege while init keeps it, what it holds, when each service of
               // the safe start's list started until that start settled, what this boot left out and what has not come back.
               run_mark: Option<usize>, mark: safe::Mark, settling: [Option<usize>; SAFE_LEFT_OUT.len()], left_out: u8, returning: u8,
-              // When init said READY.
-              ready: Option<usize> }
+              // When init said READY, and whether it said since the last start of the list that every start settled.
+              ready: Option<usize>, settled_said: bool }
 
 // A trial held for the Effector agent's word (801-KRN-0242): READY's time, the agent's last step and its detail, and
 // when a refused trial restarts the machine.
@@ -2039,7 +2039,7 @@ impl Init {
     // (000-KRN-0217): a run cut meanwhile names it at the next boot.
     fn mark_start(&mut self, index: usize) {
         let Some(i) = listed(unit_name(index)).filter(|_| self.run_mark.is_some()) else { return };
-        self.settling[i] = Some(mind::time::uptime_ms());
+        (self.settling[i], self.settled_said) = (Some(mind::time::uptime_ms()), false);
         if self.mark.starting & safe::bit(i) == 0 { self.mark.starting |= safe::bit(i); self.write_mark(); }
     }
 
@@ -2050,17 +2050,19 @@ impl Init {
         }
     }
 
-    // The list's starts that settled, taken out of the run's mark in one write (000-KRN-0217).
+    // The list's starts that settled, taken out of the run's mark in one write (000-KRN-0217), and said once they all
+    // have, the boot's own settled too (SETTLE_MS past READY), while the mark is kept.
     fn settle(&mut self) {
         let now = mind::time::uptime_ms();
         let mut settled = 0;
         for i in 0..SAFE_LEFT_OUT.len() {
             if self.settling[i].is_some_and(|at| safe::settled(at, self.ready, now)) { self.settling[i] = None; settled |= safe::bit(i); }
         }
-        if self.mark.starting & settled == 0 { return; }
-        self.mark.starting &= !settled;
-        self.write_mark();
-        if self.mark.starting == 0 { mind::println!("[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: A RUN CUT NOW LEAVES NOTHING OUT"); }
+        if self.mark.starting & settled != 0 { self.mark.starting &= !settled; self.write_mark(); }
+        if self.run_mark.is_some() && !self.settled_said && self.mark.starting == 0 && safe::settled(0, self.ready, now) {
+            self.settled_said = true;
+            mind::println!("[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: A RUN CUT NOW LEAVES NOTHING OUT");
+        }
     }
 
     // What a safe start left out, started again from RETURN_MS past READY, one at a time and each once the start before
@@ -2640,7 +2642,7 @@ fn boot(info: &'static BootInfo) {
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, owner_kept: None, notices: [const { None }; UNITS],
                          power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default(),
-                         run_mark: None, mark: safe::Mark::default(), settling: [None; SAFE_LEFT_OUT.len()], left_out: 0, returning: 0, ready: None };
+                         run_mark: None, mark: safe::Mark::default(), settling: [None; SAFE_LEFT_OUT.len()], left_out: 0, returning: 0, ready: None, settled_said: false };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
