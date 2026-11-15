@@ -38,7 +38,7 @@ mod nodes;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
-use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port};
+use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port, watchdog};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
 mod firmware;

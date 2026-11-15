@@ -7,6 +7,7 @@
 // application.
 mod hardware;
 mod legacy;
+mod safe;
 mod services;
 
 use mind::abi::*;
@@ -201,7 +202,12 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // The ACPI tables' transmit power policy for a WLAN radio, read once at boot (213-KRN-0122).
               power: mind::platform_power::Policy,
               // A trial that waits for the Effector server's word (801-KRN-0242).
-              trial: Trial }
+              trial: Trial,
+              // The run's mark (000-KRN-0217): its firmware privilege while init keeps it, what it holds, when each service of
+              // the safe start's list started until that start settled, what this boot left out and what has not come back.
+              run_mark: Option<usize>, mark: safe::Mark, settling: [Option<usize>; SAFE_LEFT_OUT.len()], left_out: u8, returning: u8,
+              // When init said READY.
+              ready: Option<usize> }
 
 // A trial held for the Effector agent's word (801-KRN-0242): READY's time, the agent's last step and its detail, and
 // when a refused trial restarts the machine.
@@ -1553,6 +1559,7 @@ impl Init {
         // A replaced service starts from its image in data/link/ (800-KRN-0144): a read-only copy for the kernel to copy.
         let replaced = match self.replaced[index] { Some((object, len)) => Some((ipc::mint(object, CAP_READ, 0, 0)?, len)), None => None };
         let image = replaced.map_or(Image::Boot(unit_image(index).0), |(cap, len)| Image::Memory { cap, len });
+        self.mark_start(index);
         let spawned = mind::process::spawn_raw(&text[..length], image, &grants.list[..grants.count], plan.flags, plan.quota);
         if let Some((cap, _)) = replaced { let _ = ipc::drop_cap(cap); }
         let pid = spawned.inspect_err(|_| { for slot in receiver.into_iter().chain(scopes[..taken].iter().copied()) { let _ = ipc::drop_cap(slot); } })?;
@@ -2028,6 +2035,71 @@ impl Init {
         mind::println!("[INIT] TRIAL BOOT REFUSED: {}; THE MACHINE RESTARTS INTO THE SLOT BEFORE WITHIN {} S", why.as_str(), REFUSED_RESTART_MS / 1000);
     }
 
+    // A start of a service of the safe start's list, marked in the run's mark before it runs and until it settles
+    // (000-KRN-0217): a run cut meanwhile names it at the next boot.
+    fn mark_start(&mut self, index: usize) {
+        let Some(i) = listed(unit_name(index)).filter(|_| self.run_mark.is_some()) else { return };
+        self.settling[i] = Some(mind::time::uptime_ms());
+        if self.mark.starting & safe::bit(i) == 0 { self.mark.starting |= safe::bit(i); self.write_mark(); }
+    }
+
+    fn write_mark(&mut self) {
+        let Some(f) = self.run_mark else { return };
+        if mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &self.mark.bytes()).is_err() {
+            mind::println!("[INIT] THE RUN'S MARK NOT WRITTEN: A RUN CUT NOW MAY NAME THE WRONG SERVICES");
+        }
+    }
+
+    // The list's starts that settled, taken out of the run's mark in one write (000-KRN-0217).
+    fn settle(&mut self) {
+        let now = mind::time::uptime_ms();
+        let mut settled = 0;
+        for i in 0..SAFE_LEFT_OUT.len() {
+            if self.settling[i].is_some_and(|at| safe::settled(at, self.ready, now)) { self.settling[i] = None; settled |= safe::bit(i); }
+        }
+        if self.mark.starting & settled == 0 { return; }
+        self.mark.starting &= !settled;
+        self.write_mark();
+        if self.mark.starting == 0 { mind::println!("[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: A RUN CUT NOW LEAVES NOTHING OUT"); }
+    }
+
+    // What a safe start left out, started again from RETURN_MS past READY, one at a time and each once the start before
+    // settled, the radios first and their station after each (000-KRN-0217): only a deliberate switch-off keeps the
+    // network down (801 S5). What `svc start` started meanwhile, or what was not prepared, is passed over.
+    fn return_next(&mut self) {
+        let now = mind::time::uptime_ms();
+        let unsettled = self.settling.iter().any(Option::is_some);
+        let Some(i) = safe::next_return(self.returning, radio_bits(), unsettled, self.ready, now) else { return };
+        self.returning &= !safe::bit(i);
+        let (name, index) = (SAFE_LEFT_OUT[i], service_index(SAFE_LEFT_OUT[i]));
+        if self.running(index) || !self.prepared(index) { return; }
+        let past = (now - self.ready.unwrap_or(now)) / 1000;
+        match self.start(index) {
+            Ok(pid) => { self.placed[index].off = Off::No; mind::println!("[INIT] {} STARTED AGAIN BY ITSELF {} S PAST READY, AFTER THE SAFE START: PID={}", name, past, pid); }
+            Err(error) => return mind::println!("[INIT] {} NOT STARTED AGAIN AFTER THE SAFE START: {:?}", name, error),
+        }
+        let station = service_index("wlan");
+        if RADIOS.contains(&name) && matches!(self.placed[station].off, Off::Safe) && self.prepared(station) {
+            match self.start(station) {
+                Ok(pid) => { self.placed[station].off = Off::No; mind::println!("[INIT] wlan STARTED AGAIN BY ITSELF OVER {}: PID={}", name, pid); }
+                Err(error) => mind::println!("[INIT] wlan NOT STARTED AGAIN OVER {}: {:?}", name, error),
+            }
+        }
+    }
+
+    // The run's mark cleared a minute after READY, once every start of the list settled and what a safe start left out
+    // came back (000-KRN-0217); its privilege goes with it.
+    fn mark_due(&mut self) {
+        let (Some(f), Some(ready)) = (self.run_mark, self.ready) else { return };
+        let past = mind::time::uptime_ms() - ready;
+        if past < MARK_CLEAR_MS || self.returning != 0 || self.settling.iter().any(Option::is_some) { return; }
+        let cleared = if mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok() { "CLEARED" } else { "COULD NOT BE CLEARED" };
+        let _ = ipc::drop_cap(f);
+        self.run_mark = None;
+        if self.left_out == 0 { mind::println!("[INIT] A MINUTE PAST READY: THE RUN'S MARK {}", cleared); }
+        else { mind::println!("[INIT] {} S PAST READY, WHAT THE SAFE START LEFT OUT BACK AND SETTLED: THE RUN'S MARK {}", past / 1000, cleared); }
+    }
+
     // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
     // policy allows; init reads the policy itself, so the gateway's own check is never the only one (MC-3.4).
     fn named(&mut self, badge: u16, sender: u64, index: usize, action: Action) -> bool {
@@ -2070,7 +2142,7 @@ impl Init {
     // One boot service at boot: started, or prepared when data/services.txt (`off`) or a safe start leaves it off, or left
     // out with the reason; false when its start failed. Not inlined: boot's own frame stays small, as a start goes deep.
     #[inline(never)]
-    fn boot_one(&mut self, info: &BootInfo, index: usize, safe: bool, off: Option<Off>) -> bool {
+    fn boot_one(&mut self, info: &BootInfo, index: usize, left_out: u8, off: Option<Off>) -> bool {
         let name = unit_name(index);
         // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
         // before the compositor takes the screen (211-PRT-0004).
@@ -2092,9 +2164,11 @@ impl Init {
             mind::println!("[INIT] {} NOT STARTED: {}", name, if name == "uart_serial" { "NO `uart` IN LINK.CONF" } else { "LINK.CONF SAYS `uart`" });
             return true;
         }
-        // Left out by a safe start, and the station whose radio is (000-KRN-0131), or by data/services.txt: prepared, not
-        // started, so that `svc start` starts it once the platform privilege is dropped.
-        let left = off.or((safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| self.running(service_index(r)))))).then_some(Off::Safe))
+        // Left out by a safe start (000-KRN-0217), and the station whose radio is (000-KRN-0131), or by data/services.txt:
+        // prepared, not started, so that `svc start` or the safe start's return starts it once the privilege is dropped.
+        let listed = listed(name).is_some_and(|i| left_out & safe::bit(i) != 0);
+        let station = name == "wlan" && left_out & radio_bits() != 0 && !RADIOS.iter().any(|&r| self.running(service_index(r)));
+        let left = off.or((listed || station).then_some(Off::Safe))
             .or((KEYED.contains(&name) && self.key_waits()).then_some(Off::Passphrase));
         if let Some(why) = left {
             self.placed[index].off = why;
@@ -2427,8 +2501,9 @@ fn boot_order() -> impl Iterator<Item = usize> {
 }
 
 
-// What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
-// run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
+// What a safe start may leave out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
+// run was most likely in; only those a run of this slot was starting when it ended (000-KRN-0217). Their plans are
+// prepared and their devices stopped, so `svc start` starts them (000-KRN-0131), and so do they by themselves later.
 const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
@@ -2479,17 +2554,36 @@ fn power_button() -> Option<Button> {
 }
 
 // The mark of an unfinished run (RUN_MARK_NAME): whether the last run left it, and whether this one set it.
-fn run_mark(firmware: usize) -> (bool, bool) {
-    let found = mind::firmware::get_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, &mut [0u8; 8]).is_ok();
-    (found, mind::firmware::set_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &[1]).is_ok())
+// The mark the last run left, if any (000-KRN-0217): none when it ended as asked.
+fn last_mark(firmware: usize) -> Option<safe::Read> {
+    let mut bytes = [0u8; 8];
+    let (_, length) = mind::firmware::get_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, &mut bytes).ok()?;
+    Some(safe::Mark::read(&bytes[..length.min(bytes.len())]))
 }
+
+// A service's place in the safe start's list.
+fn listed(name: &str) -> Option<usize> { SAFE_LEFT_OUT.iter().position(|&n| n == name) }
+
+// The list's radios: after a safe start they come back first, and their station with them (801 S5).
+fn radio_bits() -> u8 { (0..SAFE_LEFT_OUT.len()).filter(|&i| RADIOS.contains(&SAFE_LEFT_OUT[i])).fold(0, |bits, i| bits | safe::bit(i)) }
+
+// The names of the list's services whose bits `mask` holds, in the list's order.
+fn names_of(mask: u8) -> mind::util::FixedBuf<128> {
+    let mut names = mind::util::FixedBuf::<128>::new();
+    for (n, name) in (0..SAFE_LEFT_OUT.len()).filter(|&i| mask & safe::bit(i) != 0).map(|i| SAFE_LEFT_OUT[i]).enumerate() {
+        let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if n == 0 { "" } else { ", " }, name));
+    }
+    names
+}
+
+fn slot_name(slot: u32) -> &'static str { match slot { BOOT_SLOT_A => "SLOT A", BOOT_SLOT_B => "SLOT B", _ => "THE VOLUME'S ROOT" } }
 
 // The boot services in boot order (173-KRN-0035): whether every one with its hardware started, those data/services.txt
 // leaves off aside (351-KRN-0014), and whether the boot volume was found mounted (None if the file was not looked for,
 // as when `asked`, a safe start asked at the bootloader, 173-KRN-0036).
 // Not inlined: its frame is gone before the modes start the Effector services, whose start goes deep.
 #[inline(never)]
-fn boot_services(init: &mut Init, info: &BootInfo, safe: bool, asked: bool) -> (bool, Option<bool>) {
+fn boot_services(init: &mut Init, info: &BootInfo, left_out: u8, asked: bool) -> (bool, Option<bool>) {
     let mut healthy = true;
     // The units in boot order (init first) and data/services.txt's plan over them, read at the first service it may
     // change, once the boot volume is mounted (173-KRN-0035).
@@ -2527,7 +2621,7 @@ fn boot_services(init: &mut Init, info: &BootInfo, safe: bool, asked: bool) -> (
         init.placed[index].place = place;
         init.placed[index].after = plan.as_ref().and_then(|plan| plan.after[p]).map(|a| units[a]);
         let off = plan.as_ref().and_then(|plan| match (plan.off[p], plan.needs[p]) { (true, _) => Some(Off::Disabled), (_, Some(need)) => Some(Off::Needs(units[need])), _ => None });
-        healthy &= init.boot_one(info, index, safe, off);
+        healthy &= init.boot_one(info, index, left_out, off);
         tried[p] = true;
     }
     (healthy, mounted)
@@ -2545,7 +2639,8 @@ fn boot(info: &'static BootInfo) {
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, ..Default::default() },
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, owner_kept: None, notices: [const { None }; UNITS],
-                         power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default() };
+                         power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default(),
+                         run_mark: None, mark: safe::Mark::default(), settling: [None; SAFE_LEFT_OUT.len()], left_out: 0, returning: 0, ready: None };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
@@ -2566,23 +2661,36 @@ fn boot(info: &'static BootInfo) {
         mind::println!("[INIT] LAUNCH: MANIFEST {} KEY {}{} VERIFIED, {} IMAGES CHECKED; {}{}", core::str::from_utf8(manifest.as_bytes()).unwrap_or("?"), key,
                        if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
     }
-    // The last run's mark found: it stopped early, and this one starts safely (000-KRN-0076). The privilege is kept until
-    // the mark is cleared, a minute after READY.
+    // The last run's mark (000-KRN-0076): found, it stopped early. A safe start leaves out only what that run of this slot
+    // was starting, at once with the watchdog's evidence of a freeze, else after a second such run in a row (000-KRN-0217).
+    // The privilege is kept until the mark is cleared, a minute after READY once every start settled.
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
-    let (safe, marked) = firmware.map_or((false, false), run_mark);
-    if safe {
-        // Every service left out, named (the list had grown past the five the line once printed).
-        let mut names = mind::util::FixedBuf::<128>::new();
-        for (i, name) in SAFE_LEFT_OUT.iter().enumerate() { let _ = core::fmt::Write::write_fmt(&mut names, format_args!("{}{}", if i == 0 { "" } else { ", " }, name)); }
-        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}", names.as_str());
+    let slot = info.boot_slot.slot as u8;
+    let last = firmware.and_then(last_mark);
+    let decision = safe::decide(last, slot, info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0);
+    init.mark = safe::Mark { slot, starting: 0, suspected: decision.suspected };
+    let marked = firmware.is_some_and(|f| mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &init.mark.bytes()).is_ok());
+    let (named, back) = (names_of(decision.named), safe::RETURN_MS / 1000);
+    match (decision.why, last) {
+        (safe::Why::Ended, _) => {}
+        (safe::Why::Unknown, Some(safe::Read::Version(version))) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); ITS MARK IS OF VERSION {}, NOT {}, AND NAMES NO SERVICE: A NORMAL START", version, safe::VERSION),
+        (safe::Why::Unknown, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); ITS MARK IS DAMAGED AND NAMES NO SERVICE: A NORMAL START"),
+        (safe::Why::OtherSlot(other), _) => mind::println!("[INIT] THE LAST RUN, OF {}, DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); WHAT IT WAS STARTING IS NOT THIS SLOT'S: A NORMAL START", slot_name(other as u32)),
+        (safe::Why::Nothing, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), EVERY START OF THE SAFE START'S LIST SETTLED: A NORMAL START"),
+        (safe::Why::Once, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED WHILE {} STARTED, WITH NO SIGN OF A FREEZE (A CUT POWER OR A RESET): A NORMAL START; A SECOND SUCH RUN LEAVES THEM OUT", named.as_str()),
+        (safe::Why::Twice, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER), THE SECOND RUN IN A ROW WHILE THESE STARTED; NOT STARTED: {}; THEY START AGAIN BY THEMSELVES FROM {} S PAST READY", named.as_str(), back),
+        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED: THE WATCHDOG RESTARTED IT WHILE THESE STARTED; NOT STARTED: {}; THEY START AGAIN BY THEMSELVES FROM {} S PAST READY", named.as_str(), back),
     }
+    let first = decision.suspected & !decision.left_out;
+    if decision.left_out != 0 && first != 0 { mind::println!("[INIT] {} ALSO STARTED WHEN THE LAST RUN ENDED, THE FIRST TIME: STARTED; A SECOND SUCH RUN LEAVES THEM OUT", names_of(first).as_str()); }
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
-    let mut mark = firmware.filter(|_| marked);
-    if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
+    init.run_mark = firmware.filter(|_| marked);
+    if init.run_mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
+    (init.left_out, init.returning) = (decision.left_out, decision.left_out);
     // A safe start asked at the bootloader (173-KRN-0036): the service configuration is not read.
     let asked = info.boot_flags & BOOT_SAFE != 0;
-    init.safe = safe || asked;
-    let (healthy, mounted) = boot_services(&mut init, info, safe, asked);
+    init.safe = decision.left_out != 0 || asked;
+    let (healthy, mounted) = boot_services(&mut init, info, decision.left_out, asked);
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.
     match platform::reserve_memory(RECOVERY_RESERVE_MIB << 20) {
@@ -2623,14 +2731,14 @@ fn boot(info: &'static BootInfo) {
     }
     mind::println!("[INIT] READY");
     let ready = mind::time::uptime_ms();
-    init.trial.ready = ready;
+    (init.trial.ready, init.ready) = (ready, Some(ready));
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
         // A look every second too while keyed services wait for the passphrase (308-KRN-0205).
         // And while a trial waits for the Effector server, or a refused one for its restart (801-KRN-0242), or a quarantined
         // service for its cool-down (801-KRN-0245).
-        let ticks = mark.is_some() || init.passphrase_waits() || init.boot.deciding || init.trial.restart_at.is_some() || init.cool.iter().any(|&(at, _)| at != 0);
+        let ticks = init.run_mark.is_some() || init.returning != 0 || init.passphrase_waits() || init.boot.deciding || init.trial.restart_at.is_some() || init.cool.iter().any(|&(at, _)| at != 0);
         // And every FLOW_LOOK_MS while a unit waits for a policy line naming it (801-KRN-0250).
         let received = if ticks { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) }
             else if init.flowless() { Endpoint::SERVICE.recv_timeout(RECEIVED, FLOW_LOOK_MS as u32) } else { Endpoint::SERVICE.recv(RECEIVED) };
@@ -2638,12 +2746,9 @@ fn boot(info: &'static BootInfo) {
         init.cooled();
         init.flows_named();
         init.trial_due();
-        if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
-            let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
-            let _ = ipc::drop_cap(f);
-            mark = None;
-            mind::println!("[INIT] A MINUTE PAST READY: THE RUN'S MARK {}", if cleared { "CLEARED" } else { "COULD NOT BE CLEARED" });
-        }
+        init.settle();
+        init.return_next();
+        init.mark_due();
         let Ok(request) = received else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if request.irq.is_some() {
