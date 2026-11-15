@@ -1,6 +1,6 @@
 # 801-NET-0085 — The station knows a fresh radio by the PID that answers it, whatever the radio says of its channel
 
-**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-15) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
+**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-15; landed in round 144, a bench run left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
 
 ## Problem
 
@@ -51,7 +51,19 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
     - The station's first call then reaches the fresh radio.
   - **Why the first version restarted up to three times.** It retried on the other sign. On x32 (`41e360c4d4`) it needed the third restart: in two of three the station's call fell between the two radios.
 
-**Left:** the runs on the maintainer's machines, the gate, and a bench machine's run.
+**The runs on the maintainer's machines** (2026-11-15):
+- **On `cfd09c542a`**, the code:
+  - acc-2: `aarch64: network, TLS and Effector` passed in 1576 s;
+  - i9: `x86: boot, display, shell, memory, clock` in 1761 s, `x86: services, storage, audio` in 1306 s;
+  - x32: the host tests in 2221 s.
+- **On `41e360c4d4`**, x32: `x86: network, TLS and Effector` passed in 1770 s, but the check needed its third restart for the PID to tell. In the first two the station's call fell between the two radios.
+- **On `7f056287dd`**, the check holding the station:
+  - x32: `fresh_radio_check` alone five times, each passed in 15 s, the PID telling each time;
+  - i9: `x86: network, TLS and Effector` passed in 2186 s, the check's line naming the PID.
+
+**Landed in round 144** (`main` `dccd68c81e`, gate GREEN). Round 143's gate was red on the USB image check alone (000-KRN-0254), and this request waited for the next round.
+
+**Left:** a bench machine's run, the Ryzen or the DEXP, after an rtw89 restart while joined (DRV).
 
 ## Related
 
