@@ -100,3 +100,19 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
 ## Related
 
 [751](751-system-updates-at-a-developers-request.md), [750](750-effector-agent.md), [800](800-mind-link.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [800-LNK-0026](800-LNK-0026-several-machines-on-one-line.md), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md).
+
+## Progress (2026-11-15)
+
+- **S1, in `main` since round 139** (`e62d7fc506`, gate GREEN):
+  - **What `init` does now:**
+    - it holds a trial while the Effector agent runs with a server configured, and confirms it only on the agent's `accepted` (801-KRN-0242, 801-EFF-0031);
+    - otherwise it refuses the trial at the 10 min bound;
+    - the updater keeps the reason in `system/updater/refused`, spends the trial and asks for the restart, so the next boot is the slot that had the connection (801-UPD-0037).
+  - **QEMU evidence:**
+    - the `boot` suite's agent that never connects is refused at the bound;
+    - both `effector-update` suites' trials are confirmed with a server configured.
+  - **On the bench machines:** not shown yet.
+  - **Left:** `init`'s confirmation line asserted in the `effector-update` suite (EFF), and 801-ASR-0014.
+- **S5, in part:**
+  - the station joins again a network a client gave it (801-NET-0084, round 138; the Ryzen's run left, DRV);
+  - commands are judged by the server's time (801-EFF-0027, round 139).
