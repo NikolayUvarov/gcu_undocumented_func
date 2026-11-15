@@ -27,7 +27,7 @@ Three ways the agent lost its server for good, with the network working:
 
 - [x] Host tests: `restart-after`'s bounds, default and duplicate (`tests/effector_config_host.rs`).
 - [x] The fixture can stand for a server out of reach (`outage`), tested in `tests/effector_server_test.py`.
-- [ ] The `effector` suite, x86 and aarch64. The server is out of reach for 75 s with `restart-after 40`, and:
+- [x] The `effector` suite, x86 and aarch64. The server is out of reach for 75 s with `restart-after 40`, and: — LEG9, 2026-11-15, `ec86ae95`: PASS on x86_64 and aarch64.
   - the agent ends itself;
   - `init` restarts it, without quarantine;
   - its heartbeats come back once the server does.

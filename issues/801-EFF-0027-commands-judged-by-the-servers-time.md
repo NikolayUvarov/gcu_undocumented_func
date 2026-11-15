@@ -24,9 +24,9 @@
 
 ## Acceptance criteria
 
-- [ ] Host tests as above.
-- [ ] The `effector` suite, x86 and aarch64, with the RTC 3 h ahead.
-- [ ] The same with the RTC years behind, once NET's TLS part is in.
+- [x] Host tests as above. LEG9, 2026-11-15, `ec86ae95`: the host tests group passed.
+- [x] The `effector` suite, x86 and aarch64, with the RTC 3 h ahead. — LEG9, 2026-11-15, `ec86ae95`: PASS on x86_64 and aarch64 (`the device clock -10800 s off the server's: a command with a 10-minute term run and answered completed`).
+- [x] The same with the RTC years behind, once NET's TLS part is in. — LEG9, 2026-11-15, `ec86ae95`: PASS on x86_64 and aarch64, with 801-NET-0081 in `main` (`the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command with a 10-minute term run`).
 - [ ] On the DEXP after Windows has run: a command through hesere is answered, with no hand on the clock (MC-12.1).
 
 ## Related

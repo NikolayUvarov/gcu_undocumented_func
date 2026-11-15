@@ -29,7 +29,7 @@ The maintainer (2026-10-28): what is needed is not the agent's name but the mach
 
 ## Acceptance criteria
 
-- [ ] The `effector` QEMU suite: a name set by `hostname` is in the next heartbeats without a restart; with none, the agent reports what it reports today.
+- [x] The `effector` QEMU suite: a name set by `hostname` is in the next heartbeats without a restart; with none, the agent reports what it reports today. — LEG9, 2026-11-15, `ec86ae95`: PASS on x86_64 and aarch64.
 - [ ] On the DEXP:
   - `effector485 submit shell line="hostname <name>"`;
   - the server lists the agent under that name within a minute.
