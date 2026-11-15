@@ -148,7 +148,7 @@ impl Config {
                     no_token = Some(true);
                 }
                 // How long with no answer from the server before the agent ends itself, so that init starts it again with
-                // a new flow grant and new clients (801-EFF-0028).
+                // new clients of tls and parse (801-EFF-0028).
                 "restart-after" => {
                     if restart_after.is_some() { return Err(err(ErrorKind::Duplicate)); }
                     let s = value.parse::<u32>().ok().filter(|s| (RESTART_AFTER.0..=RESTART_AFTER.1).contains(s)).ok_or(err(ErrorKind::Malformed))?;

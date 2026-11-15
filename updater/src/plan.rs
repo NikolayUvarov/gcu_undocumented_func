@@ -84,6 +84,15 @@ pub fn confirm(records: [Option<Record>; 2], running: u8, keys: u64) -> Option<(
     next(records, Record { slot: running, fallback: current.fallback, tries: 0, confirmed: true, sequence: 0, floor: 0, keys })
 }
 
+/// The record that ends `running`'s trial at once, init having refused it (801-UPD-0037): the same slot and fallback,
+/// no tries left and not confirmed, so the next boot falls back to the slot before as after a trial's last try. None
+/// when the newer record does not hold `running` on trial with tries left and a fallback.
+pub fn spend(records: [Option<Record>; 2], running: u8) -> Option<(usize, Record)> {
+    let (_, current) = newest(records)?;
+    if current.slot != running || current.confirmed || current.tries == 0 || current.fallback == 0 || current.fallback == running { return None; }
+    next(records, Record { tries: 0, sequence: 0, floor: 0, keys: 0, ..current })
+}
+
 /// Whether the other slot may be written: not while the running slot is on trial and not yet confirmed on the disk,
 /// since the other slot is then its fallback.
 pub fn may_stage(records: [Option<Record>; 2], running: u8, trial: bool) -> bool {
