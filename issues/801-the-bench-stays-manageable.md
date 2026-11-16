@@ -122,6 +122,11 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
   - **The kept update waits for `init`'s word** and changes nothing slot A reads (S3, 801-EFF-0034).
   - **The suite fails if the trial is confirmed without the server.**
   - **On the bench machines:** not shown yet.
+- **S4, in QEMU, since round 145** (`0ecc5adffe`, gate GREEN):
+  - a release the running updater refuses, sent through the agent, leaves the machine on its slot and on the server;
+  - the command is answered failed with the updater's reason ([801-UPD-0043](../issues-done/801-UPD-0043-a-release-the-updater-refuses-leaves-the-machine-connected.done), the `rollback` suites);
+  - the gate's "update from the previous release" check stays as it was (801-UPD-0038, 0040);
+  - **on the bench machines:** not shown yet.
 - **S5, in part:**
   - the station joins again a network a client gave it (801-NET-0084, round 138; the Ryzen's run left, DRV);
   - commands are judged by the server's time (801-EFF-0027, round 139);
