@@ -69,6 +69,9 @@ DMESG_WAIT = 30
 # How long the listen suite waits for an answer whose text it checks, beside a build load (000-APP-0131): DRV saw the
 # shell's prompt take more than 8 s there; the wait ends at the answer, so an unloaded run takes no longer.
 LOADED_WAIT = 60
+# How long a command that writes a file on the boot disk is waited for (000-APP-0142, KRN's request of 2026-11-15): beside
+# another gate lane the write of data/services.txt had not reached the disk in 8 s; the wait ends at the prompt.
+WRITE_WAIT = 30
 # The shell's prompt for keystore's passphrase while the boot waits for it, in place of its first one (308-APP-0130).
 BOOT_PASSPHRASE = "PASSPHRASE (NO ECHO; ENTER ENDS IT, ESC: LATER): "
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -7192,8 +7195,8 @@ def effector_policy_edits(vm):
     vm.expect("(Y/N)", timeout=10)
     vm.send_bytes(b"y")
     require(vm.expect("MIND> ", timeout=30), "EFFECTOR POLICY: + reboot on; ")
-    require(vm.command("effector policy allow update everything", raw=True), "EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE ")
-    require(vm.command("effector policy deny reboot", raw=True), "EFFECTOR POLICY: - reboot on; ")
+    require(vm.command("effector policy allow update everything", raw=True, timeout=WRITE_WAIT), "EFFECTOR POLICY: NOT CHANGED: THE NEW POLICY WOULD BE REFUSED AT LINE ")
+    require(vm.command("effector policy deny reboot", raw=True, timeout=WRITE_WAIT), "EFFECTOR POLICY: - reboot on; ")
     require(vm.command("effector policy deny screen", raw=True), "NO RULE screen TO DENY")
     policy = vm.command("cat data/effector/policy", raw=True)
     assert "update apply" in policy and "reboot on" not in policy and "update everything" not in policy, policy
@@ -7311,7 +7314,7 @@ def remote_update_check(args):
                     # agrees, which init logs with the shell's badge; the link's leave refused without the link's console.
                     require(vm.command("dmesg -s shell", raw=True), "[SHELL] REMOTE UPDATE ON: A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED")
                     require(vm.command("mode", raw=True), "REMOTE UPDATE: ON (A RELEASE SENT THROUGH THE EFFECTOR SERVER MAY BE INSTALLED); THE LINK'S CONSOLE MAY SWITCH IT: NO")
-                    require_all(vm.command("mode remote-update off bench check", raw=True), "MODE REMOTE-UPDATE OFF", "REMOTE UPDATE: OFF;")
+                    require_all(vm.command("mode remote-update off bench check", raw=True, timeout=WRITE_WAIT), "MODE REMOTE-UPDATE OFF", "REMOTE UPDATE: OFF;")
                     assert "remote-update" not in vm.command("cat data/mode.conf", raw=True)
                     for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "REMOTE UPDATE: ON (")):
                         vm.send("mode remote-update on the modes suite\n")
@@ -7819,8 +7822,8 @@ def svc_boot_check(args):
             require(vm.command("svc disable virtio_net#1"), "refused, as init would refuse it: AN INSTANCE (NAME#N) CANNOT BE NAMED")
             require(vm.command("svc after virtio_net netstack"), "svc: after virtio_net netstack: refused, as init would refuse it: CONTRADICTS INIT: THE OTHER NEEDS IT FIRST")
             require(vm.command("svc reset"), "svc: no data/services.txt: every service starts in its order already")
-            require(vm.command("svc disable tts"), "tts off from the next boot (data/services.txt); svc start tts still starts it")
-            require(vm.command("svc after windows sysmon"), "windows starts after sysmon from the next boot (data/services.txt)")
+            require(vm.command("svc disable tts", timeout=WRITE_WAIT), "tts off from the next boot (data/services.txt); svc start tts still starts it")
+            require(vm.command("svc after windows sysmon", timeout=WRITE_WAIT), "windows starts after sysmon from the next boot (data/services.txt)")
             require(vm.command("svc after sysmon windows"), "refused, as init would refuse it: A CYCLE OF after")
             text = vm.command("cat data/services.txt", raw=True)
             assert "disable tts" in text and "after windows sysmon" in text and "after sysmon windows" not in text, text
@@ -7842,10 +7845,10 @@ def svc_boot_check(args):
             require(vm.command("dmesg -s init", raw=True), "[INIT] tts OFF BY data/services.txt: PREPARED, `svc start tts` STARTS IT")
             require(vm.command("svc start tts"), "tts started: PID")
             require(vm.command("svc disable tts"), "svc: data/services.txt has it already: nothing written")
-            require(vm.command("svc enable tts"), "tts on from the next boot (data/services.txt)")
+            require(vm.command("svc enable tts", timeout=WRITE_WAIT), "tts on from the next boot (data/services.txt)")
             text = vm.command("cat data/services.txt", raw=True)
             assert "after windows sysmon" in text and "disable tts" not in text, text
-            require(vm.command("svc reset"), "data/services.txt removed: every service starts in its order from the next boot")
+            require(vm.command("svc reset", timeout=WRITE_WAIT), "data/services.txt removed: every service starts in its order from the next boot")
             out = vm.command("svc boot", raw=True)
             for line in ("at the next boot, by data/services.txt as it is now:", "  tts enabled", "  windows after nothing of the file's"):
                 require(out, line)
@@ -10372,7 +10375,14 @@ def sound_meter_check(vm):
     vm.serial(enter=False)
     vm.logged("[WM] SOUND PAGE METER STARTED: The microphone records only while this page is open.", since)
     vm.logged("[WM] SOUND PAGE Microphone: peak ", since)
-    level = re.search(r"\[WM\] SOUND PAGE (Microphone: peak -?\d+ dBFS, RMS -?\d+ dBFS; noise floor -?\d+ dBFS)", ANSI.sub("", vm.log[since:]))[1]
+    # The line whole (000-APP-0142, KRN's request of 2026-11-15): on a loaded host its end comes after its start.
+    meter = re.compile(r"\[WM\] SOUND PAGE (Microphone: peak -?\d+ dBFS, RMS -?\d+ dBFS; noise floor -?\d+ dBFS)")
+    deadline = time.monotonic() + 30
+    while not (found := meter.search(ANSI.sub("", vm.log[since:]))):
+        assert time.monotonic() < deadline, vm.log[since:][-2000:]
+        time.sleep(.05)
+        vm.collect()
+    level = found[1]
     time.sleep(1)  # drawn by now
     shown = screen_text(vm)
     vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
