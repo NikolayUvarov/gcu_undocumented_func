@@ -29,6 +29,8 @@ mod ping;
 mod modes;
 #[path = "../shell/src/policyedit.rs"]
 mod policyedit;
+#[path = "../shell/src/grantterm.rs"]
+mod grantterm;
 #[path = "../libmind/src/effector/policy.rs"]
 mod policy;
 #[path = "../shell/src/pick.rs"]
@@ -1017,4 +1019,29 @@ fn effector_policy_edits_one_rule_and_never_writes_a_refused_policy() {
     assert_eq!(policyedit::state(true, policy_check(current)), "THE POLICY PARSES: 3 RULES");
     assert_eq!(policyedit::state(true, policy_check(broken)), "THE POLICY IS REFUSED AT LINE 3 (A KEY THE GRAMMAR DOES NOT KNOW): THE GATEWAY ALLOWS NOTHING");
     assert!(policyedit::state(false, Ok(0)).starts_with("NO data/effector/policy: THE GATEWAY ALLOWS NOTHING"));
+}
+
+#[test]
+fn a_boot_services_line_that_ends_its_grant_is_named_before_it_is_added() {
+    // 801-APP-0143: init takes a boot service's grant once a boot and nothing renews it (docs/network/policy.md).
+    use grantterm::{note, TERM_MAX, VOLUME_MAX};
+    let services = ["init", "timed", "updater", "effector", "shell"];
+    // The defaults (3600 s, 16 MiB) and a short term end the agent's network; the note names the line that lasts.
+    let n = note("effector 203.0.113.7 tcp 443", &services).expect("the defaults end it");
+    assert!(n.starts_with("NOTE: EFFECTOR IS A BOOT SERVICE: INIT TAKES ITS GRANT ONCE A BOOT AND NOTHING RENEWS IT, SO THIS LINE ENDS ITS NETWORK AFTER 3600 S OR 16777216 BYTES"), "{}", n);
+    assert!(n.ends_with(&format!("NETPOLICY ADD effector 203.0.113.7 tcp 443 {} {}", TERM_MAX, VOLUME_MAX)), "{}", n);
+    assert!(note("effector 10.0.2.2 tcp 9 600 1000", &services).unwrap().contains("AFTER 600 S OR 1000 BYTES"));
+    assert!(note("timed 192.0.2.10 udp 123 4294967295", &services).unwrap().contains("AFTER 4294967295 S OR 16777216 BYTES"), "the volume alone short");
+    // No port: any port (0) in the line that lasts.
+    assert!(note("updater releases.example tcp", &services).unwrap().ends_with(&format!("NETPOLICY ADD updater releases.example tcp 0 {} {}", TERM_MAX, VOLUME_MAX)));
+    // The longest term and volume, a program the shell starts, and lines that grant no flow: nothing to say.
+    assert_eq!(note(&format!("effector 203.0.113.7 tcp 443 {} {}", TERM_MAX, VOLUME_MAX), &services), None);
+    assert_eq!(note("fetch example.org tcp 80 60", &services), None);
+    for line in ["default card 1", "card 2 off", "effector", "effector host"] { assert_eq!(note(line, &services), None, "{}", line); }
+    // The other forms: browse and listen, their term after their ports and networks.
+    assert!(note("browse effector public tcp 443 600", &services).unwrap().ends_with(&format!("NETPOLICY ADD browse effector public tcp 443 {} {}", TERM_MAX, VOLUME_MAX)));
+    assert!(note("listen shell tcp 22 from 10.0.0.0/8", &services).unwrap().contains("AFTER 3600 S"));
+    assert_eq!(note(&format!("listen shell tcp 22 from 10.0.0.0/8 {} {}", TERM_MAX, VOLUME_MAX), &services), None);
+    // A term that is not a number is the broker's to refuse.
+    assert_eq!(note("effector 10.0.2.2 tcp 443 soon", &services), None);
 }
