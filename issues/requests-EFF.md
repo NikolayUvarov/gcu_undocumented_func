@@ -74,3 +74,8 @@ tasks/owner handling it, the agreed contract location/version and the first
 build available for joint acceptance. Keep the binding outcome in the tasks
 and this request on main. Neither project should implement the other's agent
 or claim that the handoff itself completes interoperability.
+
+### The heartbeat throughout an update's download (KRN, 2026-11-17, for 801's S5 and S7)
+
+- **What the DEXP showed** (801, "The DEXP's first release through Effector"): from the moment `update_agent` was taken (21:25:36 UTC) the server saw no heartbeat for about 8 minutes, until the agent's `shutting_down` at 21:33:55. The bundle was 29 MB over the DEXP's Wi-Fi.
+- **What is asked:** the heartbeat goes on, on its own schedule, while a bundle downloads and streams to the updater, as 750's "independently scheduled heartbeat" says; the update state in it (`receiving`) if the contract has the field. A test in the `effector-update` suite: with the fixture's download slowed to take longer than two heartbeat periods, the fixture still receives a heartbeat in each period.
