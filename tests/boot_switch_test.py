@@ -6,22 +6,56 @@ import struct
 import sys
 import tempfile
 import unittest
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import boot_switch  # noqa: E402
-from scripts.boot_switch import Refused, entry_for, mbr_identity, parse_entries  # noqa: E402
+from scripts.boot_switch import Refused, entry_for, identity, parse_entries  # noqa: E402
 
 SIGNATURE, START, SIZE = 0xBE1AFDFA, 0x3F, 0xFBFC1
 UBUNTU = r"HD(1,GPT,6c1e2c4f-0d9a-4bd2-9b44-3c1d5b0f5a11,0x800,0x100000)/File(\EFI\ubuntu\shimx64.efi)"
 MIND = f"PciRoot(0x0)/Pci(0x8,0x1)/Pci(0x0,0x3)/USB(3,0)/HD(1,MBR,0x{SIGNATURE:x},0x{START:x},0x{SIZE:x})"
 
 
-def mbr(signature=SIGNATURE, start=START, size=SIZE):
+X86, ARM = r"\EFI\BOOT\BOOTX64.EFI", r"\EFI\BOOT\BOOTAA64.EFI"
+# Ubuntu's disk on the ARM computer (000-KRN-0257): its ESP and root, then MIND CORE and MIND LOG at 3 and 4.
+PARTUUID, GPT_START, GPT_SIZE = "5d0b8c1e-2f3a-4b6c-9d8e-7f1a2b3c4d5e", 0x3A38000, 0x200000
+GPT_HD = f"HD(3,GPT,{PARTUUID},0x{GPT_START:x},0x{GPT_SIZE:x})"
+
+
+def mbr(signature=SIGNATURE, start=START, size=SIZE, number=1):
     sector = bytearray(512)
     struct.pack_into("<I", sector, 440, signature)
-    struct.pack_into("<II", sector, 454, start, size)
+    sector[446 + 16 * (number - 1) + 4] = 0x0C
+    struct.pack_into("<II", sector, 446 + 16 * (number - 1) + 8, start, size)
     sector[510:] = b"\x55\xaa"
     return bytes(sector)
+
+
+def gpt(parts, block=512):
+    """A GPT disk's first sectors: the protective MBR, the header in LBA 1 and the entries from LBA 2, each part
+    (number, PARTUUID, first, size)."""
+    image = bytearray(block * 2 + 128 * 128)
+    struct.pack_into("<B3sB3sII", image, 446, 0, b"\0\2\0", 0xEE, b"\xff\xff\xff", 1, 0xFFFFFFFF)
+    image[510:512] = b"\x55\xaa"
+    image[block:block + 92] = struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x10000, 92, 0, 0, 1, 0, 34, 0, bytes(16), 2, 128, 128, 0)
+    for number, partuuid, first, size in parts:
+        at = block * 2 + (number - 1) * 128
+        image[at:at + 48] = uuid.uuid4().bytes_le + uuid.UUID(partuuid).bytes_le + struct.pack("<QQ", first, first + size - 1)
+    return bytes(image)
+
+
+def ubuntu_disk(mounted_mind=None):
+    """Ubuntu's own disk, GPT: its ESP and root mounted, MIND CORE and MIND LOG beside them."""
+    return {"path": "/dev/sda", "type": "disk", "model": "Samsung SSD 860", "log-sec": 512, "mountpoints": [None],
+            "children": [{"path": "/dev/sda1", "type": "part", "label": None, "mountpoints": ["/boot/efi"]},
+                         {"path": "/dev/sda2", "type": "part", "label": None, "mountpoints": ["/"]},
+                         {"path": "/dev/sda3", "type": "part", "label": "MIND CORE", "mountpoints": [mounted_mind]},
+                         {"path": "/dev/sda4", "type": "part", "label": "MIND LOG", "mountpoints": [None]}]}
+
+
+UBUNTU_GPT = gpt([(1, str(uuid.uuid4()), 0x800, 0x100000), (2, str(uuid.uuid4()), 0x100800, 0x3937800),
+                  (3, PARTUUID, GPT_START, GPT_SIZE), (4, str(uuid.uuid4()), GPT_START + GPT_SIZE, 0x80000)])
 
 
 def stick(path="/dev/sdb", serial="AA00000000000123", mounted=None):
@@ -39,7 +73,7 @@ def system_disk():
 class Firmware:
     """The boot variables as efibootmgr shows and changes them, and the machine's disks."""
 
-    def __init__(self, entries=None, order=("0001", "0000"), current="0001", tree=None, logs=(1, 2)):
+    def __init__(self, entries=None, order=("0001", "0000"), current="0001", tree=None, logs=(1, 2), machine="x86_64", images=None, made=None):
         self.entries = entries if entries is not None else {
             "0000": {"active": True, "label": "Windows Boot Manager", "path": r"HD(1,GPT,…)/File(\EFI\Microsoft\Boot\bootmgfw.efi)"},
             "0001": {"active": True, "label": "ubuntu", "path": UBUNTU}}
@@ -49,6 +83,9 @@ class Firmware:
         # The loader's mark on the boot volume (000-KRN-0211): (count, stage), or None for a loader without one.
         self.mark = (5, "HANDOVER")
         self.create_changes_order = False
+        # What each disk's first sectors hold, the machine efibootmgr runs on, and the HD() of an entry it makes.
+        self.images, self.arch = images or {}, machine
+        self.made = made or f"HD(1,MBR,0x{SIGNATURE:x},0x{START:x},0x{SIZE:x})"
 
     def efibootmgr(self, *args):
         self.calls.append(args)
@@ -61,7 +98,7 @@ class Firmware:
         if args[0] == "--create-only":
             number = f"{max(int(n, 16) for n in self.entries) + 1:04X}"
             self.entries[number] = {"active": True, "label": args[args.index("--label") + 1],
-                                    "path": f"HD(1,MBR,0x{SIGNATURE:x},0x{START:x},0x{SIZE:x})/File({args[args.index('--loader') + 1]})"}
+                                    "path": f"{self.made}/File({args[args.index('--loader') + 1]})"}
             if self.create_changes_order:
                 self.order.insert(0, number)
             return ""
@@ -76,15 +113,18 @@ class Firmware:
     def tree(self):
         return copy.deepcopy(self.disks)
 
-    def sector(self, path):
-        return mbr()
+    def read(self, path, offset, size):
+        return self.images.get(path, mbr())[offset:offset + size]
+
+    def machine(self):
+        return self.arch
 
     def secure_boot(self):
         return False
 
     def mount(self, device, directory):
         self.mounted.append(device)
-        if device.endswith("1"):
+        if device.endswith(("sdb1", "sda3", "sdc2")):
             if self.mark:
                 Path(directory, "MIND").mkdir()
                 Path(directory, "MIND", "REACHED").write_bytes(f"MIND-REACHED 1 {self.mark[0]} {self.mark[1]}".ljust(47).encode() + b"\n")
@@ -111,12 +151,32 @@ class Parsing(unittest.TestCase):
     def test_the_entry_of_the_disks_first_partition(self):
         entries = {"0001": {"path": UBUNTU}, "0003": {"path": MIND},
                    "0004": {"path": MIND + r"/File(\EFI\other.efi)"}}
-        self.assertEqual(entry_for(entries, (SIGNATURE, START, SIZE)), "0003")
-        self.assertIsNone(entry_for(entries, (SIGNATURE, START, SIZE + 1)))
-        self.assertIsNone(entry_for({"0004": entries["0004"]}, (SIGNATURE, START, SIZE)))
-        self.assertEqual(mbr_identity(mbr()), (SIGNATURE, START, SIZE))
+        ident = ("MBR", 1, SIGNATURE, START, SIZE)
+        self.assertEqual(entry_for(entries, ident, X86), "0003")
+        self.assertIsNone(entry_for(entries, ("MBR", 1, SIGNATURE, START, SIZE + 1), X86))
+        self.assertIsNone(entry_for(entries, ("MBR", 2, SIGNATURE, START, SIZE), X86))
+        self.assertIsNone(entry_for({"0004": entries["0004"]}, ident, X86))
+        firmware = Firmware()
+        self.assertEqual(identity(firmware, stick(), stick()["children"][0]), ident)
+        firmware.images["/dev/sdb"] = bytes(512)
         with self.assertRaises(Refused):
-            mbr_identity(bytes(512))
+            identity(firmware, stick(), stick()["children"][0])
+
+    def test_a_gpt_partition_read_from_its_table(self):
+        disk = ubuntu_disk()
+        firmware = Firmware(images={"/dev/sda": UBUNTU_GPT})
+        self.assertEqual(identity(firmware, disk, disk["children"][2]), ("GPT", 3, PARTUUID, GPT_START, GPT_SIZE))
+        # 4096-byte logical sectors: the header in LBA 1 at 4096, the entries counted in those sectors too.
+        disk["log-sec"] = 4096
+        firmware.images["/dev/sda"] = gpt([(3, PARTUUID, GPT_START // 8, GPT_SIZE // 8)], block=4096)
+        self.assertEqual(identity(firmware, disk, disk["children"][2]), ("GPT", 3, PARTUUID, GPT_START // 8, GPT_SIZE // 8))
+        for path in ("/dev/sda5", "/dev/sda2"):  # past the entries the model holds; an unused entry
+            with self.subTest(path), self.assertRaises(Refused):
+                identity(Firmware(images={"/dev/sda": gpt([(3, PARTUUID, GPT_START, GPT_SIZE)])}), ubuntu_disk(), {"path": path})
+        entries = {"0001": {"path": UBUNTU}, "0004": {"path": GPT_HD + rf"/File({X86})"}, "0005": {"path": GPT_HD.upper() + rf"/File({ARM})"}}
+        self.assertEqual(entry_for(entries, ("GPT", 3, PARTUUID, GPT_START, GPT_SIZE), ARM), "0005")
+        self.assertEqual(entry_for(entries, ("GPT", 3, PARTUUID, GPT_START, GPT_SIZE), X86), "0004")
+        self.assertIsNone(entry_for(entries, ("GPT", 3, str(uuid.uuid4()), GPT_START, GPT_SIZE), ARM))
 
 
 class Switching(unittest.TestCase):
@@ -213,6 +273,47 @@ class Switching(unittest.TestCase):
         for bad in (b"", b"MIND-REACHED 2 7 READ\n", b"MIND-REACHED 1 +7 READ\n", b"MIND-REACHED 1 7 BOOTED\n",
                     b"MIND-REACHED 1 7 READ more\n", b"MIND-REACHED 1 4294967296 READ\n", bytes(48)):
             self.assertIsNone(boot_switch.parse_mark(bad), bad)
+
+    def test_ubuntus_own_disk_on_aarch64(self):
+        """000-KRN-0257: MIND CORE and MIND LOG at 3 and 4 of the GPT disk Linux runs from, its root mounted."""
+        firmware = Firmware(tree=[ubuntu_disk()], machine="aarch64", images={"/dev/sda": UBUNTU_GPT}, made=GPT_HD)
+        number = boot_switch.once(firmware, out=lambda *_: None)
+        self.assertEqual(firmware.next, number)
+        self.assertEqual(firmware.order, ["0001", "0000"])
+        self.assertEqual(self.written(firmware)[0], ("--create-only", "--disk", "/dev/sda", "--part", "3", "--loader", ARM, "--label", "MIND Core"))
+        self.assertEqual(firmware.mounted, ["/dev/sda4", "/dev/sda3"])
+        self.assertFalse(any("--bootorder" in c or "-o" in c for c in firmware.calls))
+        # Next time the entry is found, not made again.
+        firmware.calls.clear()
+        self.assertEqual(boot_switch.once(firmware, out=lambda *_: None), number)
+        self.assertEqual(self.written(firmware), [("--bootnext", number)])
+
+    def test_the_x86_loaders_entry_is_not_the_aarch64_one(self):
+        firmware = Firmware(tree=[ubuntu_disk()], machine="aarch64", images={"/dev/sda": UBUNTU_GPT}, made=GPT_HD)
+        firmware.entries["0007"] = {"active": True, "label": "MIND Core", "path": GPT_HD + rf"/File({X86})"}
+        self.assertEqual(boot_switch.once(firmware, out=lambda *_: None), "0008")
+
+    def test_volumes_found_by_label_at_any_number(self):
+        disk = {"path": "/dev/sdc", "type": "disk", "model": "Flash Disk", "mountpoints": [None],
+                "children": [{"path": "/dev/sdc1", "type": "part", "label": "MIND LOG", "mountpoints": [None]},
+                             {"path": "/dev/sdc2", "type": "part", "label": "MIND CORE", "mountpoints": [None]}]}
+        firmware = Firmware(tree=[system_disk(), disk], images={"/dev/sdc": mbr(number=2)},
+                            made=f"HD(2,MBR,0x{SIGNATURE:x},0x{START:x},0x{SIZE:x})")
+        boot_switch.once(firmware, out=lambda *_: None)
+        self.assertEqual(self.written(firmware)[0][:5], ("--create-only", "--disk", "/dev/sdc", "--part", "2"))
+        self.assertEqual(firmware.mounted, ["/dev/sdc1", "/dev/sdc2"])
+
+    def test_refusals_on_ubuntus_disk_change_nothing(self):
+        two = ubuntu_disk()
+        two["children"].append({"path": "/dev/sda5", "type": "part", "label": "MIND LOG", "mountpoints": [None]})
+        cases = {"MIND CORE mounted": Firmware(tree=[ubuntu_disk("/media/MIND CORE")], machine="aarch64", images={"/dev/sda": UBUNTU_GPT}),
+                 "two MIND LOG volumes": Firmware(tree=[two], machine="aarch64", images={"/dev/sda": UBUNTU_GPT}),
+                 "a machine with no loader": Firmware(tree=[ubuntu_disk()], machine="riscv64", images={"/dev/sda": UBUNTU_GPT})}
+        for name, firmware in cases.items():
+            with self.subTest(name), self.assertRaises(Refused):
+                boot_switch.once(firmware, reboot=True, out=lambda *_: None)
+            self.assertEqual(self.written(firmware), [], name)
+            self.assertFalse(firmware.rebooted or firmware.next, name)
 
     def test_status_changes_nothing(self):
         firmware = Firmware()

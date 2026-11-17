@@ -8,11 +8,15 @@
 
 BootOrder is never written: Linux's entry stays first, so whatever ends the run (reboot, a panic, the watchdog, a power
 cut, a bootloader that refuses the volume) the next boot is Linux. Run as root, on a machine booted by UEFI.
+
+The MIND CORE and MIND LOG volumes are found by their labels, at any partition numbers, on an MBR or a GPT disk, also
+the disk Linux runs from: only those two must not be mounted (000-KRN-0257). The loader is BOOTAA64.EFI on aarch64.
 """
 import argparse
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import struct
@@ -20,11 +24,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from write_usb_linux import descendants, devices  # noqa: E402
 
-LOADER = r"\EFI\BOOT\BOOTX64.EFI"
+# The removable-media loader of each architecture, as make_usb_image.py writes it (000-KRN-0257).
+LOADERS = {"x86_64": r"\EFI\BOOT\BOOTX64.EFI", "amd64": r"\EFI\BOOT\BOOTX64.EFI", "aarch64": r"\EFI\BOOT\BOOTAA64.EFI", "arm64": r"\EFI\BOOT\BOOTAA64.EFI"}
 LABEL = "MIND Core"
 BOOT_VOLUME, LOG_VOLUME = "MIND CORE", "MIND LOG"
 STATE = Path(os.environ.get("MIND_BOOT_SWITCH_STATE", "/var/tmp/mind-boot-switch.json"))
@@ -63,55 +69,98 @@ def parse_entries(text):
     return boot
 
 
-def mbr_identity(sector):
-    """The disk's MBR signature and its first partition's start and size, as a firmware device path names them."""
+def loader(machine):
+    """The loader this machine's firmware starts from removable media."""
+    found = LOADERS.get(machine.lower())
+    if found is None:
+        raise Refused(f"no MIND Core loader for a {machine} machine")
+    return found
+
+
+def number_of(part):
+    """A partition's number: lsblk's PARTN, else the digits that end its path (/dev/sdb3, /dev/nvme0n1p3)."""
+    if part.get("partn"):
+        return int(part["partn"])
+    found = re.search(r"(\d+)$", part["path"])
+    if not found:
+        raise Refused(f"{part['path']}: no partition number")
+    return int(found[1])
+
+
+def identity(system, disk, part):
+    """How a firmware device path names the partition: (scheme, number, the MBR's signature or GPT's PARTUUID, start,
+    size), in the disk's logical sectors, read from the disk's own table."""
+    number, block = number_of(part), int(disk.get("log-sec") or 512)
+    sector = system.read(disk["path"], 0, 512)
     if len(sector) != 512 or sector[510:] != b"\x55\xaa":
-        raise Refused("the disk has no MBR")
-    signature = struct.unpack_from("<I", sector, 440)[0]
-    start, size = struct.unpack_from("<II", sector, 454)
-    return signature, start, size
+        raise Refused(f"{disk['path']} has no partition table")
+    if sector[450] != 0xEE:
+        if not 1 <= number <= 4 or sector[446 + 16 * (number - 1) + 4] == 0:
+            raise Refused(f"{part['path']} is not a primary partition of {disk['path']}'s MBR")
+        start, size = struct.unpack_from("<II", sector, 446 + 16 * (number - 1) + 8)
+        return "MBR", number, struct.unpack_from("<I", sector, 440)[0], start, size
+    header = system.read(disk["path"], block, 92)
+    if header[:8] != b"EFI PART":
+        raise Refused(f"{disk['path']}: a protective MBR without a GPT header")
+    entries, count, width = struct.unpack_from("<QII", header, 72)
+    if not 1 <= number <= count or width < 128:
+        raise Refused(f"{part['path']} is not in {disk['path']}'s GPT")
+    entry = system.read(disk["path"], entries * block + (number - 1) * width, 128)
+    if not any(entry[:16]):
+        raise Refused(f"{part['path']}: GPT entry {number} is unused")
+    first, last = struct.unpack_from("<QQ", entry, 32)
+    return "GPT", number, str(uuid.UUID(bytes_le=bytes(entry[16:32]))), first, last - first + 1
 
 
-def entry_for(entries, identity):
-    """The entry that starts the disk's first partition: HD(1,MBR,signature,start,size), with our loader or none."""
-    signature, start, size = identity
-    for number, entry in sorted(entries.items()):
-        hd = re.search(r"HD\(1,MBR,0x([0-9a-f]+),0x([0-9a-f]+),0x([0-9a-f]+)\)", entry["path"], re.IGNORECASE)
-        loader = re.search(r"File\(([^)]*)\)", entry["path"])
-        if hd and (int(hd[1], 16), int(hd[2], 16), int(hd[3], 16)) == (signature, start, size) \
-                and (loader is None or loader[1].upper() == LOADER):
-            return number
+def entry_for(entries, ident, wanted):
+    """The entry that starts the partition `ident` names: HD(n,MBR|GPT,signature,start,size), with `wanted` as its
+    loader or none."""
+    scheme, number, signature, start, size = ident
+    for name, entry in sorted(entries.items()):
+        hd = re.search(r"HD\((\d+),(MBR|GPT),([0-9A-Fa-fx-]+),0x([0-9a-f]+),0x([0-9a-f]+)\)", entry["path"], re.IGNORECASE)
+        found = re.search(r"File\(([^)]*)\)", entry["path"])
+        if not hd or hd[2].upper() != scheme or (int(hd[1]), int(hd[4], 16), int(hd[5], 16)) != (number, start, size):
+            continue
+        same = int(hd[3], 16) == signature if scheme == "MBR" else hd[3].lower() == signature
+        if same and (found is None or found[1].upper() == wanted.upper()):
+            return name
     return None
 
 
 def mind_disks(tree):
-    """Disks whose first partition is the MIND CORE volume and whose second is MIND LOG."""
+    """Disks with one partition labelled MIND CORE and one labelled MIND LOG, at any numbers."""
     found = []
     for root in tree:
         if root.get("type") != "disk":
             continue
         parts = [n for n in descendants(root) if n is not root and n.get("type") == "part"]
-        if len(parts) >= 2 and parts[0].get("label") == BOOT_VOLUME and parts[1].get("label") == LOG_VOLUME:
-            found.append((root, parts[0], parts[1]))
+        boot = [p for p in parts if p.get("label") == BOOT_VOLUME]
+        log = [p for p in parts if p.get("label") == LOG_VOLUME]
+        if boot and log:
+            found.append((root, boot, log))
     return found
 
 
 def choose_disk(tree, requested=None):
-    """The one MIND Core disk, or the one named; refused if mounted, ambiguous or missing."""
+    """The one MIND Core disk, or the one named; refused if its two volumes are mounted, ambiguous or missing. Other
+    partitions of the disk, Linux's own among them, may be mounted."""
     found = mind_disks(tree)
     if requested:
         found = [d for d in found if d[0]["path"] == requested]
         if not found:
-            raise Refused(f"{requested} has no {BOOT_VOLUME} volume followed by {LOG_VOLUME}")
+            raise Refused(f"{requested} has no {BOOT_VOLUME} volume and {LOG_VOLUME} volume")
     if not found:
-        raise Refused(f"no disk with a {BOOT_VOLUME} volume followed by {LOG_VOLUME}: write the image first")
+        raise Refused(f"no disk with a {BOOT_VOLUME} volume and a {LOG_VOLUME} volume: write the image first")
     if len(found) > 1:
         raise Refused("several MIND Core disks: name one with --disk (" + ", ".join(d[0]["path"] for d in found) + ")")
-    disk = found[0]
-    mounted = [n["path"] for n in descendants(disk[0]) if any(m for m in n.get("mountpoints") or [])]
+    disk, boot, log = found[0]
+    if len(boot) > 1 or len(log) > 1:
+        raise Refused(f"{disk['path']} has {len(boot)} {BOOT_VOLUME} volumes and {len(log)} {LOG_VOLUME} volumes: "
+                      "relabel all but one of each")
+    mounted = [n["path"] for p in (boot[0], log[0]) for n in descendants(p) if any(m for m in n.get("mountpoints") or [])]
     if mounted:
-        raise Refused(f"{', '.join(mounted)} mounted: unmount the MIND Core disk first")
-    return disk
+        raise Refused(f"{', '.join(mounted)} mounted: unmount MIND Core's volumes first")
+    return disk, boot[0], log[0]
 
 
 def check_order(boot):
@@ -133,9 +182,13 @@ class System:
     def tree(self):
         return devices()
 
-    def sector(self, path):
+    def read(self, path, offset, size):
         with open(path, "rb") as disk:
-            return disk.read(512)
+            disk.seek(offset)
+            return disk.read(size)
+
+    def machine(self):
+        return platform.machine()
 
     def secure_boot(self):
         try:
@@ -197,9 +250,9 @@ def status(system, out=print):
         mark = " (Linux, booted now)" if number == boot["current"] else ""
         out(f"  Boot{number}{'*' if entry['active'] else ' '} {entry['label']}{mark}")
     try:
-        disk, _, _ = choose_disk(system.tree())
-        number = entry_for(boot["entries"], mbr_identity(system.sector(disk["path"])))
-        out(f"MIND Core disk: {disk['path']} ({disk.get('model') or '?'}), entry "
+        disk, part, _ = choose_disk(system.tree())
+        number = entry_for(boot["entries"], identity(system, disk, part), loader(system.machine()))
+        out(f"MIND Core disk: {disk['path']} ({disk.get('model') or '?'}), {part['path']}, entry "
             f"{'Boot' + number if number else 'none yet (once makes one)'}")
     except Refused as reason:
         out(f"MIND Core disk: {reason}")
@@ -213,19 +266,18 @@ def once(system, requested=None, reboot=False, out=print):
     boot = parse_entries(system.efibootmgr("-v"))
     check_order(boot)
     disk, part, log = choose_disk(system.tree(), requested)
-    identity = mbr_identity(system.sector(disk["path"]))
-    number = entry_for(boot["entries"], identity)
+    ident, wanted = identity(system, disk, part), loader(system.machine())
+    number = entry_for(boot["entries"], ident, wanted)
     if number is None:
-        partition = re.search(r"(\d+)$", part["path"])
-        system.efibootmgr("--create-only", "--disk", disk["path"], "--part", partition[1] if partition else "1",
-                          "--loader", LOADER, "--label", LABEL)
+        system.efibootmgr("--create-only", "--disk", disk["path"], "--part", str(ident[1]),
+                          "--loader", wanted, "--label", LABEL)
         after = parse_entries(system.efibootmgr("-v"))
         if after["order"] != boot["order"]:
             raise Refused(f"efibootmgr changed BootOrder to {','.join(after['order'])}; put back "
                           f"{','.join(boot['order'])} with efibootmgr --bootorder before switching")
-        number = entry_for(after["entries"], identity)
+        number = entry_for(after["entries"], ident, wanted)
         if number is None:
-            raise Refused("the new boot entry does not name the disk's first partition")
+            raise Refused(f"the new boot entry does not name {part['path']}")
         out(f"made Boot{number} {LABEL} for {disk['path']}")
         boot = after
     if not boot["entries"][number]["active"]:
