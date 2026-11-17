@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.7 (2026-11-05): a `rm`, a `mv` and a `mkdir` reach the disk at once (000-KRN-0212); 1.6 (2026-11-05): `logs` reads the loader's mark (000-KRN-0211); 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.8 (2026-11-17): the switch on a GPT disk beside Linux's own partitions and on aarch64 (000-KRN-0257); 1.7 (2026-11-05): a `rm`, a `mv` and a `mkdir` reach the disk at once (000-KRN-0212); 1.6 (2026-11-05): `logs` reads the loader's mark (000-KRN-0211); 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -257,6 +257,11 @@ sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copie
 
 `once` sets `BootNext` to the stick's entry. If the stick has no entry, `once` makes one first with `efibootmgr --create-only`, labelled `MIND Core`. Nothing in the image or the bootloader changes.
 
+**Which disk** (000-KRN-0257). The script finds the volumes labelled `MIND CORE` and `MIND LOG`, at any partition numbers, on an MBR or a GPT disk:
+- **its entry** is the `MIND CORE` partition's, `HD(n,MBR,<signature>,…)` or `HD(n,GPT,<PARTUUID>,…)`, read from the disk's own table;
+- **the disk Linux runs from** may hold them, as Ubuntu's disk with MIND Core's partitions beside its own does. Only the two volumes must not be mounted; Linux's other partitions are left as they are, read nor written;
+- **the loader** is `\EFI\BOOT\BOOTX64.EFI` on x86 and `\EFI\BOOT\BOOTAA64.EFI` on aarch64, by the machine Linux runs on.
+
 **Fast Boot off.** With the firmware's Fast Boot on, the Ryzen 9 5900HX ignored `BootNext` to the stick and started Ubuntu (2026-11-03); with it off, the switch ran with nobody at the machine. `once` says so each time.
 
 **`--reboot`** asks systemd to restart in 5 s (`systemd-run`), so the restart outlives the command that ran the script, an Effector exec among them.
@@ -264,8 +269,9 @@ sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copie
 **What the script refuses**, saying why:
 - Linux's entry (`BootCurrent`) is not first in `BootOrder`: a restart would not come back. Put it first in the firmware's setup.
 - Linux was not started by UEFI.
-- No MIND Core disk is attached, or several are (name one with `--disk`).
-- The MIND Core disk is mounted.
+- No MIND Core disk is attached, or several are (name one with `--disk`), or a disk has two volumes of either label.
+- The `MIND CORE` or the `MIND LOG` volume is mounted.
+- A partition the firmware cannot name: an MBR's logical partition, an unused GPT entry; or a machine with no MIND Core loader.
 
 The script never writes `BootOrder`.
 
