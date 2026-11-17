@@ -347,6 +347,11 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
   - **Which word names one:** a store volume's name (1 to 16 of `A-Z a-z 0-9 . _ -`), a colon, and no other colon (`secret-put:token:file` is a program's own word). The first such volume that has been written gets the scope.
   - **How the shell tells:** it asks the block store for the volume's name (`fs/notes`), which makes nothing, and asks `storefs` nothing for a volume never written. While the store mounts at boot it waits 500 ms at most, and the program starts without the scope.
 
+**`netpolicy add` for a boot service** (801-APP-0143, 801's S5): `init` takes a boot service's flow grant once a boot and keeps it for every restart, so nothing renews its term or volume ([docs/network/policy.md](../network/policy.md), "Term and volume").
+- When the line gives a boot service (`effector`, `timed`, `updater`, …) a term or a volume short of the longest, the shell says so before it asks. That includes the 3600 s and 16 MiB a line gets when it names none.
+- The note names when the service's network would end, and the line that lasts as long as the machine runs: `NOTE: EFFECTOR IS A BOOT SERVICE: … ENDS ITS NETWORK AFTER 3600 S OR 16777216 BYTES, UNTIL THE NEXT BOOT. THE LINE THAT LASTS AS LONG AS THE MACHINE RUNS: NETPOLICY ADD effector 203.0.113.7 tcp 443 4294967295 18446744073709551615`.
+- The owner still decides: the question follows as before.
+
 **A running program's question about a flow** (000-APP-0120, `netpolicy.wit` 1.3, for 000-NET-0049): a program that reaches a host the user names only as it runs asks through its grant, and only the user answers.
 - **Where it shows:** the shell asks the broker every 500 ms and shows the oldest question on the console its program was started from. For a program the shell did not start, it shows in the shell's window when a window manager the shell started runs, else on the console shown. The serial line names the console when it is not the first.
 - **What it says:** `NETWORK: get (PID 57) ASKS TO REACH example.org:443`, then the program's reason as its own words. A control character in it, an escape sequence's start among them, is shown as `?`, so a program cannot draw a question of its own.

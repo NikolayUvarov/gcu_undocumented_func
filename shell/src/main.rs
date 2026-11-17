@@ -16,6 +16,7 @@ mod domainrun;
 mod files;
 mod flowask;
 mod flowctl;
+mod grantterm;
 mod hostname;
 mod keymap;
 mod modectl;

@@ -11300,13 +11300,27 @@ def policy_edit_check(vm, web_port):
     require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), f"NETCHECK tcp:10.0.2.2:{web_port} OK")
     require(vm.command("cat system/netpolicy/netpolicy.txt"), "ERROR: CAT: DENIED")
     require(policy_answer(vm, "netpolicy add rogue nowhere", "y"), "NETPOLICY: Invalid")
+    # 801-APP-0143: a boot service's line that would end its grant is named before the question; answered N, unchanged.
+    def asked(command):
+        # What the shell printed before its question, and after the answer N.
+        vm.send(command + "\n")
+        before = vm.expect("(Y/N)")
+        vm.send("n")
+        return before, vm.expect("MIND> ")
+    before, after = asked("netpolicy add effector 10.0.2.2 tcp 9")
+    require_all(before, "NOTE: EFFECTOR IS A BOOT SERVICE: INIT TAKES ITS GRANT ONCE A BOOT AND NOTHING RENEWS IT, SO THIS LINE ENDS ITS NETWORK AFTER 3600 S OR 16777216 BYTES",
+                f"NETPOLICY ADD effector 10.0.2.2 tcp 9 {2**32 - 1} {2**64 - 1}")
+    require(after, "NETPOLICY: NOT CHANGED")
+    assert "NOTE:" not in asked(f"netpolicy add effector 10.0.2.2 tcp 9 {2**32 - 1} {2**64 - 1}")[0], "the line that lasts"
+    assert "NOTE:" not in asked(f"netpolicy add rogue 10.0.2.2 tcp {web_port} 60")[0], "a program the shell starts"
     require(policy_answer(vm, f"netpolicy remove {line}", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
     require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), "NETWORK FOR rogue: NoPolicy")
     log = vm.command("dmesg -s netpolicy")
     for expected in (f"POLICY CHANGED BY PID", f"ADDED {line}", f"REMOVED {line} (1 LINES)", "CHANGE REFUSED FOR PID", "NOT A POLICY LINE: rogue nowhere"):
         require(log, expected)
     print("PASS: the network policy changed while the system runs: refused without the user's yes, a line added and the next grant following it, "
-          "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
+          "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open; "
+          "a boot service's line that would end its grant named before the question (801-APP-0143)", flush=True)
 
 
 def flow_bounds_check(vm, web_port):
