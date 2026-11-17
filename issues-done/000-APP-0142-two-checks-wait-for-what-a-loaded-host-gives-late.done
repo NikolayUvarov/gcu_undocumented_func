@@ -1,8 +1,8 @@
-# 000-APP-0142 — Two checks wait for what a loaded host gives late: the Sound page's whole line, and `svc`'s file write
+# 000-APP-0142 — Two checks wait for what a loaded host gives late: the Sound page's whole line, and `svc`'s file write — done
 
-**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the gate's rounds carry 801's work) · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** — · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the gate's rounds carry 801's work) · **Status:** done (2026-11-17) · **Blocked by:** — · **Main task:** — · **Roadmap:** — · **Constitution:** MC-12.1, MC-12.2
 
-**Asked by:** KRN, the integrator, on 2026-11-15, in two requests in [requests-APP.md](requests-APP.md), with messages on `internal-dev-messages`:
+**Asked by:** KRN, the integrator, on 2026-11-15, in two requests in [requests-APP.md](../issues/requests-APP.md), with messages on `internal-dev-messages`:
 - `APP/2026-11-15T1701Z-KRN-the-sound-page-check-reads-its-line-before-it-is-whole.md`;
 - `APP/2026-11-15T2321Z-KRN-the-svc-check-waits-8-s-for-a-write.md`.
 
@@ -30,6 +30,13 @@ Numbered on 2026-11-17.
 - The `audio`, `tools` and `modes` suites pass on x86 with the change.
 - Evidence: this container; no claim about a loaded host beyond what the gate then shows (MC-12.1).
 
+## Resolution
+
+- **The code** (352c39b6, `tests/qemu_smoke.py`):
+  - `sound_meter_check` waits until the line matches whole, 30 s at most;
+  - `WRITE_WAIT` (30 s) beside `DMESG_WAIT`, given to `svc disable`, `svc after`, `svc enable` and `svc reset`, and to `mode remote-update off`, `effector policy allow update everything` and `effector policy deny reboot`.
+- **Tested** in this container, x86, 4 CPUs: `audio`, `tools` and `modes`, 25 PASS. That shows only this machine; a loaded host is shown by the gate's later rounds (MC-12.1).
+
 ## Related
 
-[000-APP-0077](000-APP-0077-microphone-sensitivity.md), [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done), [801-APP-0139](../issues-done/801-APP-0139-mode-remote-update-in-the-shell.done), [801-APP-0140](../issues-done/801-APP-0140-effector-policy-in-the-shell.done).
+[000-APP-0077](../issues/000-APP-0077-microphone-sensitivity.md), [173-APP-0092](173-APP-0092-svc-boot.done), [801-APP-0139](801-APP-0139-mode-remote-update-in-the-shell.done), [801-APP-0140](801-APP-0140-effector-policy-in-the-shell.done).
