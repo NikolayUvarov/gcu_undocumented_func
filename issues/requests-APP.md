@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: KRN's report of 2026-11-13, `wm` and the clipboard's right to badge, taken into [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done); the shell taking a remote session's lines became [112-APP-0136](../issues-done/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done), KRN's of 2026-11-12; `fm` over a store volume [311-APP-0135](../issues-done/311-APP-0135-fm-opens-a-store-volume.done), a program started in a memory domain [312-APP-0134](../issues-done/312-APP-0134-a-program-started-in-a-memory-domain.done), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (none waiting to be numbered: KRN's two of 2026-11-15, the Sound page check reading the level line only once it is whole and the `svc` check's wait for a write, became [000-APP-0142](000-APP-0142-two-checks-wait-for-what-a-loaded-host-gives-late.md); KRN's report of 2026-11-13, `wm` and the clipboard's right to badge, taken into [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done); the shell taking a remote session's lines became [112-APP-0136](../issues-done/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done), KRN's of 2026-11-12; `fm` over a store volume [311-APP-0135](../issues-done/311-APP-0135-fm-opens-a-store-volume.done), a program started in a memory domain [312-APP-0134](../issues-done/312-APP-0134-a-program-started-in-a-memory-domain.done), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -238,27 +238,3 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
      - It makes an exception to 0073's stated guarantee ("the IDL runtime passes every capability without the right"), and `docs/profile` would say so.
      - KRN would make it; APP would change the shell's one call.
 - **Asked of APP:** which way. For the first, a line here or in `KRN/` when `clipboard.wit` 1.1 is ready, and KRN gives the service its endpoint with `CAP_BADGE` in the same round.
-
-## KRN's request (2026-11-15): the Sound page check reads the level line only once it is whole
-
-For [000-APP-0077](000-APP-0077-microphone-sensitivity.md) (`tests/qemu_smoke.py`, `sound_meter_check`).
-
-- **What failed:** round 142's gate, `x86: services, storage, audio` on i9, in 188 s. The error was `TypeError: 'NoneType' object is not subscriptable` at the `re.search` of `[WM] SOUND PAGE (Microphone: peak … dBFS, RMS … dBFS; noise floor … dBFS)`. The group passed alone on x32, in 964 s.
-- **Why, as far as the code shows:**
-  - `vm.logged("[WM] SOUND PAGE Microphone: peak ", since)` returns as soon as that prefix is in the log.
-  - The `re.search` that follows needs the whole line, up to `noise floor … dBFS`.
-  - On a slow machine the rest of the line can still be on its way. The values are always integers (`wm/src/settings.rs`, `meter_line`), so the format is not the cause.
-- **The request** (APP decides how): wait for the whole line before reading it. For example, wait for the line's end (`dBFS; noise floor `, then ` dBFS` after it), or retry the `re.search` until the `logged` deadline.
-- **Owner:** APP. KRN has not changed the check.
-
-## KRN's request (2026-11-15): the `svc` check waits more than the harness's 8 s for a write on a loaded machine
-
-For [173-APP-0092](../issues-done/173-APP-0092-svc-boot.done) (`tests/qemu_smoke.py`, `svc_boot_check`).
-
-- **What failed:** round 143's gate, `x86: keys, shell, tools` on x32 beside x32-2's lane, in 191 s: `Timeout waiting for 'MIND> ': svc after windows sysmon`. Alone on x32 it passed, in 466 s. The logs are on x32, `~/mind-core/KRN/logs/land-r143/x32-08/`.
-- **What the stuck record shows** (`mind-core-stuck-635980-1.log`), at the 8 s mark and one second later alike:
-  - `svc` waits for `vfs_server`'s reply;
-  - `vfs_server` waits for `ata`'s, and `ata` runs.
-  So the write of `data/services.txt`, the check's second, had not reached the disk in 8 s. The host's disk was busy with the gate's other lane.
-- **The request** (APP decides how): give the commands that write `data/services.txt` a wait the write can take on a loaded host. For example, pass `timeout=` to `vm.command` for `svc disable` and `svc after`, as `dmesg` has `DMESG_WAIT`.
-- **Owner:** APP. KRN has not changed the check.
