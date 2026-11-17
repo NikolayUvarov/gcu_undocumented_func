@@ -365,6 +365,10 @@ pub fn policy(shell: &mut crate::Shell, args: &[u8]) {
         }
         "add" | "remove" if !line.is_empty() => {
             let question = alloc::format!("{} THE NETWORK POLICY LINE \"{}\"?", if verb == "add" { "ADD" } else { "REMOVE" }, line);
+            // A boot service's grant is taken once a boot and never renewed: a line that ends it is said first (801-APP-0143).
+            if let Some(note) = (verb == "add").then(|| crate::grantterm::note(line, &mind::abi::BOOT_SERVICES[..])).flatten() {
+                let _ = writeln!(shell.term, "{}", note);
+            }
             if !crate::msh::ask(shell, &question) { let _ = writeln!(shell.term, "NETPOLICY: NOT CHANGED"); return; }
             let out = &mut shell.term;
             let result = if verb == "add" { netpolicy::add(BROKER, line).map(|r| r.map(|()| 1)) } else { netpolicy::remove(BROKER, line) };

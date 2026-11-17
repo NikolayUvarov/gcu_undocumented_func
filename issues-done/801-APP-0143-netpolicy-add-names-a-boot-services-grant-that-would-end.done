@@ -1,0 +1,48 @@
+# 801-APP-0143 — `netpolicy add` names a boot service's line that would end its grant — done
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-17) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** the development of MIND Core on real hardware; stage V · **Constitution:** MC-3.13, MC-12.3
+
+**Found by:** APP, 2026-11-17, reading 801-EFF-0028's correction and `docs/network/policy.md` for what else could cost the Effector server.
+
+## Problem
+
+- **A boot service's grant is never renewed.** `init` takes a boot service's flow grant once a boot and keeps it for every restart (MC-3.13). So nothing renews its term or its volume until the next boot.
+  - A line that names neither gets 3600 s and 16 MiB.
+  - So `netpolicy add effector 203.0.113.7 tcp 443` costs the machine its Effector server an hour later, until a reboot. 801's S5 forbids that: only a deliberate switch-off may stop the agent.
+- **It is written down** in `docs/effector/README.md` and `docs/network/policy.md`. Only the owner, typing the line, can avoid it, and the shell asks only `ADD THE NETWORK POLICY LINE "…"?`.
+
+## Plan
+
+- **`shell/src/grantterm.rs`**, host-tested:
+  - **the line read:** for a flow line (`program address proto [port [seconds [bytes]]]`, `browse …`, `listen …`), its program and its term and volume, defaults included;
+  - **the note:** given when the program is a boot service (`mind::abi::BOOT_SERVICES`) and the term or the volume is short of the longest. It names when the service's network would end, and the same line with the longest term and volume.
+- **`netpolicy add`:** the note before its question. The owner still decides, and nothing is refused.
+- **Not changed:** the broker's and `init`'s rules (NET's, KRN's). This only says what they mean before the line is added.
+
+## Acceptance criteria
+
+- **Host tests (`tests/shell_host.rs`):**
+  - the defaults, a short term and a short volume noted;
+  - the longest line, a program the shell starts and lines that grant no flow not noted;
+  - the forms `browse` and `listen`.
+- **QEMU (the `net` suite's `policy_edit_check`, x86):**
+  - `netpolicy add effector 10.0.2.2 tcp 9` shows the note and the line that lasts, and answered N changes nothing;
+  - the longest line and a program's line show none.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`.
+
+## Resolution
+
+- **The code:**
+  - `shell/src/grantterm.rs`: the line read, defaults included; the note for a boot service of `mind::abi::BOOT_SERVICES` whose term or volume is short of the longest;
+  - `shell/src/net.rs`: `netpolicy add` prints the note before its question.
+- **Tested** in this container, x86, 4 CPUs:
+  - `tests/shell_host.rs`: `a_boot_services_line_that_ends_its_grant_is_named_before_it_is_added` (42 tests);
+  - the `net` suite's `policy_edit_check`:
+    - `netpolicy add effector 10.0.2.2 tcp 9` showed the note with the line that lasts, and answered N changed nothing;
+    - the longest line and a program's line showed none;
+  - `net` and `shell`: 59 PASS.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`. `docs/network/policy.md` and `docs/effector/README.md` are NET's and EFF's, told of the note.
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md), [801-EFF-0028](../issues/801-EFF-0028-the-agent-comes-back-by-itself.md), [801-KRN-0250](801-KRN-0250-a-network-grant-from-a-line-added-later.done).
