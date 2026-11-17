@@ -1279,7 +1279,8 @@ impl Init {
             // data/effector/ to read (a scope made at each start), and init's client for its stop notice. Nothing that acts
             // on the machine: the gateway does.
             "effector" => {
-                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+                // The clock with the setting badge, so the agent can set it from the pinned server's time (801-KRN-0255).
+                grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR)?, CLIENT);
                 match self.flow(&mut minted, "effector") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
