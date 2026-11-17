@@ -18,7 +18,7 @@ MOB's ask of 2026-11-16 (ask 1), for the maintainer's word of 2026-11-17: Ubuntu
 3. **The test:** a QEMU boot from a GPT disk with the boot partition, a Linux partition and the `MIND LOG` partition, x86 and aarch64:
    - `log:` mounted and `bootNNNN.log` written;
    - the Linux partition gets no window and is not written;
-   - a disk where the log partition has the name but not the volume label: a window, no `log:`.
+   - the same disk with the log partition named otherwise: no window for it, no `log:`, and it is not written.
 4. **The docs:** `docs/profile/bootstrap.md`'s `vfs_server` row; `docs/write-disk.md` if it names the log partition's layout.
 
 ## Acceptance criteria
@@ -26,6 +26,12 @@ MOB's ask of 2026-11-16 (ask 1), for the maintainer's word of 2026-11-17: Ubuntu
 - [ ] QEMU, x86 and aarch64, a GPT boot disk as above.
 - [ ] The docs.
 - [ ] On a machine: MOB's disk, once its script writes it (MC-12.1).
+
+## Progress (2026-11-17)
+
+- **Made** (`claude/211-KRN-0256-the-log-volume-on-gpt`, 0d824b88): `init`'s `vfs_windows`, the `MIND LOG` partition's window on the boot GPT disk; `tests/usb_image_smoke.py` `gpt_log_check`; `docs/profile/bootstrap.md`'s `vfs_server` row.
+- **x86, QEMU** (acc-2, the group `x86: USB image`, 2026-11-17): PASS. The stick's partitions on a GPT disk beside a Linux partition: named `MIND LOG`, window 3, `log:` mounted, `boot0001.log` written and read on the host; named `MIND DATA`, no window, no `log:`, not written; the Linux partition, the tables and the backup never written.
+- **Left:** aarch64 (GitHub CI's `usb_image_smoke.py --arch aarch64`), and MOB's disk on the machine.
 
 ## Related
 

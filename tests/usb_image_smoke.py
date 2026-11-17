@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, slots, store_superblock
@@ -46,6 +48,7 @@ def main():
     try:
         run(args, booted)
         store_partition_check(args, work)
+        gpt_log_check(args, work)
         slots_check(args, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -188,6 +191,101 @@ def store_partition_check(args, work):
     print(f"PASS ({args.arch}): the store's own partition (307-KRN-0177): a blank NVMe disk not given to it; two candidates refused, "
           "both named, neither written; a blank partition of its type not taken, then taken and formatted once store.txt names it; "
           "a log: volume claiming sectors past its partition written to and refused at vfs_server's window (307-KRN-0229)", flush=True)
+
+
+# GPT's type GUIDs: the EFI system partition, Microsoft basic data (a FAT volume), Linux data, the store's (partition.rs).
+GPT_TYPES = {0xEF: "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", 0x0E: "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", 0x7F: "27d2c2a1-7133-4d3d-a6ed-1de599cabdb7"}
+GPT_LINUX = "0fc63daf-8483-4772-8e79-3d69d8477de4"
+
+
+def gpt_copy(source, out, names, linux_sectors=8192):
+    """The stick's partitions at the same sectors on a GPT disk (a protective MBR, the primary table and the backup), named
+    `names` in order, then a Linux partition of seeded random bytes, as Ubuntu's beside MIND Core's (211-KRN-0256).
+    Returns the Linux partition's first sector and count."""
+    import random
+    entries, _ = partitions(source)
+    data = bytearray(Path(source).read_bytes())
+    assert min(first for _, _, first, _ in entries) >= 34, entries
+    linux_first = -(-max(first + count for _, _, first, count in entries) // 2048) * 2048
+    sectors = max(len(data) // 512, linux_first + linux_sectors) + 34
+    data += bytes(sectors * 512 - len(data))
+    rand = random.Random("211-KRN-0256")
+    data[446:510] = struct.pack("<B3sB3sII", 0, b"\x00\x02\x00", 0xEE, b"\xff\xff\xff", 1, min(sectors - 1, 0xFFFFFFFF)) + bytes(48)
+    table = bytearray(128 * 128)
+    rows = [(GPT_TYPES[kind], first, count, name) for (_, kind, first, count), name in zip(entries, names)] + [(GPT_LINUX, linux_first, linux_sectors, "ubuntu")]
+    for i, (kind, first, count, name) in enumerate(rows):
+        table[i * 128:(i + 1) * 128] = (uuid.UUID(kind).bytes_le + uuid.UUID(int=rand.getrandbits(128)).bytes_le
+                                        + struct.pack("<QQQ", first, first + count - 1, 0) + name.encode("utf-16-le").ljust(72, b"\0"))
+    disk = uuid.UUID(int=rand.getrandbits(128)).bytes_le
+
+    def header(current, backup, at):
+        head = bytearray(struct.pack("<8sIIIIQQQQ16sQIII", b"EFI PART", 0x10000, 92, 0, 0, current, backup, 34, sectors - 35, disk, at, 128, 128, zlib.crc32(table)))
+        head[16:20] = struct.pack("<I", zlib.crc32(head))
+        return bytes(head)
+    data[512:1024] = header(1, sectors - 1, 2).ljust(512, b"\0")
+    data[1024:1024 + len(table)] = table
+    data[(sectors - 33) * 512:(sectors - 1) * 512] = table
+    data[(sectors - 1) * 512:] = header(sectors - 1, 1, sectors - 33).ljust(512, b"\0")
+    data[linux_first * 512:(linux_first + linux_sectors) * 512] = rand.randbytes(linux_sectors * 512)
+    Path(out).write_bytes(data)
+    return linux_first, linux_sectors
+
+
+def gpt_log_check(args, work):
+    """211-KRN-0256: the stick's partitions on a GPT disk, as MIND Core's beside Ubuntu's: init gives vfs_server a window
+    for the boot partition and for the one GPT names MIND LOG, which vfs_server mounts as log: and this boot's log is
+    written there; the Linux partition gets no window and, as the tables, is not written. The same disk with the log
+    partition named otherwise: no window for it, no log:, and it is not written."""
+    entries, _ = partitions(args.image)
+    (_, _, boot_first, _), (_, _, log_first, log_count) = entries[0], entries[1]
+    shown = []
+    for name in ("MIND LOG", "MIND DATA"):
+        disk = work / f"gpt-{name.replace(' ', '-').lower()}.img"
+        linux_first, linux_count = gpt_copy(args.image, disk, ("MIND CORE", name, "MIND STORE"))
+        before = disk.read_bytes()
+        vm = VM(args, qemu_path(disk, args.qemu), usb=True, snapshot=False)
+        try:
+            ready, init = store_lines(vm)
+            require(init, "[INIT] usb_storage: GPT, 4 PARTITIONS")
+            require(init, f"[INIT] usb_storage PARTITION 1: WINDOW 2 FOR VFS_SERVER, ")
+            assert "usb_storage PARTITION 4: WINDOW" not in init, init[-3000:]
+            vfs = vm.command("dmesg -s vfs_server", raw=True)
+            require(vfs, f"[VFS] MOUNTED FAT16 FROM USB")
+            if name == "MIND LOG":
+                require(init, f"[INIT] usb_storage PARTITION 2: WINDOW 3 FOR VFS_SERVER, {log_count} SECTORS FROM {log_first}")
+                require(vfs, f"[VFS] MOUNTED FAT16 AT LBA {log_first} AS LOG:")
+                log = re.search(r"GOES TO LOG:(boot\d{4}\.log)", vfs)[1]
+                require(vm.command("logger GPT-LOG-PARTITION-CHECK"), "LOGGED")
+                require(vm.command("sync"), "OK")
+                for _ in range(20):
+                    saved = vm.command(f"cat log:{log}", raw=True)
+                    if "GPT-LOG-PARTITION-CHECK" in saved:
+                        break
+                    time.sleep(.5)
+                require(saved, "GPT-LOG-PARTITION-CHECK")
+                require(vm.command("sync"), "OK")
+                time.sleep(3)  # the journal's last save, flushed
+            else:
+                assert "usb_storage PARTITION 2: WINDOW" not in init, init[-3000:]
+                assert "AS LOG" not in vfs, vfs[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-usb-gpt-{name.split()[1].lower()}{'' if args.arch == 'x86_64' else '-' + args.arch}.log").write_text(vm.log)
+        now = disk.read_bytes()
+        assert now[:boot_first * 512] == before[:boot_first * 512], f"{name}: the protective MBR or the GPT was written"
+        assert now[-33 * 512:] == before[-33 * 512:], f"{name}: GPT's backup was written"
+        span = slice(linux_first * 512, (linux_first + linux_count) * 512)
+        assert now[span] == before[span], f"{name}: the Linux partition was written"
+        if name == "MIND LOG":
+            read = subprocess.run(["mtype", "-i", f"{disk}@@{log_first * 512}", f"::{log}"], check=True, capture_output=True, env=MTOOLS_ENV).stdout
+            require(read.decode(errors="replace"), "GPT-LOG-PARTITION-CHECK")
+            shown.append(f"named MIND LOG: window 3, log: mounted, {log} written and read on the host")
+        else:
+            span = slice(log_first * 512, (log_first + log_count) * 512)
+            assert now[span] == before[span], f"{name}: the partition not named MIND LOG was written"
+            shown.append(f"named {name}: no window, no log:, not written")
+    print(f"PASS ({args.arch}): a GPT boot disk beside a Linux partition (211-KRN-0256): the log partition {'; '.join(shown)}; "
+          "the Linux partition, the tables and the backup never written", flush=True)
 
 
 def _blank(image, lba):

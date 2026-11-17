@@ -77,6 +77,8 @@ const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 sl
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
 const SLOT_STORE_RTC: usize = 5; // blockstore: an rtc client that reads the calendar time and sets nothing (312-KRN-0239)
 const STORE_WINDOW: u8 = 1; // the block store's own partition, as a window of its driver (307-KRN-0177)
+// The GPT name of the boot disk's log partition, whose FAT volume vfs_server takes as log: by the same label (211-KRN-0256).
+const LOG_LABEL: &str = "MIND LOG";
 const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
 // The drivers whose disks may hold the store's own partition (307-KRN-0177, STO's 307).
@@ -491,7 +493,13 @@ impl Init {
         let table = self.table_of(driver).filter(|table| table.scheme != Scheme::None)?;
         let (boot, store) = (self.boot_volume, self.store_part.flatten().filter(|store| store.driver == driver));
         let (mut window, mut set) = (VFS_WINDOW_FIRST, 0);
-        let mounted = |p: &&partition::Partition| p.fat_type() || (boot.kind == VOLUME_GPT && matches!(p.kind, Kind::Gpt(_)) && p.first == boot.start);
+        // On the GPT disk the system booted from, the first partition GPT names MIND LOG too, for vfs_server's log (211-KRN-0256).
+        let booted = boot.kind == VOLUME_GPT && table.partitions().any(|p| matches!(p.kind, Kind::Gpt(_)) && p.first == boot.start && p.count == boot.sectors);
+        let log = table.partitions().filter(|p| booted && matches!(p.kind, Kind::Gpt(_)) && p.label().eq_ignore_ascii_case(LOG_LABEL)).map(|p| p.number).next();
+        if booted && table.partitions().filter(|p| matches!(p.kind, Kind::Gpt(_)) && p.label().eq_ignore_ascii_case(LOG_LABEL)).count() > 1 {
+            mind::println!("[INIT] {}: MORE THAN ONE PARTITION NAMED {}: ONLY PARTITION {} GETS A WINDOW", driver, LOG_LABEL, log.unwrap_or(0));
+        }
+        let mounted = |p: &&partition::Partition| p.fat_type() || (boot.kind == VOLUME_GPT && matches!(p.kind, Kind::Gpt(_)) && (p.first == boot.start || Some(p.number) == log));
         for part in table.partitions().filter(mounted) {
             if store.is_some_and(|store| part.overlaps(store.first, store.count as u64)) {
                 mind::println!("[INIT] {} PARTITION {}: SECTORS OF THE STORE'S PARTITION: NOT GIVEN TO VFS_SERVER", driver, part.number);
@@ -1279,7 +1287,8 @@ impl Init {
             // data/effector/ to read (a scope made at each start), and init's client for its stop notice. Nothing that acts
             // on the machine: the gateway does.
             "effector" => {
-                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+                // The clock with the setting badge, so the agent can set it from the pinned server's time (801-KRN-0255).
+                grants.add(SLOT_RTC, self.badged(&mut minted, "rtc", mind::rtc::BADGE_SET)?, CLIENT);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR)?, CLIENT);
                 match self.flow(&mut minted, "effector") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
