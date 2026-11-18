@@ -27,8 +27,8 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
 - **The QEMU criteria** name the first users, which do not exist yet: no `agent` (260, `AGT`) and no messenger client (950, `COM`) is written. `tally` stands in for them today:
   - restarted, it resumes from its checkpoint and reconciles a pending effect (306, 313-STO-0036);
   - moved through a copy, it is refused at its source and goes on in the store the copy lands in (313-STO-0033).
-  - What is not run: a move between two live stores, on two VMs, the old instance fenced while the new one runs. This session's container runs one VM at a time.
-- **Rebinding by the description of needs:** [313-STO-0053](313-STO-0053-rebinding-by-the-description-of-needs.md), on the storage branch (2026-11-18).
+  - moved between two live machines (2026-11-18, the store suite's `tally_two_machines_check`, x86 and aarch64): `tally.m` moved to a file on the first, carried by the host to the second, imported and going on from its count there, while the first, still running, refuses every run of it before and after.
+- **Rebinding by the description of needs:** [313-STO-0053](../issues-done/313-STO-0053-rebinding-by-the-description-of-needs.done), on the storage branch (2026-11-18).
 
 ## Acceptance criteria
 

@@ -156,6 +156,8 @@ A publication is an effect with a key (313-STO-0036):
     - another root or a removal at version 3: failed, never published over; its own root at 3 and two versions since: done; five versions past 2, or a removal after its own root: unknown, left pending, then settled by hand and asked no more; a target that forgot the name: unknown;
     - format 3's one encoding, and its refusals: every truncation, a trailing byte, a key of another kind, a name past 64 bytes, empty, or with a byte the store's names do not take; format 2 refused by its number, also at a restore (format 1 too); the largest manifest the format holds is `MAX` bytes.
 - The QEMU `store` suite (x86 and aarch64):
+  - needs rebound (313-STO-0053): `tallynf`, `tally` whose request note asks for no files, restores `tally.n` degraded, logs `NEED files (mind:vfs@2, ram:) NOT MET: NOT HELD; DEGRADED`, refuses its effect and its move, and saves a count; `tally` holding both again is told nothing and does the effect;
+  - a move between two live machines (313): two machines at once, `tally.m` moved to a file on the first, carried by the host to the second and imported there, where it goes on from its count, a repeated operation answered from the record; the first, still running, refuses every run of it before and after;
   - `tally` counts across instances, and the checkpoint's two names move together;
   - an instance that restored epoch 3 and stalled is fenced when another saves epoch 4;
   - an effect cut short (its file written, its outcome not recorded) comes back pending, new effects are refused until it is reconciled, and the next effect completes;
