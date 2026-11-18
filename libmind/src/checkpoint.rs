@@ -2,8 +2,9 @@
 //! 6.12, Appendix B.4). A checkpoint is a manifest block (this module's format, versioned) and the state's object,
 //! published together under two names by one commit, so they change at once or not at all. The names' version is the
 //! instance's generation: a save names the version it restored, so a stale instance's save is refused (fenced). The
-//! manifest lists resources by logical name and authorities as text, never as capabilities: a restored instance gets
-//! its rights from its current grants. Effects begun but not recorded come back pending, to be reconciled, not
+//! manifest lists resources by logical name and, since format 4 (313-STO-0053, RFC 001 §9), its needs as descriptions:
+//! the binding, the interface and its major version, the logical resource and the mode without it, never as
+//! capabilities. A restored instance gets its rights from its current grants (`rebind`). Effects begun but not recorded come back pending, to be reconciled, not
 //! repeated. Format 2 (313-STO-0026) keeps each client's last operation, so a repeated request is answered and not
 //! applied again; how far an input queue was read; and the messages owed to others, sent again until acknowledged.
 //! Between components (313-STO-0030) the receiver reads the sender's checkpoint and applies what it owes once, the
@@ -12,27 +13,28 @@
 //! in this store saves it again, and its last checkpoint, which the names' history keeps, goes to a copy; imported into
 //! a store that never held its names, a manifest takes their first version as its epoch. Format 3 (313-STO-0036) saves
 //! with an effect's intent the key its target tells it by, a publication by compare-and-swap: `reconcile` asks the
-//! target whether it was done, and does it now if it was not, never twice. No system calls: tests/checkpoint_host.rs.
+//! target whether it was done, and does it now if it was not, never twice. Format 4 records needs in place of
+//! authorities. No system calls: tests/checkpoint_host.rs.
 use crate::cid::{self, Cid};
 
 pub const MAGIC: &[u8; 8] = b"MIND-CKP";
 /// A release record's magic: the component was moved out of this store.
 pub const RELEASED: &[u8; 8] = b"MIND-RLS";
 /// The manifest format's version; another is refused by its number, never read as this one.
-pub const FORMAT: u16 = 3;
+pub const FORMAT: u16 = 4;
 /// The release record's format version: its layout is the one of the manifest's format 2.
 pub const RELEASE_FORMAT: u16 = 2;
-/// Bytes of a label (a contract, a resource, an authority, an effect) at most.
+/// Bytes of a label (a contract, a resource, a need's parts, an effect) at most.
 pub const LABEL: usize = 32;
 /// Bytes of a publication's name at most: a name of the store, 1 to 64 of `A-Z a-z 0-9 . _ / -`.
 pub const NAME: usize = 64;
 pub const RESOURCES: usize = 8;
-pub const AUTHORITIES: usize = 8;
+pub const NEEDS: usize = 8;
 pub const EFFECTS: usize = 16;
 pub const CLIENTS: usize = 16;
 pub const OUTBOX: usize = 16;
 /// Bytes of an encoded manifest at most.
-pub const MAX: usize = 8 + 2 + 1 + LABEL + 2 + 2 + 8 + 8 + cid::BYTES + 5 + 8 + 8 + (RESOURCES + AUTHORITIES) * (1 + LABEL)
+pub const MAX: usize = 8 + 2 + 1 + LABEL + 2 + 2 + 8 + 8 + cid::BYTES + 5 + 8 + 8 + RESOURCES * (1 + LABEL) + NEEDS * (3 * (1 + LABEL) + 2)
     + EFFECTS * (8 + 1 + 1 + LABEL + 1 + 1 + NAME + 8 + cid::BYTES) + CLIENTS * (1 + LABEL + 8 + 8 + 8) + OUTBOX * (8 + 2 * (1 + LABEL));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +74,42 @@ impl Label {
     pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("") }
 }
 impl core::fmt::Display for Label { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { f.write_str(self.as_str()) } }
+
+/// What a restored instance does without a need it recorded (MC-6.11): refuse, so the component is not resumed; or
+/// degrade, so only the actions that need it are refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode { Refuse, Degrade }
+
+/// A need, for rebinding (RFC 001 §9): the binding the component knows it by, the interface it speaks there and its
+/// major version, the logical resource it reaches through it, and the mode without it. A description, not a right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Need { pub binding: Label, pub interface: Label, pub major: u8, pub resource: Label, pub mode: Mode }
+impl Need { pub const EMPTY: Need = Need { binding: Label::EMPTY, interface: Label::EMPTY, major: 0, resource: Label::EMPTY, mode: Mode::Refuse }; }
+impl core::fmt::Display for Need {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { write!(f, "{} ({}@{}, {})", self.binding, self.interface, self.major, self.resource) }
+}
+
+/// What an instance holds now for a need, by its own grants: the binding as described; none; the interface at another
+/// major version, the one it speaks; or refused by its service (a policy, a revocation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Offer { Held, Missing, Version(u8), Refused }
+
+/// A need and what is held for it now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bound { pub need: Need, pub offer: Offer }
+
+/// Every need of a checkpoint rebound (`rebind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rebinding { bound: [Bound; NEEDS], n: usize }
+impl Rebinding {
+    pub fn all(&self) -> &[Bound] { &self.bound[..self.n] }
+    /// The needs not held as described.
+    pub fn unmet(&self) -> impl Iterator<Item = &Bound> { self.all().iter().filter(|b| b.offer != Offer::Held) }
+    /// The first unmet need whose mode refuses: the component is not resumed.
+    pub fn refused(&self) -> Option<&Bound> { self.unmet().find(|b| b.need.mode == Mode::Refuse) }
+    /// Whether the need of `binding` is held as described; a binding the checkpoint does not name is not.
+    pub fn met(&self, binding: &str) -> bool { self.all().iter().any(|b| b.need.binding.as_str() == binding && b.offer == Offer::Held) }
+}
 
 /// What became of an external effect. Pending: begun and not recorded, so after a restore its outcome is unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +184,7 @@ pub struct Message { pub seq: u64, pub to: Label, pub what: Label }
 impl Message { pub const EMPTY: Message = Message { seq: 0, to: Label::EMPTY, what: Label::EMPTY }; }
 
 /// A checkpoint's manifest: the contract it follows, the instance generation and consistency point it records, the
-/// state's root, the resources, authorities and effects the state depends on, its clients' last operations, how far
+/// state's root, the resources, needs and effects the state depends on, its clients' last operations, how far
 /// its input was read and the messages it owes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -164,7 +202,7 @@ pub struct Manifest {
     // The last sequence a message was given, so none is given twice.
     sent: u64,
     resources: [Label; RESOURCES],
-    authorities: [Label; AUTHORITIES],
+    needs: [Need; NEEDS],
     effects: [Effect; EFFECTS],
     clients: [Client; CLIENTS],
     outbox: [Message; OUTBOX],
@@ -175,12 +213,12 @@ impl Manifest {
     pub fn new(contract: Label, contract_version: u16, schema: u16, state: Cid) -> Self {
         Manifest {
             contract, contract_version, schema, epoch: 0, sequence: 0, state, inbox: 0, sent: 0, resources: [Label::EMPTY; RESOURCES],
-            authorities: [Label::EMPTY; AUTHORITIES], effects: [Effect::EMPTY; EFFECTS], clients: [Client::EMPTY; CLIENTS],
+            needs: [Need::EMPTY; NEEDS], effects: [Effect::EMPTY; EFFECTS], clients: [Client::EMPTY; CLIENTS],
             outbox: [Message::EMPTY; OUTBOX], counts: [0; 5],
         }
     }
     pub fn resources(&self) -> &[Label] { &self.resources[..self.counts[0] as usize] }
-    pub fn authorities(&self) -> &[Label] { &self.authorities[..self.counts[1] as usize] }
+    pub fn needs(&self) -> &[Need] { &self.needs[..self.counts[1] as usize] }
     pub fn effects(&self) -> &[Effect] { &self.effects[..self.counts[2] as usize] }
     pub fn clients(&self) -> &[Client] { &self.clients[..self.counts[3] as usize] }
     pub fn outbox(&self) -> &[Message] { &self.outbox[..self.counts[4] as usize] }
@@ -194,11 +232,13 @@ impl Manifest {
         self.counts[0] += 1;
         Ok(())
     }
-    pub fn add_authority(&mut self, name: &str) -> Result<(), Error> {
-        let l = Label::new(name).ok_or(Error::Invalid)?;
+    /// Records a need (format 4): `binding`, `interface` at `major`, the logical `resource` there, and the mode without it.
+    pub fn add_need(&mut self, binding: &str, interface: &str, major: u8, resource: &str, mode: Mode) -> Result<(), Error> {
+        let need = Need { binding: Label::new(binding).ok_or(Error::Invalid)?, interface: Label::new(interface).ok_or(Error::Invalid)?, major,
+                          resource: Label::new(resource).ok_or(Error::Invalid)?, mode };
         let n = self.counts[1] as usize;
-        if n == AUTHORITIES { return Err(Error::Invalid); }
-        self.authorities[n] = l;
+        if n == NEEDS || self.needs().iter().any(|d| d.binding == need.binding) { return Err(Error::Invalid); }
+        self.needs[n] = need;
         self.counts[1] += 1;
         Ok(())
     }
@@ -311,7 +351,14 @@ impl Manifest {
         w.put(&self.counts);
         w.put(&self.inbox.to_le_bytes());
         w.put(&self.sent.to_le_bytes());
-        for l in self.resources().iter().chain(self.authorities()) { w.label(l); }
+        for l in self.resources() { w.label(l); }
+        for d in self.needs() {
+            w.label(&d.binding);
+            w.label(&d.interface);
+            w.put(&[d.major]);
+            w.label(&d.resource);
+            w.put(&[match d.mode { Mode::Refuse => 0, Mode::Degrade => 1 }]);
+        }
         for e in self.effects() {
             w.put(&e.id.to_le_bytes());
             w.put(&[match e.outcome { Outcome::Pending => 0, Outcome::Done => 1, Outcome::Failed => 2 }]);
@@ -349,12 +396,17 @@ impl Manifest {
         let mut m = Manifest::new(contract, contract_version, schema, state);
         (m.epoch, m.sequence) = (epoch, sequence);
         let counts = r.take(5)?;
-        if counts[0] as usize > RESOURCES || counts[1] as usize > AUTHORITIES || counts[2] as usize > EFFECTS
+        if counts[0] as usize > RESOURCES || counts[1] as usize > NEEDS || counts[2] as usize > EFFECTS
             || counts[3] as usize > CLIENTS || counts[4] as usize > OUTBOX { return Err(Error::Format); }
         m.counts.copy_from_slice(counts);
         (m.inbox, m.sent) = (r.u64()?, r.u64()?);
         for k in 0..counts[0] as usize { m.resources[k] = r.label()?; }
-        for k in 0..counts[1] as usize { m.authorities[k] = r.label()?; }
+        for k in 0..counts[1] as usize {
+            let (binding, interface, major, resource) = (r.label()?, r.label()?, r.take(1)?[0], r.label()?);
+            let mode = match r.take(1)?[0] { 0 => Mode::Refuse, 1 => Mode::Degrade, _ => return Err(Error::Format) };
+            if m.needs[..k].iter().any(|d| d.binding == binding) { return Err(Error::Format); }
+            m.needs[k] = Need { binding, interface, major, resource, mode };
+        }
         for k in 0..counts[2] as usize {
             let id = r.u64()?;
             let outcome = match r.take(1)?[0] { 0 => Outcome::Pending, 1 => Outcome::Done, 2 => Outcome::Failed, _ => return Err(Error::Format) };
@@ -502,7 +554,7 @@ impl Restored {
 
 /// The last checkpoint of `component`, if it follows `contract` at `version` with state of `schema`, and its two names
 /// agree; its epoch is their version. A manifest of another epoch is taken only at their first version, moved in from
-/// another store; elsewhere Inconsistent. Released if both names hold a release, never fresh. `buffer` holds MAX. Its authorities are text: the caller checks them against what it
+/// another store; elsewhere Inconsistent. Released if both names hold a release, never fresh. `buffer` holds MAX. Its needs are descriptions: the caller rebinds them against what it
 /// holds now (`rebind`).
 pub fn restore(store: &mut impl Store, names: &Names, contract: &str, version: u16, schema: u16, buffer: &mut [u8]) -> Result<Restored, Error> {
     let [(mv, manifest), (sv, state)] = store.snapshot([names.manifest(), names.state()])?;
@@ -571,8 +623,14 @@ pub fn save(store: &mut impl Store, names: &Names, manifest: &mut Manifest, from
     store.commit([names.manifest(), names.state()], from, [root, manifest.state])
 }
 
-/// The authorities the checkpoint records that `holds` says the instance does not hold now: protected actions that
-/// need them must be refused or degraded (MC-6.11). A recorded authority is never turned back into a right.
-pub fn rebind<'m>(manifest: &'m Manifest, holds: impl Fn(&str) -> bool) -> impl Iterator<Item = &'m Label> {
-    manifest.authorities().iter().filter(move |a| !holds(a.as_str()))
+/// Each need the checkpoint records, with what `offer` says the instance holds for it now (RFC 001 §9, MC-6.11): a
+/// description is never turned back into a right, and the caller resumes the component only if `refused` is none,
+/// refusing what an unmet need in mode degrade would do.
+pub fn rebind(manifest: &Manifest, mut offer: impl FnMut(&Need) -> Offer) -> Rebinding {
+    let mut r = Rebinding { bound: [Bound { need: Need::EMPTY, offer: Offer::Missing }; NEEDS], n: 0 };
+    for need in manifest.needs() {
+        r.bound[r.n] = Bound { need: *need, offer: offer(need) };
+        r.n += 1;
+    }
+    r
 }
