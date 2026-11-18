@@ -1,6 +1,6 @@
 # 801-KRN-0255 — The Effector agent gets `rtc`'s setting client, to set the clock from the pinned server's time
 
-**Type:** grant · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17) · **Blocked by:** — (the agent's use of it is `EFF`'s, asked in [requests-EFF.md](requests-EFF.md)) · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-7.5, MC-5.6, MC-12.3, MC-12.6
+**Type:** grant · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17; the grant in `main` since round 146, the agent's use of it left to `EFF`) · **Blocked by:** — (the agent's use of it is `EFF`'s, asked in [requests-EFF.md](requests-EFF.md)) · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-7.5, MC-5.6, MC-12.3, MC-12.6
 
 ## Problem
 
@@ -25,9 +25,15 @@
 
 ## Acceptance criteria
 
-- [ ] The `effector` suite, x86 and aarch64: the agent's slot 2 is `rtc` badged `BADGE_SET`, its other grants as before.
-- [ ] `docs/profile` says who may set the clock and what the server is trusted for.
-- [ ] The request to `EFF` recorded.
+- [x] The `effector` suite, x86 and aarch64: the agent's slot 2 is `rtc` badged `BADGE_SET`, its other grants as before.
+- [x] `docs/profile` says who may set the clock and what the server is trusted for.
+- [x] The request to `EFF` recorded.
+
+## Progress (2026-11-18)
+
+- **Tested:** `x86: network, TLS and Effector` on x32 (1801 s) and `aarch64: network, TLS and Effector` on acc-1 (1538 s), PASS, on 8c2bfcecc7; QEMU evidence only (MC-12.1).
+- **In `main` since round 146** (56acdb5207, gate `land-r146b` GREEN).
+- **The request to `EFF`** is in `requests-EFF.md`, with the 8-minute heartbeat gap the DEXP showed (801). Open until `EFF` numbers it: the clock is not set by anyone new until the agent's part is in.
 
 ## Related
 
