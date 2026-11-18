@@ -5140,6 +5140,68 @@ def tally_move_check(vm):
           "outbox at the new store's next epoch, a repeated operation answered from the record", flush=True)
 
 
+def tally_two_machines_check(args):
+    """313: a component restored on another machine while the old one is fenced. Two machines run at once, each with
+    its own boot image and its own store on a RAM disk. On the first, `tally as m` counts and is moved to a file on its
+    boot volume. The host reads that file from the first's image, checks it against the SHA-256 tally printed, and puts
+    it on the second's image. The second imports it and goes on from the count at its store's next epoch. The first,
+    still running, refuses every run of `m` (released there) before and after the second saves."""
+    if not raw_tools():
+        print("SKIP: the two machines' check needs mkfs.fat and mtools", flush=True)
+        return
+    import copy
+    small = copy.copy(args)
+    small.cpus = 2  # two machines at once on the host's CPUs
+    def run(vm, program, line):
+        vm.send(f"{program} {line}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"{program} {line}\n")
+    with tempfile.TemporaryDirectory(prefix="smoke-two-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        (temp / "a").mkdir()
+        (temp / "b").mkdir()
+        a_image, a_start, _ = raw_fat_image(temp / "a")
+        b_image, b_start, _ = raw_fat_image(temp / "b")
+        a_part, b_part = f"{a_image}@@{a_start * 512}", f"{b_image}@@{b_start * 512}"
+        first = VM(small, a_image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        second = None
+        try:
+            require(run(first, "tally", "as m add plums 4 op shell 1"), "SAVED EPOCH 1 SEQUENCE 1: plums = 4")
+            require(run(first, "tally", "as m add plums 3"), "SAVED EPOCH 2 SEQUENCE 2: plums = 7")
+            first.command("mkdir data")
+            out = run(first, "tally", "as m move data/tally-m.car")
+            require(out, "RELEASED m EPOCH 3: NO INSTANCE IN THIS STORE SAVES IT AGAIN")
+            moved = re.search(r"^MOVED m EPOCH 2 TO data/tally-m\.car: 2 BLOCKS, (\d+) BYTES; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+            assert moved, out
+            # The copy as the first machine's image holds it, once its bytes are those tally wrote.
+            copied = temp / "tally-m.car"
+            for _ in range(30):
+                subprocess.run(["mcopy", "-o", "-i", a_part, "::data/tally-m.car", str(copied)], env=MTOOLS_ENV, capture_output=True)
+                if copied.exists() and hashlib.sha256(copied.read_bytes()).hexdigest() == moved[2]:
+                    break
+                time.sleep(1)
+            assert copied.exists() and hashlib.sha256(copied.read_bytes()).hexdigest() == moved[2], "the copy did not reach the first machine's image"
+            subprocess.run(["mmd", "-i", b_part, "::data"], env=MTOOLS_ENV, capture_output=True)
+            subprocess.run(["mcopy", "-o", "-i", b_part, str(copied), "::data/tally-m.car"], env=MTOOLS_ENV, check=True, capture_output=True)
+            second = VM(small, b_image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            refused = "tally: RELEASED: m was moved out of this store at epoch 3; nothing restored or saved here (MC-6.12)"
+            require(run(first, "tally", "as m add plums 1"), refused)
+            require(run(second, "blocks", "import data/tally-m.car"), "(2 STORED, 0 REPAIRED, 0 HELD)")
+            require_all(run(second, "tally", "as m show"), "TALLY EPOCH 1 SEQUENCE 2", "plums = 7")
+            require(run(second, "tally", "as m add plums 3 op shell 1"), "REPEATED shell 1: ANSWERED 4, NOT APPLIED AGAIN")
+            require(run(second, "tally", "as m add plums 1"), "SAVED EPOCH 2 SEQUENCE 3: plums = 8")
+            for line in ("as m show", "as m add plums 1"):
+                out = run(first, "tally", line)
+                require(out, refused)
+                assert "SAVED" not in out and "TALLY EPOCH" not in out, out
+        finally:
+            first.close()
+            if second:
+                second.close()
+    print("PASS: a component restored on another machine while the old one is fenced: tally.m moved on the first to a "
+          "file, carried by the host to the second, imported and going on from its count there, a repeated operation "
+          "answered from the record; the first, still running, refused every run of it before and after (313)", flush=True)
+
+
 def store_journal_check(vm):
     """312-STO-0034: a journal through `blocks journal`. Three notes are appended, each entry published by
     compare-and-swap at the name's next version; `check` reads them whole from the head, and `list` prints them newest
@@ -19338,6 +19400,7 @@ def main():
                 store_copy_disk_check(args, disk)
                 store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
                 store_partition_disk_check(args, disk)  # two more, the store on an NVMe and an AHCI partition (307-STO-0044)
+                tally_two_machines_check(args)  # two machines at once, a component moved from one to the other (313)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The tts suite's model disk (252-KRN-0230): its manifest alone, read-only, as models: holds it.
             models = model_disk(Path(tempfile.mkdtemp(prefix="mind-tts-models-"))) if suite == "tts" else None
