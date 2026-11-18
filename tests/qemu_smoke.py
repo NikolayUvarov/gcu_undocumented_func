@@ -4778,6 +4778,7 @@ def store_suite(vm):
           "effect cut short comes back pending and is reconciled before another begins, an operation sent again is "
           "applied once (also after the store restarted)", flush=True)
     tally_publish_check(vm)
+    tally_needs_check(vm)
     store_domains_check(vm)
     fm_store_check(vm)
     tally_messages_check(vm)
@@ -4813,6 +4814,30 @@ def reboot_blank_store(vm):
     vm.expect("MIND>", timeout=120)
     time.sleep(1); vm.collect(); vm.output = ""
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+
+
+def tally_needs_check(vm):
+    """313-STO-0053: a checkpoint's needs (format 4), rebound to what an instance holds now (MC-6.11, RFC 001 §9).
+    `tally as n` records the store's need in mode refuse and the files' in mode degrade. A copy whose request note asks
+    for no files (`tallynf`) restores the same component degraded: its effect and its move refused, a count applied
+    and saved. tally holding both again is told nothing missing, and its effect is done."""
+    def run(program, args):
+        vm.send(f"{program} {args}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"{program} {args}\n")
+    require(run("tally", "as n add pears 2"), "SAVED EPOCH 1 SEQUENCE 1: pears = 2")
+    out = run("tallynf", "as n add pears 3")
+    require_all(out, "tally: NEED files (mind:vfs@2, ram:) NOT MET: NOT HELD; DEGRADED", "SAVED EPOCH 2 SEQUENCE 2: pears = 5")
+    assert "NEED store" not in out and "NOT RESUMED" not in out, out
+    require(run("tallynf", "as n effect needs.txt"), "tally: effect refused: its need files is not met")
+    require(run("tallynf", "as n move ram:n.car"), "tally: move refused: its need files is not met")
+    out = run("tally", "as n show")
+    require(out, "TALLY EPOCH 2 SEQUENCE 2")
+    assert "NEED" not in out, out
+    require(run("tally", "as n effect needs.txt"), "EFFECT 1 DONE SAVED EPOCH 3")
+    require(vm.command("cat ram:needs.txt"), "done by tally")
+    print("PASS: a checkpoint's needs rebound to what an instance holds: tally without its files need restored degraded, "
+          "its effect and move refused and a count saved; holding both again, nothing missing and its effect done "
+          "(313-STO-0053)", flush=True)
 
 
 def tally_publish_check(vm):
@@ -19190,6 +19215,11 @@ def main():
                 note = elf.index(b"MINDREQ1") + 8
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
+                # tallynf: tally asking for no files (REQUEST_FILES 32), for its needs rebound (313-STO-0053).
+                elf = bytearray((disk / "tally.elf").read_bytes())
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~32).to_bytes(4, "little")
+                (disk / "tallynf.elf").write_bytes(elf)
             if suite == "tools" and args.clip_elf:
                 # The clipboard's stub (000-APP-0032), and a copy whose request note asks for no clipboard
                 # (REQUEST_CLIPBOARD 524288), as blocksro is made below.

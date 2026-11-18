@@ -28,7 +28,7 @@ From the kernel session's draft (`STO/2026-10-25T1557Z-KRN-draft-plan-the-store-
   - restarted, it resumes from its checkpoint and reconciles a pending effect (306, 313-STO-0036);
   - moved through a copy, it is refused at its source and goes on in the store the copy lands in (313-STO-0033).
   - What is not run: a move between two live stores, on two VMs, the old instance fenced while the new one runs. This session's container runs one VM at a time.
-- **Not built:** rebinding by the description of needs.
+- **Rebinding by the description of needs:** [313-STO-0053](313-STO-0053-rebinding-by-the-description-of-needs.md), on the storage branch (2026-11-18).
 
 ## Acceptance criteria
 

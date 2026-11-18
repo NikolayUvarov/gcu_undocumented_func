@@ -26,7 +26,7 @@ mod worktree;
 mod car;
 
 use car::Named;
-use checkpoint::{read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Names, Outcome, Publication, Release, Restored, Target, Told, CLIENTS, MAX, OUTBOX};
+use checkpoint::{read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Mode, Names, Offer, Outcome, Publication, Release, Restored, Target, Told, CLIENTS, MAX, NEEDS, OUTBOX};
 use cid::{Cid, Codec};
 use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, LEASE_NS, SECTOR};
 
@@ -116,8 +116,8 @@ fn manifest(local: &mut Local, state: &[u8]) -> Manifest {
     let root = local.0.put(Codec::Raw, state).unwrap();
     let mut m = Manifest::new(Label::new("tally").unwrap(), 1, 1, root);
     m.add_resource("blockstore").unwrap();
-    m.add_authority("blockstore:put,publish").unwrap();
-    m.add_authority("files").unwrap();
+    m.add_need("store", "mind:blockstore", 2, "checkpoint/tally", Mode::Refuse).unwrap();
+    m.add_need("files", "mind:vfs", 2, "ram:", Mode::Degrade).unwrap();
     m
 }
 
@@ -126,7 +126,7 @@ fn a_manifest_has_one_encoding_and_refuses_the_rest() {
     let mut m = Manifest::new(Label::new("tally").unwrap(), 1, 3, Cid::raw(b"state"));
     (m.epoch, m.sequence) = (5, 42);
     m.add_resource("rtc").unwrap();
-    m.add_authority("files").unwrap();
+    m.add_need("files", "mind:vfs", 2, "ram:", Mode::Degrade).unwrap();
     let id = m.begin("write:ram:out.txt").unwrap();
     assert!(m.settle(id, Outcome::Done) && !m.settle(id + 1, Outcome::Done));
     m.begin("beep").unwrap();
@@ -144,8 +144,8 @@ fn a_manifest_has_one_encoding_and_refuses_the_rest() {
         bad[at] = value;
         assert_eq!(Manifest::decode(&bad), Err(Error::Format), "byte {at}");
     }
-    // Another format version is refused by its number (313-STO-0036: formats 1 and 2 are not read, nor converted).
-    for version in [1u16, 2, 4] {
+    // Another format version is refused by its number (formats 1 to 3 are not read, nor converted: 313-STO-0053).
+    for version in [1u16, 2, 3, 5] {
         let mut bad = out[..n].to_vec();
         bad[8..10].copy_from_slice(&version.to_le_bytes());
         assert_eq!(Manifest::decode(&bad), Err(Error::Version(version)));
@@ -156,11 +156,23 @@ fn a_manifest_has_one_encoding_and_refuses_the_rest() {
         bad[counts + k] = 200;
         assert_eq!(Manifest::decode(&bad), Err(Error::Format));
     }
+    // A need's mode other than refuse (0) or degrade (1) is refused: after the counts, inbox and sent, the resource
+    // `rtc`, then the need's binding `files`, interface `mind:vfs`, major and resource `ram:`.
+    let mode = counts + 5 + 16 + 4 + 6 + 9 + 1 + 5;
+    assert_eq!(out[mode - 6..mode], *b"\x02\x04ram:");
+    let mut bad = out[..n].to_vec();
+    bad[mode] = 2;
+    assert_eq!(Manifest::decode(&bad), Err(Error::Format));
     // Labels are short and printable; the lists are bounded.
     assert_eq!(Label::new("with space"), None);
     assert_eq!(Label::new(&"x".repeat(33)), None);
-    for k in 0..7 { m.add_authority(&format!("a{k}")).unwrap(); }
-    assert_eq!(m.add_authority("one-more"), Err(Error::Invalid));
+    for k in 0..NEEDS - 1 { m.add_need(&format!("b{k}"), "mind:x", 1, "r", Mode::Degrade).unwrap(); }
+    assert_eq!(m.add_need("one-more", "mind:x", 1, "r", Mode::Refuse), Err(Error::Invalid));
+    // A binding is named once, and a need's parts are labels.
+    let mut twice = Manifest::new(Label::new("tally").unwrap(), 1, 3, Cid::raw(b"state"));
+    twice.add_need("files", "mind:vfs", 2, "ram:", Mode::Degrade).unwrap();
+    assert_eq!(twice.add_need("files", "mind:vfs", 3, "data/", Mode::Refuse), Err(Error::Invalid));
+    assert_eq!(twice.add_need("store", "mind blockstore", 2, "x", Mode::Refuse), Err(Error::Invalid));
     assert!(Names::of("a/b").is_none() && Names::of("").is_none());
     let names = Names::of("tally").unwrap();
     assert_eq!((names.manifest(), names.state()), ("checkpoint/tally", "checkpoint/tally/state"));
@@ -263,14 +275,34 @@ fn effects_begun_and_not_recorded_come_back_pending() {
 }
 
 #[test]
-fn authorities_are_checked_against_what_an_instance_holds() {
+fn needs_are_rebound_against_what_an_instance_holds_and_their_mode_decides() {
     let mut medium = Memory { data: vec![0; 256 * SECTOR] };
     let mut room = Room::new();
     let mut local = mount(&mut medium, &mut room);
-    let m = manifest(&mut local, b"a=1\n");
-    // The checkpoint names what the instance used; a new instance holding less is told what is missing.
-    assert_eq!(rebind(&m, |_| true).count(), 0);
-    assert_eq!(rebind(&m, |a| a != "files").map(|l| l.as_str()).collect::<Vec<_>>(), vec!["files"]);
+    let mut m = manifest(&mut local, b"a=1\n");
+    // Found again after a save and a restore, as described.
+    let names = Names::of("tally").unwrap();
+    let mut buffer = [0u8; MAX];
+    save(&mut local, &names, &mut m, 0, &mut buffer).unwrap();
+    let Restored::Found(back) = restore(&mut local, &names, "tally", 1, 1, &mut buffer).unwrap() else { panic!("not found") };
+    assert_eq!(back.needs(), m.needs());
+    let need = |b: &str| *m.needs().iter().find(|d| d.binding.as_str() == b).unwrap();
+    assert_eq!((need("store").interface.as_str(), need("store").major, need("store").resource.as_str(), need("store").mode), ("mind:blockstore", 2, "checkpoint/tally", Mode::Refuse));
+    // Everything held: nothing unmet, nothing refused.
+    let all = rebind(&m, |_| Offer::Held);
+    assert!(all.unmet().next().is_none() && all.refused().is_none() && all.met("store") && all.met("files") && !all.met("rtc"));
+    // A need in mode degrade not held: resumed, without what needs it.
+    let mut asked = Vec::new();
+    let no_files = rebind(&m, |d| { asked.push(d.binding.as_str().to_string()); if d.binding.as_str() == "files" { Offer::Missing } else { Offer::Held } });
+    assert_eq!(asked, ["store", "files"]);
+    assert!(no_files.refused().is_none() && no_files.met("store") && !no_files.met("files"));
+    assert_eq!(no_files.unmet().map(|b| (b.need.binding.as_str(), b.offer)).collect::<Vec<_>>(), vec![("files", Offer::Missing)]);
+    // In mode refuse, any unmet answer refuses the component: another major version, a refusal by its service, none.
+    for offer in [Offer::Version(3), Offer::Refused, Offer::Missing] {
+        let r = rebind(&m, |d| if d.binding.as_str() == "store" { offer } else { Offer::Held });
+        assert_eq!(r.refused().map(|b| (b.need.binding.as_str(), b.offer)), Some(("store", offer)));
+    }
+    assert_eq!(format!("{}", need("files")), "files (mind:vfs@2, ram:)");
     assert_eq!(m.resources().iter().map(|l| l.as_str()).collect::<Vec<_>>(), vec!["blockstore"]);
 }
 
@@ -503,7 +535,7 @@ fn a_checkpoint_of_format_1_or_2_is_refused_by_its_number() {
     let mut m = manifest(&mut local, b"a=1\n");
     save(&mut local, &names, &mut m, 0, &mut buffer).unwrap();
     // The same manifest written as format 1 or 2 would have it, under the same names.
-    for (expected, version) in [(1, 1u16), (2, 2)] {
+    for (expected, version) in [(1, 1u16), (2, 2), (3, 3)] {
         let mut old = [0u8; MAX];
         let n = m.encode(&mut old);
         old[8..10].copy_from_slice(&version.to_le_bytes());
@@ -1123,14 +1155,17 @@ fn format_3_keys_have_one_encoding_and_format_2_is_refused() {
         assert_eq!(Publication::new(core::str::from_utf8(name).unwrap(), 7, key.root), None);
     }
     assert_eq!(Manifest::decode(&with(b"notes")).map(|d| d.effects()[1].key), Ok(Key::Publication(Publication::new("notes", 7, key.root).unwrap())));
-    // Format 2 is refused by its number.
-    let mut old = out[..n].to_vec();
-    old[8..10].copy_from_slice(&2u16.to_le_bytes());
-    assert_eq!(Manifest::decode(&old), Err(Error::Version(2)));
+    // Formats 2 and 3 are refused by their number.
+    for version in [2u16, 3] {
+        let mut old = out[..n].to_vec();
+        old[8..10].copy_from_slice(&version.to_le_bytes());
+        assert_eq!(Manifest::decode(&old), Err(Error::Version(version)));
+    }
     // The largest manifest the format holds, every list full and every label and name at its longest, is MAX bytes.
     let label = |c: char| c.to_string().repeat(checkpoint::LABEL);
     let mut full = Manifest::new(Label::new(&label('c')).unwrap(), 1, 1, Cid::raw(b"0"));
-    for k in 0..8 { full.add_resource(&format!("{k}{}", &label('r')[1..])).unwrap(); full.add_authority(&format!("{k}{}", &label('a')[1..])).unwrap(); }
+    for k in 0..8 { full.add_resource(&format!("{k}{}", &label('r')[1..])).unwrap(); }
+    for k in 0..NEEDS { full.add_need(&format!("{k}{}", &label('b')[1..]), &label('i'), 255, &label('r'), Mode::Degrade).unwrap(); }
     for _ in 0..checkpoint::EFFECTS { full.begin_keyed(&label('e'), Key::Publication(key)).unwrap(); }
     for k in 0..CLIENTS { full.sequence += 1; full.record(&format!("{k:02}{}", &label('w')[2..]), 1, 1).unwrap(); }
     for _ in 0..OUTBOX { full.send(&label('t'), &label('m')).unwrap(); }

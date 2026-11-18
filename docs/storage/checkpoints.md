@@ -1,6 +1,6 @@
 # Checkpoints: the contract and its protocol
 
-**Version:** 5 (2026-10-31): format 3, an effect with a key its target tells it by, reconciled by asking the target, `tally` 4 (313-STO-0036); 4 (2026-10-30): a component moved to another store through a copy, active in one place only (313-STO-0033); 3 (2026-10-30): messages between components, `tally` 3 (313-STO-0030); 2 (2026-10-30): format 2, operation IDs, the inbox and the outbox, `tally` 2 (313-STO-0026); 1 (2026-10-08) · **Track:** `STO`, main tasks [306](../../issues-done/306-checkpoints-and-rebinding.done) and [313](../../issues/313-persistent-actors.md) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.6, 6.10, 6.11, 6.12, Appendix B.4
+**Version:** 6 (2026-11-18): format 4, needs described for rebinding in place of authorities, each with its mode, `tally` 4 degraded without its files (313-STO-0053); 5 (2026-10-31): format 3, an effect with a key its target tells it by, reconciled by asking the target, `tally` 4 (313-STO-0036); 4 (2026-10-30): a component moved to another store through a copy, active in one place only (313-STO-0033); 3 (2026-10-30): messages between components, `tally` 3 (313-STO-0030); 2 (2026-10-30): format 2, operation IDs, the inbox and the outbox, `tally` 2 (313-STO-0026); 1 (2026-10-08) · **Track:** `STO`, main tasks [306](../../issues-done/306-checkpoints-and-rebinding.done) and [313](../../issues/313-persistent-actors.md) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-6.6, 6.10, 6.11, 6.12, Appendix B.4
 
 A component that claims to save and restore its state follows a versioned checkpoint contract (MC-6.10). This document defines the checkpoint format and the protocol of `mind::checkpoint` (`libmind/src/checkpoint.rs`, format version 3), and the contract of its one user so far, the pilot program `tally`. Persistence is not assumed for any other component: no service checkpoints its state. What is implemented and tested is stated here and in the profile; anything else is plan (MC-12.3).
 
@@ -19,17 +19,17 @@ Both names change together or not at all, so the manifest always describes the s
 
 | Field | Meaning |
 |---|---|
-| `MIND-CKP`, format version (u16) | another format version is refused by its number (`version`), never read as this one; formats 1 and 2 are not converted |
+| `MIND-CKP`, format version (u16) | another format version is refused by its number (`version`), never read as this one; formats 1 to 3 are not converted |
 | contract (label), contract version (u16) | the contract the component follows; a restorer accepts only its own |
 | schema (u16) | the state's schema version |
 | epoch (u64) | the generation of the instance that saved it: the version of the checkpoint's names it wrote |
 | sequence (u64) | the consistency point: how many requests the state includes |
 | state (CID, 36 bytes) | the state object's root |
-| counts (5 × u8) | resources (at most 8), authorities (at most 8), effects (at most 16), clients (at most 16), messages owed (at most 16) |
+| counts (5 × u8) | resources (at most 8), needs (at most 8), effects (at most 16), clients (at most 16), messages owed (at most 16) |
 | inbox (u64) | how far an input queue was read: the number its source gave the last message taken |
 | sent (u64) | the last sequence given to a message, so none is given twice |
 | resources (labels) | logical names of what the state refers to: services, names. Never a handle or an address (MC-6.11) |
-| authorities (labels) | the rights the instance used, as text. Never a capability |
+| needs (binding label, interface label, major u8, resource label, mode u8) | what the component needs, described for rebinding (RFC 001 §9): the binding it knows it by, the interface it speaks there and its major version, the logical resource it reaches through it, and the mode without it, 0 refuse or 1 degrade; a binding once. Never a capability |
 | effects (id u64, outcome u8, label, key) | the effect journal: 0 pending, 1 done, 2 failed; each with the key its target tells it by (below) |
 | clients (label, operation u64, result u64, at u64) | each client's last operation applied, the result it was answered, and the sequence it was applied at |
 | outbox (sequence u64, destination label, what label) | the messages owed to others, in the order given; their bytes are in the state |
@@ -88,7 +88,12 @@ A manifest decodes only if it is exactly one encoding: no bytes after the last f
   4. **A cut anywhere** leaves the component active at the source (no release committed), or released there with its last checkpoint in the source's history. An import cut before it published both names restores nothing there; run again, it completes.
 
   **What "active in one place" rests on:** the release's compare-and-swap in the source's store, and the copy written only after it. Nothing checks two stores against each other: a copy imported into two stores, or a copy of an active component's names made by hand (`blocks export`), is active in each. A release is not a removal: a removed name keeps only its removal, so its last checkpoint would be retained by nothing.
-- **Rebinding (MC-6.11).** Restore returns the recorded authorities as text. A restored instance takes its rights from its current grants: what `init` and the shell give it now, never from the checkpoint. `rebind` lists the recorded authorities the instance does not hold now. Protected actions that need them are refused or degraded, and the checkpoint cannot return a revoked right.
+- **Rebinding (MC-6.11, RFC 001 §9).** Restore returns the recorded needs as descriptions. A restored instance takes its rights from its current grants: what `init` and the shell give it now, never from the checkpoint.
+  - `rebind` asks the component, for each need, what it holds now: the binding as described, none, the interface at another major version (the one this build speaks), or a refusal by its service.
+  - **A need in mode refuse** not met: the component is not resumed (`tally: <component> NOT RESUMED: ITS NEED <binding> IS NOT MET`).
+  - **A need in mode degrade** not met: it is resumed, and what needs that binding is refused.
+  - The checkpoint cannot return a revoked right, and a need is changed only by the contract's own migration (none is built: a need saved under another major stays unmet).
+  - `tally`'s needs: `store` (`mind:blockstore`, its major, `checkpoint`, refuse) and `files` (`mind:vfs`, its major, `ram:`, degrade: its effects and moves are refused without it).
 - **Retention.** The checkpoint's names keep their last 4 versions, and those retain their manifests and states ([303](../../issues-done/303-retention-and-collection.done)). Recoverability is promised for the last 4 checkpoints, under the store's own durability (on the RAM disk, until the next reset). After a release, the last checkpoint is the version before it, kept while nothing changes the names by hand. The code that reads them, `tally.elf`, is on the boot volume. Its schemas are versioned in the manifest.
 
 ## The contract of `tally`, version 4
@@ -131,7 +136,7 @@ A publication is an effect with a key (313-STO-0036):
   - a stale instance fenced;
   - another contract, contract version or schema (named by the version found), a state name moved alone, and a manifest that is not one, each refused;
   - effects coming back pending and reconciled, and a full journal keeping every pending effect;
-  - authorities checked against what an instance holds;
+  - needs (format 4, 313-STO-0053): found again after a save and a restore; rebound, each asked once, met, missing, at another major version or refused by its service; a need in mode refuse not met refuses, in mode degrade it is resumed without it; a binding twice, a mode not 0 or 1, and formats 1 to 3 refused;
   - format 2 (313-STO-0026): a client's new, repeated and stale operations and the oldest client dropped; the outbox bounded; a client twice, an operation 0, a client past the sequence, a message out of order or past `sent` each refused; format 1 refused by its number, also at a restore;
   - a model service stopped after each number of the store's calls in turn, its answer also lost after the commit: each of five operations applied once, every answer to it the count just after it, a stale one refused;
   - three owed messages delivered with a stop after each number of calls in turn, then again until none is owed: each received once, and the next sequence above them;
@@ -166,7 +171,6 @@ These are tests of one pilot, not a proof (MC-12.2). Not provided:
 - a check between two stores: a copy imported into two stores, or copied by hand from an active component's names, is active in each. Only the release in the source's store, and the copy written after it, keep a component in one place;
 - a move into a store where the component's names already exist. Moved back into a store it was moved out of, the import finds its names at the release record, another root, and leaves them as they are (a conflict), so it stays released there. Where its names were removed, the import publishes them at a later version than 1, and the restore refuses it (`inconsistent`);
 - messages between components in two stores: in the source's store, a read of a component moved out is refused (`released`), so what it owes and what is owed to it wait until sender and receiver are in one store;
-- a test that a recorded authority the instance lacks is refused on the platform (the shell lends `tally` both rights; the refusal is host-tested);
 - effects with a key (313-STO-0036):
   - one target, a name in the store. A publication in the component's own store could instead go into the checkpoint's own commit ([304](../../issues-done/304-several-names-at-once.done)), and then nothing is left to reconcile; the keyed effect stands for a target outside that commit: here a name of the same store's, later another store or a service that keeps operation IDs (a clients table, as format 2's, is the same shape);
   - no target that cannot tell: a file written through `vfs` keeps no version, so `effect <file>` still needs a person;
