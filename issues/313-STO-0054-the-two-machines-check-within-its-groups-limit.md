@@ -19,6 +19,18 @@ The group's logs on acc-2 were not read. KRN's guess is that `tally_two_machines
 - The `store` suite passes in this container with the check on one CPU each, its time logged.
 - The next round's gate passes the store groups, and their logs show the check's time.
 
+## Progress (2026-11-18)
+
+**Done** on `claude/relaxed-meitner-5bmhpz` as 7a042413: one CPU each, and the time logged.
+
+**Run** in this session's container (4 CPUs, QEMU 8.2.2 under TCG), on images of the same code as round 148's:
+- **x86 `store` suite:** 35 passed; the two machines' check took 26 s.
+- **aarch64 `store` suite:** 41 passed; the check took 21 s.
+
+So the check itself costs well under a minute here, on 1 CPU each. That alone does not explain acc-2's 3500 s against x32's 1019 s; their logs on acc-2 are still the thing to read.
+
+**Left:** the next round's gate, its store groups' logs showing the check's time.
+
 ## Related
 
 [313](313-persistent-actors.md), 313's move between two machines (2026-11-18).
