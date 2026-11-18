@@ -5173,7 +5173,8 @@ def tally_two_machines_check(args):
         return
     import copy
     small = copy.copy(args)
-    small.cpus = 2  # two machines at once on the host's CPUs
+    small.cpus = 1  # two machines at once beside another lane of the gate (313-STO-0054)
+    began = time.monotonic()
     def run(vm, program, line):
         vm.send(f"{program} {line}\n")
         return vm.expect("MIND> ", timeout=240, after=f"{program} {line}\n")
@@ -5219,6 +5220,7 @@ def tally_two_machines_check(args):
             first.close()
             if second:
                 second.close()
+    print(f"TIME: the two machines' check took {time.monotonic() - began:.0f} s", flush=True)
     print("PASS: a component restored on another machine while the old one is fenced: tally.m moved on the first to a "
           "file, carried by the host to the second, imported and going on from its count there, a repeated operation "
           "answered from the record; the first, still running, refused every run of it before and after (313)", flush=True)
