@@ -52,6 +52,7 @@ Done on `claude/relaxed-meitner-5bmhpz` as 671d5237, with the check's expectatio
   - the `store` suite's `tally_needs_check`, on images built from 514cf529 with the test of f88c7fcd: x86 (35 checks passed) and on aarch64 the store suite (41 checks) and the tls suite (13 passed, the late TPM's check skipped, as it is x86's) passed. `tallynf`, whose request note asks for no files, restored `tally.n` degraded: its effect and move were refused and a count saved. `tally`, holding both again, was told nothing and did the effect.
 - **docs/storage/checkpoints.md 6.**
 - **Not built:** a contract's migration of its needs. A need saved under another major stays unmet, as RFC 001 asks of an incompatible transition: a refusal, not a guess.
+- **Landed** in round 148 (`main` 8a40c274, gate `land-r148` green, 52 groups). The aarch64 store group ended once at the 3500-s limit on acc-2 beside another lane, its logs not read, and passed alone on x32 in 1019 s: 313-STO-0054, on the storage branch.
 
 ## Related
 
