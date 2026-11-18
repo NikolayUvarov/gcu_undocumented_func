@@ -110,7 +110,7 @@ Main task [100002](100002-power-on-a-battery-idle-frequency-and-sleep.md).
 - The shell and `wm` at 720 × 1440, scaled.
 - An on-screen keyboard (a request to `APP`).
 - Rotation by the accelerometer, later.
-- **The applications:** among the first, `improve` ([100003](100003-improve-the-system-from-the-phone.md)), so that the user asks for an improvement of MIND Core from the phone and is told its status (the maintainer, 2026-10-25). The others are those of the communications plan (`msg`, `mail`, `tgtxt`, `sms` and `call`).
+- **The applications:** among the first, `improve` ([100003](100003-mind-hub-requests-conversation-check-and-updates.md)), so that the user asks for an improvement of MIND Core from the phone and is told its status (the maintainer, 2026-10-25). Since 2026-11-18 it is `APP`'s MIND Hub, for every device, and the phone's screen of it is this track's part. The others are those of the communications plan (`msg`, `mail`, `tgtxt`, `sms` and `call`).
 
 ### Stage 6: the platform profile `aarch64/PinePhone-0`
 
