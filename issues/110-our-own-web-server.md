@@ -62,7 +62,7 @@
 
 ### Stage 3: later (intention only)
 
-- More than releases: a static site, the intake of [100003](100003-improve-the-system-from-the-phone.md)'s requests, a base for `msgd` (950).
+- More than releases: a static site, the intake of [100003](100003-mind-hub-requests-conversation-check-and-updates.md)'s requests, a base for `msgd` (950).
 - HTTP/2, then HTTP/3.
 - Certificates through ACME.
 
@@ -90,4 +90,4 @@
 
 ## Related
 
-[351](351-self-update.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-UPD-0031](../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done), [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) (the client side), [950](950-our-own-micro-messenger.md), [100003](100003-improve-the-system-from-the-phone.md).
+[351](351-self-update.md), [docs/update/publishing.md](../docs/update/publishing.md), [351-UPD-0031](../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done), [351-STO-0006](../issues-done/351-STO-0006-releases-pinned-in-the-store.done), [000-NET-0047](../issues-done/000-NET-0047-http-for-api-clients.done) (the client side), [950](950-our-own-micro-messenger.md), [100003](100003-mind-hub-requests-conversation-check-and-updates.md).
