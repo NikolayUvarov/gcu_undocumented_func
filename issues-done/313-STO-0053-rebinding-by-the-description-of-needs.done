@@ -1,6 +1,6 @@
-# 313-STO-0053 — Rebinding by the description of needs: a checkpoint's needs, rebound to what an instance holds now
+# 313-STO-0053 — Rebinding by the description of needs: a checkpoint's needs, rebound to what an instance holds now — done
 
-**Type:** storage (library, pilot) · **Owner:** `STO` track · **Priority:** P2 · **Status:** open (2026-11-18) · **Blocked by:** — · **Main task:** [313](313-persistent-actors.md) · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.11, RFC 001 §9
+**Type:** storage (library, pilot) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-18) · **Blocked by:** — · **Main task:** [313](../issues/313-persistent-actors.md) · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.11, RFC 001 §9
 
 ## Problem
 
@@ -35,6 +35,24 @@ RFC 001 §9 asks for more: capabilities replaced by descriptions of needs (the l
   - `tally`, holding both again, is told nothing and does the effect.
 - `docs/storage/checkpoints.md` describes format 4 and rebinding.
 
+## Resolution
+
+Done on `claude/relaxed-meitner-5bmhpz` as 671d5237, with the check's expectation fixed in f88c7fcd.
+- **`mind::checkpoint` format 4:**
+  - each need is a binding, an interface with its major version, a logical resource and a mode, refuse or degrade;
+  - `rebind(manifest, offer)` asks the component, for each need, what it holds now: held, missing, another major, or refused by its service;
+  - `refused()` decides whether the component is resumed;
+  - formats 1 to 3 are refused by their number.
+- **`tally`:**
+  - `store` (`mind:blockstore`, refuse) and `files` (`mind:vfs`, degrade);
+  - each unmet need is logged with what was found;
+  - without `files`, its effects and moves are refused.
+- **Tests:**
+  - `tests/checkpoint_host.rs`: 23 passed;
+  - the `store` suite's `tally_needs_check`, on images built from 514cf529 with the test of f88c7fcd: x86 (35 checks passed) and on aarch64 the store suite (41 checks) and the tls suite (13 passed, the late TPM's check skipped, as it is x86's) passed. `tallynf`, whose request note asks for no files, restored `tally.n` degraded: its effect and move were refused and a count saved. `tally`, holding both again, was told nothing and did the effect.
+- **docs/storage/checkpoints.md 6.**
+- **Not built:** a contract's migration of its needs. A need saved under another major stays unmet, as RFC 001 asks of an incompatible transition: a refusal, not a guess.
+
 ## Related
 
-[313](313-persistent-actors.md), [306](../issues-done/306-checkpoints-and-rebinding.done), [313-STO-0036](../issues-done/313-STO-0036-an-effect-its-target-can-tell.done), RFC 001 §9.
+[313](../issues/313-persistent-actors.md), [306](306-checkpoints-and-rebinding.done), [313-STO-0036](313-STO-0036-an-effect-its-target-can-tell.done), RFC 001 §9.

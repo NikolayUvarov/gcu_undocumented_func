@@ -62,6 +62,7 @@
 
 **2. Reporting.**
 
+- **Through MIND Hub's intake** ([100003](100003-mind-hub-requests-conversation-check-and-updates.md), [docs/hub/README.md](../docs/hub/README.md)), since 2026-11-18 the update server too: a machine's report becomes a request whose author is the machine, with the owner's leave. What follows was written before the hub and becomes its form for a report:
 - **To the update server** (`UPD`'s server, 351):
   - a report endpoint the machine reaches with its device certificate (`tls.wit` `client-certificate`), so that the server knows which machine reports, and nothing about its owner;
   - the server deduplicates by signature and answers with the problem's state upstream: known, fixed in a release (which one), or new.
