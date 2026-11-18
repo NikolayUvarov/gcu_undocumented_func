@@ -1,6 +1,6 @@
 # 000-KRN-0257 — `boot_switch.py` on a GPT disk shared with Linux, and on aarch64
 
-**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1
+**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17; in `main` since round 146; the machine left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1
 
 ## Problem
 
@@ -23,9 +23,15 @@ MOB's ask of 2026-11-16 (ask 2), for the maintainer's word of 2026-11-17: Ubuntu
 
 ## Acceptance criteria
 
-- [ ] Host tests as above.
-- [ ] The docs.
+- [x] Host tests as above.
+- [x] The docs.
 - [ ] On a machine: MOB's disk on the ARM computer (MC-12.1).
+
+## Progress (2026-11-18)
+
+- **Made:** `scripts/boot_switch.py` (`identity` reads the MBR's entry or the GPT's, in the disk's logical sectors; `entry_for` matches `HD(n,MBR|GPT,…)`; the volumes by label; only the two volumes refused mounted; `LOADERS` by `platform.machine()`), `tests/boot_switch_test.py` (16 tests, 5 new), `docs/write-disk.md` and `_RU` 1.8.
+- **In `main` since round 146** (56acdb5207, gate `land-r146b` GREEN, `host tests` among its groups).
+- **Left:** MOB's disk on the ARM computer (MC-12.1).
 
 ## Related
 

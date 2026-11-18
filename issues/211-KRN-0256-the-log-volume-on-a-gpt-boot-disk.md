@@ -1,6 +1,6 @@
 # 211-KRN-0256 — The log volume on a GPT boot disk: a window for its partition named `MIND LOG`
 
-**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.3, MC-12.1
+**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-17; in `main` since round 146; aarch64 and the machine left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.3, MC-12.1
 
 ## Problem
 
@@ -31,7 +31,8 @@ MOB's ask of 2026-11-16 (ask 1), for the maintainer's word of 2026-11-17: Ubuntu
 
 - **Made** (`claude/211-KRN-0256-the-log-volume-on-gpt`, 0d824b88): `init`'s `vfs_windows`, the `MIND LOG` partition's window on the boot GPT disk; `tests/usb_image_smoke.py` `gpt_log_check`; `docs/profile/bootstrap.md`'s `vfs_server` row.
 - **x86, QEMU** (acc-2, the group `x86: USB image`, 2026-11-17): PASS. The stick's partitions on a GPT disk beside a Linux partition: named `MIND LOG`, window 3, `log:` mounted, `boot0001.log` written and read on the host; named `MIND DATA`, no window, no `log:`, not written; the Linux partition, the tables and the backup never written.
-- **Left:** aarch64 (GitHub CI's `usb_image_smoke.py --arch aarch64`), and MOB's disk on the machine.
+- **In `main` since round 146** (56acdb5207, gate `land-r146b` GREEN, `x86: USB image` among its groups).
+- **Left:** aarch64: GitHub CI's `usb_image_smoke.py --arch aarch64` stayed queued with no runner in round 146, and the local gate has no aarch64 USB image group; and MOB's disk on the machine.
 
 ## Related
 

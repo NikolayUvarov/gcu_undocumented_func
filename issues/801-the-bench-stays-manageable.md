@@ -133,3 +133,23 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
   - a safe start leaves out only what the cut run of the same slot was starting, and brings it back by itself 120 s past `READY` (000-KRN-0217, round 140);
   - rtw89 takes no channel before the station's own tune (801-DRV-0071, round 141);
   - the station knows a fresh radio by the PID that answers it, whatever the radio reports of its channel (801-NET-0085, round 144). A bench machine's run is left (DRV).
+
+## The DEXP's first release through Effector (S7, S8; 2026-11-17)
+
+On the maintainer's word of 2026-11-17 («прогоняй на DEXP и MacBook, Ryzen занят пока что»). Evidence for the DEXP only (MC-12.1).
+
+- **Before:** the DEXP online through hesere, in the maintenance mode with `remote-update` on and the test keys (its boot log: `REMOTE UPDATE ON WITH THE TEST KEYS`), slot A confirmed, version not known, floor 0, the key file of version 1 kept; up 261 142 s on `fast-test` 719549b1.
+- **The release:** `main` c6a5d2206c built for x86_64, 111 files signed with the test boot key at version 1, published and bundled with `release.py` as `docs/update/publishing.md` says (29 037 802 bytes, SHA-256 `ca94eb6a…`; the key file the same bytes as the DEXP's).
+- **What happened** (UTC; `update_agent` operation `20261117212530.979892591_000048`):
+  - 21:25:36: the command taken. The owner's policy and `remote-update` let it through: it ran, not `denied`.
+  - From then the server saw no heartbeat (`offline`) while the agent downloaded the bundle.
+  - 21:33:55: one heartbeat, `shutting_down`: the agent's last before a restart `init` asked for, so the release was downloaded, checked and applied.
+  - After that, nothing. At 22:25:56 the operation ended `timeout` (`agent did not acknowledge the operation before timeout_seconds elapsed`, 3600 s).
+- **What this shows and does not:**
+  - **Not S1 to S3 on the DEXP.** In MIND Core, any end of the trial brings the machine back within about 15 minutes: the kernel's restart at 120 s without `init`'s word, `init`'s fall-back 600 s past `READY`, then slot A. It did not come back in 50 minutes. So something outside those bounds stopped it, and it is not known what. The candidates:
+    - the firmware started another entry at the restart: the DEXP runs Windows 11 from its own disk, and MIND Core from the stick (800-LNK-0037). Its `BootOrder` was the stick's first on 2026-11-08; if Windows is first now and MIND Core was started by `BootNext`, every restart MIND Core asks for goes to Windows;
+    - the restart itself did not complete;
+    - the firmware stopped at its menu or setup.
+  - **A gap in the heartbeat:** about 8 minutes with none while the bundle downloaded. 801's "always connected" asks for a heartbeat throughout (EFF, asked in `requests-EFF.md`).
+- **Held:** the MacBook gets no release until the DEXP's cause is known, as the same restart could take it off the network too. The release that loses the network (S8's first check) waits too.
+- **Needed:** what the DEXP's screen shows (asked of the maintainer, 2026-11-17).

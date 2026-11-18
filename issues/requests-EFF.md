@@ -91,3 +91,8 @@ The EFF track numbers its own tasks, so a request from another track waits here 
   5. Tests: a host test of the rule (the threshold, the floor, 2099); the `effector` suite with the guest's clock 3 h ahead and at 2000-01-01, the clock read back within a few seconds of the fixture's after the first answer, and the log line.
 - **What it trusts.** The server, or whoever holds its pinned key, can move the clock forward without limit and back to the floor ([clocks.md](../docs/profile/clocks.md), "The Effector server's time"): a memory domain's term in mode `forget` can then pass. If EFF wants the owner to be able to switch it off, a policy line (for example `clock keep`) would do; KRN does not ask for one.
 - **Docs.** `docs/effector/README.md`'s table of the session's grants can then say `rtc` with the setting badge, and what the agent does with it.
+
+### The heartbeat throughout an update's download (KRN, 2026-11-17, for 801's S5 and S7)
+
+- **What the DEXP showed** (801, "The DEXP's first release through Effector"): from the moment `update_agent` was taken (21:25:36 UTC) the server saw no heartbeat for about 8 minutes, until the agent's `shutting_down` at 21:33:55. The bundle was 29 MB over the DEXP's Wi-Fi.
+- **What is asked:** the heartbeat goes on, on its own schedule, while a bundle downloads and streams to the updater, as 750's "independently scheduled heartbeat" says; the update state in it (`receiving`) if the contract has the field. A test in the `effector-update` suite: with the fixture's download slowed to take longer than two heartbeat periods, the fixture still receives a heartbeat in each period.
