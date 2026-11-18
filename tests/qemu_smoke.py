@@ -15827,6 +15827,11 @@ def tpm_check(args, cpu):
             assert temporary != plain, (plain, temporary)
             assert stored("device.sealed") and not stored("device.key") and not stored("services/blockstore.kept.before")
             keystore_elf(ROOT / IMAGE / "keystore.elf")
+            print(f"PASS: a TPM that answers late: keystore's test build, with TPM A, took a key for this boot only and the store "
+                  f"waited unmounted; once the TPM answered, A's key (MIND {plain}) was held in its place and the store mounted and "
+                  f"read back its object, in the same boot, nothing in system/keystore changed (801-NET-0087, 801-STO-0052)", flush=True)
+        else:
+            print("SKIP: a TPM that answers late: no late-tpm-test build of keystore (scripts/x86_fixtures.sh; x86 only)", flush=True)
         # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
         try:
