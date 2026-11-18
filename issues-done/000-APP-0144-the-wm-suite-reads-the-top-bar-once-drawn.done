@@ -1,0 +1,30 @@
+# 000-APP-0144 — The `wm` suite's full-screen check reads the bars once `wm` has drawn them — done
+
+**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the gate's rounds carry 801's work) · **Status:** done (2026-11-18) · **Blocked by:** — · **Main task:** — · **Roadmap:** — · **Constitution:** MC-12.1, MC-12.2
+
+**Asked by:** KRN, the integrator: `APP/2026-11-18T0011Z-KRN-the-wm-suites-top-row-was-blank-once-in-round-146.md` on `internal-dev-messages`, "the wm suite's top row was blank once in round 146". Numbered on 2026-11-18.
+
+## Problem
+
+- **Where:** round 146's gate, `x86: the window manager` on x32-2 beside a busy lane. `full_screen_and_list` (211-APP-0014) failed at `assert screen[0].startswith(canon(" wm │"))`, with the top row blank. The group then passed alone.
+- **Why, as far as the code shows:** after Alt+Tab out of a full-screen window, the check took one screenshot at once, and `wm` had not drawn its top bar again yet.
+- **The same function had a second one-shot read:** after Alt+F, it took one screenshot half a second later to see the bars gone. Under load that can come early in the same way.
+
+## Plan
+
+Both reads are repeated until the screen shows what is expected, 10 s at most, before the assertion. An unloaded run takes no longer.
+
+## Acceptance criteria
+
+The `wm` suite passes on x86 with the change.
+
+## Resolution
+
+- **The code:** `tests/qemu_smoke.py`, `full_screen_and_list`.
+  - After Alt+F, the screen is read every 0.2 s until the top bar and the keys line are gone, then the pixels are taken.
+  - After Alt+Tab, it is read until the top bar starts ` wm │`.
+- **Tested** in this container: the `wm` suite on x86, 4 CPUs. A loaded host is the gate's to show (MC-12.1).
+
+## Related
+
+[000-APP-0142](000-APP-0142-two-checks-wait-for-what-a-loaded-host-gives-late.done), [211-APP-0014](211-APP-0014-wm-full-screen-and-window-list.done) (full screen in `wm`).
