@@ -15714,6 +15714,32 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert back == plain, (plain, back)
+        # 801-NET-0087, 801-STO-0052: a TPM that answers late (keystore's test build takes none in the boot's first
+        # minute). A key for this boot only, the store not mounted while keystore gives it no key; once the TPM answers,
+        # A's sealed key is held in its place, and the store mounts and reads back its object, all in the same boot.
+        if getattr(args, "late_tpm_keystore_elf", None):
+            def keystore_elf(source):
+                files = temp / "files"
+                shutil.copyfile(source, files / "keystore.elf")
+                sign_manifest.sign_volume(files)
+                subprocess.run(["mcopy", "-o", "-s", "-i", part, *[str(p) for p in files.iterdir()], "::"], env=MTOOLS_ENV, check=True, capture_output=True)
+            keystore_elf(args.late_tpm_keystore_elf)
+            vm, log, temporary = boot("a")
+            try:
+                require(log, "[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN system/keystore/device.sealed, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY")
+                require(log, "[KEYSTORE] THE TPM IS ASKED AGAIN EVERY 10 S: THE KEY IT SEALED IS HELD ONCE IT ANSWERS")
+                require(service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED"),
+                        f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH HOLDS NO DEVICE KEY IT MAY USE YET: TRIED AGAIN EVERY 30 S")
+                late = service_log(vm, "keystore", "THE TPM ANSWERS NOW", tries=300)
+                require(late, "[KEYSTORE] THE TPM ANSWERS NOW: DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM), HELD IN PLACE OF THE ONE FOR THIS BOOT")
+                require(late.partition("THE TPM ANSWERS NOW")[2], f"[KEYSTORE] DEVICE KEY READY: MIND {plain} ")
+                require(service_log(vm, "blockstore", "THE MEDIUM MOUNTED", tries=300), "[BLOCKSTORE] KEYSTORE GAVE THE KEPT VOLUME KEY NOW: THE MEDIUM MOUNTED")
+                store_opens(vm, root)
+            finally:
+                close(vm)
+            assert temporary != plain, (plain, temporary)
+            assert stored("device.sealed") and not stored("device.key") and not stored("services/blockstore.kept.before")
+            keystore_elf(ROOT / IMAGE / "keystore.elf")
         # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
         try:
@@ -19013,6 +19039,9 @@ def main():
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     tuned = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-selftuned-target/x86_64-unknown-none/release/wlansim"
     args.self_tuned_radio_elf = str(tuned) if args.arch == "x86_64" and tuned.exists() else None
+    # keystore's build that takes no TPM in the boot's first minute (801-NET-0087): x86 only.
+    late_keys = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-keystore-late-target/x86_64-unknown-none/release/keystore"
+    args.late_tpm_keystore_elf = str(late_keys) if args.arch == "x86_64" and late_keys.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.disk == "ahci":
