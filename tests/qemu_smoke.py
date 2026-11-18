@@ -16118,8 +16118,13 @@ def wm_suite(vm):
         mode, focus, rects = keys("alt-f", text=f"FULL={clock}")
         assert focus == clock and rects == frames, (focus, rects)
         until(f"[WM] PIXELS {clock} 1280X800")  # it draws at the screen's size
-        time.sleep(.5)
-        screen = screen_text(vm)
+        # The bars gone, read again until they are: on a loaded host wm draws later (000-APP-0144, KRN's remark of
+        # 2026-11-18); 10 s at most.
+        for _ in range(50):
+            time.sleep(.2)
+            screen = screen_text(vm)
+            if not screen[0].startswith(canon(" wm │")) and canon("keys go to") not in screen[-1]:
+                break
         _, size, _, pixels = vm.screenshot().split(b"\n", 3)
         vm.serial(enter=False)
         width = int(size.split()[0])
@@ -16128,7 +16133,12 @@ def wm_suite(vm):
         assert green and max(green) > 700, (len(green), max(green, default=0))  # its digits across the screen
         mode, focus, rects = keys("alt-tab")
         assert focus != clock and "FULL=" not in last_state(), last_state()
-        screen = screen_text(vm)
+        # The top bar back: round 146 read it blank on x32-2 beside a busy lane, before wm drew it (000-APP-0144).
+        for _ in range(50):
+            screen = screen_text(vm)
+            if screen[0].startswith(canon(" wm │")):
+                break
+            time.sleep(.2)
         vm.serial(enter=False)
         assert screen[0].startswith(canon(" wm │")), screen[0]
         keys(*["alt-tab"] * (len(frames) - 1), text=f"FULL={clock}")
