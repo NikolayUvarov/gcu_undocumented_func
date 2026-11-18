@@ -16,7 +16,7 @@
 use core::fmt::Write;
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::car::{self, Named};
-use mind::checkpoint::{self, read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Message, Names, Outcome, Publication, Restored, Target, Told, FORMAT, LABEL, MAX, OUTBOX};
+use mind::checkpoint::{self, read, rebind, reconcile, release, released, restore, save, Applied, Error, Key, Label, Manifest, Message, Mode, Names, Need, Offer, Outcome, Publication, Restored, Target, Told, FORMAT, LABEL, MAX, OUTBOX};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, CHUNK};
 use mind::fs::File;
@@ -200,10 +200,26 @@ fn component(name: &str) -> Option<Label> {
 // A component as the user names it: `b` for `tally.b`.
 fn short(component: &Label) -> &str { component.as_str().strip_prefix("tally.").unwrap_or(component.as_str()) }
 
-// The authorities this contract uses, as the checkpoint records them; held now if the capability is there.
-fn holds(authority: &str) -> bool {
-    let slot = match authority { "blockstore" => SLOT_BLOCKSTORE, "files" => SLOT_FILE, _ => return false };
+// The needs this contract records (format 4, 313-STO-0053): the store, without which it is not resumed, and the user's
+// files, without which its effects and moves are refused; each the interface this build speaks there and its major.
+const NEEDS: [(&str, &str, u8, &str, Mode); 2] = [
+    ("store", "mind:blockstore", mind::idl::blockstore::VERSION.0, "checkpoint", Mode::Refuse),
+    ("files", "mind:vfs", mind::idl::vfs::VERSION.0, "ram:", Mode::Degrade),
+];
+
+// Whether the binding's capability is there now.
+fn holds(binding: &str) -> bool {
+    let slot = match binding { "store" => SLOT_BLOCKSTORE, "files" => SLOT_FILE, _ => return false };
     mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT
+}
+
+// What this instance holds now for a need it restored: its binding there, and the interface at the major version this
+// build speaks; never a right taken from the checkpoint (MC-6.11).
+fn offer(need: &Need) -> Offer {
+    let Some(&(binding, interface, major, _, _)) = NEEDS.iter().find(|n| n.0 == need.binding.as_str()) else { return Offer::Missing };
+    if !holds(binding) || need.interface.as_str() != interface { return Offer::Missing; }
+    if need.major != major { return Offer::Version(major); }
+    Offer::Held
 }
 
 /// The instance: its component, what it restored, the counters at that point, and the messages its receivers
@@ -230,8 +246,7 @@ fn open(me: Label, names: &Names, buffer: &mut [u8]) -> Option<Instance> {
         Restored::Fresh { .. } => {
             let mut m = Manifest::new(Label::new(CONTRACT)?, VERSION, SCHEMA, Cid::raw(b""));
             m.add_resource("blockstore").ok()?;
-            m.add_authority("blockstore").ok()?;
-            m.add_authority("files").ok()?;
+            for (binding, interface, major, resource, mode) in NEEDS { m.add_need(binding, interface, major, resource, mode).ok()?; }
             (m, Counters::EMPTY)
         }
         Restored::Found(m) => {
@@ -422,7 +437,7 @@ fn publish(names: &Names, i: &mut Instance, buffer: &mut [u8], state: &mut [u8],
 // checkpoint to `file`, a copy for `blocks import` into another store. Released before: the copy is written again from
 // the names' history.
 fn move_out(me: &Label, names: &Names, file: &str, buffer: &mut [u8]) {
-    if !holds("files") { mind::println!("tally: move refused: this instance does not hold the files authority"); return; }
+    if !holds("files") { mind::println!("tally: move refused: its need files is not met"); return; }
     let r = match restore(&mut Remote, names, CONTRACT, VERSION, SCHEMA, buffer) {
         // A publication's target is a name in this store: asked here, never in the store it moves to.
         Ok(Restored::Found(m)) if m.pending().any(|e| e.key != Key::None) => {
@@ -466,7 +481,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("tally — named counters kept by checkpoints in the block store (contract tally 4). As <name> it is the component tally.<name>, which owes amounts to others and receives what they owe it. A move releases it here and writes its last checkpoint to a file, for `blocks import` into another store. A publication of a word under a name is an effect each run asks the store about if it was left pending.\nUsage: tally [as <name>] [show] | add <key> [n] [op <client> <id>] | hold <seconds> <key> | effect <file> [crash] | publish <name> <word> [crash-before|crash-after] | reconcile <id> done|failed | move <file>\n       tally as <name> send <key> <n> to <name> | receive <name>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
-    if !holds("blockstore") { mind::println!("tally: no client of the block store: nothing to restore from"); return; }
+    if !holds("store") { mind::println!("tally: no client of the block store: nothing to restore from"); return; }
     let (buffer, state) = unsafe { (&mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(STATE)) };
     let (mut all, mut count) = ([""; 9], 0);
     for w in mind::process::args_str().split_whitespace() {
@@ -484,12 +499,19 @@ fn main(_info: &'static BootInfo) {
     // A move restores on its own: a component released before is written again, not refused.
     if let ["move", file] = words { return move_out(&me, &names, file, buffer); }
     let Some(mut i) = open(me, &names, buffer) else { return };
-    // The rights the checkpoint names come from this instance's grants, never from the checkpoint (MC-6.11).
-    let mut files = true;
-    for missing in rebind(&i.manifest, holds) {
-        mind::println!("tally: AUTHORITY {} NOT HELD NOW", missing);
-        files &= missing.as_str() != "files";
+    // The needs the checkpoint describes, rebound to this instance's grants, never taken from the checkpoint (MC-6.11):
+    // one in mode refuse not met, the component is not resumed; one in mode degrade, what needs it is refused.
+    let bound = rebind(&i.manifest, offer);
+    for b in bound.unmet() {
+        let what = if b.need.mode == Mode::Refuse { "REFUSED" } else { "DEGRADED" };
+        match b.offer {
+            Offer::Version(speaks) => mind::println!("tally: NEED {} NOT MET: THIS BUILD SPEAKS {}@{}; {}", b.need, b.need.interface, speaks, what),
+            Offer::Refused => mind::println!("tally: NEED {} NOT MET: REFUSED BY ITS SERVICE; {}", b.need, what),
+            _ => mind::println!("tally: NEED {} NOT MET: NOT HELD; {}", b.need, what),
+        }
     }
+    if let Some(b) = bound.refused() { mind::println!("tally: {} NOT RESUMED: ITS NEED {} IS NOT MET (MC-6.11)", short(&i.me), b.need.binding); return; }
+    let files = bound.met("files");
     // What is pending with a key is asked of the store, and what it told saved, before a request is applied.
     if !settle(&names, &mut i, buffer, state) { return; }
     match (named.is_some(), words) {
@@ -510,7 +532,7 @@ fn main(_info: &'static BootInfo) {
         }
         (_, ["effect", file, crash @ ..]) if crash.len() <= 1 && crash.iter().all(|c| *c == "crash") => {
             let crash = crash.first().copied();
-            if !files { mind::println!("tally: effect refused: this instance does not hold the files authority"); return; }
+            if !files { mind::println!("tally: effect refused: its need files is not met"); return; }
             if let Some(e) = i.manifest.pending().next() { mind::println!("tally: effect refused: effect {} is pending; reconcile it first", e.id); return; }
             let mut what = [0u8; 32];
             let (prefix, path) = (b"write:ram:", file.as_bytes());

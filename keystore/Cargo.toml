@@ -14,6 +14,10 @@ chacha20poly1305 = { version = "0.10", default-features = false } # programs' se
 passlock = { path = "../passlock" } # the device key sealed under the owner's passphrase where no TPM seals it (308-NET-0055)
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # used by ed25519-dalek; no SHA-NI: the target has no SSE in its ABI
 
+[features]
+# Test only (801-NET-0087): the TPM is taken as not answering in the boot's first minute, so that the suites see it answer late.
+late-tpm-test = []
+
 [profile.release]
 panic = "abort"
 opt-level = 3
