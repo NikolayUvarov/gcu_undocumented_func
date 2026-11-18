@@ -153,3 +153,13 @@ On the maintainer's word of 2026-11-17 («прогоняй на DEXP и MacBook,
   - **A gap in the heartbeat:** about 8 minutes with none while the bundle downloaded. 801's "always connected" asks for a heartbeat throughout (EFF, asked in `requests-EFF.md`).
 - **Held:** the MacBook gets no release until the DEXP's cause is known, as the same restart could take it off the network too. The release that loses the network (S8's first check) waits too.
 - **Needed:** what the DEXP's screen shows (asked of the maintainer, 2026-11-17).
+- **Back, 2026-11-18 about 09:41 UTC:**
+  - the DEXP started again from slot A (`THE NEWER RECORD: SLOT B NOT CONFIRMED`);
+  - its clock read 07:20:38, about 2 h 21 min behind the server's;
+  - the agent answered the kept command `completed`: `fell back: slot A runs version 0, not 1; the updater: check: Missing`, and the operation's record holds that answer.
+- **So:** the fall-back took a start from outside, very likely a person's (not confirmed).
+  - Slot B's trial left no boot log, so it stopped before `log:` was mounted. The loader had counted its try.
+  - Neither the trial's deadline nor `init`'s bound runs that early, and the DEXP has no chipset watchdog (`WATCHDOG: NONE (THE LPC BRIDGE'S ACPI I/O IS OFF)`). Nor does the MacBook (`NO_REBOOT HELD BY THE FIRMWARE`).
+  - Taken as [801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.md).
+  - Why the release stopped there is not known: nothing of that boot was kept.
+- **Also seen in that boot:** `data/effector/effector.conf` names `mind-macbook-pro`, not this machine (`mind-n100`); the agent logs it and goes on under its own name.
