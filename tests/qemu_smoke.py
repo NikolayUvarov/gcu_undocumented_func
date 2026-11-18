@@ -4833,7 +4833,7 @@ def tally_needs_check(vm):
     out = run("tally", "as n show")
     require(out, "TALLY EPOCH 2 SEQUENCE 2")
     assert "NEED" not in out, out
-    require(run("tally", "as n effect needs.txt"), "EFFECT 1 DONE SAVED EPOCH 3")
+    require(run("tally", "as n effect needs.txt"), "EFFECT 1 DONE SAVED EPOCH 4")  # its intent saved at 3, its outcome at 4
     require(vm.command("cat ram:needs.txt"), "done by tally")
     print("PASS: a checkpoint's needs rebound to what an instance holds: tally without its files need restored degraded, "
           "its effect and move refused and a count saved; holding both again, nothing missing and its effect done "
