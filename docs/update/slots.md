@@ -64,7 +64,7 @@ The loader at `EFI/BOOT/` is the file the firmware starts, and the one `bless` n
 6. **If it cannot,** it says why (`…; BACK TO THE LOADER AT EFI/BOOT/`), gives its buffers back and returns.
    - The loader at `EFI/BOOT/` then treats the slot as one that does not verify. A trial's record is left with no tries, and the fallback slot boots at once.
    - A loader the firmware refuses to load (Secure Boot, [secure-boot.md](secure-boot.md)) is the same case.
-7. **A slot's loader that hangs, or a reset while it runs:** the try was counted before it started, so the next boot past the trial's tries is the fallback's. Each loader sets the firmware's watchdog as it starts, to five minutes and its two pauses, so a loader that hangs is restarted by the firmware; `ExitBootServices` ends that watchdog, and the kernel then arms the chipset's where it knows it ([801-KRN-0258](../../issues/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.md)).
+7. **A slot's loader that hangs, or a reset while it runs:** the try was counted before it started, so the next boot past the trial's tries is the fallback's. Each loader sets the firmware's watchdog as it starts, to five minutes and its two pauses, so a loader that hangs is restarted by the firmware; `ExitBootServices` ends that watchdog, and the kernel then arms the chipset's where it knows it ([801-KRN-0258](../../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done)).
 
 Load options of any other form, or none, mean the firmware started the loader: it chooses the slot itself. The options choose only among the slots of its own volume, each checked against its signed manifest.
 

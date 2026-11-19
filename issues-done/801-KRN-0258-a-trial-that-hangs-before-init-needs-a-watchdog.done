@@ -1,6 +1,6 @@
-# 801-KRN-0258 — A trial that hangs before `init` comes back only with a watchdog, and neither bench machine has one
+# 801-KRN-0258 — A trial that hangs before `init` comes back only with a watchdog, and neither bench machine has one — done
 
-**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`, the trial's deadline), bootloader · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-18) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`, the trial's deadline), bootloader · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-19) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -93,6 +93,25 @@ On the maintainer's word of 2026-11-18 («Начни задачу DEXP смог�
 - **The cause is read:** release 4's boot line gives `TCO1_CNT 0x1000`, so the firmware set `TCO_LOCK` and `TCO_EN` stays on.
 - **Criterion 2 is met by the PCH's over-clocking watchdog:** release 5's trial, stopped before `init`, was reset 30 s later by that watchdog, whose mark the next boot read. The loader booted slot A, and the agent answered `fell back: slot A runs version 4, not 5`. The record is in 0259.
 
+## Resolution
+
+Done on 2026-11-19 and landed in round 150 (`main` e14a1bc415):
+- **The kernel's watchdog:**
+  - the TCO behind the SMBus controller of the PCHs from Cannon Lake's on, armed as the kernel starts once the FADT is read;
+  - a panic on a trial restarts the machine;
+  - each loader sets the firmware's watchdog until `ExitBootServices`.
+
+  The code is in `kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `kernel/src/main.rs` and `bootloader/src/main.rs`.
+- **The tests:**
+  - the `watchdog` and `boot` suites on q35;
+  - `tests/tco_watchdog_host.rs`.
+- **On the DEXP:**
+  - the TCO is armed (criterion 1);
+  - its first expiry goes to the firmware's SMI, as the firmware locks `TCO_EN` on (`TCO1_CNT 0x1000`);
+  - a stopped trial is reset by the PCH's over-clocking watchdog, [801-KRN-0259](801-KRN-0259-the-pchs-over-clocking-watchdog.done) (criterion 2).
+- **The profile:** `docs/profile` says which stops a trial survives on each bench machine (criterion 3).
+- **Left:** another reset path for the MacBook Pro, whose firmware holds `NO_REBOOT`. It is [801-KRN-0260](../issues/801-KRN-0260-another-reset-path-for-the-macbook-pro.md).
+
 ## Acceptance criteria
 
 - [x] The DEXP's boot line names its TCO timer, armed (release 2, 2026-11-19).
@@ -101,4 +120,4 @@ On the maintainer's word of 2026-11-18 («Начни задачу DEXP смог�
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [000-KRN-0217](000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md), [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0211](000-KRN-0211-the-loaders-mark-of-how-far-a-boot-got.md).
+[801](../issues/801-the-bench-stays-manageable.md), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md), [213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0211](../issues/000-KRN-0211-the-loaders-mark-of-how-far-a-boot-got.md).
