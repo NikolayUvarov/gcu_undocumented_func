@@ -163,3 +163,26 @@ On the maintainer's word of 2026-11-17 («прогоняй на DEXP и MacBook,
   - Taken as [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done).
   - Why the release stopped there is not known: nothing of that boot was kept.
 - **Also seen in that boot:** `data/effector/effector.conf` names `mind-macbook-pro`, not this machine (`mind-n100`); the agent logs it and goes on under its own name.
+
+## The DEXP: a release that loses the network, rolled back (S8, 2026-11-19)
+
+MC-12.1: this machine, this network.
+
+**The release.** Release 15 was release 14's build (801-KRN-0259's kernel, 801-NET-0088's `netstack`) with `netstack.elf` left out, signed as usual. It went through `update_agent` while slot A ran release 14.
+
+**What happened:**
+1. The download, check and staging took 18:51:03 to 18:56:18 UTC, and the machine restarted into slot B's trial.
+2. Slot B had no network, so the agent said nothing to the server.
+3. At `init`'s 10-minute bound the trial was refused, the updater spent its tries, and slot A booted again.
+4. The agent was back at 19:07:35, 11 min 17 s after the restart. Its heartbeat carried `rolled_back`, build 15, and the reason. It answered the command:
+   ```
+   fell back: slot A runs version 14, not 15; the updater: version 15 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING
+   ```
+
+Nobody touched the machine.
+
+**S8's first check is shown on the DEXP:** a release built to lose the network is rolled back on its own, with its report. The other machines of S8 are not done:
+- the MacBook gets no release yet;
+- the Ryzen is busy.
+
+The rewrite of all three disks is also left.
