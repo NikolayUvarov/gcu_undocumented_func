@@ -1,8 +1,8 @@
 // The chipset's watchdog (000-KRN-0076): Intel's TCO timer (tco.rs), in the LPC bridge's ACPI I/O space (ICH9 to the
 // 7-series PCH, and QEMU's q35) or behind the SMBus controller (the PCHs from Cannon Lake's on, 801-KRN-0258), or the
-// AMD FCH's timer (213-KRN-0125, fch.rs). The PCHs' TCO behind the SMBus controller is armed as the kernel starts, as it
-// needs only configuration space and I/O ports; the others as soon as the kernel has its page tables and the screen
-// (801-KRN-0258). Fed every second from the boot CPU's tick: a machine whose boot CPU
+// AMD FCH's timer (213-KRN-0125, fch.rs). Those PCHs' over-clocking watchdog too, whose expiry no firmware SMI can
+// keep (801-KRN-0259). Theirs are armed as the kernel starts, once the FADT is read, as they need only configuration
+// space and I/O ports; the others as soon as the kernel has its page tables and the screen (801-KRN-0258). Fed every second from the boot CPU's tick: a machine whose boot CPU
 // stops is reset at the timer's expiry. A halt the kernel chose (a fatal error, HALT; a panic outside a trial) stops it
 // first.
 use super::fch;
@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering
 
 static TCO: AtomicU16 = AtomicU16::new(0); // the TCO registers' I/O base while the watchdog runs
 static FCH: AtomicU32 = AtomicU32::new(0); // the AMD FCH timer's address while it runs
+static OC: AtomicU16 = AtomicU16::new(0); // the PCH's over-clocking watchdog's port while it runs
 static RESTARTED: AtomicBool = AtomicBool::new(false);
 static FRESH: AtomicBool = AtomicBool::new(false);
 /// Ticks of 0.6 s to the first expiry; the reset comes at the second: 30 s without the boot CPU's tick.
@@ -26,24 +27,25 @@ pub fn restarted() -> bool { RESTARTED.load(Ordering::Relaxed) }
 pub fn fresh() -> bool { FRESH.load(Ordering::Relaxed) }
 
 // What `early` found, for `start`: written once on the boot CPU before any other runs.
-static mut EARLY: Option<Result<tco::Armed, tco::Refused>> = None;
+type Found = (Result<tco::Armed, tco::Refused>, Result<tco::OcArmed, &'static str>);
+static mut EARLY: Option<Found> = None;
 
-/// As the kernel starts, before its page tables and the FADT: the TCO of a PCH listed by its SMBus controller, which
-/// needs only configuration space and I/O ports (801-KRN-0258). `start` says what it found.
+/// As the kernel starts, once the FADT is read and before its page tables: a listed PCH's TCO and over-clocking
+/// watchdog, which need only configuration space and I/O ports (801-KRN-0258, 801-KRN-0259). `start` says what it found.
 pub unsafe fn early() {
     if tco::listed(&mut Chipset).is_none() { return; }
-    let found = tco::arm(&mut Early, TICKS);
+    let found = tco::arm(&mut Chipset, TICKS);
     if let Ok(armed) = found { TCO.store(armed.base, Ordering::Release); }
-    core::ptr::addr_of_mut!(EARLY).write(Some(found));
+    let oc = Chipset.pm_base().ok_or("NO PM BASE IN THE FADT").and_then(|pm| tco::arm_oc(&mut Chipset, pm, TICKS as u32 * 12 / 10));
+    if let Ok(armed) = oc { OC.store(armed.port, Ordering::Release); }
+    core::ptr::addr_of_mut!(EARLY).write(Some((found, oc)));
 }
 
-/// Finds and arms the watchdog, or takes what `early` armed and quiets its SMI now that the FADT is read; the boot line
-/// names it, or why there is none.
+/// Finds and arms the watchdog, or takes what `early` armed; the boot line names it, or why there is none.
 pub unsafe fn start() {
     let seconds = TICKS as u32 * 12 / 10;
     let found = match core::ptr::addr_of_mut!(EARLY).read() {
-        Some(Ok(armed)) => Ok(tco::Armed { smi_kept: tco::no_smi(&mut Chipset, Chipset.pm_base()), ..armed }),
-        Some(refused) => refused,
+        Some((found, oc)) => { over_clocking(oc); found }
         None => tco::arm(&mut Chipset, TICKS),
     };
     let armed = match found {
@@ -53,7 +55,7 @@ pub unsafe fn start() {
         Err(tco::Refused::BehindP2sb(id)) => return none(format_args!("INTEL PCH WITH SMBUS 8086:{:04X}: ITS NO_REBOOT IS BEHIND THE P2SB, NOT DONE HERE", id)),
         Err(tco::Refused::Why(why)) => return none(format_args!("{}", why)),
     };
-    RESTARTED.store(armed.restarted, Ordering::Relaxed);
+    RESTARTED.fetch_or(armed.restarted, Ordering::Relaxed);
     FRESH.store(armed.fresh, Ordering::Relaxed);
     TCO.store(armed.base, Ordering::Release);
     let mut out = crate::PanicSerial;
@@ -65,6 +67,23 @@ pub unsafe fn start() {
                    if armed.decode_on { "; ITS DECODE TURNED ON HERE" } else { "" },
                    if armed.smi_kept { "; THE FIRMWARE'S SMI AT THE FIRST EXPIRY KEPT" } else { "" },
                    if armed.restarted { "; IT RESTARTED THE LAST RUN" } else { "" });
+    // Why the SMI is kept, for a machine where the TCO did not reset (801-KRN-0258's DEXP run).
+    if let (true, Some(pm)) = (armed.smi_kept, Chipset.pm_base()) {
+        let _ = write!(out, "MIND CORE KERNEL: WATCHDOG: SMI_EN {:#X}, TCO1_CNT {:#X}\n", Chipset.io(pm + tco::SMI_EN, 4), Chipset.io(armed.base + tco::CNT1, 2));
+    }
+}
+
+// The over-clocking watchdog's boot line (801-KRN-0259), with the register as the firmware left it.
+fn over_clocking(oc: Result<tco::OcArmed, &'static str>) {
+    let mut out = crate::PanicSerial;
+    let _ = match oc {
+        Ok(a) => {
+            RESTARTED.fetch_or(a.restarted, Ordering::Relaxed);
+            write!(out, "MIND CORE KERNEL: WATCHDOG: THE PCH'S OVER-CLOCKING WATCHDOG AT {:#X} (FOUND {:#X}), A RESET AFTER {} S WITHOUT THE BOOT CPU'S TICK{}{}\n",
+                   a.port, a.found, a.seconds, if a.locked { "; LOCKED BY THE FIRMWARE" } else { "" }, if a.restarted { "; IT RESTARTED THE LAST RUN" } else { "" })
+        }
+        Err(why) => write!(out, "MIND CORE KERNEL: WATCHDOG: NO OVER-CLOCKING WATCHDOG ({})\n", why),
+    };
 }
 
 fn none(why: core::fmt::Arguments) { let _ = write!(crate::PanicSerial, "MIND CORE KERNEL: WATCHDOG: NONE ({})\n", why); }
@@ -85,19 +104,6 @@ impl tco::Registers for Chipset {
         let (event, control) = (fixed.pm1a_evt?, fixed.pm1a_cnt?);
         (control.port == event.port + 4).then_some(event.port)
     }
-}
-
-// The chipset before the kernel's page tables: no MMIO, and no FADT read yet. The PCHs' path `early` takes uses neither.
-struct Early;
-
-impl tco::Registers for Early {
-    fn config(&mut self, device: u8, function: u8, offset: u8) -> u32 { Chipset.config(device, function, offset) }
-    fn set_config(&mut self, device: u8, function: u8, offset: u8, value: u32) { Chipset.set_config(device, function, offset, value) }
-    fn io(&mut self, port: u16, width: u8) -> u32 { Chipset.io(port, width) }
-    fn set_io(&mut self, port: u16, width: u8, value: u32) { Chipset.set_io(port, width, value) }
-    fn gcs(&mut self, _: usize) -> u32 { u32::MAX }
-    fn set_gcs(&mut self, _: usize, _: u32) {}
-    fn pm_base(&mut self) -> Option<u16> { None }
 }
 
 // The chipset configuration mapped uncached on its first use.
@@ -146,14 +152,24 @@ unsafe fn mapped(address: u32) -> usize {
 pub fn feed() {
     let base = TCO.load(Ordering::Relaxed);
     if base != 0 { tco::feed(&mut Chipset, base); }
+    let port = OC.load(Ordering::Relaxed);
+    if port != 0 { tco::feed_oc(&mut Chipset, port); }
     let base = FCH.load(Ordering::Relaxed);
     if base != 0 { fch::feed(&mut Fch, base); }
+}
+
+/// Before a reset the kernel chose without stopping the watchdogs: the over-clocking one at its longest count.
+pub fn before_reset() {
+    let port = OC.load(Ordering::Relaxed);
+    if port != 0 { tco::long_oc(&mut Chipset, port); }
 }
 
 /// Before a halt the kernel chose: what it shows stays on the screen.
 pub fn stop() {
     let base = TCO.swap(0, Ordering::AcqRel);
     if base != 0 { tco::stop(&mut Chipset, base); }
+    let port = OC.swap(0, Ordering::AcqRel);
+    if port != 0 { tco::stop_oc(&mut Chipset, port); }
     let base = FCH.swap(0, Ordering::AcqRel);
     if base != 0 { fch::stop(&mut Fch, base); }
 }
