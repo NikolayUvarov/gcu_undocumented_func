@@ -1,6 +1,6 @@
-# 801-NET-0088 — A long download over the DEXP's Wi-Fi is cut by a 10 s stall, and runs at an 8 KiB window
+# 801-NET-0088 — A long download over the DEXP's Wi-Fi is cut by a 10 s stall, and runs at an 8 KiB window — done
 
-**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19; steps 1 and 2 landed in round 151, the DEXP's criterion met; `netbench` and a shown stall left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
+**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-19) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
 
 ## Problem
 
@@ -74,9 +74,21 @@ The agent starts a cut download again from its first byte. Every try then needs 
 ## Acceptance criteria
 
 - [x] `netstack`'s TCP receive buffer is 64 KiB; the `net`, `download`, `tls` and `netbench` suites pass on x86 and aarch64, `netbench`'s speed before and after named (round 151's gate; `netbench` on x86 with user networking, above; the tap run not made).
-- [ ] A stalled receive is named in the log with the socket's state (the `download` suite's check, in round 152).
+- [x] A stalled receive is named in the log with the socket's state: the `download` suite's check, landed in round 152 (`main` `ae50162c6c`).
 - [x] On the DEXP, five downloads of a 29 MB release are taken in a row, with their times (MC-12.1: that machine, that network): releases 10 to 14, 2026-11-19.
+
+## Resolution
+
+- **The window** (round 151, `main` `3e6bbde056`): a connection a client opens receives into 64 KiB, and listening sockets keep 8 KiB (`netstack/src/main.rs`).
+  - On the DEXP, releases 9 to 14 were each taken at the first try, in 132 to 194 s. With 8 KiB, four of ten had been taken.
+  - `netbench` on QEMU's user networking showed no change, as its round trip is short.
+- **The stall line** (round 152, `main` `ae50162c6c`): a stream that stops while its client reads is named once after 5 s, with its peer, state, queue and unsent bytes, and again when its bytes come.
+  - The `download` suite's check shows it on x86 and aarch64.
+  - No bench machine has shown it.
+- **Not done here:**
+  - `Range` for a cut download is EFF's, asked in `requests-EFF.md`;
+  - `netbench` on a tap device needs a `mindtap0` the maintainer makes.
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-KRN-0259](../issues-done/801-KRN-0259-the-pchs-over-clocking-watchdog.done) (the runs, on its branch), [requests-EFF.md](requests-EFF.md).
+[801](../issues/801-the-bench-stays-manageable.md), [801-KRN-0259](801-KRN-0259-the-pchs-over-clocking-watchdog.done) (the runs, on its branch), [requests-EFF.md](../issues/requests-EFF.md).
