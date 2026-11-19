@@ -831,7 +831,10 @@ python3 scripts/make_usb_image.py --no-build --force ${SLOT_ARGS[@]+"${SLOT_ARGS
 if [[ -x scripts/proprietary.sh ]]; then scripts/proprietary.sh fetch && HAVE_PROPRIETARY=1; fi
 fi
 
-IMAGE_WIN="$(wslpath -w "${IMAGE_FILE:-$REPO/dist/mind-core-usb.img}")"
+# The image's size once it is ready, in decimal MB (000-LNK-0048).
+IMAGE_PATH="${IMAGE_FILE:-$REPO/dist/mind-core-usb.img}"
+if [[ -f $IMAGE_PATH ]]; then echo ">>> The image: $IMAGE_PATH, $(stat -c %s -- "$IMAGE_PATH" | awk '{ printf "%.1f MB (%d bytes)", $1 / 1e6, $1 }')"; fi
+IMAGE_WIN="$(wslpath -w "$IMAGE_PATH")"
 case "$IMAGE_WIN" in
     \\\\*) echo "The image must be on a Windows drive (/mnt/c/...), not in the WSL file system: $IMAGE_WIN" >&2; exit 1 ;;
 esac

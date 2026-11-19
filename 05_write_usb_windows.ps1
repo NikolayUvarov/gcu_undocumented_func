@@ -50,11 +50,14 @@ function Get-ProtectedDisks([string]$ImagePath) {
     return @($result | Sort-Object -Unique)
 }
 
+# The disk's size in decimal GB beside its bytes, as its label gives it (000-LNK-0048).
+$SizeGB = @{ Name = 'GB'; Expression = { [math]::Round($_.Size / 1e9, 1) } }
+
 function Invoke-UsbWriter {
     if ($env:OS -ne 'Windows_NT') { throw 'Use the Linux .sh writer on Linux.' }
     if ($List -or $DiskNumber -lt 0) {
         Get-Disk | Where-Object BusType -eq 'USB' |
-            Select-Object Number, FriendlyName, SerialNumber, Size, IsBoot, IsSystem, IsReadOnly |
+            Select-Object Number, FriendlyName, SerialNumber, Size, $SizeGB, IsBoot, IsSystem, IsReadOnly |
             Format-Table -AutoSize | Out-Host
         if (-not $List) { Write-Host 'Choose explicitly: .\05_write_usb_windows.ps1 -DiskNumber N [-Check]' }
         return
@@ -82,9 +85,9 @@ function Invoke-UsbWriter {
         [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     try {
         $hash = [UsbImageWriter]::ImageHash($source)
-        Write-Host "Image: $resolvedImage ($($source.Length) bytes)"
+        Write-Host "Image: $resolvedImage ($($source.Length) bytes, $([math]::Round($source.Length / 1e6, 1)) MB)"
         Write-Host "SHA256: $hash"
-        $disk | Select-Object Number, FriendlyName, SerialNumber, Size, BusType | Format-List | Out-Host
+        $disk | Select-Object Number, FriendlyName, SerialNumber, Size, $SizeGB, BusType | Format-List | Out-Host
         if ($Check) { Write-Host 'Check passed. Nothing was unmounted or written.'; return }
         $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
         if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
