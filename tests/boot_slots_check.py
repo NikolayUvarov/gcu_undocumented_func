@@ -146,9 +146,10 @@ def run(boot, temp, volume, label, updater=None):
         print(f"SKIP ({label}): the update zone's client: no test stand-in for the updater was built", flush=True)
 
 
-def stopped_trial(boot, temp, volume, kernel, lines):
+def stopped_trial(boot, temp, volume, kernel, lines, after=()):
     """Slot B on trial holds `kernel`, a test kernel that stops before its boot is confirmed: `lines` must follow in
-    order, then the loader boots slot A, B's one try spent. `boot` lets the machine restart. The boot's output."""
+    order, then the loader boots slot A, B's one try spent, and A's kernel says `after`. `boot` lets the machine restart.
+    The boot's output."""
     temp = Path(temp)
     source = quiet_volume(volume, temp / "volume")
     other = temp / "other"
@@ -164,7 +165,7 @@ def stopped_trial(boot, temp, volume, kernel, lines):
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     out = boot(image.path, STARTED).replace("\r", "")
     at = 0
-    for line in ("BOOT: SLOT B LOADED ON TRIAL", *lines, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", STARTED):
+    for line in ("BOOT: SLOT B LOADED ON TRIAL", *lines, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", *after, STARTED):
         at = out.find(line, at)
         assert at >= 0, (line, out[-3000:])
     return out
@@ -192,8 +193,8 @@ def hung_trial(boot, temp, volume, kernel, label):
     off once the watchdog is armed, before init: neither its tick nor init can restart it, the chipset's TCO timer
     does, and slot A boots, its kernel told the watchdog ended the last run."""
     armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
-    out = stopped_trial(boot, temp, volume, kernel, (armed + "\n", "MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT",
-                                                     armed + "; IT RESTARTED THE LAST RUN"))
+    out = stopped_trial(boot, temp, volume, kernel, (armed + "\n", "MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT"),
+                        (armed + "; IT RESTARTED THE LAST RUN",))
     assert "INIT STARTED" not in out[:out.find("BOOT: SLOT B NOT CONFIRMED")], out[-3000:]
     print(f"PASS ({label}): a trial that stops for good before init, its tick stopped, is reset by the chipset's "
           "watchdog, and the loader boots slot A with B's try spent; A's kernel says the watchdog ended the last run", flush=True)

@@ -42,6 +42,28 @@ So 801's S1 to S3, "an update that breaks the machine rolls back by itself", doe
    - QEMU's q35 keeps its ICH9 path;
    - on the DEXP: the boot line, then one trial built to stop before `init`, which must come back by itself (MC-12.1). It needs the maintainer's word and someone near the machine the first time.
 
+## Progress (2026-11-19)
+
+**Made** on `claude/801-KRN-0258-a-watchdog-for-early-trial-hangs`:
+1. **The TCO of the PCHs from Cannon Lake's on** (`kernel/src/arch/x86_64/tco.rs`): the SMBus controller 00:1F.4's `TCOBASE` (0x50, bits 15:5) and `TCOCTL` (0x54, `TCO_BASE_EN` bit 8), `NO_REBOOT` as `TCO1_CNT` bit 0 (`NR_MSUS`). Names, offsets and bits as Intel's register database for the 400 Series Chipset On-Package PCH (615146) gives them, its pages SMBus PCI configuration and SMBus TCO I/O. The PCHs are known by their SMBus controller's ID, as Linux's i2c-i801 lists those with Cannon Lake's TCO; the N100's is 8086:54A3.
+   - The count is set and reloaded before `NO_REBOOT` clears, and `NMI_NOW` is never written back.
+   - `TCO_EN` in `SMI_EN` is cleared at the PM base the FADT names (its PM1a event block, with the control block 4 bytes on, as Intel lays them out). Where it stays on (`TCO_LOCK`), the boot line says the firmware's SMI is kept.
+   - A decode the firmware left off with a base set is turned on, and the boot line says so. A strap that holds `NO_REBOOT`, a base of 0, registers that do not answer: refused, the timer left halted.
+   - The 100 and 200 series (Sunrise Point's kind) keep `NO_REBOOT` behind the P2SB: named and refused, not done. An Intel SMBus controller not listed: its ID named.
+   - The boot line: `WATCHDOG: INTEL TCO OF THE ALDER LAKE-M AND -N PCH (SMBUS 8086:54A3, TCO AT 0x…), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK`. ICH9's line is as before.
+2. **Armed as early as the kernel can:** right after the page tables and the screen, before the firmware's services, the frame pool, the CPUs and the scheduler; fed from the tick as before.
+3. **A panic on a trial** not yet confirmed restarts the machine (`TRIAL: RESTARTING INTO THE FALLBACK`), the watchdog left running in case the restart does not come. The kernel knows the trial from the handoff's first read, so a panic in the page tables is covered too.
+4. **The firmware's watchdog to the handover:** each loader sets it as it starts, to five minutes and its two pauses, whether or not the boot manager did.
+5. **Tests:**
+   - `tests/tco_watchdog_host.rs`: both paths against a model of the registers;
+   - the `watchdog` suite: the `watchdog-test` kernel on trial stops for good with interrupts off once the watchdog is armed, q35's TCO resets it, slot A boots and says the watchdog ended the last run;
+   - the `boot` suite: the `panic-test` kernel on trial panics inside the scheduler lock, restarts, and slot A boots.
+6. **Docs:** [docs/profile](../docs/profile/README.md) (the supervision and boot rows, and a row in [evidence.md](../docs/profile/evidence.md)), [slots.md](../docs/update/slots.md), [write-disk.md](../docs/write-disk.md) and their Russian versions. They say which stops a trial survives, and on which bench machine.
+
+**Left:** step 4 of the plan, another reset path for the MacBook Pro, is not looked for. The DEXP's runs (criteria 1 and 2) come after landing:
+1. a release of this `main` through Effector, its boot line read from the logs;
+2. if it names the TCO armed: a release whose kernel is the `watchdog-test` one, which stops for good on its trial. It must come back on the other slot by itself.
+
 ## Acceptance criteria
 
 - [ ] The DEXP's boot line names its TCO timer, armed.
