@@ -160,6 +160,6 @@ On the maintainer's word of 2026-11-17 («прогоняй на DEXP и MacBook,
 - **So:** the fall-back took a start from outside, very likely a person's (not confirmed).
   - Slot B's trial left no boot log, so it stopped before `log:` was mounted. The loader had counted its try.
   - Neither the trial's deadline nor `init`'s bound runs that early, and the DEXP has no chipset watchdog (`WATCHDOG: NONE (THE LPC BRIDGE'S ACPI I/O IS OFF)`). Nor does the MacBook (`NO_REBOOT HELD BY THE FIRMWARE`).
-  - Taken as [801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.md).
+  - Taken as [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done).
   - Why the release stopped there is not known: nothing of that boot was kept.
 - **Also seen in that boot:** `data/effector/effector.conf` names `mind-macbook-pro`, not this machine (`mind-n100`); the agent logs it and goes on under its own name.

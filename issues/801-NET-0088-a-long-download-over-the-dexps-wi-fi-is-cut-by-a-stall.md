@@ -57,4 +57,4 @@ The agent starts a cut download again from its first byte. Every try then needs 
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [801-KRN-0259](801-KRN-0259-the-pchs-over-clocking-watchdog.md) (the runs, on its branch), [requests-EFF.md](requests-EFF.md).
+[801](801-the-bench-stays-manageable.md), [801-KRN-0259](../issues-done/801-KRN-0259-the-pchs-over-clocking-watchdog.done) (the runs, on its branch), [requests-EFF.md](requests-EFF.md).
