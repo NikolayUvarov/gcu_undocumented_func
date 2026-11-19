@@ -261,3 +261,20 @@ fn the_feed_reloads_and_the_stop_halts() {
     assert_ne!(m.cnt1 & TMR_HLT, 0);
     assert_eq!(m.cnt1 & NR_MSUS, 0, "NO_REBOOT left clear");
 }
+
+#[test]
+fn the_n100_is_armed_before_the_page_tables_and_its_smi_quieted_after() {
+    // As the kernel starts (801-KRN-0258): listed, armed without the FADT; then, the FADT read, TCO_EN cleared.
+    let mut m = Model { pm: None, ..Model::n100() };
+    assert_eq!(listed(&mut m), Some((0x54A3, "ALDER LAKE-M AND -N")));
+    let armed = arm(&mut m, 25).expect("armed");
+    assert!(armed.smi_kept && m.cnt1 & TMR_HLT == 0, "{armed:?}");
+    assert!(!m.log.iter().any(|w| matches!(w, Write::Gcs(_))), "no MMIO before the page tables: {:x?}", m.log);
+    m.pm = Some(0x1800);
+    assert!(!no_smi(&mut m, Some(0x1800)));
+    assert_eq!(m.smi_en, 1);
+    // The older chipsets and AMD's wait for the page tables.
+    assert_eq!(listed(&mut Model::q35()), None);
+    assert_eq!(listed(&mut Model { lpc: 0x790E << 16 | 0x1022, ..Model::n100() }), None);
+    assert_eq!(listed(&mut Model { smbus: 0xA123 << 16 | INTEL, ..Model::n100() }), None);
+}

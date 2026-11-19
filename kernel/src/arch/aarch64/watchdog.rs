@@ -17,6 +17,9 @@ impl Registers for Mapped {
     fn write(&mut self, offset: usize, value: u32) { unsafe { core::ptr::write_volatile((self.0 + offset) as *mut u32, value) } }
 }
 
+/// Nothing to arm before the page tables here: the A31's timer is MMIO (801-KRN-0258).
+pub fn early() {}
+
 /// Arms the watchdog the device tree names; the boot line names it, or says there is none.
 pub fn start() {
     let base = super::board::get(&super::board::WATCHDOG);

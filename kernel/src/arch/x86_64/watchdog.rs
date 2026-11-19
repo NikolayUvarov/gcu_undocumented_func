@@ -1,13 +1,14 @@
 // The chipset's watchdog (000-KRN-0076): Intel's TCO timer (tco.rs), in the LPC bridge's ACPI I/O space (ICH9 to the
 // 7-series PCH, and QEMU's q35) or behind the SMBus controller (the PCHs from Cannon Lake's on, 801-KRN-0258), or the
-// AMD FCH's timer (213-KRN-0125, fch.rs). Armed as soon as the kernel has its page tables and the screen, before the
-// rest of the kernel starts (801-KRN-0258), and fed every second from the boot CPU's tick: a machine whose boot CPU
+// AMD FCH's timer (213-KRN-0125, fch.rs). The PCHs' TCO behind the SMBus controller is armed as the kernel starts, as it
+// needs only configuration space and I/O ports; the others as soon as the kernel has its page tables and the screen
+// (801-KRN-0258). Fed every second from the boot CPU's tick: a machine whose boot CPU
 // stops is reset at the timer's expiry. A halt the kernel chose (a fatal error, HALT; a panic outside a trial) stops it
 // first.
 use super::fch;
 use super::pcicfg;
 use super::port::{read, write};
-use super::tco;
+use super::tco::{self, Registers as _};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 
@@ -24,10 +25,28 @@ pub fn restarted() -> bool { RESTARTED.load(Ordering::Relaxed) }
 /// Whether no run of this kernel armed the timer since the machine was powered on (QEMU keeps its count across resets).
 pub fn fresh() -> bool { FRESH.load(Ordering::Relaxed) }
 
-/// Finds and arms the watchdog; the boot line names it, or why there is none.
+// What `early` found, for `start`: written once on the boot CPU before any other runs.
+static mut EARLY: Option<Result<tco::Armed, tco::Refused>> = None;
+
+/// As the kernel starts, before its page tables and the FADT: the TCO of a PCH listed by its SMBus controller, which
+/// needs only configuration space and I/O ports (801-KRN-0258). `start` says what it found.
+pub unsafe fn early() {
+    if tco::listed(&mut Chipset).is_none() { return; }
+    let found = tco::arm(&mut Early, TICKS);
+    if let Ok(armed) = found { TCO.store(armed.base, Ordering::Release); }
+    core::ptr::addr_of_mut!(EARLY).write(Some(found));
+}
+
+/// Finds and arms the watchdog, or takes what `early` armed and quiets its SMI now that the FADT is read; the boot line
+/// names it, or why there is none.
 pub unsafe fn start() {
     let seconds = TICKS as u32 * 12 / 10;
-    let armed = match tco::arm(&mut Chipset, TICKS) {
+    let found = match core::ptr::addr_of_mut!(EARLY).read() {
+        Some(Ok(armed)) => Ok(tco::Armed { smi_kept: tco::no_smi(&mut Chipset, Chipset.pm_base()), ..armed }),
+        Some(refused) => refused,
+        None => tco::arm(&mut Chipset, TICKS),
+    };
+    let armed = match found {
         Ok(armed) => armed,
         Err(tco::Refused::NotIntel) => return amd(),
         Err(tco::Refused::Unknown(id)) => return none(format_args!("AN INTEL SMBUS CONTROLLER 8086:{:04X} AT 00:1F.4 NOT KNOWN HERE", id)),
@@ -66,6 +85,19 @@ impl tco::Registers for Chipset {
         let (event, control) = (fixed.pm1a_evt?, fixed.pm1a_cnt?);
         (control.port == event.port + 4).then_some(event.port)
     }
+}
+
+// The chipset before the kernel's page tables: no MMIO, and no FADT read yet. The PCHs' path `early` takes uses neither.
+struct Early;
+
+impl tco::Registers for Early {
+    fn config(&mut self, device: u8, function: u8, offset: u8) -> u32 { Chipset.config(device, function, offset) }
+    fn set_config(&mut self, device: u8, function: u8, offset: u8, value: u32) { Chipset.set_config(device, function, offset, value) }
+    fn io(&mut self, port: u16, width: u8) -> u32 { Chipset.io(port, width) }
+    fn set_io(&mut self, port: u16, width: u8, value: u32) { Chipset.set_io(port, width, value) }
+    fn gcs(&mut self, _: usize) -> u32 { u32::MAX }
+    fn set_gcs(&mut self, _: usize, _: u32) {}
+    fn pm_base(&mut self) -> Option<u16> { None }
 }
 
 // The chipset configuration mapped uncached on its first use.

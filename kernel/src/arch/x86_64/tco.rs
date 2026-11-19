@@ -103,6 +103,16 @@ pub enum Refused {
     Why(&'static str),
 }
 
+/// The PCH listed by its SMBus controller at 00:1F.4, whose TCO needs only configuration space and I/O ports, so it can
+/// be armed before the kernel's page tables (801-KRN-0258).
+pub fn listed(r: &mut impl Registers) -> Option<(u16, &'static str)> {
+    let lpc = r.config(LPC.0, LPC.1, 0);
+    if lpc & 0xFFFF != INTEL || r.config(LPC.0, LPC.1, 8) >> 8 != ISA_BRIDGE { return None; }
+    let smbus = r.config(SMBUS.0, SMBUS.1, 0);
+    if smbus & 0xFFFF != INTEL { return None; }
+    PCH_SMBUS.iter().find(|(known, _)| *known as u32 == smbus >> 16).copied()
+}
+
 /// Finds the timer, sets it to reset the machine at its second expiry, `ticks` of 0.6 s after the last reload each, and
 /// starts it; else why not. A refusal after a register changed puts it back, or leaves the timer halted.
 pub fn arm(r: &mut impl Registers, ticks: u16) -> Result<Armed, Refused> {
@@ -168,9 +178,9 @@ fn load(r: &mut impl Registers, tco: u16, ticks: u16, clear: u32) -> (bool, bool
     (restarted, fresh)
 }
 
-// No SMI at the first expiry: no handler of the kernel's would take it, and the firmware's might reload the timer. True
-// when it stays on: TCO1_CNT's TCO_LOCK (bit 12) keeps TCO_EN as the firmware set it.
-fn no_smi(r: &mut impl Registers, pm: Option<u16>) -> bool {
+/// No SMI at the first expiry: no handler of the kernel's would take it, and the firmware's might reload the timer. True
+/// when it stays on: TCO1_CNT's TCO_LOCK (bit 12) keeps TCO_EN as the firmware set it, or no PM base is known.
+pub fn no_smi(r: &mut impl Registers, pm: Option<u16>) -> bool {
     let Some(pm) = pm else { return true };
     let smi = r.io(pm + SMI_EN, 4);
     if smi & TCO_EN != 0 { r.set_io(pm + SMI_EN, 4, smi & !TCO_EN); }
