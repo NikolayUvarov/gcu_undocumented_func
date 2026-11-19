@@ -130,7 +130,7 @@ fn ich(r: &mut impl Registers, ticks: u16, lpc: u32, pmbase: u16) -> Result<Arme
     let gcs = (rcba & 0xFFFF_C000) as usize + GCS;
     let value = r.gcs(gcs);
     if value & GCS_NO_REBOOT != 0 { r.set_gcs(gcs, value & !GCS_NO_REBOOT); }
-    if r.gcs(gcs) & GCS_NO_REBOOT != 0 { return Err(Refused::Why("NO_REBOOT HELD BY THE FIRMWARE")); }
+    if r.gcs(gcs) & GCS_NO_REBOOT != 0 { return Err(Refused::Why("NO_REBOOT HELD BY THE BOARD'S STRAP OR ITS FIRMWARE")); }
     let smi_kept = no_smi(r, Some(pmbase));
     run(r, tco)?;
     Ok(Armed { base: tco, kind: Kind::Lpc, restarted, fresh, decode_on: false, smi_kept })

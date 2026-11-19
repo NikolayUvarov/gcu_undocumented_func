@@ -49,6 +49,7 @@ So 801's S1 to S3, "an update that breaks the machine rolls back by itself", doe
    - The count is set and reloaded before `NO_REBOOT` clears, and `NMI_NOW` is never written back.
    - `TCO_EN` in `SMI_EN` is cleared at the PM base the FADT names (its PM1a event block, with the control block 4 bytes on, as Intel lays them out). Where it stays on (`TCO_LOCK`), the boot line says the firmware's SMI is kept.
    - A decode the firmware left off with a base set is turned on, and the boot line says so. A strap that holds `NO_REBOOT`, a base of 0, registers that do not answer: refused, the timer left halted.
+   - On the older chipsets' path a `NO_REBOOT` that stays set is now named `NO_REBOOT HELD BY THE BOARD'S STRAP OR ITS FIRMWARE`: Intel ties the bit to a strap of the board (the SPKR pin, sampled at power-on, in its ICH4-M design checklist; the 7-series datasheet was not read), so "the firmware" alone was a guess.
    - The 100 and 200 series (Sunrise Point's kind) keep `NO_REBOOT` behind the P2SB: named and refused, not done. An Intel SMBus controller not listed: its ID named.
    - The boot line: `WATCHDOG: INTEL TCO OF THE ALDER LAKE-M AND -N PCH (SMBUS 8086:54A3, TCO AT 0x…), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK`. ICH9's line is as before.
 2. **Armed as early as the kernel can:** right after the page tables and the screen, before the firmware's services, the frame pool, the CPUs and the scheduler; fed from the tick as before.
