@@ -11545,7 +11545,7 @@ def download_check(args, disk):
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], pause.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port, future_port))
                                         + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
                                         + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
@@ -11567,7 +11567,7 @@ def download_check(args, disk):
             sftp_runs(vm, sftp)
         else:
             print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
-        download_runs(vm, release, port, big, small, cut, 5 + len(sftp_port))
+        download_runs(vm, release, port, big, small, cut, 6 + len(sftp_port))
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
         stalled_stream_check(vm, pause, small)
