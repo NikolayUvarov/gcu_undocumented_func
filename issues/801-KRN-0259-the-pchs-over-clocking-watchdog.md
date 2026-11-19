@@ -1,6 +1,6 @@
 # 801-KRN-0259 — The PCH's over-clocking watchdog: a reset no firmware SMI can keep
 
-**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-19; criteria 1–3 met on the DEXP, the restart's line left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-19; every criterion met on the DEXP, to close once landed) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -69,22 +69,32 @@ The maintainer was at the machine. Releases were built from this branch and sent
    Criteria 2 and 3 are met.
 3. **The mark:** release 4's kernel read only the status bits, so that boot did not say `IT RESTARTED THE LAST RUN`. `14a3905f64` reads the mark as a restart and clears it.
 
-   Releases 6 (as built) and 7 (`watchdog-test`) are to show two things:
-   - whether an ordinary reset keeps the mark;
-   - the line after an expiry.
+   Releases 6 and 7 never arrived: three downloads of 6 were cut (item 4).
 4. **The downloads:** six of the day's ten archive downloads (about 29 MB each) were cut after 184 to 439 s, with `/api/commands/file BODY: Transport`.
    - Each time the radio's traffic fell in the last 10 s, which is the agent's bound on a body read with no byte.
    - The radio counted no frame lost.
    - The ones taken lasted about 9 minutes.
 
    This is 801-NET-0088.
+5. **Releases 8 and 9:** built from this branch's kernel (`14a3905f64`) and 801-NET-0088's `netstack` (64 KiB TCP receive window, `3ba6f4abde`).
+   - **Release 8, as built:**
+     - taken at the first try, `updated 8, slot B confirmed` at 14:06:33;
+     - its boot: `FOUND 0x201D`, with no `IT RESTARTED`. The ordinary reset of the update had cleared the mark and `EN` and kept `TOV` (29), so an ordinary reset is not taken for an expiry, and the count does not run on through the firmware.
+   - **Release 9, `watchdog-test`:**
+     - the command ran from 14:07:35 to the agent's `shutting_down` at 14:10:09, download, check and staging, 154 s against about 9 minutes before;
+     - the machine was back at 14:11:35 with `fell back: slot B runs version 8, not 9`;
+     - slot B's boot said:
+       ```
+       MIND CORE KERNEL: WATCHDOG: THE PCH'S OVER-CLOCKING WATCHDOG AT 0x1854 (FOUND 0x802000), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN
+       ```
+   - Criterion 4 is met.
 
 ## Acceptance criteria
 
 - [x] Host tests against a model of the register: off and armed, after an expiry's reset, locked and running, locked and off, silent, stuck; the feed, the longest count and the stop (`tests/tco_watchdog_host.rs`).
 - [x] The DEXP's boot line names its over-clocking watchdog, armed (release 4, 2026-11-19).
 - [x] On the DEXP, a trial that stops before `init` is reset by it and boots slot A by itself (release 5, 2026-11-19; 0258's criterion 2).
-- [ ] The boot after such a reset says the watchdog ended the last run, and the boot after an ordinary reset does not (releases 6 and 7).
+- [x] The boot after such a reset says the watchdog ended the last run, and the boot after an ordinary reset does not (releases 9 and 8, 2026-11-19).
 
 ## Related
 
