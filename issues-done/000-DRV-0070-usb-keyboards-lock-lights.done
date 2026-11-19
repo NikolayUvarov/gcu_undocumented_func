@@ -1,6 +1,6 @@
-# 000-DRV-0070 — USB keyboards' lock lights: Caps Lock, Num Lock and Scroll Lock
+# 000-DRV-0070 — USB keyboards' lock lights: Caps Lock, Num Lock and Scroll Lock — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1
 
 From the maintainer's Ryzen PC, 2026-11-13.
 
@@ -52,7 +52,7 @@ From the maintainer's Ryzen PC, 2026-11-13.
   - the `usb` suite: the keyboard is sent `REPORT 00` when it is set up; `caps_lock`, `a`, `num_lock`, `kp_1` type `A` and `1` and send `02`, then `03`; a keyboard plugged in with both on is sent `03` at once, types `M`, and its Caps Lock and Num Lock send `01`, then `00`;
   - the `ehci` suite: the report is taken over EHCI as well as xHCI.
 - **QEMU aarch64 `virt`, 4 CPUs:** the same `usb` suite.
-- **On the Ryzen, the maintainer** (not done yet):
+- **On the Ryzen, the maintainer** (done 2026-11-19, below):
   - Caps Lock and Num Lock light on 17EF:60A1;
   - a keyboard plugged in after Caps Lock was turned on lights it at once.
 
@@ -63,6 +63,20 @@ From the maintainer's Ryzen PC, 2026-11-13.
 - **The maintainer:** Caps Lock lights its key's light, and the letters turn to capitals; pressed again, both go off. A long press acts as a short one (the held key toggles once).
 - **Left:** the Ryzen's run as the criteria name it (17EF:60A1, and a keyboard plugged in after Caps Lock). The release with this change also runs on the Ryzen (202611132118) since 2026-11-13; no keyboard was plugged in there for the check yet.
 
+## Resolution
+
+**On the Ryzen, 2026-11-19** (`fast-test` 92c2c6e9, `log:boot0001.log`), with the Logitech receiver 046D:C534 in from boot:
+- **The Lenovo 17EF:60A1 was plugged in at 1779 s,** with Caps Lock and Num Lock already on. It was sent both at once:
+  ```
+  [ 1779.112] usb_host(7) [USB] XHCI 1: 17EF:60A1 ON PORT 1.4 (LOW SPEED)
+  [ 1779.260] usb_hid(9) [USB_HID] 17EF:60A1 KEYBOARD
+  [ 1779.277] usb_hid(9) [USB_HID] 17EF:60A1 LOCK LIGHTS: NUM ON, CAPS ON, SCROLL OFF (REPORT 03)
+  ```
+- **Each Caps Lock and Num Lock press,** on either keyboard, sent the new report to both, about 2 ms apart. There were 30 changes between 1781 and 1795 s.
+- **The maintainer:** «Переключение numlock capslock на любой из клавиатур переключают и регистр и светодиоды». Of the two keyboards, only one has the lights.
+
+Recorded for that machine and its firmware only (MC-12.1). The code is `usb_hid`'s, as the progress section of 2026-11-14 says; the host tests and the QEMU suites are listed in the criteria.
+
 ## Related
 
-[213](213-amd-ryzen-pc.md) (the Ryzen), [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md) (its other USB keyboard), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (`usb_hid`).
+[213](../issues/213-amd-ryzen-pc.md) (the Ryzen), [213-DRV-0061](../issues/213-DRV-0061-the-ryzens-usb-keyboard.md) (its other USB keyboard), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (`usb_hid`).
