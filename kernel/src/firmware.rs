@@ -57,6 +57,17 @@ pub fn set(name: &[u16], guid: &[u8; 16], attributes: u32, data: &[u8]) -> Resul
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
+/// The loader's lines (213-KRN-0262), kept by it in a volatile variable: into the kernel's log alone, as COM1 and the
+/// screen showed them already. (Carried onto the ABI 34 tree for the Ryzen's test release, 213-DRV-0074.)
+pub fn loader_lines() {
+    let mut name = [0u16; 32];
+    for (unit, byte) in name.iter_mut().zip(crate::abi::LOADER_LINES_NAME.bytes()) { *unit = byte as u16; }
+    let mut data = [0u8; crate::abi::LOADER_LINES_MAX];
+    let Ok((_, length)) = get(&name[..crate::abi::LOADER_LINES_NAME.len() + 1], &crate::abi::RUN_MARK_GUID, &mut data) else { return };
+    let text = &data[..length.min(data.len())];
+    crate::klog::keep(core::str::from_utf8(text).unwrap_or_else(|e| core::str::from_utf8(&text[..e.valid_up_to()]).unwrap_or("")));
+}
+
 /// Deletes init's mark of an unfinished run (000-KRN-0076): this run ends as a task asked.
 pub fn clear_run_mark() {
     let mut name = [0u16; 32];

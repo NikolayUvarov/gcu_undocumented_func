@@ -183,6 +183,35 @@ fn safe_start(system_table: &mut SystemTable<Boot>) -> bool {
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
     let mut console = unsafe { system_table.unsafe_clone() };
     let _ = writeln!(console.stdout(), "MIND CORE BOOT: {}", args);
+    // Kept whole for the kernel's log, while it fits (213-KRN-0262).
+    let mut line = Said([0; 256], 0);
+    let _ = writeln!(line, "MIND CORE BOOT: {}", args);
+    let (said, at) = unsafe { (&mut *core::ptr::addr_of_mut!(SAID), SAID_LEN.load(Relaxed)) };
+    if at + line.1 <= said.len() { said[at..at + line.1].copy_from_slice(&line.0[..line.1]); SAID_LEN.store(at + line.1, Relaxed); }
+}
+
+// What say() showed, for the kernel's log (213-KRN-0262): only the screen had it.
+static mut SAID: [u8; abi::LOADER_LINES_MAX] = [0; abi::LOADER_LINES_MAX];
+static SAID_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+struct Said([u8; 256], usize);
+impl core::fmt::Write for Said {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let n = text.len().min(self.0.len() - self.1);
+        self.0[self.1..self.1 + n].copy_from_slice(&text.as_bytes()[..n]);
+        self.1 += n;
+        Ok(())
+    }
+}
+
+// The kept lines in a volatile variable the kernel reads, as boot services end: gone at the next reset.
+fn keep_said(system_table: &SystemTable<Boot>) {
+    let said: &[u8; abi::LOADER_LINES_MAX] = unsafe { &*core::ptr::addr_of!(SAID) };
+    let said = &said[..SAID_LEN.load(Relaxed)];
+    let mut name = [0u16; 32];
+    let Ok(name) = uefi::CStr16::from_str_with_buf(abi::LOADER_LINES_NAME, &mut name) else { return };
+    let vendor = uefi::table::runtime::VariableVendor(uefi::Guid::from_bytes(abi::RUN_MARK_GUID));
+    let attributes = uefi::table::runtime::VariableAttributes::BOOTSERVICE_ACCESS | uefi::table::runtime::VariableAttributes::RUNTIME_ACCESS;
+    if system_table.runtime_services().set_variable(name, &vendor, attributes, said).is_err() { let _ = writeln!(Serial, "BOOT: THE LOADER'S LINES NOT KEPT FOR THE KERNEL'S LOG\r"); }
 }
 
 // A graphics mode and its framebuffer as the progress lines show them.
@@ -844,6 +873,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     }
     mark(system_table.boot_services(), image, mark::Stage::Handover);
     say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
+    keep_said(&system_table);
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.

@@ -145,6 +145,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             cpu::halt_here();
         }
         firmware::init(info.efi_runtime);
+        // The loader's lines in the kernel's log, for a machine whose screen alone showed them (213-KRN-0262).
+        firmware::loader_lines();
         firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
