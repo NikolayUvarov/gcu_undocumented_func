@@ -1,6 +1,6 @@
-# 801-KRN-0244 — The TPM lent over pages the firmware lists as reserved: the DEXP's TPM found again
+# 801-KRN-0244 — The TPM lent over pages the firmware lists as reserved: the DEXP's TPM found again — done
 
-**Type:** kernel (`PLATFORM_MMIO`, `init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-14) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S3, S5) · **Roadmap:** stage V · **Constitution:** MC-3.1, MC-11.9, MC-12.1
+**Type:** kernel (`PLATFORM_MMIO`, `init`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-19) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S3, S5) · **Roadmap:** stage V · **Constitution:** MC-3.1, MC-11.9, MC-12.1
 
 ## Problem
 
@@ -32,6 +32,18 @@
   - aarch64 "network, TLS and Effector", "the board from a device tree, under U-Boot" and "programs, shell and four CPUs" on acc-2.
 - **Left: the DEXP's run.** DRV was asked (`DRV/…-KRN-the-dexps-tpm-key-and-radio-the-three-tasks.md`) for the memory map's type at `0xFED40000`, or `[TPM] READY` with a release that has this change.
 
+## Resolution
+
+## Resolution
+
+- **The fix:** `PLATFORM_MMIO` takes a page the firmware lists as reserved (type 0) or as memory-mapped I/O, so the TPM's control area is lent again. In `main` since round 135 (01c3b5aa32), gated green on the pool; the host test `registers_listed_as_reserved_or_io_are_not_ram` (`tests/nodes_host.rs`).
+- **On the DEXP (MC-12.1):** the maintainer's disk holds `fast-test` 719549b1cd8d (2026-11-14), which contains the fix (af404e2738). Its boot log of 2026-11-18 (`boot0004.log`, slot A), read through Effector:
+  - `[TPM] READY: TPM 2.0 BY INTC, CRB INTERFACE`;
+  - `[TPM] UNSEALED FOR PID 24`;
+  - `[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)`.
+- **The same boot's hardware report** (`log:/hw0004.txt`) names the TPM2 table's control area at 0xFED40040.
+- This is one machine and one boot, not a proof (MC-12.2).
+
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [100000-KRN-0171](../issues-done/100000-KRN-0171-platform-devices-from-the-device-tree.done), [351-KRN-0052](../issues-done/351-KRN-0052-tpm-registers-from-the-firmware.done), [801-NET-0079](../issues-done/801-NET-0079-keystore-keeps-the-slot-befores-keys-and-networks.done) (STO's: `keystore` keeps a sealed key while no TPM answers).
+[801](../issues/801-the-bench-stays-manageable.md), [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.done), [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.done), [801-NET-0079](801-NET-0079-keystore-keeps-the-slot-befores-keys-and-networks.done) (STO's: `keystore` keeps a sealed key while no TPM answers).
