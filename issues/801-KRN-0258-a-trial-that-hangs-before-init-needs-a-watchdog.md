@@ -71,9 +71,23 @@ So 801's S1 to S3, "an update that breaks the machine rolls back by itself", doe
 
 So the path behind the SMBus controller is the one this machine has, and its decode is on. `NO_REBOOT` and the timer's own state are in I/O space, which the report does not read: the boot line will say. The host test's model of the N100 holds these values.
 
-**Left:** step 4 of the plan, another reset path for the MacBook Pro, is not looked for. The DEXP's runs (criteria 1 and 2) come after landing:
-1. a release of this `main` through Effector, its boot line read from the logs;
-2. if it names the TCO armed: a release whose kernel is the `watchdog-test` one, which stops for good on its trial. It must come back on the other slot by itself.
+## The DEXP's runs (2026-11-19; MC-12.1: this machine, these boots)
+
+On the maintainer's word of 2026-11-18 («Начни задачу DEXP смогу перезагрузить»), with releases built from round 150's candidate `94dbf2bd42` (this branch's tree), through Effector's `update_agent`:
+1. **Release 2, as it is:** downloaded in about 9 minutes, restarted at 11:27:10 UTC, slot B confirmed 35 s later (`updated 2, slot B confirmed`). Its boot line:
+   `MIND CORE KERNEL: WATCHDOG: INTEL TCO OF THE ALDER LAKE-M AND -N PCH (SMBUS 8086:54A3, TCO AT 0x400), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; THE FIRMWARE'S SMI AT THE FIRST EXPIRY KEPT`.
+   Criterion 1 is met.
+2. **Release 3, with the `watchdog-test` kernel:**
+   - the first download was cut by the transport (`GET /api/commands/file: NO ANSWER` after 257 s); the command failed and the machine stayed on slot B, connected;
+   - the second was taken, and the machine restarted at 11:47:51;
+   - slot A's trial stopped as built: the screen showed `SLOT A ON TRIAL`, the watchdog's line as above and `WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT` (the maintainer's photo);
+   - **nothing reset it in 20 minutes.** The maintainer restarted it by hand: slot B came back, version 2, and the agent answered `fell back: slot B runs version 2, not 3`;
+   - that boot's line has no `IT RESTARTED THE LAST RUN`, so the TCO's second expiry was not seen.
+
+   **Criterion 2 is not met.** The likely cause is in the boot line itself: `TCO_EN` stays set in `SMI_EN` (TCO1_CNT's `TCO_LOCK`, or no PM base read), so the first expiry goes to the firmware's SMI handler, which may reload or stop the timer. Not confirmed: the registers after the first expiry were not read.
+3. **What follows:** the PCH's over-clocking watchdog, which resets the platform at expiry with no SMI. On the DEXP the DSDT names it (`CWDT`, `_HID INTC1099`, its register at the PM base + 0x54, 0x1854). It is 801-KRN-0259.
+
+**Left:** criterion 2 on the DEXP (801-KRN-0259); step 4 of the plan, another reset path for the MacBook Pro, is not looked for.
 
 ## Acceptance criteria
 
