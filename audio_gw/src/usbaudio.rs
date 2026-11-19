@@ -49,6 +49,17 @@ impl Usb {
 
     pub fn attached(&self) -> bool { self.attached.is_some() }
 
+    /// An attached device with no stream running is asked for its device descriptor every LOOK_MS: one that went away
+    /// answers no more, and the gateway goes back to the codec. A running stream finds that out by itself.
+    pub fn check(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        let Some(a) = self.attached.as_ref() else { return };
+        if self.active() || now < self.looked + LOOK_MS { return; }
+        self.looked = now;
+        let first = a.handles[0];
+        if let Err(e) = self.host.control(first, 0x80, 6, 0x0100, 0, 18) { self.gone(e); }
+    }
+
     /// Claims an audio function's interfaces if usb_host has one, at most every LOOK_MS; true when one is attached now.
     pub fn look(&mut self) -> bool {
         let now = mind::time::uptime_ms() as u64;

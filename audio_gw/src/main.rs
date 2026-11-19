@@ -385,6 +385,7 @@ fn main(_info: &'static BootInfo) {
         let now = mind::time::uptime_ms() as u64;
         if watching && now >= jack_due { if let Some(d) = device.as_mut() { d.watch_jack(); } jack_due = now + JACK_MS; }
         // The USB device plugged in: the codec steps aside, its clients' waits answered; gone: the codec comes back.
+        if let Some(Device::Usb(u)) = device.as_mut() { u.check(); }
         if usb.as_mut().is_some_and(|u| u.look()) {
             if let Some(d) = device.as_mut() { d.record_stop(); d.reset(); }
             internal = device.take();
@@ -406,8 +407,9 @@ fn main(_info: &'static BootInfo) {
         let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active);
         let usb_streams = matches!(&device, Some(Device::Usb(u)) if u.active());
         let timeout = if usb_streams { usbaudio::PUMP_MS } else if waiting { POLL_MS } else if watching { jack_due.saturating_sub(now).clamp(1, JACK_MS) as u32 } else { 0 };
-        // A USB device not plugged in yet is looked for now and then.
-        let timeout = if usb.is_some() && (timeout == 0 || timeout as u64 > usbaudio::LOOK_MS) { usbaudio::LOOK_MS as u32 } else { timeout };
+        // A USB device not plugged in yet is looked for now and then, and one plugged in is asked whether it is still there.
+        let looking = usb.is_some() || matches!(&device, Some(Device::Usb(_)));
+        let timeout = if looking && (timeout == 0 || timeout as u64 > usbaudio::LOOK_MS) { usbaudio::LOOK_MS as u32 } else { timeout };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, timeout) {
             Ok(request) => request,
             Err(Error::Other(ERR_TIMEOUT)) => {
