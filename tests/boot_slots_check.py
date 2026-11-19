@@ -181,11 +181,13 @@ def refused_trial(boot, temp, volume, kernel, label):
 
 def panicked_trial(boot, temp, volume, kernel, label):
     """801-KRN-0258: slot B on trial holds `kernel`, built with `panic-test`, which panics inside the scheduler lock at
-    init's first log line: on a trial the panic restarts the machine instead of stopping it, and slot A boots."""
-    out = stopped_trial(boot, temp, volume, kernel, ("MIND CORE KERNEL: SLOT B ON TRIAL", "KERNEL PANIC: panic test at ", "TRIAL: RESTARTING INTO THE FALLBACK"))
+    init's first log line: on a trial the panic restarts the machine instead of stopping it, and slot A boots. Slot A's
+    kernel names B's panic, from the record B's kept as it stopped, and init takes no evidence from it (801-KRN-0261)."""
+    out = stopped_trial(boot, temp, volume, kernel, ("MIND CORE KERNEL: SLOT B ON TRIAL", "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK"),
+                        ("MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:",))
     assert "KERNEL PANIC" not in out[out.find("BOOT: SLOT A LOADED\n"):], out[-3000:]
     print(f"PASS ({label}): a kernel panic on a trial, inside the scheduler lock, restarts the machine, and the loader "
-          "boots slot A with B's try spent", flush=True)
+          "boots slot A with B's try spent; A's kernel names B's panic from its record", flush=True)
 
 
 def hung_trial(boot, temp, volume, kernel, label):

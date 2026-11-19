@@ -32,6 +32,10 @@ fn function(offset: usize) -> Option<usize> {
 // The firmware runs with the control words it expects, and alone.
 fn call<T>(body: impl FnOnce() -> T) -> T {
     while BUSY.swap(true, Ordering::Acquire) { core::hint::spin_loop(); }
+    entered(body)
+}
+
+fn entered<T>(body: impl FnOnce() -> T) -> T {
     #[cfg(target_arch = "x86_64")]
     unsafe { let mxcsr: u32 = 0x1F80; core::arch::asm!("fninit", "ldmxcsr [{}]", in(reg) &mxcsr); }
     // aarch64: FP/SIMD stays enabled (250-KRN-0056); the registers the firmware changes are the task's, which the exit
@@ -57,12 +61,79 @@ pub fn set(name: &[u16], guid: &[u8; 16], attributes: u32, data: &[u8]) -> Resul
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
+fn utf16<'a>(name: &str, units: &'a mut [u16; 32]) -> &'a [u16] {
+    for (unit, byte) in units.iter_mut().zip(name.bytes()) { *unit = byte as u16; }
+    &units[..name.len() + 1]
+}
+
 /// Deletes init's mark of an unfinished run (000-KRN-0076): this run ends as a task asked.
 pub fn clear_run_mark() {
-    let mut name = [0u16; 32];
-    for (unit, byte) in name.iter_mut().zip(crate::abi::RUN_MARK_NAME.bytes()) { *unit = byte as u16; }
-    let _ = set(&name[..crate::abi::RUN_MARK_NAME.len() + 1], &crate::abi::RUN_MARK_GUID, 0, &[]);
+    let _ = set(utf16(crate::abi::RUN_MARK_NAME, &mut [0; 32]), &crate::abi::RUN_MARK_GUID, 0, &[]);
 }
+
+// The kernel's record of a run it stopped on a fault of its own (801-KRN-0261): the format's version, the slot, the kind,
+// then the report's line. Kept across a restart and a cut power, read and deleted by the next boot.
+const FAULT_NAME: &str = "MindCoreFault";
+const FAULT_VERSION: u8 = 1;
+pub const FAULT_TEXT: usize = 160;
+const KEPT: u32 = 7; // non-volatile, boot and runtime access
+
+/// What stopped a run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Fault { Panic = 1, Exception = 2, InitExited = 3, Unexpected = 4 }
+
+static SLOT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static FAULTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the last run of this slot ended in a fault of the kernel's (ABI 35's BOOT_LAST_RUN_FAULTED): a freeze's
+/// evidence for init's safe start. init's own exit is not: no service's start is suspected of it.
+pub fn faulted() -> bool { FAULTED.load(Ordering::Relaxed) }
+
+/// At a stop no task asked for: the record for the next boot, and whether it was written. Skipped while the firmware is
+/// in use, as the fault may be inside it or another CPU may have stopped there.
+pub fn record_fault(kind: Fault, text: &[u8]) -> bool {
+    let Some(f) = function(SET_VARIABLE) else { return false };
+    if BUSY.swap(true, Ordering::Acquire) { return false; }
+    let mut data = [0u8; 3 + FAULT_TEXT];
+    let length = text.len().min(FAULT_TEXT);
+    data[..3].copy_from_slice(&[FAULT_VERSION, SLOT.load(Ordering::Relaxed), kind as u8]);
+    data[3..3 + length].copy_from_slice(&text[..length]);
+    let mut units = [0u16; 32];
+    let name = utf16(FAULT_NAME, &mut units);
+    let status = entered(|| unsafe { core::mem::transmute::<usize, SetVariable>(f)(name.as_ptr(), &crate::abi::RUN_MARK_GUID, KEPT, 3 + length, data.as_ptr()) });
+    status == 0
+}
+
+/// As the boot starts, once the runtime services are known: the record the last run left, said and deleted.
+pub fn last_fault(slot: u32) {
+    SLOT.store(slot as u8, Ordering::Relaxed);
+    let mut units = [0u16; 32];
+    let name = utf16(FAULT_NAME, &mut units);
+    let mut data = [0u8; 3 + FAULT_TEXT];
+    let found = get(name, &crate::abi::RUN_MARK_GUID, &mut data);
+    if matches!(found, Err((NOT_FOUND, _))) { return; }
+    let deleted = set(name, &crate::abi::RUN_MARK_GUID, 0, &[]).is_ok();
+    let mut out = crate::PanicSerial;
+    let _ = match found {
+        Ok((_, length)) if length >= 3 && data[0] == FAULT_VERSION => {
+            let (kind, text) = (data[2], &data[3..length]);
+            let text = match core::str::from_utf8(text) { Ok(text) => text, Err(e) => core::str::from_utf8(&text[..e.valid_up_to()]).unwrap_or("") };
+            let how = ["IN THE KERNEL'S PANIC: ", "IN AN EXCEPTION IN THE KERNEL: ", "AS INIT EXITED: ", "IN AN INTERRUPT THE KERNEL HAS NO HANDLER FOR: "].get((kind as usize).wrapping_sub(1)).unwrap_or(&"IN A FAULT OF A KIND THIS KERNEL DOES NOT NAME: ");
+            #[cfg(feature = "panic-test")] PANIC_STAGE.store(if text.starts_with("panic test at ") { 1 } else { 2 }, Ordering::Relaxed);
+            let ours = data[1] == slot as u8;
+            FAULTED.store(ours && kind != Fault::InitExited as u8, Ordering::Relaxed);
+            let other = match data[1] as u32 { crate::abi::BOOT_SLOT_A => ", OF SLOT A,", crate::abi::BOOT_SLOT_B => ", OF SLOT B,", _ => ", OF THE VOLUME'S ROOT," };
+            core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN{} ENDED {}{}\n", if ours { " OF THIS SLOT" } else { other }, how, text))
+        }
+        _ => core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN LEFT A FAULT RECORD THIS KERNEL CANNOT READ (VERSION {}, NOT {})\n", data[0], FAULT_VERSION)),
+    };
+    if !deleted { let _ = core::fmt::Write::write_str(&mut out, "MIND CORE KERNEL: THE FAULT RECORD COULD NOT BE DELETED: THE NEXT BOOT NAMES IT AGAIN\n"); }
+}
+
+/// The test kernel's panic (801-KRN-0261): 0 at the first log of a boot after no record, 1 on the tick 20 s past the boot
+/// after its own first panic, 2 none after that.
+#[cfg(feature = "panic-test")]
+pub static PANIC_STAGE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 const FDT_MAGIC: u32 = 0xd00d_feed;
 
