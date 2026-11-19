@@ -1,6 +1,6 @@
 # 801-NET-0088 — A long download over the DEXP's Wi-Fi is cut by a 10 s stall, and runs at an 8 KiB window
 
-**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
+**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19; steps 1 and 2 on `claude/801-NET-0088-a-wider-tcp-window`, the DEXP's criterion met) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
 
 ## Problem
 
@@ -31,11 +31,29 @@ The agent starts a cut download again from its first byte. Every try then needs 
    - a body read waits longer than the 10 s bound of a short request.
 4. **The DEXP:** five downloads of a 29 MB release in a row, each taken, with their times.
 
+## Progress (2026-11-19)
+
+**Steps 1 and 2:** `3ba6f4abde` on `claude/801-NET-0088-a-wider-tcp-window`.
+- **The window:** a connection a client opens receives into 64 KiB, and listening sockets keep 8 KiB.
+- **The stall line:** a client that read bytes, asks again within a second and gets nothing for 5 s has its socket named once: `[NETSTACK] TCP SOCKET n TO …: NOTHING RECEIVED FOR … MS WHILE ITS CLIENT READS (state, QUEUE q OF c, u BYTES UNSENT)`. When bytes come again, `BYTES AGAIN AFTER … MS`.
+
+**The DEXP** (MC-12.1: that machine, its Wi-Fi to hesere.uz). The releases had this `netstack` with 801-KRN-0259's kernel.
+- **Release 8** came through the old `netstack`, and was taken at its first try.
+- **Releases 9 to 14** came through the new one. Each was taken at the first try. From the command's start to the agent's restart, which covers download, check and staging:
+
+  | Release | 9 | 10 | 11 | 12 | 13 | 14 |
+  |---|---|---|---|---|---|---|
+  | Seconds | 154 | 155 | 132 | 160 | 194 | 143 |
+
+  - **Before:** with 8 KiB, four of ten downloads were taken, in about 9 minutes each.
+  - **To the confirmed slot:** each of 10 to 14 took 177 to 234 s, through a trial on alternating slots.
+  - **The stall line:** whether it was printed is not known. The downloads' boots were replaced by the next ones before their log was read.
+
 ## Acceptance criteria
 
 - [ ] `netstack`'s TCP receive buffer is 64 KiB; the `net`, `download`, `tls` and `netbench` suites pass on x86 and aarch64, `netbench`'s speed before and after named.
 - [ ] A stalled receive is named in the log with the socket's state.
-- [ ] On the DEXP, five downloads of a 29 MB release are taken in a row, with their times (MC-12.1: that machine, that network).
+- [x] On the DEXP, five downloads of a 29 MB release are taken in a row, with their times (MC-12.1: that machine, that network): releases 10 to 14, 2026-11-19.
 
 ## Related
 
