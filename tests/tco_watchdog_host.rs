@@ -321,12 +321,22 @@ fn the_dexps_over_clocking_watchdog_arms_at_30_s() {
 
 #[test]
 fn an_expirys_reset_is_read_and_cleared_and_the_firmwares_scratch_kept() {
-    let found = OC_STS & !(1 << 25) | 0x80 << 16 | OC_FORCE_ALL;
+    let found = OC_STS & !(1 << 25) | 0x40 << 16 | OC_FORCE_ALL;
     let mut m = Oc::new(found);
     let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
     assert!(armed.restarted && armed.found == found, "{armed:x?}");
-    assert_eq!(m.ctl, 0x80 << 16 | OC_EN | 29, "status cleared, FORCE_ALL off, scratch kept");
+    assert_eq!(m.ctl, 0x40 << 16 | OC_EN | 29, "status cleared, FORCE_ALL off, the other scratch kept");
     assert_eq!(m.log.iter().filter(|w| *w & OC_STS != 0).count(), 1, "the status cleared once: {:x?}", m.log);
+}
+
+#[test]
+fn the_dexps_firmware_mark_after_an_expiry_is_read_and_cleared() {
+    // The DEXP after its over-clocking watchdog reset a stopped trial (801-KRN-0259): status clear, scratch bit 23 set.
+    let mut m = Oc::new(0x80_2000);
+    let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
+    assert!(armed.restarted, "{armed:x?}");
+    assert_eq!(m.ctl & (OC_MARK | OC_EN | OC_TOV), OC_EN | 29, "the mark cleared: the next run is not taken for a restart");
+    assert!(!arm_oc(&mut Oc::new(0x2000), 0x1800, 30).expect("armed").restarted, "after an ordinary reset");
 }
 
 #[test]

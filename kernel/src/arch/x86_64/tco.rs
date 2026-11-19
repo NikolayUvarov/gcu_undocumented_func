@@ -208,6 +208,7 @@ pub fn stop(r: &mut impl Registers, tco: u16) {
 pub const OC_WDT_CTL: u16 = 0x54; // in the PM I/O space
 pub const OC_RLD: u32 = 1 << 31; // a 1 written reloads the count
 pub const OC_STS: u32 = 0b11 << 24; // ICCSURV_STS and NO_ICCSURV_STS: set by an expiry's reset, a 1 written clears them
+pub const OC_MARK: u32 = 1 << 23; // a scratch bit: the DEXP's firmware sets it after an expiry and clears the status
 pub const OC_FORCE_ALL: u32 = 1 << 15; // set: any global reset counts as an expiry
 pub const OC_EN: u32 = 1 << 14;
 pub const OC_LCK: u32 = 1 << 12;
@@ -219,7 +220,7 @@ pub struct OcArmed {
     /// The register as the firmware left it.
     pub found: u32,
     pub seconds: u32,
-    /// An expiry's reset ended the last run: its status outlives the reset.
+    /// An expiry's reset ended the last run: its status, or the firmware's mark where it cleared that.
     pub restarted: bool,
     /// Locked by the firmware while running: fed at its own timeout, never stopped.
     pub locked: bool,
@@ -231,14 +232,14 @@ pub fn arm_oc(r: &mut impl Registers, pm: u16, seconds: u32) -> Result<OcArmed, 
     let port = pm + OC_WDT_CTL;
     let found = r.io(port, 4);
     if found == u32::MAX { return Err("ITS OVER-CLOCKING WATCHDOG DOES NOT ANSWER"); }
-    let mut armed = OcArmed { port, found, seconds, restarted: found & OC_STS != 0, locked: found & OC_LCK != 0 };
+    let mut armed = OcArmed { port, found, seconds, restarted: found & (OC_STS | OC_MARK) != 0, locked: found & OC_LCK != 0 };
     if armed.locked {
         if found & OC_EN == 0 { return Err("ITS OVER-CLOCKING WATCHDOG IS OFF AND LOCKED BY THE FIRMWARE"); }
         armed.seconds = (found & OC_TOV) + 1;
         feed_oc(r, port);
         return Ok(armed);
     }
-    let kept = found & !(OC_RLD | OC_STS | OC_FORCE_ALL | OC_EN | OC_TOV);
+    let kept = found & !(OC_RLD | OC_STS | OC_MARK | OC_FORCE_ALL | OC_EN | OC_TOV);
     r.set_io(port, 4, kept | found & OC_STS);
     r.set_io(port, 4, kept | OC_EN | (seconds - 1));
     r.set_io(port, 4, kept | OC_EN | (seconds - 1) | OC_RLD);
