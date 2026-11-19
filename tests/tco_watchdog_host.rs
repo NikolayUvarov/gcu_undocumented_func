@@ -244,7 +244,7 @@ fn q35s_ich9_arms_behind_its_lpc_bridge() {
 fn firmware_that_holds_no_reboot_in_gcs_leaves_the_timer_halted() {
     // The MacBook Pro's 7-series PCH (801-KRN-0258).
     let mut m = Model { gcs_sticks: false, lpc: 0x1E57 << 16 | INTEL, rcba: 0xFED1_C001, ..Model::q35() };
-    assert_eq!(arm(&mut m, 25), Err(Refused::Why("NO_REBOOT HELD BY THE FIRMWARE")));
+    assert_eq!(arm(&mut m, 25), Err(Refused::Why("NO_REBOOT HELD BY THE BOARD'S STRAP OR ITS FIRMWARE")));
     assert_ne!(m.cnt1 & TMR_HLT, 0);
     let mut m = Model { lpc: 0x1E57 << 16 | INTEL, ..Model::q35() };
     assert_eq!(arm(&mut m, 25), Err(Refused::Why("NO CHIPSET CONFIGURATION: THIS PCH KEEPS NO_REBOOT ELSEWHERE")));
