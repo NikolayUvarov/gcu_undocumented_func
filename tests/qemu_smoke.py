@@ -12082,8 +12082,9 @@ def stalled_stream_check(vm, pause, body):
                          r"\(ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT\)")
     # Only this server's connection: an earlier check's held stream may have been named too.
     ours = lambda log: [m for m in stalled.finditer(log) if int(m[2]) == pause.server_address[1]]
+    log = ""  # `logs` gives the lines since its last call: they are kept here
     for _ in range(120):  # 5 s after the last byte, as netstack's clock sees it; the log read takes its own time
-        log = vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
         if ours(log):
             break
         time.sleep(.25)
@@ -12094,7 +12095,7 @@ def stalled_stream_check(vm, pause, body):
     held = time.monotonic() - started
     pause.go.set()
     for _ in range(120):
-        log = vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
         if f"[NETSTACK] TCP SOCKET {line[1]}: BYTES AGAIN AFTER" in log and not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
             break
         time.sleep(.25)
