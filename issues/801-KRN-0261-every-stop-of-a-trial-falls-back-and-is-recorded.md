@@ -48,6 +48,8 @@ A release that breaks the kernel or `init` must roll its slot back (801 S1). Sin
 
 **Not claimed:** a bench machine's run, and a trial ended by an exception in the kernel, `init`'s exit or an interrupt with no handler. Those take the panic's path, but no test makes one.
 
+**Left to [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md):** the record's line reaches neither the updater nor the server, so a fallback from a trial the kernel stopped is reported without its step (S2).
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md) (S1, S5), [000-KRN-0217](000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md) (its step 3), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done), [211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done) (the panic's report on the screen).
