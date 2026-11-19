@@ -1,5 +1,5 @@
 {
-  "budget": 7700,
+  "budget": 7900,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -40,6 +40,11 @@
       "date": "2026-11-12",
       "to": 7700,
       "why": "100004-PRT-0015 (74 lines in kernel/src/arch/aarch64: sunxi_wdt.rs and watchdog.rs, and the feed, start and stops): the Allwinner SoCs' watchdog, armed with the tick and fed every second from the boot CPU's tick, stopped before a halt the kernel chose, a reboot and a power-off, as x86's chipset watchdog is (000-KRN-0076, 213-KRN-0125). Its point is to restart a board whose kernel froze: fed by a task, it would also be fed by a system whose kernel still schedules that task and nothing else, and it must be stopped by the kernel's own halt; and no task may hold its registers, which could stop it. 7640 lines after it; about 60 of room."
+    },
+    {
+      "date": "2026-11-19",
+      "to": 7900,
+      "why": "801-KRN-0258 (190 lines: kernel/src/arch/x86_64/tco.rs and watchdog.rs, the early arm and the trial's restart in main.rs and trial.rs): Intel's TCO timer behind the SMBus controller, the N100's PCH's and the 300 series' and later, armed as the kernel starts, and a panic on a trial that restarts into the fallback. It is the chipset watchdog that restarts a trial stopped before init, or one whose tick stopped: it must be armed before any task exists, since the stops it covers come before init; fed from the boot CPU's tick, as a task's feed would go on while the kernel schedules nothing else; stopped by the kernel's own halt; and no task may hold its registers, which could stop it (MC-1.2, as 100004-PRT-0015 and 000-KRN-0076). The panic's restart is the kernel's own panic path. 7831 lines after it; about 69 of room."
     }
   ]
 }
