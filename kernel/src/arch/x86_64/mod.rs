@@ -11,4 +11,5 @@ pub mod report;
 pub mod port;
 pub mod serial;
 mod fch;
+mod tco;
 pub mod watchdog;

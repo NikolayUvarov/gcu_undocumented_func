@@ -22,6 +22,8 @@ const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel
 
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
 const MANIFEST_PAGES: usize = 16; // 64 KiB: the largest boot manifest (350-UPD-0003)
+const WATCHDOG_S: usize = 300 + 2 * PHOTO_PAUSE_MAX_S as usize; // the firmware's five minutes, and the two pauses
+const WATCHDOG_CODE: u64 = 0x4D49_4E44; // "MIND"; the firmware keeps the codes up to 0xFFFF
 
 // aarch64's line (100000-PRT-0009): a UART the firmware names, the SPCR's PL011 or SBSA UART under ACPI, else the
 // console a device tree's `stdout-path` names, a PL011 or a 16550 in memory. None otherwise: no address is written that
@@ -727,6 +729,10 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let _ = writeln!(Serial, "\r\nBOOT: THE LINE: {} AT {:#x}, FROM THE {}\r", line::kind(), line::base(), if rsdp != 0 { "SPCR" } else { "DEVICE TREE" });
     }
     show_text(&system_table);
+    // The firmware's watchdog to the handover (801-KRN-0258), whether or not its boot manager set one: a loader that
+    // stops is restarted, and on a trial the next start is the fallback's. ExitBootServices ends it; from there the
+    // kernel arms the chipset's.
+    let _ = system_table.boot_services().set_watchdog_timer(WATCHDOG_S, WATCHDOG_CODE, None);
     // Started by the loader at EFI/BOOT/ for its slot (351-UPD-0010): that one chose the slot and asked for the pause
     // and the safe start's key.
     let chained = chained(system_table.boot_services(), image);

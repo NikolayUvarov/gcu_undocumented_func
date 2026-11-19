@@ -121,6 +121,10 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             cpu::halt_here();
         }
         let info = &*raw_info;
+        // From here a panic on a trial restarts the machine: the loader has counted the try (801-KRN-0258).
+        trial::start(&info.boot_slot);
+        // A chipset watchdog that needs no page tables, armed before anything else can stop the kernel (801-KRN-0258).
+        watchdog::early();
         // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
         if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
         // The devices outside PCI that init may lend, from the tree or else from the firmware's tables (100000-KRN-0171).
@@ -130,15 +134,20 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
-        trial::start(&info.boot_slot);
+        trial::announce();
+        // The other watchdogs, now that the chipset's MMIO and the FADT are reachable, and the boot line (801-KRN-0258).
+        // Their feed, the boot CPU's tick, starts after the scheduler; init's BootInfo says whether one restarted the last run.
+        watchdog::start();
+        // A test kernel on trial stops for good here, before init: only the chipset's watchdog restarts it (801-KRN-0258).
+        if cfg!(feature = "watchdog-test") && info.boot_slot.trial != 0 {
+            serial_print("MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT\n");
+            cpu::halt_here();
+        }
         firmware::init(info.efi_runtime);
         firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
-        // The watchdog before init starts, so that init's BootInfo says whether it restarted the last run (000-KRN-0217);
-        // the boot CPU's tick, which feeds it, starts a moment later.
-        watchdog::start();
         scheduler::spawn_init().expect("init spawn");
         // Printed before any task can run, so it never lands in the middle of a task's console output.
         serial_print("MIND CORE KERNEL: INIT STARTED\n");
@@ -180,11 +189,16 @@ impl core::fmt::Write for Fatal {
 static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 #[panic_handler]
+#[allow(unreachable_code)] // x86's reset never returns; aarch64's does where the FADT names no PSCI
 fn panic(info: &PanicInfo) -> ! {
     use core::fmt::Write;
     unsafe { cpu::disable_interrupts(); }
-    // One report: a second panic (another CPU, or inside the formatting) only stops the machine.
-    if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { cpu::halt_all(); }
+    // A trial not yet confirmed restarts instead: the loader has counted its try, so the next boot is the fallback's,
+    // and the watchdog runs on in case the restart does not come (801-KRN-0258).
+    let trial = trial::pending();
+    // One report: a second panic (another CPU, or inside the formatting) only stops the machine, on a trial with the
+    // watchdog left running.
+    if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { if trial { cpu::freeze() } cpu::halt_all(); }
     // Other CPUs stop first, so their output does not interleave with the report.
     cpu::stop_others();
     let cpu = cpu::id();
@@ -202,5 +216,10 @@ fn panic(info: &PanicInfo) -> ! {
         let _ = write!(out, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
     }
     let _ = write!(out, "\n");
+    if trial {
+        let _ = write!(out, "TRIAL: RESTARTING INTO THE FALLBACK\n");
+        unsafe { acpi::reset(); }
+        cpu::freeze();
+    }
     cpu::halt_all();
 }

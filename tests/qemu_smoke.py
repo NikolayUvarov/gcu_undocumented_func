@@ -17907,7 +17907,8 @@ def watchdog_suite(args, disk):
     machine at its second expiry, 30 s on, and the next boot says so. With that evidence (ABI 34's BOOT_WATCHDOG_RESTARTED)
     init leaves out at once what the stopped run of this slot was starting of the safe start's list, prepared for `svc
     start`; what it left out starts again by itself from 120 s past READY, one at a time (000-KRN-0217); the run's mark is
-    cleared once they settled, and the boot after a reboot is a normal one."""
+    cleared once they settled, and the boot after a reboot is a normal one. Then a trial of that kernel, which stops for
+    good before init: the TCO timer resets it and slot A boots (801-KRN-0258)."""
     armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
     safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
@@ -17974,6 +17975,17 @@ def watchdog_suite(args, disk):
           f"privilege, {', '.join(f'{n} by itself {p} s past READY' for n, p in back) or 'none left to come back'}; it ran "
           f"past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left out; the boot "
           f"after a reboot was a normal one", flush=True)
+
+    def restarting(image, until):
+        vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+        try:
+            vm.expect(until, timeout=240)
+            return ANSI.sub("", vm.log)
+        finally:
+            vm.close()
+    with tempfile.TemporaryDirectory(prefix="mind-hung-") as temp:
+        boot_slots_check.hung_trial(restarting, temp, disk, disk / "kernel.elf", "x86")
+
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
@@ -18993,6 +19005,14 @@ def boot_suite(args, disk):
         finally:
             vm.close()
     print("PASS: reboot through the ACPI reset register (q35) and port 0xCF9 (pc); the system boots again", flush=True)
+
+    def restarting(image, until):
+        vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            vm.expect(until, timeout=180)
+            return ANSI.sub("", vm.log)
+        finally:
+            vm.close()
     if args.panic_kernel:
         # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
         target = disk / "kernel.elf"
@@ -19012,6 +19032,23 @@ def boot_suite(args, disk):
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
         print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
+
+        def past_the_panic(image, until):
+            # `until` once slot A is loaded: slot B's panic comes first, which expect() takes for a failure (801-KRN-0258).
+            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+            try:
+                deadline = time.monotonic() + 180
+                while True:
+                    vm.collect()
+                    out = ANSI.sub("", vm.log).replace("\r", "")
+                    if until in out.partition("BOOT: SLOT A LOADED\n")[2]:
+                        return out
+                    assert time.monotonic() < deadline and vm.process.poll() is None, out[-3000:]
+                    time.sleep(.05)
+            finally:
+                vm.close()
+        with tempfile.TemporaryDirectory(prefix="mind-panicked-") as temp:
+            boot_slots_check.panicked_trial(past_the_panic, temp, disk, args.panic_kernel, "x86")
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
@@ -19051,14 +19088,6 @@ def boot_suite(args, disk):
         sign_manifest.sign_volume(disk)
         print("PASS: a bootloader of another handoff version: outside a trial the kernel stops before init and stays stopped, "
               "with the reason on COM1 and on the screen", flush=True)
-
-        def restarting(image, until):
-            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
-            try:
-                vm.expect(until, timeout=180)
-                return ANSI.sub("", vm.log)
-            finally:
-                vm.close()
         with tempfile.TemporaryDirectory(prefix="mind-refused-") as temp:
             boot_slots_check.refused_trial(restarting, temp, disk, args.loader_abi_kernel, "x86")
     if args.trial_kernel:
