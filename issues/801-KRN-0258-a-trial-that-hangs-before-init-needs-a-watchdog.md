@@ -87,12 +87,16 @@ On the maintainer's word of 2026-11-18 («Начни задачу DEXP смог�
    **Criterion 2 is not met.** The likely cause is in the boot line itself: `TCO_EN` stays set in `SMI_EN` (TCO1_CNT's `TCO_LOCK`, or no PM base read), so the first expiry goes to the firmware's SMI handler, which may reload or stop the timer. Not confirmed: the registers after the first expiry were not read.
 3. **What follows:** the PCH's over-clocking watchdog, which resets the platform at expiry with no SMI. On the DEXP the DSDT names it (`CWDT`, `_HID INTC1099`, its register at the PM base + 0x54, 0x1854). It is 801-KRN-0259.
 
-**Left:** criterion 2 on the DEXP (801-KRN-0259); step 4 of the plan, another reset path for the MacBook Pro, is not looked for.
+**Left:** step 4 of the plan, another reset path for the MacBook Pro, is not looked for.
+
+**801-KRN-0259's runs (2026-11-19, later):**
+- **The cause is read:** release 4's boot line gives `TCO1_CNT 0x1000`, so the firmware set `TCO_LOCK` and `TCO_EN` stays on.
+- **Criterion 2 is met by the PCH's over-clocking watchdog:** release 5's trial, stopped before `init`, was reset 30 s later by that watchdog, whose mark the next boot read. The loader booted slot A, and the agent answered `fell back: slot A runs version 4, not 5`. The record is in 0259.
 
 ## Acceptance criteria
 
-- [ ] The DEXP's boot line names its TCO timer, armed.
-- [ ] On the DEXP, a trial that stops before `init` is reset and boots slot A by itself.
+- [x] The DEXP's boot line names its TCO timer, armed (release 2, 2026-11-19).
+- [x] On the DEXP, a trial that stops before `init` is reset and boots slot A by itself (801-KRN-0259's release 5, 2026-11-19: by the over-clocking watchdog, not the TCO).
 - [ ] `docs/profile` says, for each bench machine, which stops a trial survives by itself.
 
 ## Related

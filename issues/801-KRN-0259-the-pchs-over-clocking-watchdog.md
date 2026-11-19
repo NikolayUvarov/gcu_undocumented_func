@@ -1,6 +1,6 @@
 # 801-KRN-0259 — The PCH's over-clocking watchdog: a reset no firmware SMI can keep
 
-**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-19) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-19; criteria 1–3 met on the DEXP, the restart's line left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -40,11 +40,51 @@ On the DEXP its DSDT names it: device `CWDT`, `_HID INTC1099`, `_STA` 0x0F, its 
    - a release as built, to read its boot line;
    - then one with the `watchdog-test` kernel, whose trial stops for good before `init`.
 
+## The DEXP's runs (2026-11-19; MC-12.1: this machine, these boots)
+
+The maintainer was at the machine. Releases were built from this branch and sent through Effector's `update_agent`.
+
+1. **Release 4, as built** (`ad4555a880`):
+   - taken at the second try; the first download was cut (below);
+   - `updated 4, slot A confirmed` at 12:54:33 UTC;
+   - its boot lines:
+     ```
+     MIND CORE KERNEL: WATCHDOG: THE PCH'S OVER-CLOCKING WATCHDOG AT 0x1854 (FOUND 0x2000), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK
+     MIND CORE KERNEL: WATCHDOG: INTEL TCO OF THE ALDER LAKE-M AND -N PCH (SMBUS 8086:54A3, TCO AT 0x400), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; THE FIRMWARE'S SMI AT THE FIRST EXPIRY KEPT
+     MIND CORE KERNEL: WATCHDOG: SMI_EN 0x80002033, TCO1_CNT 0x1000
+     ```
+   - **What they show:**
+     - the over-clocking watchdog was off and unlocked, as the firmware left it, with bit 13 set (`ICCSURV` on the older PCHs);
+     - it was armed and fed: the machine ran on;
+     - `TCO1_CNT` has `TCO_LOCK` (bit 12) set, so `TCO_EN` stays set in `SMI_EN`. That is 0258's cause, now read, not inferred.
+2. **Release 5, with the `watchdog-test` kernel:**
+   - taken at the second try, after its first download was cut;
+   - the machine went down at 13:09:36 and was back at 13:11:03, 87 s later, with `fell back: slot A runs version 4, not 5`;
+   - slot A's boot: `THE NEWER RECORD: SLOT B NOT CONFIRMED`, and the over-clocking watchdog `FOUND 0x802000`. The firmware had cleared the status bits and set scratch bit 23. An ordinary reset left 0x2000, and `FORCE_ALL` was clear, so the mark is the watchdog's expiry.
+
+   **The reset was the watchdog's, not a hand's:**
+   - the 87 s are two boots and the 30 s;
+   - a reset by hand leaves no such mark.
+
+   Criteria 2 and 3 are met.
+3. **The mark:** release 4's kernel read only the status bits, so that boot did not say `IT RESTARTED THE LAST RUN`. `14a3905f64` reads the mark as a restart and clears it.
+
+   Releases 6 (as built) and 7 (`watchdog-test`) are to show two things:
+   - whether an ordinary reset keeps the mark;
+   - the line after an expiry.
+4. **The downloads:** five of the eight archive downloads (29 MB each) were cut after 184 to 280 s, with `/api/commands/file BODY: Transport`.
+   - Each time the radio's traffic fell in the last 10 s, which is the agent's bound on a body read with no byte.
+   - The radio counted no frame lost.
+   - The ones taken lasted about 9 minutes.
+
+   This is 801-NET-0088.
+
 ## Acceptance criteria
 
 - [x] Host tests against a model of the register: off and armed, after an expiry's reset, locked and running, locked and off, silent, stuck; the feed, the longest count and the stop (`tests/tco_watchdog_host.rs`).
-- [ ] The DEXP's boot line names its over-clocking watchdog, armed.
-- [ ] On the DEXP, a trial that stops before `init` is reset by it and boots slot A by itself (0258's criterion 2).
+- [x] The DEXP's boot line names its over-clocking watchdog, armed (release 4, 2026-11-19).
+- [x] On the DEXP, a trial that stops before `init` is reset by it and boots slot A by itself (release 5, 2026-11-19; 0258's criterion 2).
+- [ ] The boot after such a reset says the watchdog ended the last run, and the boot after an ordinary reset does not (releases 6 and 7).
 
 ## Related
 
