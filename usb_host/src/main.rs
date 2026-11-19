@@ -826,7 +826,7 @@ fn main(_info: &'static BootInfo) {
     loop {
         let streaming = host.ehci.iter().flatten().any(|bus| bus.streaming.is_some()) || host.roots.iter().flatten().any(|r| r.xhci.streaming());
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
-        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); }
+        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.watch_streams(); } }
         for bus in host.ehci.iter_mut().flatten() { bus.hc.pump(); }
         let now = mind::time::uptime_ms() as u64;
         if now >= host.scanned + SCAN_MS {

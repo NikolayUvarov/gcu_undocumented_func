@@ -65,6 +65,8 @@ pub struct Stream {
     tds: usize, state: [Td; STREAM_TDS], next: usize, oldest: usize,
     /// TDs the controller missed, times its ring ran dry, packets that came with an error.
     missed: u32, dry: u32, damaged: u32, moved: u64, reported: bool,
+    // When a TD last ended, the completion codes already logged (a bit each, below 64), and when a stall was last said.
+    ended_ms: u64, codes: u64, said_ms: u64,
 }
 
 impl Stream {
@@ -346,8 +348,9 @@ impl Xhci {
         for n in 0..(tds * size).div_ceil(PAGE) {
             match self.alloc() { Some(page) => pages[n] = page, None => { pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p)); self.release(ring.page); return None } }
         }
+        let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
-            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false });
+            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0 });
         Some(ring)
     }
     /// The stream of endpoint `dci` of `slot`.
@@ -375,7 +378,15 @@ impl Xhci {
     fn stream_event(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(t) = self.streams[index].as_mut() else { return };
         let code = status >> 24;
+        // Each completion code other than success is said once a stream, with what the controller's status says.
+        if !matches!(code, SUCCESS | SHORT_PACKET) && code < 64 && t.codes & 1 << code == 0 {
+            t.codes |= 1 << code;
+            let (slot, dci, usbsts) = (t.slot, t.dci, self.mmio.read32(self.op + 4));
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: AN ISOCHRONOUS TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, code, usbsts);
+        }
+        let Some(t) = self.streams[index].as_mut() else { return };
         if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; return; }
+        t.ended_ms = mind::time::uptime_ms() as u64;
         let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
         let good = matches!(code, SUCCESS | SHORT_PACKET);
         if code == MISSED_SERVICE { t.missed += 1; } else if !good { t.damaged += 1; }
@@ -452,6 +463,19 @@ impl Xhci {
         }
         if let (true, Some(t)) = (queued, self.streams[index].as_ref()) { self.doorbell(t.slot, t.dci as u32); }
         at
+    }
+    /// Streams with TDs on their ring and none ended for a second: said every 5 s at most, with the controller's
+    /// status (USBSTS: halted, host system error, controller error) and the TDs it holds.
+    pub fn watch_streams(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        let usbsts = self.mmio.read32(self.op + 4);
+        for t in self.streams.iter_mut().flatten() {
+            let armed = t.state[..t.tds].iter().filter(|s| matches!(s, Td::Armed(_))).count();
+            if armed == 0 || now < t.ended_ms + 1000 || now < t.said_ms + 5000 { continue; }
+            t.said_ms = now;
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: NO TD ENDED FOR {} MS, {} ON THE RING; USBSTS {:08X}; {} MOVED, {} MISSED, {} TIMES DRY",
+                Tag(self.number), t.slot, t.dci, now - t.ended_ms, armed, usbsts, t.moved, t.missed, t.dry);
+        }
     }
     /// Whether a stream runs: events are then taken every STREAM_MS, so the event ring never fills.
     pub fn streaming(&self) -> bool { self.streams.iter().any(Option::is_some) }
