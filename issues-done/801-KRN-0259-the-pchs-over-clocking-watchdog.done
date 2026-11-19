@@ -1,10 +1,10 @@
-# 801-KRN-0259 — The PCH's over-clocking watchdog: a reset no firmware SMI can keep
+# 801-KRN-0259 — The PCH's over-clocking watchdog: a reset no firmware SMI can keep — done
 
-**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (2026-11-19; every criterion met on the DEXP, to close once landed) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/tco.rs`, `watchdog.rs`, `acpi.rs`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-19) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) · **Constitution:** MC-9.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
-On the DEXP (Intel N100, Alder Lake-N PCH) the TCO timer of [801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.md) is armed, but a trial stopped for good before `init` was not reset in 20 minutes (0258, "The DEXP's runs"):
+On the DEXP (Intel N100, Alder Lake-N PCH) the TCO timer of [801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done) is armed, but a trial stopped for good before `init` was not reset in 20 minutes (0258, "The DEXP's runs"):
 - its boot line says `THE FIRMWARE'S SMI AT THE FIRST EXPIRY KEPT`: `TCO_EN` stays set in `SMI_EN`;
 - so the first expiry goes to the firmware's SMI handler, which may reload or stop the timer.
 
@@ -89,6 +89,16 @@ The maintainer was at the machine. Releases were built from this branch and sent
        ```
    - Criterion 4 is met.
 
+## Resolution
+
+Done on 2026-11-19 and landed in round 150 (`main` e14a1bc415):
+- **The code:** `kernel/src/arch/x86_64/tco.rs` has `arm_oc`, `feed_oc`, `long_oc` and `stop_oc`. `watchdog.rs` arms the over-clocking watchdog beside the TCO, feeds it, stops it and reads the firmware's mark. `acpi.rs` gives it its longest count before a reset.
+- **The tests:** `tests/tco_watchdog_host.rs`, 17 tests.
+- **On the DEXP**, releases 4, 5, 8 and 9:
+  - the watchdog was armed;
+  - two trials stopped before `init` were reset by it and fell back;
+  - the boot after such a reset said so, and one after an ordinary reset did not.
+
 ## Acceptance criteria
 
 - [x] Host tests against a model of the register: off and armed, after an expiry's reset, locked and running, locked and off, silent, stuck; the feed, the longest count and the stop (`tests/tco_watchdog_host.rs`).
@@ -98,4 +108,4 @@ The maintainer was at the machine. Releases were built from this branch and sent
 
 ## Related
 
-[801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.md), [801](801-the-bench-stays-manageable.md), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).
+[801-KRN-0258](801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done), [801](../issues/801-the-bench-stays-manageable.md), [000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).
