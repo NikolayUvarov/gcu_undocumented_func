@@ -111,3 +111,14 @@ The EFF track numbers its own tasks, so a request from another track waits here 
   1. On a boot on trial (init's `boot_slot`, or the updater's state the agent already reads for `update_step`), leave the journal as it is: no compaction, and no file in `system/effector` other than what the trial must add. Compact at the first start after the trial is confirmed.
   2. Say in the log line when the compaction is left for later.
   3. The `rollback` suite already checks the result; a host or `effector` suite check that a trial's start writes no `journal.new` would show it without the 600 s trial.
+
+### A cut archive download goes on from where it stopped (KRN, 2026-11-19, for 801's S7 and S8)
+
+- **What the DEXP showed** (801-NET-0088): six of the day's ten downloads of a 29 MB release failed. Each was cut after 184 to 439 s with `EFFECTOR: /api/commands/file BODY: Transport`, and the command ended `upload`. The four taken lasted about 9 minutes each.
+  - In the ten seconds before each cut the radio's traffic fell, so the stream stopped for 10 s. `Link::receive` waits `REQUEST_MS` (10 s) for a byte, in a body as in a short request.
+  - Each try then started again from the first byte, so each needed 9 minutes with no stall of 10 s.
+- **What NET does** (801-NET-0088): a larger TCP receive window and a log line naming a stall. Neither makes a cut impossible on a radio link.
+- **What is asked:**
+  1. A cut archive download goes on from the bytes already written to the gateway, with a `Range: bytes=N-` request (`http::get` takes an offset and checks `206` and `Content-Range`), a bounded number of times within the command's time. The archive's SHA-256 is checked over the whole as now.
+  2. A body read waits longer than a short request's 10 s, for example 60 s, as a TCP retransmission after a loss can take longer.
+  3. Each resumed try is logged with its offset. A test in the `effector-update` suite has the fixture cut the body once halfway: the agent goes on from there and the update is taken.
