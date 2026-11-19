@@ -104,6 +104,7 @@ pub mod sse;
 pub mod zip;
 #[cfg(feature = "alloc")]
 pub mod png;
+pub mod uac;
 #[cfg(feature = "alloc")]
 pub mod uvc;
 #[cfg(feature = "alloc")]

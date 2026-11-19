@@ -10776,6 +10776,55 @@ def hda_suite(args):
           f"the levels at 0 dB: volume {levels[1]} % of {levels[2]} settings{levels[3] or ''}, gain {levels[4]} % of {levels[5]}{levels[6] or ''}, boost {levels[7].lower()}", flush=True)
 
 
+def usbaudio_suite(args):
+    """000-DRV-0073: a USB Audio Class 1 device in audio_gw. QEMU's usb-audio (UAC1, 48 kHz stereo playback) on an xHCI
+    of its own: usb_host streams its isochronous OUT endpoint, the gateway takes it in the codec's place, and beep's
+    packets go out on it while beep plays; unplugged, the codec comes back."""
+    with tempfile.TemporaryDirectory(prefix="mind-uac-") as temp:
+        wav = Path(temp) / "usb.wav"
+        vm = VM(args, IMAGE, audio="none", audio_card="HDA",
+                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
+        try:
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "ATTACHED")
+                if "ATTACHED" in log:
+                    break
+            attached = re.search(r"\[AUDIO\] USB ([0-9A-F]{4}):([0-9A-F]{4}) ATTACHED: PLAYBACK YES \(INTERFACE (\d+), 2 CHANNELS, ENDPOINT ([0-9A-F]{2}), (\d+) BYTES", log)
+            assert attached, log
+            require(log, "[AUDIO] LEVELS USB DEVICE")
+            require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
+            output = ""
+            for _ in range(60):
+                output += vm.command("logs 1")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DEVICE=true RATE=48000")
+            time.sleep(2.5)
+            log = vm.service_logs("audio_gw", "USB PLAYBACK STOPPED")
+            require(log, "[AUDIO] USB PLAYBACK STARTED")
+            stopped = re.search(r"\[AUDIO\] USB PLAYBACK STOPPED: INTERFACE \d+; (\d+) PACKETS SENT, (\d+) OF THEM SILENCE", log)
+            assert stopped and int(stopped[1]) > 500, log
+            usb = vm.service_logs("usb_host", "STREAMS OUT")
+            require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            # Unplugged: the gateway goes back to the codec.
+            vm.qmp("device_del", id="uac")
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "THE CODEC AGAIN")
+                if "THE CODEC AGAIN" in log:
+                    break
+            require(log, "[AUDIO] LEVELS THE CODEC AGAIN")
+        finally:
+            vm.close()
+        # QEMU 8.2's xHCI ends each isochronous OUT TD with success and no byte taken: usb-audio gets nothing, and its
+        # wav backend keeps a bare header. What the device hears is checked on a real one (the STM-Speaker, the Ryzen).
+        print(f"NOTE: usb-audio's wav holds {wav.stat().st_size} bytes: QEMU's xHCI moves no isochronous OUT data", flush=True)
+    print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
+          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played; unplugged, the codec again", flush=True)
+
+
 def listen_suite(vm, starts):
     vm.wait = LOADED_WAIT
     # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
@@ -19337,6 +19386,9 @@ def main():
             continue
         if suite == "hda":
             hda_suite(args)
+            continue
+        if suite == "usbaudio":
+            usbaudio_suite(args)
             continue
         if suite == "link":
             link_suite(args)
