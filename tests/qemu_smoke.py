@@ -12100,7 +12100,8 @@ def stalled_stream_check(vm, pause, body):
         time.sleep(.25)
     else:
         raise AssertionError(("the stream did not go on", log[-2000:]))
-    assert len(ours(log)) == 1, "named once for one stop"
+    assert len(ours(log)) == 1, ("named once for one stop", [m[0] for m in ours(log)], pause.ranges,
+                                 [l for l in log.splitlines() if "TCP SOCKET" in l])
     assert pause.ranges == [None], pause.ranges
     require(vm.command("sha256 ram:p.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:p.bin")
     print(f"PASS: a stream that stops while its client reads is named once in netstack's log after 5 s (ESTABLISHED, its 64 KiB "
