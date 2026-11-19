@@ -19087,7 +19087,8 @@ def boot_suite(args, disk):
             # on the tick, while the safe start's list is still starting (its starts settle 30 s past READY).
             vm.hmp("system_reset")
             vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=90)
-            panicked(r"KERNEL PANIC: panic test, 20 s past the boot at src/arch/x86_64/interrupts\.rs:\d+:\d+ CPU=0", 90)
+            # On the tick: the task it cut, if any, is named after the CPU (round 153: PID=5 NAME=compositor).
+            panicked(r"KERNEL PANIC: panic test, 20 s past the boot at src/arch/x86_64/interrupts\.rs:\d+:\d+ CPU=0(?: PID=\d+ NAME=\S+)?", 90)
             # A fault the kernel recorded is a freeze's evidence (ABI 35): what that run was starting is left out at once.
             vm.hmp("system_reset")
             vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
