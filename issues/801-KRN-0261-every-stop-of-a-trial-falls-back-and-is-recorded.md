@@ -66,6 +66,7 @@ A release that breaks the kernel or `init` must roll its slot back (801 S1). Sin
 | x86: one CPU | x32-2 | 203 s | PASS |
 | host tests | x32 | 1126 s | PASS |
 | aarch64: boot and fault containment | PCU | 220 s | PASS |
+| aarch64: the updater and the modes | PCU | 1959 s | PASS |
 
 The same groups and `aarch64: the updater and the modes` (acc-1) also passed on `d3ec178c7b`, before the code was folded into one report writer.
 
