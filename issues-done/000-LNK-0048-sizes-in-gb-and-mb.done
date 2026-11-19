@@ -1,0 +1,33 @@
+# 000-LNK-0048 — The writer shows a disk's size in GB and the image's in MB — done
+
+**Type:** tools · **Owner:** `LNK` · **Priority:** P3 · **Status:** done (2026-11-19) · **Blocked by:** — · **Roadmap:** the maintainer's request of 2026-11-19 · **Constitution:** —
+
+## Problem
+
+`./build-and-write.sh --list` gave each disk's size in bytes alone (`16013942784`), and the script said nothing of the image's size once it was built. The maintainer asked for the disk's size in GB beside the bytes, and for the image's size in MB after it is prepared.
+
+## Plan
+
+- `05_write_usb_windows.ps1`: a `GB` column after `Size` in `-List`, and a `GB` line in the disk's details before a write or `-Check`; the image's line gives MB beside its bytes.
+- `scripts/build_and_write.sh`: one line once the image is ready (built, or given with `--image`), its path and size in MB and bytes.
+- Decimal units (10^9, 10^6), as a disk's label gives them: the Kingston `SNS4151S316G` is 16 GB.
+
+## Acceptance criteria
+
+- [x] `-List` shows `GB` beside `Size`.
+- [x] `-Check` shows the image's MB and the disk's GB, and writes nothing.
+- [x] The script prints the image's size in MB after the build.
+- [x] `tests/build_and_write_args_test.py`, `build_and_write_keep_test.sh` and `build_and_write_machines_test.sh` pass.
+
+## Resolution
+
+Done on LEG9 on 2026-11-19 with the maintainer's Kingston SSD in as disk 2:
+```
+Number FriendlyName          SerialNumber        Size GB IsBoot IsSystem IsReadOnly
+     2 KINGSTON SNS4151S316G 50026B723C0B 16013942784 16  False    False      False
+```
+`-DiskNumber 2 -Check` with `fast-test`'s image: `Image: …\dist\mind-core-usb.img (729808896 bytes, 729.8 MB)`, then `GB : 16` in the disk's details and `Check passed. Nothing was unmounted or written.` The script's new line, run on the same image: `729.8 MB (729808896 bytes)`. The three writer suites pass.
+
+## Related
+
+- [800-LNK-0036](800-LNK-0036-a-damaged-old-disk-never-erases-what-was-kept.done), [801-LNK-0046](../issues/801-LNK-0046-each-machines-settings-kept-onto-any-new-disk.md): the writer's other tasks.
