@@ -709,8 +709,9 @@ impl Stack {
             Err(Error::Again) if slot.waiting == 0 => slot.waiting = now,
             Err(Error::Again) if !slot.stalled && slot.got != 0 && slot.waiting - slot.got <= 1000 && now - slot.got >= STALL_MS => {
                 let socket = self.link(slot.link).sockets.get::<tcp::Socket>(slot.handle);
-                mind::println!("[NETSTACK] TCP SOCKET {} TO {:?}: NOTHING RECEIVED FOR {} MS WHILE ITS CLIENT READS ({:?}, QUEUE {} OF {}, {} BYTES UNSENT)",
-                               index + 1, socket.remote_endpoint(), now - slot.got, socket.state(), socket.recv_queue(), socket.recv_capacity(), socket.send_queue());
+                let peer = socket.remote_endpoint().map(|e| alloc::format!("{}", e)).unwrap_or_else(|| alloc::string::String::from("?"));
+                mind::println!("[NETSTACK] TCP SOCKET {} TO {}: NOTHING RECEIVED FOR {} MS WHILE ITS CLIENT READS ({}, QUEUE {} OF {}, {} BYTES UNSENT)",
+                               index + 1, peer, now - slot.got, socket.state(), socket.recv_queue(), socket.recv_capacity(), socket.send_queue());
                 slot.stalled = true;
             }
             _ => return,
