@@ -21,6 +21,11 @@
 - [ ] The run's graphics outputs recorded from the log, with the connectors as Linux names them.
 - [ ] A decision recorded: two firmware framebuffers, or a display driver as a separate task.
 
+## Progress (2026-11-20)
+
+- **Linux on the Ryzen** sees two connected outputs, `card1-DP-2` and `card1-HDMI-A-1`. `DP-1` and `HDMI-A-2` are not connected. The firmware's framebuffer is one `simple-framebuffer` until `amdgpu` takes over.
+- **The loader's GOP lines** reach the system log since KRN's 213-KRN-0262 (`fast-test` 87d9aadac9 on). That branch is ABI 35, and the Ryzen's stick is ABI 34, so they come with the next disk write.
+
 ## Related
 
 [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) (the shell's screen on this machine), 211-PRT-0011 (the monitor's preferred mode from EDID).
