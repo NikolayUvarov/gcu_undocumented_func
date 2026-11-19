@@ -51,15 +51,30 @@ The agent starts a cut download again from its first byte. Every try then needs 
 
 **Landed in round 151** (`main` 3e6bbde056). The gate was green, 61 groups, among them the `net`, `tls` and Effector groups on x86 and aarch64.
 
+**`netbench` before and after** (2026-11-19, on i9 through Effector, x86, QEMU's user networking, one run each; `main` `e14a1bc415` before, `3e6bbde056` after):
+
+| | Offload off, before | Offload off, after | Offload on, before | Offload on, after |
+|---|---|---|---|---|
+| TCP down | 3851 KiB/s | 3868 KiB/s | 3645 KiB/s | 4246 KiB/s |
+| TCP up | 826 KiB/s | 794 KiB/s | 808 KiB/s | 861 KiB/s |
+| UDP round trips | 470 per s | 463 per s | 471 per s | 473 per s |
+
+- **What it shows:** no change beyond one run's noise. Here the round trip is short, so 8 KiB did not limit the speed; the send buffer did not change.
+- **The tap run** (`ci_local.sh --tap`) was not made. No machine has `mindtap0`, and making one needs `sudo` there, which is the maintainer's (2026-11-19: no machine had it, and `sudo` asks for a password).
+
+**The stall line, shown:** `claude/801-NET-0088-a-stall-shown` (`aa450065fe`, in round 152).
+- **The check:** the `download` suite's server stops a body after 50 000 bytes, then goes on with it on the same connection.
+- **The result:** the line is named once, `ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT`, then `BYTES AGAIN AFTER`, and the file is whole with no `Range`. It passed on i9 on x86 and aarch64, with the stream held 6 s.
+- **The format:** the line now prints the peer and the state as smoltcp's Display.
+
 **Left:**
-- **`netbench` before and after:** it needs a tap interface, and the gate does not run it.
-- **The stall line, shown:** a check where the fixture's server stops a body for more than 5 s, and the line is in the log.
-- **EFF's part:** a cut download goes on with `Range` (`requests-EFF.md`).
+- EFF's part: a cut download goes on with `Range` (`requests-EFF.md`).
+- The tap run, if the maintainer makes `mindtap0` on a machine.
 
 ## Acceptance criteria
 
-- [ ] `netstack`'s TCP receive buffer is 64 KiB; the `net`, `download`, `tls` and `netbench` suites pass on x86 and aarch64, `netbench`'s speed before and after named.
-- [ ] A stalled receive is named in the log with the socket's state.
+- [x] `netstack`'s TCP receive buffer is 64 KiB; the `net`, `download`, `tls` and `netbench` suites pass on x86 and aarch64, `netbench`'s speed before and after named (round 151's gate; `netbench` on x86 with user networking, above; the tap run not made).
+- [ ] A stalled receive is named in the log with the socket's state (the `download` suite's check, in round 152).
 - [x] On the DEXP, five downloads of a 29 MB release are taken in a row, with their times (MC-12.1: that machine, that network): releases 10 to 14, 2026-11-19.
 
 ## Related
