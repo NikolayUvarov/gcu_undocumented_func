@@ -32,10 +32,11 @@ So a trial there survives by itself a stop in the loader, a panic and a hang its
 2. **ACPI's watchdog tables:**
    - `log:acpi/` holds the machine's 22 tables, but no `WDAT`, `WDRT` or `WDDT` (`collect_file`: not-found);
    - `FACP` was read the same way as a control.
-3. **Not yet looked for:**
-   - an over-clocking watchdog on the 7-series PCH, which Intel's documents name for later PCHs;
-   - the SMC, which has no public interface known here for a watchdog.
-4. **A path the kernel could make itself:** another CPU that sees the boot CPU's tick stop and resets the machine through the reset register.
+3. **The over-clocking watchdog:** its device (`INT3F0D` or `INTC1099`, as `CWDT` on the DEXP) is in none of the MacBook's AML tables. The tables read were the DSDT (Apple `MacBookP`, 19 804 bytes) and SSDT1 to SSDT11, all of them.
+   - So the firmware does not offer it.
+   - Whether the 7-series PCH has the register at the PM base + 0x54 is not shown. Reading that needs a kernel run on the MacBook, which waits for the maintainer's word.
+4. **The SMC:** no public interface for a watchdog is known here. Not looked for further.
+5. **A path the kernel could make itself:** another CPU that sees the boot CPU's tick stop and resets the machine through the reset register.
    - It would cover a stop of the boot CPU alone, as the `watchdog-test` kernel makes, if the other CPUs run by then;
    - not every CPU stopped, nor a stop before they start.
    - Not built.
