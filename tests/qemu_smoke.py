@@ -19030,8 +19030,23 @@ def boot_suite(args, disk):
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
         print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
+
+        def past_the_panic(image, until):
+            # `until` once slot A is loaded: slot B's panic comes first, which expect() takes for a failure (801-KRN-0258).
+            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+            try:
+                deadline = time.monotonic() + 180
+                while True:
+                    vm.collect()
+                    out = ANSI.sub("", vm.log).replace("\r", "")
+                    if until in out.partition("BOOT: SLOT A LOADED\n")[2]:
+                        return out
+                    assert time.monotonic() < deadline and vm.process.poll() is None, out[-3000:]
+                    time.sleep(.05)
+            finally:
+                vm.close()
         with tempfile.TemporaryDirectory(prefix="mind-panicked-") as temp:
-            boot_slots_check.panicked_trial(restarting, temp, disk, args.panic_kernel, "x86")
+            boot_slots_check.panicked_trial(past_the_panic, temp, disk, args.panic_kernel, "x86")
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
