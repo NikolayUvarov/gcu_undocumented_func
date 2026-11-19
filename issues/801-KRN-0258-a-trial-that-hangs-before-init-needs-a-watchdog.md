@@ -60,6 +60,13 @@ So 801's S1 to S3, "an update that breaks the machine rolls back by itself", doe
    - the `boot` suite: the `panic-test` kernel on trial panics inside the scheduler lock, restarts, and slot A boots.
 6. **Docs:** [docs/profile](../docs/profile/README.md) (the supervision and boot rows, and a row in [evidence.md](../docs/profile/evidence.md)), [slots.md](../docs/update/slots.md), [write-disk.md](../docs/write-disk.md) and their Russian versions. They say which stops a trial survives, and on which bench machine.
 
+**The DEXP's registers, read without a restart** (its hardware report `log:/hw0004.txt` of 2026-11-18, taken with Effector's `collect_file`):
+- the eSPI bridge 00:1F.0 is 8086:5481, its offsets 0x40 and 0x44 zero: hence `THE LPC BRIDGE'S ACPI I/O IS OFF`;
+- the SMBus controller 00:1F.4 is 8086:54A3, `TCOBASE` 0x00000401 (the TCO at 0x400), `TCOCTL` 0x00000101 (`TCO_BASE_EN` and `TCO_BASE_LOCK` set);
+- the FADT's PM1a event block is at 0x1800 (4 bytes), the PM timer at 0x1808, the reset register 0xCF9.
+
+So the path behind the SMBus controller is the one this machine has, and its decode is on. `NO_REBOOT` and the timer's own state are in I/O space, which the report does not read: the boot line will say. The host test's model of the N100 holds these values.
+
 **Left:** step 4 of the plan, another reset path for the MacBook Pro, is not looked for. The DEXP's runs (criteria 1 and 2) come after landing:
 1. a release of this `main` through Effector, its boot line read from the logs;
 2. if it names the TCO armed: a release whose kernel is the `watchdog-test` one, which stops for good on its trial. It must come back on the other slot by itself.
