@@ -1,6 +1,6 @@
 # 801-UPD-0044 — A trial the kernel stopped names its fault in the fallback's reason
 
-**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19) · **Blocked by:** [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.md) (the record) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19) · **Blocked by:** [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done) (the record) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -37,4 +37,4 @@ The machine falls back, but nothing writes `refused`. The agent's answer is then
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.md), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done).
+[801](801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done).
