@@ -52,11 +52,14 @@ So 801's S1 to S3, "an update that breaks the machine rolls back by itself", doe
    - On the older chipsets' path a `NO_REBOOT` that stays set is now named `NO_REBOOT HELD BY THE BOARD'S STRAP OR ITS FIRMWARE`: Intel ties the bit to a strap of the board (the SPKR pin, sampled at power-on, in its ICH4-M design checklist; the 7-series datasheet was not read), so "the firmware" alone was a guess.
    - The 100 and 200 series (Sunrise Point's kind) keep `NO_REBOOT` behind the P2SB: named and refused, not done. An Intel SMBus controller not listed: its ID named.
    - The boot line: `WATCHDOG: INTEL TCO OF THE ALDER LAKE-M AND -N PCH (SMBUS 8086:54A3, TCO AT 0x…), A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK`. ICH9's line is as before.
-2. **Armed as early as the kernel can:** right after the page tables and the screen, before the firmware's services, the frame pool, the CPUs and the scheduler; fed from the tick as before.
+2. **Armed as early as the kernel can:**
+   - the TCO behind the SMBus controller needs only configuration space and I/O ports, so it is armed as the kernel starts, before the ACPI tables, the page tables and the screen: the window from `ExitBootServices` to the kernel's first line on the screen, where the DEXP's screen stayed black, is covered there. Its SMI is quieted once the FADT is read, and the boot line comes with the screen;
+   - the others (ICH9's GCS and the FCH are MMIO) right after the page tables and the screen;
+   - all before the firmware's services, the frame pool, the CPUs and the scheduler; fed from the tick as before.
 3. **A panic on a trial** not yet confirmed restarts the machine (`TRIAL: RESTARTING INTO THE FALLBACK`), the watchdog left running in case the restart does not come. The kernel knows the trial from the handoff's first read, so a panic in the page tables is covered too.
 4. **The firmware's watchdog to the handover:** each loader sets it as it starts, to five minutes and its two pauses, whether or not the boot manager did.
 5. **Tests:**
-   - `tests/tco_watchdog_host.rs`: both paths against a model of the registers;
+   - `tests/tco_watchdog_host.rs`: both paths against a model of the registers, and the early arm without MMIO or the FADT;
    - the `watchdog` suite: the `watchdog-test` kernel on trial stops for good with interrupts off once the watchdog is armed, q35's TCO resets it, slot A boots and says the watchdog ended the last run;
    - the `boot` suite: the `panic-test` kernel on trial panics inside the scheduler lock, restarts, and slot A boots.
 6. **Docs:** [docs/profile](../docs/profile/README.md) (the supervision and boot rows, and a row in [evidence.md](../docs/profile/evidence.md)), [slots.md](../docs/update/slots.md), [write-disk.md](../docs/write-disk.md) and their Russian versions. They say which stops a trial survives, and on which bench machine.

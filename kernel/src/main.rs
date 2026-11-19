@@ -123,6 +123,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         let info = &*raw_info;
         // From here a panic on a trial restarts the machine: the loader has counted the try (801-KRN-0258).
         trial::start(&info.boot_slot);
+        // A chipset watchdog that needs no page tables, armed before anything else can stop the kernel (801-KRN-0258).
+        watchdog::early();
         // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
         if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
         // The devices outside PCI that init may lend, from the tree or else from the firmware's tables (100000-KRN-0171).
@@ -133,8 +135,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
         trial::announce();
-        // The watchdog as early as it can be (801-KRN-0258): the chipset's registers and the FADT are reachable now. Its
-        // feed, the boot CPU's tick, starts after the scheduler; init's BootInfo says whether it restarted the last run.
+        // The other watchdogs, now that the chipset's MMIO and the FADT are reachable, and the boot line (801-KRN-0258).
+        // Their feed, the boot CPU's tick, starts after the scheduler; init's BootInfo says whether one restarted the last run.
         watchdog::start();
         // A test kernel on trial stops for good here, before init: only the chipset's watchdog restarts it (801-KRN-0258).
         if cfg!(feature = "watchdog-test") && info.boot_slot.trial != 0 {
