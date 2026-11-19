@@ -123,10 +123,11 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         let info = &*raw_info;
         // From here a panic on a trial restarts the machine: the loader has counted the try (801-KRN-0258).
         trial::start(&info.boot_slot);
-        // A chipset watchdog that needs no page tables, armed before anything else can stop the kernel (801-KRN-0258).
-        watchdog::early();
         // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
         if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
+        // The chipset watchdogs that need no page tables, armed before anything else can stop the kernel; the FADT
+        // names their PM base (801-KRN-0258, 801-KRN-0259).
+        watchdog::early();
         // The devices outside PCI that init may lend, from the tree or else from the firmware's tables (100000-KRN-0171).
         platform::nodes();
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);

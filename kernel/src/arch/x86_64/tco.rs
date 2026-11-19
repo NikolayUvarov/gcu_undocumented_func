@@ -8,6 +8,8 @@
 //   TCO1_CNT's bit 0 (NR_MSUS), which software may clear unless the board's strap holds it. Names, offsets and bits as
 //   Intel's register database for the 400 Series Chipset On-Package PCH (615146) gives them: SMBus PCI configuration,
 //   SMBus TCO I/O.
+// The same PCHs have an over-clocking watchdog, OC_WDT_CTL at the PM I/O base + 0x54 (the same database, PMC I/O): its
+// expiry resets the platform with no SMI in the way, where the firmware keeps the TCO's first expiry (801-KRN-0259).
 // The timer itself is the same in both: TCO_RLD 0x00 (a write reloads it), TCO1_STS 0x04 (TIMEOUT bit 3), TCO2_STS 0x06
 // (SECOND_TO_STS bit 1), TCO1_CNT 0x08 (TCO_TMR_HALT bit 11), TCO_TMR 0x12 (ticks of about 0.6 s); with NO_REBOOT clear,
 // the second expiry without a reload resets the machine (PLTRST#).
@@ -201,4 +203,64 @@ pub fn feed(r: &mut impl Registers, tco: u16) { r.set_io(tco + RLD, 2, 1); }
 pub fn stop(r: &mut impl Registers, tco: u16) {
     let control = r.io(tco + CNT1, 2) & !NMI_NOW;
     r.set_io(tco + CNT1, 2, control | TMR_HLT);
+}
+
+pub const OC_WDT_CTL: u16 = 0x54; // in the PM I/O space
+pub const OC_RLD: u32 = 1 << 31; // a 1 written reloads the count
+pub const OC_STS: u32 = 0b11 << 24; // ICCSURV_STS and NO_ICCSURV_STS: set by an expiry's reset, a 1 written clears them
+pub const OC_FORCE_ALL: u32 = 1 << 15; // set: any global reset counts as an expiry
+pub const OC_EN: u32 = 1 << 14;
+pub const OC_LCK: u32 = 1 << 12;
+pub const OC_TOV: u32 = 0x3FF; // seconds, less one
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OcArmed {
+    pub port: u16,
+    /// The register as the firmware left it.
+    pub found: u32,
+    pub seconds: u32,
+    /// An expiry's reset ended the last run: its status outlives the reset.
+    pub restarted: bool,
+    /// Locked by the firmware while running: fed at its own timeout, never stopped.
+    pub locked: bool,
+}
+
+/// The over-clocking watchdog of a listed PCH whose PM I/O base is `pm`, set to reset the platform `seconds` after the
+/// last feed and started; else why not. A locked one the firmware left running is fed as it is.
+pub fn arm_oc(r: &mut impl Registers, pm: u16, seconds: u32) -> Result<OcArmed, &'static str> {
+    let port = pm + OC_WDT_CTL;
+    let found = r.io(port, 4);
+    if found == u32::MAX { return Err("ITS OVER-CLOCKING WATCHDOG DOES NOT ANSWER"); }
+    let mut armed = OcArmed { port, found, seconds, restarted: found & OC_STS != 0, locked: found & OC_LCK != 0 };
+    if armed.locked {
+        if found & OC_EN == 0 { return Err("ITS OVER-CLOCKING WATCHDOG IS OFF AND LOCKED BY THE FIRMWARE"); }
+        armed.seconds = (found & OC_TOV) + 1;
+        feed_oc(r, port);
+        return Ok(armed);
+    }
+    let kept = found & !(OC_RLD | OC_STS | OC_FORCE_ALL | OC_EN | OC_TOV);
+    r.set_io(port, 4, kept | found & OC_STS);
+    r.set_io(port, 4, kept | OC_EN | (seconds - 1));
+    r.set_io(port, 4, kept | OC_EN | (seconds - 1) | OC_RLD);
+    if r.io(port, 4) & (OC_EN | OC_TOV) != OC_EN | (seconds - 1) { return Err("ITS OVER-CLOCKING WATCHDOG DOES NOT START"); }
+    Ok(armed)
+}
+
+/// The over-clocking watchdog's count started again.
+pub fn feed_oc(r: &mut impl Registers, port: u16) {
+    let value = r.io(port, 4) & !OC_STS;
+    r.set_io(port, 4, value | OC_RLD);
+}
+
+/// Its longest count, 1024 s, started: before a reset the kernel chose, so that one the firmware does not stop leaves
+/// it and the loader time, and a reset that does not come still ends in one.
+pub fn long_oc(r: &mut impl Registers, port: u16) {
+    let value = r.io(port, 4) & !(OC_STS | OC_TOV);
+    r.set_io(port, 4, value | OC_TOV | OC_RLD);
+}
+
+/// The over-clocking watchdog stopped, unless the firmware locked it.
+pub fn stop_oc(r: &mut impl Registers, port: u16) {
+    let value = r.io(port, 4) & !(OC_STS | OC_RLD);
+    r.set_io(port, 4, value & !OC_EN);
 }
