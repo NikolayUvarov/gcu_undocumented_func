@@ -39,11 +39,13 @@ struct Model {
 }
 
 impl Model {
-    // The DEXP as its boot line showed it: Intel's eSPI bridge without the ACPI I/O of the older chipsets; the firmware
-    // set the TCO at 0x400, decoded, halted, NO_REBOOT set (its strap low), TCO_EN on in SMI_EN at 0x1830.
+    // The DEXP as its hardware report showed it (log:/hw0004.txt, 2026-11-18): Intel's eSPI bridge 8086:5481 without
+    // the ACPI I/O of the older chipsets, the SMBus controller 8086:54A3 with TCOBASE 0x401 and TCOCTL 0x101 (decoded,
+    // locked), the FADT's PM1a events at 0x1800. The TCO's own registers are not in the report: here halted, NO_REBOOT
+    // set (its strap low), TCO_EN on in SMI_EN.
     fn n100() -> Self {
-        Model { lpc: ADL_N_ESPI, class: ISA_BRIDGE, pmbase: 1, acpi_cntl: 0, rcba: 0, smbus: ADL_N_SMBUS, tcobase: 0x401,
-                tcoctl: TCO_BASE_EN, decode_sticks: true, answers: true, cnt1: TMR_HLT | NR_MSUS | NMI_NOW, sts1: 0,
+        Model { lpc: ADL_N_ESPI, class: ISA_BRIDGE, pmbase: 0, acpi_cntl: 0, rcba: 0, smbus: ADL_N_SMBUS, tcobase: 0x401,
+                tcoctl: TCO_BASE_EN | 1, decode_sticks: true, answers: true, cnt1: TMR_HLT | NR_MSUS | NMI_NOW, sts1: 0,
                 sts2: 0, tmr: 4, count: 4, strap: false, gcs: 0, gcs_sticks: true, pm: Some(0x1800), smi_en: TCO_EN | 1,
                 smi_locked: false, log: Vec::new() }
     }
@@ -177,7 +179,7 @@ fn a_no_reboot_strap_leaves_the_timer_halted() {
     let mut m = Model { strap: true, ..Model::n100() };
     assert_eq!(arm(&mut m, 25), Err(Refused::Why("INTEL PCH: NO_REBOOT HELD BY THE BOARD'S STRAP")));
     assert_ne!(m.cnt1 & TMR_HLT, 0, "still halted");
-    assert_eq!(m.tcoctl, TCO_BASE_EN, "the decode as the firmware left it");
+    assert_eq!(m.tcoctl, TCO_BASE_EN | 1, "the decode as the firmware left it");
 }
 
 #[test]
