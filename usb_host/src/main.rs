@@ -352,7 +352,7 @@ impl Controller {
         let mut planned = [(0u8, false, 0u16, 0u8, Ring::default()); MAX_ENDPOINTS];
         let mut count = 0;
         for e in endpoints.iter().filter(|e| e.is_isochronous()) {
-            let Some(ring) = self.xhci.new_stream(slot, dci(e.address), number, e.is_in(), e.packet) else {
+            let Some(ring) = self.xhci.new_stream(slot, dci(e.address), number, e.is_in(), e.packet, iso_interval(device.speed, e.interval)) else {
                 self.xhci.end_streams(slot, Some(number));
                 mind::println!("[USB] {}SLOT {} ENDPOINT {:02X}: NO ROOM FOR A STREAM", Tag(self.xhci.number), slot, e.address);
                 return Err(Error::NoMemory);

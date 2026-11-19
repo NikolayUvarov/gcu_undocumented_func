@@ -22,7 +22,12 @@ const POOL_SCRATCH: usize = POOL_PAGES / 2;
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
 const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
-const TYPE_ISOCH: u32 = 17; const SIA: u32 = 1 << 31; // an isochronous TD that starts as soon as possible after the one before
+const TYPE_ISOCH: u32 = 17;
+// An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
+// IDs: the Ryzen's AMD xHCI stopped with a host controller error on TDs that asked to start as soon as possible (SIA).
+const FRAME_ID_SHIFT: u32 = 20;
+// The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
+const FIRST_AHEAD: u32 = 8 * 8;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
@@ -67,6 +72,9 @@ pub struct Stream {
     missed: u32, dry: u32, damaged: u32, moved: u64, reported: bool,
     // When a TD last ended, the completion codes already logged (a bit each, below 64), and when a stall was last said.
     ended_ms: u64, codes: u64, said_ms: u64,
+    // The microframe the next TD runs in (MFINDEX's count, 14 bits: 2048 frames), None until the first TD or after the
+    // ring ran dry; the microframes between two TDs (2^interval).
+    uframe: Option<u32>, step: u32,
 }
 
 impl Stream {
@@ -355,7 +363,7 @@ impl Xhci {
 
     /// A new stream of isochronous endpoint `dci` of `slot`, packets of up to `packet` bytes (with a high-speed
     /// endpoint's extra transactions); its ring, for the endpoint's context. None when the pool has no room.
-    pub fn new_stream(&mut self, slot: u8, dci: u8, interface: u8, input: bool, packet: u16) -> Option<Ring> {
+    pub fn new_stream(&mut self, slot: u8, dci: u8, interface: u8, input: bool, packet: u16, interval: u8) -> Option<Ring> {
         let at = self.streams.iter().position(Option::is_none)?;
         let bytes = (packet & 0x7FF) as usize * ((packet >> 11 & 3) as usize + 1);
         let size = bytes.max(64).next_power_of_two().min(PAGE);
@@ -368,7 +376,7 @@ impl Xhci {
         }
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
-            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0 });
+            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15) });
         Some(ring)
     }
     /// The stream of endpoint `dci` of `slot`.
@@ -403,7 +411,9 @@ impl Xhci {
             mind::println!("[USB] {}SLOT {} ENDPOINT {}: AN ISOCHRONOUS TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, code, usbsts);
         }
         let Some(t) = self.streams[index].as_mut() else { return };
-        if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; return; }
+        // A ring that ran dry starts again from the controller's frame with its next TD.
+        if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; t.uframe = None; return; }
+        if code == MISSED_SERVICE { t.uframe = None; }
         t.ended_ms = mind::time::uptime_ms() as u64;
         let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
         let good = matches!(code, SUCCESS | SHORT_PACKET);
@@ -421,10 +431,17 @@ impl Xhci {
 
     // Puts free TD k of stream `index` on its ring with `length` bytes; its TRB's address is how its end is known.
     fn queue_td(&mut self, index: usize, k: usize, length: usize) {
+        let mfindex = self.mmio.read32(self.runtime) & 0x3FFF;
         let Some(t) = self.streams[index].as_mut() else { return };
         let (buffer, input) = (t.buffer(k), t.input);
         let address = self.dma.physical(buffer);
-        let control = TYPE_ISOCH << 10 | IOC | SIA | if input { ISP } else { 0 };
+        // Its frame: the one after the TD before, or a little ahead of the controller; one that fell behind starts anew.
+        let uframe = match t.uframe {
+            Some(u) if (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= 16 => u,
+            _ => (mfindex + FIRST_AHEAD) & 0x3FFF,
+        };
+        t.uframe = Some((uframe + t.step) & 0x3FFF);
+        let control = TYPE_ISOCH << 10 | IOC | ((uframe >> 3) & 0x7FF) << FRAME_ID_SHIFT | if input { ISP } else { 0 };
         let trb = Self::enqueue(&mut self.dma, &mut t.ring, address, length as u32, control);
         t.state[k] = Td::Armed(trb);
     }

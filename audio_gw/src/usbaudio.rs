@@ -101,6 +101,16 @@ impl Usb {
         true
     }
 
+    // usb_host refused the device's stream (its controller takes none): the codec again, and the device's interfaces stay
+    // claimed, so it is not taken again until it is plugged in again.
+    fn refused(&mut self, why: mind::Error) {
+        if let Some(a) = self.attached.take() {
+            mind::println!("[AUDIO] USB {:04X}:{:04X}: ITS STREAM REFUSED ({:?}): THE CODEC AGAIN UNTIL IT IS PLUGGED IN AGAIN", a.name[0], a.name[1], why);
+        }
+        (self.playing, self.capturing, self.queued, self.kept) = (false, false, 0, 0);
+        self.looked = mind::time::uptime_ms() as u64;
+    }
+
     // The device went away (usb_host refused its handles): the gateway goes back to the codec.
     fn gone(&mut self, why: mind::Error) {
         if let Some(a) = self.attached.take() {
@@ -162,7 +172,7 @@ impl Usb {
                 (self.started_ms, self.sent, self.silent, self.fast, self.told) = (self.fed_ms, 0, 0, false, false);
                 mind::println!("[AUDIO] USB PLAYBACK STARTED: INTERFACE {} SETTING {}", s.interface, s.alternate);
             }
-            Err(e) => { mind::println!("[AUDIO] USB PLAYBACK SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } }
+            Err(e) => { mind::println!("[AUDIO] USB PLAYBACK SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } }
         }
     }
 
@@ -292,7 +302,7 @@ impl Usb {
         if self.capturing { return true; }
         match self.host.select(handle, s.alternate) {
             Ok(_) => { (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
-            Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); false }
+            Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } false }
         }
     }
     pub fn record_stop(&mut self) {
