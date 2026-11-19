@@ -738,6 +738,10 @@ pub const FIRMWARE_HEADER: usize = 26;
 // (a freeze the watchdog reset, a cut power), and init starts safely. GUID {444E494D-4F43-4552-8076-52554E4D4152}.
 pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
 pub const RUN_MARK_NAME: &str = "MindCoreRun";
+// The loader's lines, as it showed them (213-KRN-0262): a volatile variable of RUN_MARK_GUID's vendor, written as it
+// leaves boot services, which the kernel copies into its log; UTF-8 lines, at most LOADER_LINES_MAX bytes.
+pub const LOADER_LINES_NAME: &str = "MindCoreLoaderSaid";
+pub const LOADER_LINES_MAX: usize = 2048;
 // TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
 // fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With the
 // CAP_KIND_CONSOLE writer (ABI 29) the bytes queue for the console instead, ERR_PEER once its channel ended. With

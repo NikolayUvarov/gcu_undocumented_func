@@ -147,6 +147,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         firmware::init(info.efi_runtime);
         // A run the kernel stopped on a fault of its own says so at the next boot, and init learns it (801-KRN-0261).
         firmware::last_fault(info.boot_slot.slot);
+        // The loader's lines in the kernel's log, for a machine whose screen alone showed them (213-KRN-0262).
+        firmware::loader_lines();
         firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");

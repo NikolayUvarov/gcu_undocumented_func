@@ -37,18 +37,42 @@ A release that breaks the kernel or `init` must roll its slot back (801 S1). Sin
 
 ## Acceptance criteria
 
-- [ ] In QEMU (x86), the `boot` suite's panic check:
+- [x] In QEMU (x86), the `boot` suite's panic check (i9, above):
   - the panic is recorded as the machine stops;
   - the next boot names it;
   - the panic of that boot, 20 s in, leaves out at once what was starting.
-- [ ] The panicked trial (801-KRN-0258's check): the trial records its panic and restarts, and slot A's kernel names slot B's panic. `init` takes no evidence from it.
-- [ ] `init`'s exit and the ABI check still halt as before outside a trial (the `services` suite, the ABI kernel's check).
+- [x] The panicked trial (801-KRN-0258's check): the trial records its panic and restarts, and slot A's kernel names slot B's panic. `init` takes no evidence from it.
+- [x] `init`'s exit and the ABI check still halt as before outside a trial (the `services` suite, the ABI kernel's check in the `boot` suite).
 - [ ] aarch64 builds, and its suites pass. It runs no panic kernel, so no aarch64 evidence of the record is claimed.
-- [ ] docs/profile says which stops fall back and are recorded, and what is not shown.
+- [x] docs/profile says which stops fall back and are recorded, and what is not shown.
 
 **Not claimed:** a bench machine's run, and a trial ended by an exception in the kernel, `init`'s exit or an interrupt with no handler. Those take the panic's path, but no test makes one.
 
 **Left to [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md):** the record's line reaches neither the updater nor the server, so a fallback from a trial the kernel stopped is reported without its step (S2).
+
+## Progress (2026-11-19)
+
+**Made** on `claude/801-KRN-0261-every-fatal-end`, as the plan says.
+- The kernel grew by 78 lines, so `kernel/size-budget.json` is raised to 8000 in a commit of its own (`2e2c9772c5`). Its reason: after such a stop no task runs, so only the kernel can keep the record or restart the trial (MC-1.2).
+- `tests/runtime.rs` checks ABI 35.
+
+**Tested on `2e2c9772c5`,** through Effector (QEMU only, MC-12.1):
+
+| Group | Machine | Time | Result |
+|---|---|---|---|
+| x86: boot, display, shell, memory, clock | i9 | 1692 s | PASS |
+| x86: the watchdog | x32 | 289 s | PASS |
+| x86: services, storage, audio | x32-2 | 964 s | PASS |
+| x86: one CPU | x32-2 | 203 s | PASS |
+| host tests | x32 | 1126 s | PASS |
+| aarch64: boot and fault containment | PCU | 220 s | PASS |
+| aarch64: the updater and the modes | PCU | 1959 s | PASS |
+
+The same groups and `aarch64: the updater and the modes` (acc-1) also passed on `d3ec178c7b`, before the code was folded into one report writer.
+
+**The new checks' lines (i9):**
+- `PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen; it is recorded in a firmware variable, the next boot names it, and a panic while the safe start's list was starting leaves out at once what was starting (video_gw, audio_gw, tts) (801-KRN-0261)`
+- `PASS (x86): a kernel panic on a trial, inside the scheduler lock, restarts the machine, and the loader boots slot A with B's try spent; A's kernel names B's panic from its record`
 
 ## Related
 

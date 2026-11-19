@@ -81,12 +81,12 @@ fn a_reset_by_the_timer_is_reported_once_and_cleared() {
 fn a_timer_the_firmware_disabled_is_left_as_it_was() {
     let mut m = Model::zen();
     m.control |= DISABLED;
-    assert_eq!(arm(&mut m, 30), Err("AMD FCH: DISABLED BY THE FIRMWARE"));
+    assert_eq!(arm(&mut m, 30), Err("AMD FCH: DISABLED BY THE FIRMWARE (THE TIMER'S WATCHDOGDISABLE BIT)"));
     assert_eq!(m.pm[DECODEEN3 as usize], WDT_DISABLE, "the PM register put back");
     assert!(timer_writes(&m).is_empty());
     let mut m = Model::zen();
     m.pm_sticks = false;
-    assert_eq!(arm(&mut m, 30), Err("AMD FCH: DISABLED BY THE FIRMWARE"));
+    assert_eq!(arm(&mut m, 30), Err("AMD FCH: DISABLED BY THE FIRMWARE (PM DECODEEN3'S WATCHDOG DISABLE KEPT)"));
     assert!(timer_writes(&m).is_empty());
 }
 

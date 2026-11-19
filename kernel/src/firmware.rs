@@ -130,6 +130,15 @@ pub fn last_fault(slot: u32) {
     if !deleted { let _ = core::fmt::Write::write_str(&mut out, "MIND CORE KERNEL: THE FAULT RECORD COULD NOT BE DELETED: THE NEXT BOOT NAMES IT AGAIN\n"); }
 }
 
+/// The loader's lines (213-KRN-0262), kept by it in a volatile variable: into the kernel's log alone, as COM1 and the
+/// screen showed them already.
+pub fn loader_lines() {
+    let mut data = [0u8; crate::abi::LOADER_LINES_MAX];
+    let Ok((_, length)) = get(utf16(crate::abi::LOADER_LINES_NAME, &mut [0; 32]), &crate::abi::RUN_MARK_GUID, &mut data) else { return };
+    let text = &data[..length.min(data.len())];
+    crate::klog::keep(core::str::from_utf8(text).unwrap_or_else(|e| core::str::from_utf8(&text[..e.valid_up_to()]).unwrap_or("")));
+}
+
 /// The test kernel's panic (801-KRN-0261): 0 at the first log of a boot after no record, 1 on the tick 20 s past the boot
 /// after its own first panic, 2 none after that.
 #[cfg(feature = "panic-test")]
