@@ -65,6 +65,7 @@ The maintainer was at the machine. Releases were built from this branch and sent
    **The reset was the watchdog's, not a hand's:**
    - the 87 s are two boots and the 30 s;
    - a reset by hand leaves no such mark.
+   - the maintainer, at the machine, confirmed that nobody reset it, for both runs (releases 5 and 9).
 
    Criteria 2 and 3 are met.
 3. **The mark:** release 4's kernel read only the status bits, so that boot did not say `IT RESTARTED THE LAST RUN`. `14a3905f64` reads the mark as a restart and clears it.
