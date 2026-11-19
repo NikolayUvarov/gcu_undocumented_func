@@ -42,6 +42,10 @@ const FRAME_MAX: usize = 1514;
 const SOCKETS: usize = 32; // all clients together
 const PER_CLIENT: usize = 8;
 const TCP_BUFFER: usize = 8192;
+// A connection a client opens receives into 64 KiB: 8 KiB a round trip held the DEXP's downloads to about 54 KB/s (801-NET-0088).
+const TCP_RECEIVE: usize = 64 * 1024;
+// A client that reads and gets nothing for this long has its connection named in the log, once (801-NET-0088).
+const STALL_MS: u64 = 5000;
 const UDP_PACKETS: usize = 8;
 const UDP_BUFFER: usize = 8192;
 const POLL_MS: u32 = 10;
@@ -232,7 +236,7 @@ enum Kind { Udp, Tcp, Listen }
 
 // A client's socket: its interface (`link`) and its handle in that interface's socket set.
 #[derive(Clone, Copy)]
-struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64 }
+struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64, got: u64, waiting: u64, stalled: bool }
 
 // An echo's data: 1 to 16 bytes repeated over it (socket.wit 2.6); `MINDCORE` by default, as `ping` sends.
 #[derive(Clone, Copy)]
@@ -595,7 +599,7 @@ impl Stack {
         let free = self.slots.iter().position(Option::is_none);
         let (false, Some(index)) = (full, free) else { self.link(link).sockets.remove(handle); return Err(Error::Limit) };
         self.generations[index] = (self.generations[index] + 1) & 0xFF_FFFF;
-        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0 });
+        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0, got: 0, waiting: 0, stalled: false });
         Ok(index)
     }
     fn free(&mut self, index: usize) {
@@ -692,6 +696,28 @@ impl Stack {
         list
     }
     // Sockets of clients that ended.
+    // A stream that stops: its client read bytes, asked again within a second and got nothing for STALL_MS. Named
+    // once, with what smoltcp holds, and again when bytes come (801-NET-0088); an empty queue means nothing arrived.
+    fn watch(&mut self, index: usize, result: &Result<usize, Error>) {
+        let Some(mut slot) = self.slots[index] else { return };
+        let now = now_ms();
+        match result {
+            Ok(n) if *n > 0 => {
+                if slot.stalled { mind::println!("[NETSTACK] TCP SOCKET {}: BYTES AGAIN AFTER {} MS", index + 1, now - slot.got); }
+                slot.got = now; slot.waiting = 0; slot.stalled = false;
+            }
+            Err(Error::Again) if slot.waiting == 0 => slot.waiting = now,
+            Err(Error::Again) if !slot.stalled && slot.got != 0 && slot.waiting - slot.got <= 1000 && now - slot.got >= STALL_MS => {
+                let socket = self.link(slot.link).sockets.get::<tcp::Socket>(slot.handle);
+                mind::println!("[NETSTACK] TCP SOCKET {} TO {:?}: NOTHING RECEIVED FOR {} MS WHILE ITS CLIENT READS ({:?}, QUEUE {} OF {}, {} BYTES UNSENT)",
+                               index + 1, socket.remote_endpoint(), now - slot.got, socket.state(), socket.recv_queue(), socket.recv_capacity(), socket.send_queue());
+                slot.stalled = true;
+            }
+            _ => return,
+        }
+        self.slots[index] = Some(slot);
+    }
+
     fn reap(&mut self) {
         for index in 0..SOCKETS {
             if let Some(slot) = self.slots[index] { if !mind::process::alive(slot.owner.0) { self.free(index); } }
@@ -843,7 +869,7 @@ impl Stack {
             }
             socket::Request::TcpConnect { address, port, timeout_ms } => {
                 let Some(link) = self.route(address) else { let _ = socket::reply_tcp_connect(call, Err(Error::NoNetwork)); return moved };
-                let socket = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; TCP_BUFFER]), tcp::SocketBuffer::new(vec![0; TCP_BUFFER]));
+                let socket = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; TCP_RECEIVE]), tcp::SocketBuffer::new(vec![0; TCP_BUFFER]));
                 let local = self.port();
                 let l = self.link(link);
                 let handle = l.sockets.add(socket);
@@ -868,12 +894,14 @@ impl Stack {
             }
             socket::Request::TcpReceive { socket: id, length } => {
                 let mut buffer = [0u8; 4096];
-                let result = self.slot(id, owner, Kind::Tcp).and_then(|(_, slot)| {
+                let result = self.slot(id, owner, Kind::Tcp).and_then(|(index, slot)| {
                     let socket = self.link(slot.link).sockets.get_mut::<tcp::Socket>(slot.handle);
-                    if socket.can_recv() {
+                    let result = if socket.can_recv() {
                         let want = (length as usize).clamp(1, buffer.len());
                         socket.recv_slice(&mut buffer[..want]).map_err(|_| Error::Closed)
-                    } else if !socket.may_recv() { Err(Error::Closed) } else { Err(Error::Again) }
+                    } else if !socket.may_recv() { Err(Error::Closed) } else { Err(Error::Again) };
+                    self.watch(index, &result);
+                    result
                 });
                 if let Ok(n) = result { moved.1 = n; }
                 socket::reply_tcp_receive(call, result.map(|n| &buffer[..n]))
