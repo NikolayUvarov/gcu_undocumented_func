@@ -1,6 +1,6 @@
 # 801-NET-0088 — A long download over the DEXP's Wi-Fi is cut by a 10 s stall, and runs at an 8 KiB window
 
-**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19; steps 1 and 2 on `claude/801-NET-0088-a-wider-tcp-window`, the DEXP's criterion met) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
+**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-19; steps 1 and 2 landed in round 151, the DEXP's criterion met; `netbench` and a shown stall left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
 
 ## Problem
 
@@ -48,6 +48,13 @@ The agent starts a cut download again from its first byte. Every try then needs 
   - **Before:** with 8 KiB, four of ten downloads were taken, in about 9 minutes each.
   - **To the confirmed slot:** each of 10 to 14 took 177 to 234 s, through a trial on alternating slots.
   - **The stall line:** whether it was printed is not known. The downloads' boots were replaced by the next ones before their log was read.
+
+**Landed in round 151** (`main` 3e6bbde056). The gate was green, 61 groups, among them the `net`, `tls` and Effector groups on x86 and aarch64.
+
+**Left:**
+- **`netbench` before and after:** it needs a tap interface, and the gate does not run it.
+- **The stall line, shown:** a check where the fixture's server stops a body for more than 5 s, and the line is in the log.
+- **EFF's part:** a cut download goes on with `Range` (`requests-EFF.md`).
 
 ## Acceptance criteria
 
