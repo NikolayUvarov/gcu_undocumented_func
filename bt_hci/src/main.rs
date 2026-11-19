@@ -3,8 +3,10 @@
 
 //! bt_hci (700-BLT-0001): a Bluetooth controller's HCI over USB. It claims the controller usb_host gives its badge
 //! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C from data/firmware/rtl_bt/, says its
-//! version and address, then listens: an LE scan and a BR/EDR inquiry at start and every five minutes, each device
-//! heard logged once a round. The stack (bt_host) and its devices come after.
+//! version and address, then, when the disk asks with `data/bt-listen.txt`, listens: an LE scan and a BR/EDR inquiry
+//! at start and every five minutes, each device heard logged once a round. Without it the controller stays quiet: a
+//! controller that shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its
+//! inquiries until the Wi-Fi driver restarted (700-BLT-0003). The stack (bt_host) and its devices come after.
 
 use bt_hci::{hci, rtl};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DEV0, SLOT_VFS};
@@ -24,6 +26,8 @@ const CLAIM_MS: u64 = 30_000;
 const COMMAND_MS: u64 = 2_000;
 const SCAN_MS: u64 = 10_000;
 const ROUND_MS: u64 = 300_000;
+/// The file that turns the listening rounds on (700-BLT-0003).
+const LISTEN: &str = "data/bt-listen.txt";
 /// The default event mask with Extended Inquiry Result (bit 46) and the LE meta event (bit 61).
 const EVENT_MASK: u64 = 0x0000_1FFF_FFFF_FFFF | 1 << 46 | 1 << 61;
 /// The general inquiry access code, 0x9E8B33, and 8 × 1.28 s.
@@ -227,7 +231,11 @@ fn main(_info: &'static BootInfo) {
         Ok(())
     })();
     if let Err(e) = up { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle(); }
-    say(format_args!("UP: LISTENING EVERY {} S", ROUND_MS / 1000));
+    if mind::fs::File::open(LISTEN).is_err() {
+        say(format_args!("UP: NOT LISTENING (NO {}): A SCAN TAKES THE RADIO A WI-FI MAY SHARE", LISTEN));
+        idle();
+    }
+    say(format_args!("UP: LISTENING EVERY {} S ({})", ROUND_MS / 1000, LISTEN));
     loop {
         if let Err(e) = hci.round() { say(format_args!("ROUND FAILED: {:?}", e)); }
         // The kernel ends one wait at 60 s at most, so the round's wait is made of several (700-BLT-0002).
