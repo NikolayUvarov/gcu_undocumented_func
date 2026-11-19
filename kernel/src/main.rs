@@ -145,6 +145,8 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             cpu::halt_here();
         }
         firmware::init(info.efi_runtime);
+        // A run the kernel stopped on a fault of its own says so at the next boot, and init learns it (801-KRN-0261).
+        firmware::last_fault(info.boot_slot.slot);
         firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
@@ -187,10 +189,44 @@ impl core::fmt::Write for Fatal {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_only(text); screen::fatal(text); Ok(()) }
 }
 
+// A fatal report's line, kept for the next boot (801-KRN-0261): written beside the report, cut at its first line's end.
+pub struct Line { text: [u8; firmware::FAULT_TEXT], length: usize, ended: bool }
+impl Line { pub const fn new() -> Self { Line { text: [0; firmware::FAULT_TEXT], length: 0, ended: false } } }
+impl core::fmt::Write for Line {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        for &byte in text.as_bytes() {
+            if self.ended || self.length == self.text.len() { break; }
+            if byte == b'\n' { self.ended = true; } else { self.text[self.length] = byte; self.length += 1; }
+        }
+        Ok(())
+    }
+}
+// The report and its line together.
+pub struct Both<'a>(pub &'a mut Fatal, pub &'a mut Line);
+impl core::fmt::Write for Both<'_> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result { let _ = self.0.write_str(text); self.1.write_str(text) }
+}
+
+/// Every stop the kernel chose that no task asked for, after its report (801-KRN-0261): the report's line kept in a
+/// firmware variable for the next boot, then a trial not yet confirmed restarted into the fallback, its watchdogs left
+/// running in case the restart does not come (801-KRN-0258); any other run stops, its watchdog stopped first.
+#[allow(unreachable_code)] // x86's reset never returns; aarch64's does where the FADT names no PSCI
+pub fn fatal_end(out: &mut Fatal, kind: firmware::Fault, line: &Line) -> ! {
+    use core::fmt::Write;
+    cpu::stop_others();
+    let kept = firmware::record_fault(kind, &line.text[..line.length]);
+    let _ = out.write_str(if kept { "THE FAULT IS RECORDED FOR THE NEXT BOOT\n" } else { "THE FAULT IS NOT RECORDED: THE FIRMWARE KEEPS NO VARIABLES, OR WAS IN USE\n" });
+    if trial::pending() {
+        let _ = out.write_str("TRIAL: RESTARTING INTO THE FALLBACK\n");
+        unsafe { acpi::reset(); }
+        cpu::freeze();
+    }
+    cpu::halt_all();
+}
+
 static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 #[panic_handler]
-#[allow(unreachable_code)] // x86's reset never returns; aarch64's does where the FADT names no PSCI
 fn panic(info: &PanicInfo) -> ! {
     use core::fmt::Write;
     unsafe { cpu::disable_interrupts(); }
@@ -203,10 +239,12 @@ fn panic(info: &PanicInfo) -> ! {
     // Other CPUs stop first, so their output does not interleave with the report.
     cpu::stop_others();
     let cpu = cpu::id();
-    let mut out = Fatal::begin();
-    let _ = write!(out, "\nKERNEL PANIC: {}", info.message());
-    if let Some(location) = info.location() { let _ = write!(out, " at {}:{}:{}", location.file(), location.line(), location.column()); }
-    let _ = write!(out, " CPU={}", cpu);
+    let (mut out, mut line) = (Fatal::begin(), Line::new());
+    let _ = write!(out, "\nKERNEL PANIC: ");
+    let mut both = Both(&mut out, &mut line);
+    let _ = write!(both, "{}", info.message());
+    if let Some(location) = info.location() { let _ = write!(both, " at {}:{}:{}", location.file(), location.line(), location.column()); }
+    let _ = write!(both, " CPU={}", cpu);
     let running = &cpu::RUNNING[cpu];
     let pid = running[0].load(core::sync::atomic::Ordering::Relaxed);
     if pid != 0 {
@@ -214,13 +252,8 @@ fn panic(info: &PanicInfo) -> ! {
         name[..8].copy_from_slice(&running[1].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
         name[8..].copy_from_slice(&running[2].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
         let len = name.iter().position(|&b| b == 0).unwrap_or(16);
-        let _ = write!(out, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
+        let _ = write!(both, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
     }
-    let _ = write!(out, "\n");
-    if trial {
-        let _ = write!(out, "TRIAL: RESTARTING INTO THE FALLBACK\n");
-        unsafe { acpi::reset(); }
-        cpu::freeze();
-    }
-    cpu::halt_all();
+    let _ = write!(both, "\n");
+    fatal_end(&mut out, firmware::Fault::Panic, &line)
 }

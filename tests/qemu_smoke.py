@@ -19018,20 +19018,43 @@ def boot_suite(args, disk):
         target = disk / "kernel.elf"
         target.write_bytes(Path(args.panic_kernel).read_bytes())
         sign_manifest.sign_volume(disk)
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
-        try:
-            deadline, pattern = time.monotonic() + 30, re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n")
-            while not pattern.search(vm.output.replace("\r", "")):
-                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False, reboot=True)
+
+        def panicked(pattern, timeout):
+            # A panic's report and its record, which expect() would take for a failure; the output cleared after them.
+            deadline, pattern = time.monotonic() + timeout, re.compile(pattern + r"\n(.*\n)*THE FAULT IS RECORDED FOR THE NEXT BOOT\n")
+            while not (found := pattern.search(vm.output.replace("\r", ""))):
+                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-3000:]
                 vm.collect(); time.sleep(.05)
+            vm.output = ""
+            return found
+        try:
+            panicked(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", 30)
             # 211-KRN-0013: the boot line and the report are on the screen too, for a machine without a serial port.
             screen = "\n".join(line.rstrip() for line in screen_text(vm))
             assert re.search(r"MIND CORE KERNEL: INIT STARTED\n(.*\n)*KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", screen), screen
+            # 801-KRN-0261: the record outlives the reset, and the next boot names it. That one panics 20 s past its start,
+            # on the tick, while the safe start's list is still starting (its starts settle 30 s past READY).
+            vm.hmp("system_reset")
+            vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=90)
+            panicked(r"KERNEL PANIC: panic test, 20 s past the boot at src/arch/x86_64/interrupts\.rs:\d+:\d+ CPU=0", 90)
+            # A fault the kernel recorded is a freeze's evidence (ABI 35): what that run was starting is left out at once.
+            vm.hmp("system_reset")
+            vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE KERNEL STOPPED IT ON A FAULT; NOT STARTED: ([^\r\n]+)", log)
+            assert decided, [line for line in log.splitlines() if "LAST RUN" in line or "MARK" in line] or log[:3000]
+            left = decided[1].split(", ")
+            assert left and set(left) <= set(SAFE_LIST), left
+            require(log, "[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM 120 S PAST READY")
         finally:
             vm.close()
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
-        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
+        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen; "
+              f"it is recorded in a firmware variable, the next boot names it, and a panic while the safe start's list was "
+              f"starting leaves out at once what was starting ({', '.join(left)}) (801-KRN-0261)", flush=True)
 
         def past_the_panic(image, until):
             # `until` once slot A is loaded: slot B's panic comes first, which expect() takes for a failure (801-KRN-0258).

@@ -515,7 +515,15 @@ impl Scheduler {
         self.forget_send(send); let task = self.tasks[slot].as_ref().unwrap();
         self.ended[self.ended_next] = (pid, reason, task.parent.map_or(0, |p| p.1)); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
-        if task.parent.is_none() { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "INIT EXITED: SYSTEM HALTED (REASON={:016X})\n", reason); cpu::halt_all(); }
+        // On a trial init's exit restarts into the fallback (801-KRN-0261).
+        if task.parent.is_none() {
+            use core::fmt::Write;
+            cpu::stop_others();
+            let (mut out, mut line) = (crate::Fatal::begin(), crate::Line::new());
+            let _ = write!(out, "INIT EXITED{} ", if crate::trial::pending() { "" } else { ": SYSTEM HALTED" });
+            let _ = write!(crate::Both(&mut out, &mut line), "(REASON={:016X})\n", reason);
+            crate::fatal_end(&mut out, crate::firmware::Fault::InitExited, &line)
+        }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
         for other in 1..self.tasks.len() {
@@ -973,6 +981,8 @@ impl Scheduler {
         let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.extra_programs = self.boot.extra_programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).count(); info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
         // Whether the watchdog restarted the last run, a freeze's evidence for init's safe start (ABI 34, 000-KRN-0217).
         if crate::watchdog::restarted() { info.boot_flags |= BOOT_WATCHDOG_RESTARTED; }
+        // Whether the last run of this slot ended in a fault the kernel recorded, the same evidence (ABI 35, 801-KRN-0261).
+        if crate::firmware::faulted() { info.boot_flags |= BOOT_LAST_RUN_FAULTED; }
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -1489,7 +1499,8 @@ impl Scheduler {
         let ptr = self.mailbox(slot); let request = core::ptr::read_volatile(ptr);
         self.settle_kernel(slot);
         let tasks: *mut Table<TaskBox> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
-        #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
+        // The test kernel: at the first log of a boot after no fault record; 20 s past the next boot's start (the tick's).
+        #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG && crate::firmware::PANIC_STAGE.load(Ordering::Relaxed) == 0 { panic!("panic test"); }
         #[cfg(all(feature = "protection-test", target_arch = "x86_64"))] if request.syscall_num == SYSCALL_LOG { crate::arch::report::probe::run(); }
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
@@ -1963,7 +1974,14 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             Event::Stop => cpu::halt_here(),
             // A checked read of a register the CPU may not have (the hardware report) resumes as "absent".
             Event::KernelFault { pc, .. } if crate::arch::report::resume_after_fault(pc).is_some() => { context::resume_at(sp, crate::arch::report::resume_after_fault(pc).unwrap()); return sp; }
-            Event::KernelFault { code, pc, error } => { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error); cpu::halt_all(); }
+            // On a trial it restarts into the fallback, like a panic (801-KRN-0261).
+            Event::KernelFault { code, pc, error } => {
+                use core::fmt::Write;
+                cpu::stop_others();
+                let (mut out, mut line) = (crate::Fatal::begin(), crate::Line::new());
+                let _ = write!(crate::Both(&mut out, &mut line), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error);
+                crate::fatal_end(&mut out, crate::firmware::Fault::Exception, &line)
+            }
             _ if ZEROING[cpu].load(Ordering::Relaxed) => return between_pieces(cpu, event, sp),
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}

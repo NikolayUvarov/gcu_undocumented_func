@@ -2673,12 +2673,14 @@ fn boot(info: &'static BootInfo) {
                        if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
     }
     // The last run's mark (000-KRN-0076): found, it stopped early. A safe start leaves out only what that run of this slot
-    // was starting, at once with the watchdog's evidence of a freeze, else after a second such run in a row (000-KRN-0217).
+    // was starting, at once with the evidence of a freeze (the watchdog's restart, or a fault the kernel recorded as it
+    // stopped, 801-KRN-0261), else after a second such run in a row (000-KRN-0217).
     // The privilege is kept until the mark is cleared, a minute after READY once every start settled.
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
     let slot = info.boot_slot.slot as u8;
     let last = firmware.and_then(last_mark);
-    let decision = safe::decide(last, slot, info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0);
+    let (restarted, faulted) = (info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0, info.boot_flags & BOOT_LAST_RUN_FAULTED != 0);
+    let decision = safe::decide(last, slot, restarted || faulted);
     init.mark = safe::Mark { slot, starting: 0, suspected: decision.suspected };
     let marked = firmware.is_some_and(|f| mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &init.mark.bytes()).is_ok());
     let (named, back) = (names_of(decision.named), safe::RETURN_MS / 1000);
@@ -2691,7 +2693,8 @@ fn boot(info: &'static BootInfo) {
         // Each line fits logd's 200-byte record with every name of the list.
         (safe::Why::Once, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: {}", named.as_str()),
         (safe::Why::Twice, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE SECOND IN A ROW WHILE THESE STARTED; NOT STARTED: {}", named.as_str()),
-        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: {}", named.as_str()),
+        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, {}; NOT STARTED: {}",
+                                                   if restarted { "THE WATCHDOG RESTARTED IT" } else { "THE KERNEL STOPPED IT ON A FAULT" }, named.as_str()),
     }
     if decision.left_out != 0 { mind::println!("[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM {} S PAST READY", back); }
     let first = decision.suspected & !decision.left_out;
