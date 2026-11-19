@@ -11531,6 +11531,7 @@ def download_check(args, disk):
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
+    pause = stall_server(small, 50_000, resume=True)  # stops a body and goes on with it: netstack names the stall (801-NET-0088)
     service = _service_server(certificates)
     api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
     api_other = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # another host for get's redirects
@@ -11544,7 +11545,7 @@ def download_check(args, disk):
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], pause.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port, future_port))
                                         + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
                                         + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
@@ -11566,9 +11567,10 @@ def download_check(args, disk):
             sftp_runs(vm, sftp)
         else:
             print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
-        download_runs(vm, release, port, big, small, cut, 5 + len(sftp_port))
+        download_runs(vm, release, port, big, small, cut, 6 + len(sftp_port))
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
+        stalled_stream_check(vm, pause, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
@@ -11578,6 +11580,7 @@ def download_check(args, disk):
         vm.close()
         held.go.set()
         stall.go.set()
+        pause.go.set()
         if sftp:
             sftp.stop()
         for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired, future):
@@ -11996,10 +11999,11 @@ def session_parsers_check(vm, held, body):
           "netstat lists both connections as ESTABLISHED under download's name, and not after", flush=True)
 
 
-def stall_server(body, cut):
+def stall_server(body, cut, resume=False):
     """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
-    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
-    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    cuts the connection, or with `resume` sends the rest on it; a request with a Range gets the rest. `server.sent` is
+    set once the first part is out, and `server.ranges` lists each request's Range header (109-NET-0010: a download's
+    parser that ended meanwhile; 801-NET-0088: a stream that stops and goes on)."""
     go, sent, ranges = threading.Event(), threading.Event(), []
 
     class Stall(http.server.BaseHTTPRequestHandler):
@@ -12023,8 +12027,11 @@ def stall_server(body, cut):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body[:cut])
+            self.wfile.flush()
             sent.set()
             go.wait(60)
+            if resume:
+                self.wfile.write(body[cut:])
             self.close_connection = True
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
     server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
@@ -12061,6 +12068,45 @@ def parser_restart_check(vm, stall, body):
     assert stall.ranges == [None, "bytes=50000-"], stall.ranges
     require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
     print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
+
+
+def stalled_stream_check(vm, pause, body):
+    """801-NET-0088: a stream that stops while its client keeps reading is named once in netstack's log after 5 s with
+    nothing, with the socket's peer, state and queue (a 64 KiB window, empty: nothing arrived), and again when its
+    bytes come on the same connection; the file is whole."""
+    url = f"http://10.0.2.2:{pause.server_address[1]}"
+    started = time.monotonic()
+    require(vm.command(f"run download ram:p.bin {url}/p.bin &"), "NAME=download BACKGROUND")
+    assert pause.sent.wait(30), pause.ranges
+    stalled = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:(\d+): NOTHING RECEIVED FOR (\d+) MS WHILE ITS CLIENT READS "
+                         r"\(ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT\)")
+    # Only this server's connection: an earlier check's held stream may have been named too.
+    ours = lambda log: [m for m in stalled.finditer(log) if int(m[2]) == pause.server_address[1]]
+    log = ""  # `logs` gives the lines since its last call: they are kept here
+    for _ in range(120):  # 5 s after the last byte, as netstack's clock sees it; the log read takes its own time
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if ours(log):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("no stall named", log[-2000:]))
+    line = ours(log)[0]
+    assert int(line[3]) >= 5000, line[0]
+    held = time.monotonic() - started
+    pause.go.set()
+    for _ in range(120):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if f"[NETSTACK] TCP SOCKET {line[1]}: BYTES AGAIN AFTER" in log and not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the stream did not go on", log[-2000:]))
+    assert len(ours(log)) == 1, ("named once for one stop", [m[0] for m in ours(log)], pause.ranges,
+                                 [l for l in log.splitlines() if "TCP SOCKET" in l])
+    assert pause.ranges == [None], pause.ranges
+    require(vm.command("sha256 ram:p.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:p.bin")
+    print(f"PASS: a stream that stops while its client reads is named once in netstack's log after 5 s (ESTABLISHED, its 64 KiB "
+          f"window empty), and again when its bytes come on the same connection; the file is whole ({held:.0f} s held)", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
