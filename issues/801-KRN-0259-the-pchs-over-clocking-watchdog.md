@@ -72,7 +72,7 @@ The maintainer was at the machine. Releases were built from this branch and sent
    Releases 6 (as built) and 7 (`watchdog-test`) are to show two things:
    - whether an ordinary reset keeps the mark;
    - the line after an expiry.
-4. **The downloads:** five of the eight archive downloads (29 MB each) were cut after 184 to 280 s, with `/api/commands/file BODY: Transport`.
+4. **The downloads:** six of the day's ten archive downloads (about 29 MB each) were cut after 184 to 439 s, with `/api/commands/file BODY: Transport`.
    - Each time the radio's traffic fell in the last 10 s, which is the agent's bound on a body read with no byte.
    - The radio counted no frame lost.
    - The ones taken lasted about 9 minutes.
