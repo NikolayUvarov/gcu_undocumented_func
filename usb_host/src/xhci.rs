@@ -151,6 +151,14 @@ impl Xhci {
 
     pub fn ports(&self) -> usize { self.ports }
 
+    /// USBSTS: bit 0 halted, bit 2 a host system error, bit 12 a host controller error.
+    pub fn status(&self) -> u32 { self.mmio.read32(self.op + 4) }
+    /// Whether the controller stopped by itself, with a host system or controller error (000-DRV-0073: the Ryzen's
+    /// second xHCI did, on its first isochronous TDs).
+    pub fn failed(&self) -> bool { let s = self.status(); s & 1 != 0 && s & (1 << 2 | 1 << 12) != 0 }
+    /// The controller set up anew on its registers and DMA region, after it failed: every device on it is gone.
+    pub fn start_again(self) -> Option<Self> { let Xhci { mmio, dma, number, .. } = self; Self::init(mmio, dma, number) }
+
     // DMA pages for device contexts and transfer rings.
     pub fn alloc(&mut self) -> Option<usize> {
         let bit = self.free.trailing_zeros() as usize;
@@ -332,6 +340,16 @@ impl Xhci {
         self.dma.write64(at + 8, dequeue);
         self.dma.write32(at + 16, esit | (esit & 0xFFFF) << 16);
     }
+    /// The input slot context as the device's output one is, with `entries` (Linux's xhci_slot_copy): a Configure
+    /// Endpoint that adds endpoints to a running device changes nothing else of its slot.
+    pub fn slot_context_from(&mut self, output: usize, entries: u32) {
+        let slot = INPUT + self.context;
+        for i in 0..4 { let v = self.dma.read32(output + 4 * i); self.dma.write32(slot + 4 * i, v); }
+        let first = self.dma.read32(slot) & !(0x1F << 27) | entries << 27;
+        self.dma.write32(slot, first);
+    }
+    /// An endpoint's state in the device's output context: 1 running, 2 halted, 3 stopped, 4 error.
+    pub fn endpoint_state(&mut self, output: usize, dci: u8) -> u32 { self.dma.read32(output + self.context * dci as usize) & 7 }
     /// The endpoints a Configure Endpoint drops (input control context's drop flags).
     pub fn input_drop(&mut self, drop: u32) { self.dma.write32(INPUT, drop); }
 
