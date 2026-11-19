@@ -96,3 +96,18 @@ The EFF track numbers its own tasks, so a request from another track waits here 
 
 - **What the DEXP showed** (801, "The DEXP's first release through Effector"): from the moment `update_agent` was taken (21:25:36 UTC) the server saw no heartbeat for about 8 minutes, until the agent's `shutting_down` at 21:33:55. The bundle was 29 MB over the DEXP's Wi-Fi.
 - **What is asked:** the heartbeat goes on, on its own schedule, while a bundle downloads and streams to the updater, as 750's "independently scheduled heartbeat" says; the update state in it (`receiving`) if the contract has the field. A test in the `effector-update` suite: with the fixture's download slowed to take longer than two heartbeat periods, the fixture still receives a heartbeat in each period.
+
+### No rewrite of the agent's journal on a trial boot (KRN, 2026-11-19, for 801's S3)
+
+- **What round 149's gate showed** (x32, the `rollback` suite, x86; the candidate changed only `tests/qemu_smoke.py`'s store check): `AssertionError: [('the trial changed what slot A reads', ['system/effector/journal.new'])]`.
+  - Slot B's trial left `system/effector/journal.new` on the disk, and `system/effector/journal` as it was.
+  - The group passed when it ran again alone, and in every gate before.
+- **Where it comes from.** The agent compacts its journal at each start (`effector/src/main.rs`, `start()`: `rewrite_journal`, "Compacted at each start").
+  - The rewrite writes `journal.new`, removes `journal` and renames the new file into its place.
+  - A `journal.new` left beside an unchanged `journal` means the removal or the rename did not take. The trial's service lines are not on the serial console, so which one is not known.
+  - Slot A's agent then removes `journal.new` at its start (`recover()`), so its records were not lost here.
+- **Why it matters for S3.** On a trial boot, `system/effector` holds slot A's journal. A compaction there rewrites what slot A reads, and a cut one leaves its pieces. If the compaction drops a line, slot A comes back to a journal the trial changed.
+- **What is asked:**
+  1. On a boot on trial (init's `boot_slot`, or the updater's state the agent already reads for `update_step`), leave the journal as it is: no compaction, and no file in `system/effector` other than what the trial must add. Compact at the first start after the trial is confirmed.
+  2. Say in the log line when the compaction is left for later.
+  3. The `rollback` suite already checks the result; a host or `effector` suite check that a trial's start writes no `journal.new` would show it without the 600 s trial.
