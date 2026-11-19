@@ -57,12 +57,7 @@ unsafe fn set_handler(index: usize, address: u64, cs: u16) {
 
 // A vector with no handler: reported, recorded, and on a trial a restart into the fallback (801-KRN-0261).
 extern "x86-interrupt" fn unexpected(frame: &mut InterruptFrame) {
-    use core::fmt::Write;
-    crate::cpu::stop_others();
-    let (mut out, mut line) = (crate::Fatal::begin(), crate::Line::new());
-    let _ = write!(out, "KERNEL EXCEPTION: ");
-    let _ = write!(crate::Both(&mut out, &mut line), "AN INTERRUPT WITH NO HANDLER AT RIP={:016X}\n", frame.rip);
-    crate::fatal_end(&mut out, crate::firmware::Fault::Unexpected, &line)
+    crate::fatal(crate::firmware::Fault::Unexpected, "KERNEL EXCEPTION: ", format_args!("AN INTERRUPT WITH NO HANDLER AT RIP={:016X}\n", frame.rip))
 }
 // The tick comes from the boot CPU's LAPIC timer rather than the PIT through the 8259 (211-PRT-0003).
 static LAPIC_TICK: AtomicBool = AtomicBool::new(false);

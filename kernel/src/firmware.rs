@@ -104,10 +104,6 @@ pub fn record_fault(kind: Fault, text: &[u8]) -> bool {
     status == 0
 }
 
-fn slot_name(slot: u8) -> &'static str {
-    match slot as u32 { crate::abi::BOOT_SLOT_A => "SLOT A", crate::abi::BOOT_SLOT_B => "SLOT B", _ => "THE VOLUME'S ROOT" }
-}
-
 /// As the boot starts, once the runtime services are known: the record the last run left, said and deleted.
 pub fn last_fault(slot: u32) {
     SLOT.store(slot as u8, Ordering::Relaxed);
@@ -122,15 +118,14 @@ pub fn last_fault(slot: u32) {
         Ok((_, length)) if length >= 3 && data[0] == FAULT_VERSION => {
             let (kind, text) = (data[2], &data[3..length]);
             let text = match core::str::from_utf8(text) { Ok(text) => text, Err(e) => core::str::from_utf8(&text[..e.valid_up_to()]).unwrap_or("") };
-            let how = match kind { 1 => "IN THE KERNEL'S PANIC: ", 2 => "IN AN EXCEPTION IN THE KERNEL: ", 3 => "AS INIT EXITED: ", 4 => "IN AN INTERRUPT THE KERNEL HAS NO HANDLER FOR", _ => "IN A FAULT OF A KIND THIS KERNEL DOES NOT NAME: " };
+            let how = ["IN THE KERNEL'S PANIC: ", "IN AN EXCEPTION IN THE KERNEL: ", "AS INIT EXITED: ", "IN AN INTERRUPT THE KERNEL HAS NO HANDLER FOR: "].get((kind as usize).wrapping_sub(1)).unwrap_or(&"IN A FAULT OF A KIND THIS KERNEL DOES NOT NAME: ");
             #[cfg(feature = "panic-test")] PANIC_STAGE.store(if text.starts_with("panic test at ") { 1 } else { 2 }, Ordering::Relaxed);
             let ours = data[1] == slot as u8;
             FAULTED.store(ours && kind != Fault::InitExited as u8, Ordering::Relaxed);
-            if ours { core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED {}{}\n", how, text)) }
-            else { core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN, OF {}, ENDED {}{}\n", slot_name(data[1]), how, text)) }
+            let other = match data[1] as u32 { crate::abi::BOOT_SLOT_A => ", OF SLOT A,", crate::abi::BOOT_SLOT_B => ", OF SLOT B,", _ => ", OF THE VOLUME'S ROOT," };
+            core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN{} ENDED {}{}\n", if ours { " OF THIS SLOT" } else { other }, how, text))
         }
-        Ok((_, length)) if length > 0 => core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN LEFT A FAULT RECORD OF VERSION {}, NOT {}: ITS RUN IS NOT NAMED\n", data[0], FAULT_VERSION)),
-        _ => core::fmt::Write::write_str(&mut out, "MIND CORE KERNEL: THE LAST RUN LEFT A FAULT RECORD THIS KERNEL CANNOT READ\n"),
+        _ => core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: THE LAST RUN LEFT A FAULT RECORD THIS KERNEL CANNOT READ (VERSION {}, NOT {})\n", data[0], FAULT_VERSION)),
     };
     if !deleted { let _ = core::fmt::Write::write_str(&mut out, "MIND CORE KERNEL: THE FAULT RECORD COULD NOT BE DELETED: THE NEXT BOOT NAMES IT AGAIN\n"); }
 }

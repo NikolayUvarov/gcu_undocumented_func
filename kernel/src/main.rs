@@ -189,35 +189,38 @@ impl core::fmt::Write for Fatal {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_only(text); screen::fatal(text); Ok(()) }
 }
 
-// A fatal report's line, kept for the next boot (801-KRN-0261): written beside the report, cut at its first line's end.
-pub struct Line { text: [u8; firmware::FAULT_TEXT], length: usize, ended: bool }
-impl Line { pub const fn new() -> Self { Line { text: [0; firmware::FAULT_TEXT], length: 0, ended: false } } }
-impl core::fmt::Write for Line {
+// A fatal report, its line kept for the next boot (801-KRN-0261): what `write` takes goes to the screen and COM1, and its
+// first line, to 160 bytes, into the record; a prefix written to `out` alone is not kept.
+pub struct Report { pub out: Fatal, text: [u8; firmware::FAULT_TEXT], length: usize, ended: bool }
+impl Report { pub fn begin() -> Self { cpu::stop_others(); Report { out: Fatal::begin(), text: [0; firmware::FAULT_TEXT], length: 0, ended: false } } }
+impl core::fmt::Write for Report {
     fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let _ = self.out.write_str(text);
         for &byte in text.as_bytes() {
-            if self.ended || self.length == self.text.len() { break; }
-            if byte == b'\n' { self.ended = true; } else { self.text[self.length] = byte; self.length += 1; }
+            if self.ended || byte == b'\n' { self.ended = true; } else if self.length < self.text.len() { self.text[self.length] = byte; self.length += 1; }
         }
         Ok(())
     }
 }
-// The report and its line together.
-pub struct Both<'a>(pub &'a mut Fatal, pub &'a mut Line);
-impl core::fmt::Write for Both<'_> {
-    fn write_str(&mut self, text: &str) -> core::fmt::Result { let _ = self.0.write_str(text); self.1.write_str(text) }
+
+/// A stop the kernel chose that no task asked for, its report in one line after `prefix` (801-KRN-0261).
+pub fn fatal(kind: firmware::Fault, prefix: &str, report: core::fmt::Arguments) -> ! {
+    let mut r = Report::begin();
+    let _ = core::fmt::Write::write_str(&mut r.out, prefix);
+    let _ = core::fmt::Write::write_fmt(&mut r, report);
+    fatal_end(r, kind)
 }
 
-/// Every stop the kernel chose that no task asked for, after its report (801-KRN-0261): the report's line kept in a
-/// firmware variable for the next boot, then a trial not yet confirmed restarted into the fallback, its watchdogs left
-/// running in case the restart does not come (801-KRN-0258); any other run stops, its watchdog stopped first.
+/// Every such stop, after its report: its line kept in a firmware variable for the next boot, then a trial not yet
+/// confirmed restarted into the fallback, its watchdogs left running in case the restart does not come (801-KRN-0258);
+/// any other run stops, its watchdog stopped first.
 #[allow(unreachable_code)] // x86's reset never returns; aarch64's does where the FADT names no PSCI
-pub fn fatal_end(out: &mut Fatal, kind: firmware::Fault, line: &Line) -> ! {
+pub fn fatal_end(mut r: Report, kind: firmware::Fault) -> ! {
     use core::fmt::Write;
-    cpu::stop_others();
-    let kept = firmware::record_fault(kind, &line.text[..line.length]);
-    let _ = out.write_str(if kept { "THE FAULT IS RECORDED FOR THE NEXT BOOT\n" } else { "THE FAULT IS NOT RECORDED: THE FIRMWARE KEEPS NO VARIABLES, OR WAS IN USE\n" });
+    let kept = firmware::record_fault(kind, &r.text[..r.length]);
+    let _ = r.out.write_str(if kept { "THE FAULT IS RECORDED FOR THE NEXT BOOT\n" } else { "THE FAULT IS NOT RECORDED: THE FIRMWARE KEEPS NO VARIABLES, OR WAS IN USE\n" });
     if trial::pending() {
-        let _ = out.write_str("TRIAL: RESTARTING INTO THE FALLBACK\n");
+        let _ = r.out.write_str("TRIAL: RESTARTING INTO THE FALLBACK\n");
         unsafe { acpi::reset(); }
         cpu::freeze();
     }
@@ -237,11 +240,8 @@ fn panic(info: &PanicInfo) -> ! {
     // watchdog left running.
     if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { if trial { cpu::freeze() } cpu::halt_all(); }
     // Other CPUs stop first, so their output does not interleave with the report.
-    cpu::stop_others();
-    let cpu = cpu::id();
-    let (mut out, mut line) = (Fatal::begin(), Line::new());
-    let _ = write!(out, "\nKERNEL PANIC: ");
-    let mut both = Both(&mut out, &mut line);
+    let (cpu, mut both) = (cpu::id(), Report::begin());
+    let _ = write!(both.out, "\nKERNEL PANIC: ");
     let _ = write!(both, "{}", info.message());
     if let Some(location) = info.location() { let _ = write!(both, " at {}:{}:{}", location.file(), location.line(), location.column()); }
     let _ = write!(both, " CPU={}", cpu);
@@ -255,5 +255,5 @@ fn panic(info: &PanicInfo) -> ! {
         let _ = write!(both, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
     }
     let _ = write!(both, "\n");
-    fatal_end(&mut out, firmware::Fault::Panic, &line)
+    fatal_end(both, firmware::Fault::Panic)
 }

@@ -516,14 +516,7 @@ impl Scheduler {
         self.ended[self.ended_next] = (pid, reason, task.parent.map_or(0, |p| p.1)); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
         // On a trial init's exit restarts into the fallback (801-KRN-0261).
-        if task.parent.is_none() {
-            use core::fmt::Write;
-            cpu::stop_others();
-            let (mut out, mut line) = (crate::Fatal::begin(), crate::Line::new());
-            let _ = write!(out, "INIT EXITED{} ", if crate::trial::pending() { "" } else { ": SYSTEM HALTED" });
-            let _ = write!(crate::Both(&mut out, &mut line), "(REASON={:016X})\n", reason);
-            crate::fatal_end(&mut out, crate::firmware::Fault::InitExited, &line)
-        }
+        if task.parent.is_none() { crate::fatal(crate::firmware::Fault::InitExited, if crate::trial::pending() { "INIT EXITED " } else { "INIT EXITED: SYSTEM HALTED " }, format_args!("(REASON={:016X})\n", reason)) }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
         for other in 1..self.tasks.len() {
@@ -1975,13 +1968,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             // A checked read of a register the CPU may not have (the hardware report) resumes as "absent".
             Event::KernelFault { pc, .. } if crate::arch::report::resume_after_fault(pc).is_some() => { context::resume_at(sp, crate::arch::report::resume_after_fault(pc).unwrap()); return sp; }
             // On a trial it restarts into the fallback, like a panic (801-KRN-0261).
-            Event::KernelFault { code, pc, error } => {
-                use core::fmt::Write;
-                cpu::stop_others();
-                let (mut out, mut line) = (crate::Fatal::begin(), crate::Line::new());
-                let _ = write!(crate::Both(&mut out, &mut line), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error);
-                crate::fatal_end(&mut out, crate::firmware::Fault::Exception, &line)
-            }
+            Event::KernelFault { code, pc, error } => crate::fatal(crate::firmware::Fault::Exception, "KERNEL EXCEPTION ", format_args!("VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error)),
             _ if ZEROING[cpu].load(Ordering::Relaxed) => return between_pieces(cpu, event, sp),
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
