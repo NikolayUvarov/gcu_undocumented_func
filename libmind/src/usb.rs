@@ -10,8 +10,10 @@ pub const BADGE_HID: u16 = 1;
 pub const BADGE_STORAGE: u16 = 2;
 /// A camera's interfaces (158): the video gateway's.
 pub const BADGE_VIDEO: u16 = 3;
-/// The interface class a badge allows (HID 3, mass storage 8, video 0x0E).
-pub fn class_of(badge: u16) -> Option<u8> { match badge { BADGE_HID => Some(3), BADGE_STORAGE => Some(8), BADGE_VIDEO => Some(0x0E), _ => None } }
+/// Audio interfaces (000-DRV-0073): the audio gateway's, a USB speaker, microphone or speakerphone.
+pub const BADGE_AUDIO: u16 = 6;
+/// The interface class a badge allows (HID 3, mass storage 8, video 0x0E, audio 1).
+pub fn class_of(badge: u16) -> Option<u8> { match badge { BADGE_HID => Some(3), BADGE_STORAGE => Some(8), BADGE_VIDEO => Some(0x0E), BADGE_AUDIO => Some(1), _ => None } }
 /// USB-serial converters (800-LNK-0002): the vendor-specific interface (class 0xFF) of a chip `SERIAL_DEVICES` names.
 pub const BADGE_SERIAL: u16 = 4;
 /// The converters `usb_serial` drives, by vendor and product ID: the FTDI FT232R and the WCH CH340.
@@ -22,7 +24,7 @@ pub fn is_serial(vendor: u16, product: u16) -> bool { SERIAL_DEVICES.contains(&(
 pub const BADGE_BLUETOOTH: u16 = 5;
 pub fn is_bluetooth(info: &Interface) -> bool { (info.class, info.subclass, info.protocol) == (0xE0, 1, 1) }
 /// Every badge that names a class driver; a new badge is added here.
-pub const ALL_BADGES: [u16; 5] = [BADGE_HID, BADGE_STORAGE, BADGE_VIDEO, BADGE_SERIAL, BADGE_BLUETOOTH];
+pub const ALL_BADGES: [u16; 6] = [BADGE_HID, BADGE_STORAGE, BADGE_VIDEO, BADGE_SERIAL, BADGE_BLUETOOTH, BADGE_AUDIO];
 /// Entries in a table indexed by badge: one past the highest (700-DRV-0044).
 pub const BADGES: usize = {
     let (mut n, mut i) = (0, 0);
@@ -193,6 +195,12 @@ impl Host {
             at += 2 + packet.len();
         }
         Ok(written)
+    }
+    /// Packets for an isochronous OUT endpoint, at `offset` in the buffer as two length bytes each and the packet
+    /// (usb.wit 1.5, 000-DRV-0073); the bytes usb_host took.
+    pub fn isochronous_out(&mut self, handle: u32, address: u8, offset: usize, length: usize) -> Result<usize> {
+        let r = usb::isochronous_out(self.endpoint, handle, address, offset as u32, length as u32);
+        self.check(r).map(|n| n as usize)
     }
 }
 

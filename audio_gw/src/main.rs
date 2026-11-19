@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // audio_gw: ring 3 audio gateway. Intel High Definition Audio (551-DRV-0010, hda.rs) or, LEGACY, AC97 (QEMU's old card,
-// docs/legacy.md): playback DMA ring of 32 buffers, capture ring of 16 (microphone), which the gateway empties into its own
+// docs/legacy.md), or a USB Audio Class 1 device while one is plugged in (000-DRV-0073, usbaudio.rs): playback DMA ring of 32 buffers, capture ring of 16 (microphone), which the gateway empties into its own
 // copy every POLL_MS while it records; interrupts arrive as IPC messages on the service endpoint, client PCM comes
 // through their shared buffers.
 // Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to `play` (idl/audio.wit).
@@ -16,6 +16,7 @@ use mind::mem::{self, Mapping};
 mod codec;
 mod hda;
 mod levels;
+mod usbaudio;
 
 use levels::Amp;
 
@@ -244,8 +245,9 @@ impl Levels {
     }
 }
 
-// The device behind the gateway: HDA when init granted memory-mapped registers, AC97 when it granted ports.
-enum Device { Ac97(Ac97), Hda(hda::Hda) }
+// The device behind the gateway: HDA when init granted memory-mapped registers, AC97 when it granted ports; a USB audio
+// device in their place while it is plugged in.
+enum Device { Ac97(Ac97), Hda(hda::Hda), Usb(usbaudio::Usb) }
 // A second HD Audio function's interrupt line, where init puts it (its SLOT_AUDIO_IRQ1, 213-KRN-0127).
 const SECOND_IRQ: usize = 7;
 impl Device {
@@ -260,18 +262,19 @@ impl Device {
         mind::println!("[AUDIO] HDA: DRIVING THE SECOND FUNCTION");
         Some((Device::Hda(d), SECOND_IRQ))
     }
-    fn free(&mut self) -> usize { match self { Device::Ac97(d) => d.free(), Device::Hda(d) => d.free() } }
-    // A stream the loop looks at every POLL_MS: HDA's while it plays or records, AC'97's capture (000-DRV-0066).
-    fn active(&self) -> bool { match self { Device::Hda(d) => d.active(), Device::Ac97(d) => d.capture } }
-    fn drain(&mut self) { if let Device::Ac97(d) = self { d.drain(); } }
-    fn play(&mut self, pcm: &[u8]) -> usize { match self { Device::Ac97(d) => d.play(pcm), Device::Hda(d) => d.play(pcm) } }
-    fn tone(&mut self, hz: usize, ms: usize) -> usize { match self { Device::Ac97(d) => d.tone(hz, ms), Device::Hda(d) => d.tone(hz, ms, sine) } }
-    fn reset(&mut self) { match self { Device::Ac97(d) => d.reset(), Device::Hda(d) => d.reset() } }
-    fn record_start(&mut self) -> bool { match self { Device::Ac97(d) => d.record_start(), Device::Hda(d) => d.record_start() } }
-    fn record_stop(&mut self) { match self { Device::Ac97(d) => d.record_stop(), Device::Hda(d) => d.record_stop() } }
-    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) { match self { Device::Ac97(d) => d.record_read(out), Device::Hda(d) => d.record_read(out) } }
-    fn clear_status(&mut self) { match self { Device::Ac97(d) => d.clear_status(), Device::Hda(d) => d.clear_status() } }
-    fn interrupt(&mut self) -> usize { match self { Device::Ac97(d) => { d.interrupt(); d.interrupts } Device::Hda(d) => { d.interrupt(); d.interrupts } } }
+    fn free(&mut self) -> usize { match self { Device::Ac97(d) => d.free(), Device::Hda(d) => d.free(), Device::Usb(d) => d.free() } }
+    // A stream the loop looks at every POLL_MS: HDA's while it plays or records, AC'97's capture (000-DRV-0066), a USB
+    // device's streams (every usbaudio::PUMP_MS).
+    fn active(&self) -> bool { match self { Device::Hda(d) => d.active(), Device::Ac97(d) => d.capture, Device::Usb(d) => d.active() } }
+    fn drain(&mut self) { match self { Device::Ac97(d) => d.drain(), Device::Usb(d) => d.pump(), Device::Hda(_) => {} } }
+    fn play(&mut self, pcm: &[u8]) -> usize { match self { Device::Ac97(d) => d.play(pcm), Device::Hda(d) => d.play(pcm), Device::Usb(d) => d.play(pcm) } }
+    fn tone(&mut self, hz: usize, ms: usize) -> usize { match self { Device::Ac97(d) => d.tone(hz, ms), Device::Hda(d) => d.tone(hz, ms, sine), Device::Usb(d) => d.tone(hz, ms, sine) } }
+    fn reset(&mut self) { match self { Device::Ac97(d) => d.reset(), Device::Hda(d) => d.reset(), Device::Usb(d) => d.reset() } }
+    fn record_start(&mut self) -> bool { match self { Device::Ac97(d) => d.record_start(), Device::Hda(d) => d.record_start(), Device::Usb(d) => d.record_start() } }
+    fn record_stop(&mut self) { match self { Device::Ac97(d) => d.record_stop(), Device::Hda(d) => d.record_stop(), Device::Usb(d) => d.record_stop() } }
+    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) { match self { Device::Ac97(d) => d.record_read(out), Device::Hda(d) => d.record_read(out), Device::Usb(d) => d.record_read(out) } }
+    fn clear_status(&mut self) { match self { Device::Ac97(d) => d.clear_status(), Device::Hda(d) => d.clear_status(), Device::Usb(_) => {} } }
+    fn interrupt(&mut self) -> usize { match self { Device::Ac97(d) => { d.interrupt(); d.interrupts } Device::Hda(d) => { d.interrupt(); d.interrupts } Device::Usb(_) => 0 } }
     // A headphone jack to look at (551-DRV-0056), and the look.
     fn watches(&self) -> bool { matches!(self, Device::Hda(d) if d.watches()) }
     fn watch_jack(&mut self) { if let Device::Hda(d) = self { d.watch_jack(); } }
@@ -280,6 +283,9 @@ impl Device {
         match self {
             Device::Ac97(d) => Levels { output: Side { amp: d.master, setting: d.master.zero, switch: false, scaled: false },
                                         capture: Side { amp: AC97_RECORD, setting: 0, switch: false, scaled: false }, boost_qdb: levels::AC97_BOOST_QDB },
+            // A USB device's levels are the gateway's: it scales the samples (its feature unit is not used yet).
+            Device::Usb(_) => Levels { output: Side { amp: levels::SOFT_OUTPUT, setting: levels::SOFT_OUTPUT.zero, switch: false, scaled: true },
+                                       capture: Side { amp: levels::SOFT_CAPTURE, setting: levels::SOFT_CAPTURE.zero, switch: false, scaled: true }, boost_qdb: 0 },
             Device::Hda(d) => {
                 let side = |c: Option<hda::Control>, soft: Amp| match c { Some(c) => Side { amp: c.amp, setting: c.amp.zero, switch: false, scaled: false }, None => Side { amp: soft, setting: soft.zero, switch: false, scaled: true } };
                 let boost_qdb = d.boost_amp.map_or(0, |b| ((b.amp.steps - 1 - b.amp.zero) as u16) * b.amp.step_qdb as u16);
@@ -291,6 +297,7 @@ impl Device {
     fn set_volume(&mut self, s: &Side) {
         match self {
             Device::Ac97(d) => d.set_volume(s.setting, s.switch),
+            Device::Usb(d) => d.out_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), s.switch),
             Device::Hda(d) => match d.out_amp {
                 Some(c) => {
                     d.set_amp(c, s.setting, s.switch);
@@ -305,6 +312,7 @@ impl Device {
     fn set_gain(&mut self, s: &Side) {
         match self {
             Device::Ac97(d) => d.set_gain(s.setting, s.switch),
+            Device::Usb(d) => d.in_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), false),
             Device::Hda(d) => {
                 match d.in_amp { Some(c) => d.set_amp(c, s.setting, false), None => d.in_factor = levels::factor_q15(levels::qdb(s.setting, s.amp), false) }
                 if let Some(b) = d.boost_amp { d.set_amp(b, if s.switch { b.amp.steps - 1 } else { b.amp.zero }, false); }
@@ -364,16 +372,42 @@ fn main(_info: &'static BootInfo) {
             let line = irq.bind(Endpoint::SERVICE).is_ok();
             mind::println!("[AUDIO] HDA READY: {}; {} HZ STEREO S16, {} DMA BUFFERS, {}", d.summary(), AUDIO_RATE, BUFFERS, if line { "INTERRUPTS" } else { "POLLED" });
         }
+        Some(Device::Usb(_)) => {}
         None => mind::println!("[AUDIO] NO AUDIO DEVICE (HDA OR AC97); GATEWAY ANSWERS WITHOUT OUTPUT"),
     }
+    // A USB audio device takes the codec's place while it is plugged in (000-DRV-0073); the codec waits in `internal`.
+    let mut usb = usbaudio::Usb::open();
+    let mut internal: Option<Device> = None;
+    if usb.is_some() { mind::println!("[AUDIO] USB AUDIO CLIENT: LOOKING FOR A DEVICE EVERY {} MS", usbaudio::LOOK_MS); }
     let watching = device.as_ref().is_some_and(Device::watches);
     let mut jack_due = mind::time::uptime_ms() as u64 + JACK_MS;
     loop {
         let now = mind::time::uptime_ms() as u64;
         if watching && now >= jack_due { if let Some(d) = device.as_mut() { d.watch_jack(); } jack_due = now + JACK_MS; }
+        // The USB device plugged in: the codec steps aside, its clients' waits answered; gone: the codec comes back.
+        if usb.as_mut().is_some_and(|u| u.look()) {
+            if let Some(d) = device.as_mut() { d.record_stop(); d.reset(); }
+            internal = device.take();
+            device = usb.take().map(Device::Usb);
+            owner = None;
+            set = device.as_ref().map(Device::levels);
+            if let Some(l) = &set { l.say("USB DEVICE"); }
+            release(&mut device, &mut waiters, true);
+        } else if let Some(Device::Usb(u)) = device.as_ref().filter(|d| matches!(d, Device::Usb(u) if !u.attached())) {
+            let _ = u;
+            if let Some(Device::Usb(u)) = device.take() { usb = Some(u); }
+            device = internal.take();
+            owner = None;
+            set = device.as_ref().map(Device::levels);
+            if let Some(l) = &set { l.say("THE CODEC AGAIN"); }
+            release(&mut device, &mut waiters, true);
+        }
         // A running HDA stream is looked at while it runs, so the buffers it played are cleared before it loops.
         let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active);
-        let timeout = if waiting { POLL_MS } else if watching { jack_due.saturating_sub(now).clamp(1, JACK_MS) as u32 } else { 0 };
+        let usb_streams = matches!(&device, Some(Device::Usb(u)) if u.active());
+        let timeout = if usb_streams { usbaudio::PUMP_MS } else if waiting { POLL_MS } else if watching { jack_due.saturating_sub(now).clamp(1, JACK_MS) as u32 } else { 0 };
+        // A USB device not plugged in yet is looked for now and then.
+        let timeout = if usb.is_some() && (timeout == 0 || timeout as u64 > usbaudio::LOOK_MS) { usbaudio::LOOK_MS as u32 } else { timeout };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, timeout) {
             Ok(request) => request,
             Err(Error::Other(ERR_TIMEOUT)) => {
