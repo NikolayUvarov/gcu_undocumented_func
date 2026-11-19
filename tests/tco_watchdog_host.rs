@@ -1,6 +1,7 @@
 // Intel's TCO watchdog (000-KRN-0076, 801-KRN-0258) against a model of its registers: the N100's Alder Lake-N PCH, its
 // TCO behind the SMBus controller, and q35's ICH9 behind the LPC bridge; a strap or firmware that holds NO_REBOOT, a
-// decode left off, TCO_EN locked, chipsets the code does not know, and the feed and the stop.
+// decode left off, TCO_EN locked, chipsets the code does not know, and the feed and the stop. Then the PCH's
+// over-clocking watchdog (801-KRN-0259): off, after its reset, locked, silent, and its feed, longest count and stop.
 #[allow(dead_code)]
 #[path = "../kernel/src/arch/x86_64/tco.rs"]
 mod tco;
@@ -277,4 +278,100 @@ fn the_n100_is_armed_before_the_page_tables_and_its_smi_quieted_after() {
     assert_eq!(listed(&mut Model::q35()), None);
     assert_eq!(listed(&mut Model { lpc: 0x790E << 16 | 0x1022, ..Model::n100() }), None);
     assert_eq!(listed(&mut Model { smbus: 0xA123 << 16 | INTEL, ..Model::n100() }), None);
+}
+
+// OC_WDT_CTL as Intel's SoC I/O registers describe it: the status bits cleared by a 1, the RW/L fields frozen by LCK,
+// RLD reloading only while EN is set; the reserved bits (30:26, 13, 11:10) read 0.
+struct Oc { ctl: u32, count: u32, sticks: bool, answers: bool, log: Vec<u32> }
+
+const OC_PORT: u16 = 0x1854; // the DEXP's: PM base 0x1800 in its FADT, CWDT's _CRS in its DSDT
+const OC_RW: u32 = 0xFF << 16 | OC_FORCE_ALL | OC_EN | OC_LCK | OC_TOV;
+
+impl Oc {
+    fn new(ctl: u32) -> Self { Oc { ctl, count: 0, sticks: true, answers: true, log: Vec::new() } }
+}
+
+impl Registers for Oc {
+    fn config(&mut self, _: u8, _: u8, _: u8) -> u32 { panic!("no configuration space for the OC watchdog") }
+    fn set_config(&mut self, _: u8, _: u8, _: u8, _: u32) { panic!("no configuration space for the OC watchdog") }
+    fn io(&mut self, port: u16, width: u8) -> u32 {
+        assert_eq!((port, width), (OC_PORT, 4));
+        if self.answers { self.ctl } else { u32::MAX }
+    }
+    fn set_io(&mut self, port: u16, width: u8, value: u32) {
+        assert_eq!((port, width), (OC_PORT, 4));
+        self.log.push(value);
+        self.ctl &= !(value & OC_STS);
+        if self.sticks && self.ctl & OC_LCK == 0 { self.ctl = self.ctl & !OC_RW | value & OC_RW; }
+        if value & OC_RLD != 0 && self.ctl & OC_EN != 0 { self.count = (self.ctl & OC_TOV) + 1; }
+    }
+    fn gcs(&mut self, _: usize) -> u32 { panic!("no GCS") }
+    fn set_gcs(&mut self, _: usize, _: u32) { panic!("no GCS") }
+    fn pm_base(&mut self) -> Option<u16> { Some(0x1800) }
+}
+
+#[test]
+fn the_dexps_over_clocking_watchdog_arms_at_30_s() {
+    let mut m = Oc::new(0);
+    let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
+    assert_eq!(armed, OcArmed { port: OC_PORT, found: 0, seconds: 30, restarted: false, locked: false });
+    assert_eq!(m.ctl, OC_EN | 29);
+    assert_eq!(m.count, 30);
+}
+
+#[test]
+fn an_expirys_reset_is_read_and_cleared_and_the_firmwares_scratch_kept() {
+    let found = OC_STS & !(1 << 25) | 0x40 << 16 | OC_FORCE_ALL;
+    let mut m = Oc::new(found);
+    let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
+    assert!(armed.restarted && armed.found == found, "{armed:x?}");
+    assert_eq!(m.ctl, 0x40 << 16 | OC_EN | 29, "status cleared, FORCE_ALL off, the other scratch kept");
+    assert_eq!(m.log.iter().filter(|w| *w & OC_STS != 0).count(), 1, "the status cleared once: {:x?}", m.log);
+}
+
+#[test]
+fn the_dexps_firmware_mark_after_an_expiry_is_read_and_cleared() {
+    // The DEXP after its over-clocking watchdog reset a stopped trial (801-KRN-0259): status clear, scratch bit 23 set.
+    let mut m = Oc::new(0x80_2000);
+    let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
+    assert!(armed.restarted, "{armed:x?}");
+    assert_eq!(m.ctl & (OC_MARK | OC_EN | OC_TOV), OC_EN | 29, "the mark cleared: the next run is not taken for a restart");
+    assert!(!arm_oc(&mut Oc::new(0x2000), 0x1800, 30).expect("armed").restarted, "after an ordinary reset");
+}
+
+#[test]
+fn a_locked_running_one_is_fed_at_its_own_timeout() {
+    let found = OC_LCK | OC_EN | 59;
+    let mut m = Oc::new(found);
+    let armed = arm_oc(&mut m, 0x1800, 30).expect("armed");
+    assert!(armed.locked && armed.seconds == 60, "{armed:x?}");
+    assert_eq!((m.ctl, m.count), (found, 60));
+}
+
+#[test]
+fn a_locked_one_left_off_or_one_that_does_not_answer_is_refused_untouched() {
+    let mut m = Oc::new(OC_LCK);
+    assert_eq!(arm_oc(&mut m, 0x1800, 30), Err("ITS OVER-CLOCKING WATCHDOG IS OFF AND LOCKED BY THE FIRMWARE"));
+    let mut silent = Oc { answers: false, ..Oc::new(0) };
+    assert_eq!(arm_oc(&mut silent, 0x1800, 30), Err("ITS OVER-CLOCKING WATCHDOG DOES NOT ANSWER"));
+    assert!(m.log.is_empty() && silent.log.is_empty(), "{:x?} {:x?}", m.log, silent.log);
+    let mut stuck = Oc { sticks: false, ..Oc::new(0) };
+    assert_eq!(arm_oc(&mut stuck, 0x1800, 30), Err("ITS OVER-CLOCKING WATCHDOG DOES NOT START"));
+}
+
+#[test]
+fn the_oc_feed_reloads_a_reset_gets_the_longest_count_and_the_stop_stops() {
+    let mut m = Oc::new(0);
+    arm_oc(&mut m, 0x1800, 30).expect("armed");
+    m.count = 3;
+    m.ctl |= 1 << 24; // a status the feed must not clear unread
+    feed_oc(&mut m, OC_PORT);
+    assert_eq!(m.count, 30);
+    assert_ne!(m.ctl & 1 << 24, 0);
+    long_oc(&mut m, OC_PORT);
+    assert_eq!((m.ctl & (OC_EN | OC_TOV), m.count), (OC_EN | OC_TOV, 1024));
+    m.count = 7;
+    stop_oc(&mut m, OC_PORT);
+    assert_eq!((m.ctl & OC_EN, m.count), (0, 7), "stopped, not reloaded");
+    assert!(m.log[3..].iter().all(|w| w & OC_STS == 0), "{:x?}", m.log);
 }
