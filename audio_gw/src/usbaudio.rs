@@ -9,7 +9,7 @@ use mind::usb::{Host, Interface};
 
 use crate::levels;
 
-/// Where init grants usb_host's client badged for audio (asked of KRN, 000-DRV-0073).
+/// Where init grants usb_host's client badged for audio: its SLOT_AUDIO_USB (213-KRN-0263).
 pub const SLOT_USB: usize = 8;
 /// A device not plugged in yet is looked for this often.
 pub const LOOK_MS: u64 = 2000;
