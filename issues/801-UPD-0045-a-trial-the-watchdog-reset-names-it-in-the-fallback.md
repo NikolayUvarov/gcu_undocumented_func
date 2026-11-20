@@ -28,9 +28,9 @@ S2 asks that a fallback be reported with the step that failed. After 801-UPD-004
 
 ## Acceptance criteria
 
-- [ ] A trial the watchdog restarted is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
+- [x] A trial the watchdog restarted is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
 - [ ] A freeze of the fallback slot's own run, with the records still naming the other slot's trial, is not reported as that trial's.
-- [ ] `init.wit` 1.15 in docs/idl.
+- [x] `init.wit` 1.15 in docs/idl.
 
 ## Progress (2026-11-20)
 
@@ -46,6 +46,24 @@ S2 asks that a fallback be reported with the step that failed. After 801-UPD-004
 - **The kernel** is unchanged but for that test feature (7978 lines of 8000).
 
 **Not covered:** a trial that stops before `init` sets its mark. The last mark is then an older run's, or none.
+
+**Tested** through Effector (QEMU only, MC-12.1), on `c47e293899`:
+
+| Group | Machine | Result |
+|---|---|---|
+| x86: the watchdog (with the new check) | x32-2 | PASS, 348 s, twice |
+| x86: a release that loses the server, rolled back | x32-2 | PASS, 717 s |
+| aarch64: a release that loses the server, rolled back | acc-1 | PASS, 712 s |
+| aarch64: boot and fault containment | acc-1 | PASS, 165 s |
+| host: `idl_fuzz` | here | PASS |
+
+The check's lines (x32-2):
+- `MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD` in slot B's trial;
+- `BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT`;
+- `WATCHDOG: INTEL TCO, …; IT RESTARTED THE LAST RUN`;
+- `[UPDATER] SLOT B'S TRIAL OF VERSION not known FELL BACK TO THIS SLOT: THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING; KEPT IN system/updater/refused`.
+
+The second criterion has no run: no test freezes the fallback slot's own run with the records still naming the other's trial. The updater keeps the reason only when `last-run`'s slot is the other's.
 
 ## Related
 
