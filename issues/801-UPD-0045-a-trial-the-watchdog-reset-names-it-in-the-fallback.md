@@ -29,7 +29,7 @@ S2 asks that a fallback be reported with the step that failed. After 801-UPD-004
 ## Acceptance criteria
 
 - [x] A trial the watchdog restarted is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
-- [ ] A freeze of the fallback slot's own run, with the records still naming the other slot's trial, is not reported as that trial's.
+- [x] A freeze of the fallback slot's own run, with the records still naming the other slot's trial, is not reported as that trial's.
 - [x] `init.wit` 1.15 in docs/idl.
 
 ## Progress (2026-11-20)
@@ -70,6 +70,24 @@ The second criterion has no run: no test freezes the fallback slot's own run wit
 In round 158 (`main` `7a1e938a6b`), the gate green on both architectures. Its x86 `watchdog` group ran the new check (acc-1, 350 s), and both `rollback` groups passed.
 
 **Left:** the second criterion. Its check is made and passed twice here (`own_freeze_after_a_fallback`, on `claude/801-UPD-0044-own-fault-not-a-fallback`). It lands with 801-UPD-0044's.
+
+## The second criterion (2026-11-20)
+
+**The check** (`own_freeze_after_a_fallback`, the x86 `watchdog` suite, on `claude/801-UPD-0044-own-fault-not-a-fallback`). Both slots hold the `watchdog-late-test` kernel. It stops for good only on the first boot after QEMU starts (`watchdog::fresh`), so the check runs two QEMU processes on one disk:
+1. **The first:** slot B's trial stops past `init`'s mark, the TCO timer resets the machine, and slot A boots with B's one try spent. A's updater keeps the watchdog's restart in `refused`.
+2. **The second**, started afresh, boots slot A: A stops past its own mark, and the timer resets it. At the boot after that, the boot records still name B's trial fallen back to A, and `last-run` names A.
+
+The check asks:
+- that the updater says `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`;
+- that it keeps no new reason;
+- that `refused` holds B's refusal as before.
+
+**Runs:** two here, in QEMU (x86 q35, 4 CPUs, this session's container), on round 158's candidate merged with this branch. Each passed, in 128 s. The lines of the second boot of A:
+- `SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts, video_gw …`;
+- `[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version not known in slot B, falling back to slot A; THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING`;
+- `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`.
+
+The x86 watchdog group on Effector's machines is left before landing.
 
 ## Related
 
