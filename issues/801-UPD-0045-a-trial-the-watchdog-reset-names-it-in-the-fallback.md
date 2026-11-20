@@ -87,7 +87,7 @@ The check asks:
 - `[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version not known in slot B, falling back to slot A; THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING`;
 - `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`.
 
-The x86 watchdog group on Effector's machines is left before landing.
+**On Effector's machines** (`6fd343ffcf`, `main` merged): x32, `x86: the watchdog` PASS, 467 s, with the check's line `PASS: watchdog: slot A stopped for good on a run of its own after slot B's trial fell back to it, and the TCO timer reset it; …`.
 
 ## Related
 
