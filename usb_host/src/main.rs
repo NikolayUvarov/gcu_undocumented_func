@@ -376,6 +376,19 @@ impl Controller {
             let mut states = [0u32; MAX_ENDPOINTS];
             for (i, p) in planned[..count].iter().enumerate() { states[i] = self.xhci.endpoint_state(device.output, p.0); }
             mind::println!("[USB] {}SLOT {} INTERFACE {}: {} STREAMS CONFIGURED, ENTRIES {}; THEIR STATES {:?}; USBSTS {:08X}", Tag(self.xhci.number), slot, number, count, entries, &states[..count], self.xhci.status());
+            // The hub whose transaction translator the device's packets go through: its output slot context.
+            if let Some((hub_slot, _)) = device.tt {
+                if let Some(hub) = self.devices.iter().flatten().find(|d| d.slot == hub_slot).copied() {
+                    let at = hub.output;
+                    let words = [self.xhci.dma.read32(at), self.xhci.dma.read32(at + 4), self.xhci.dma.read32(at + 8), self.xhci.dma.read32(at + 12)];
+                    mind::println!("[USB] {}HUB SLOT {} OUTPUT SLOT CONTEXT {:08X} {:08X} {:08X} {:08X}", Tag(self.xhci.number), hub_slot, words[0], words[1], words[2], words[3]);
+                }
+            }
+            for p in &planned[..count] {
+                let w = self.xhci.context_words(device.output, p.0);
+                mind::println!("[USB] {}SLOT {} DCI {}: CONTROL {:08X} {:08X}; SLOT {:08X} {:08X} {:08X} {:08X}; IN {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}; OUT {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                    Tag(self.xhci.number), slot, p.0, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15], w[16], w[17]);
+            }
         }
         Ok(())
     }

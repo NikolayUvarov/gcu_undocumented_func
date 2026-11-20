@@ -356,6 +356,16 @@ impl Xhci {
         let first = self.dma.read32(slot) & !(0x1F << 27) | entries << 27;
         self.dma.write32(slot, first);
     }
+    /// The raw words of the input context's control, slot and endpoint `dci` contexts and of the output's endpoint
+    /// `dci` context, for the log (000-DRV-0073: compared with Linux's on the same controller).
+    pub fn context_words(&mut self, output: usize, dci: u8) -> [u32; 18] {
+        let mut w = [0u32; 18];
+        for i in 0..2 { w[i] = self.dma.read32(INPUT + 4 * i); }
+        for i in 0..4 { w[2 + i] = self.dma.read32(INPUT + self.context + 4 * i); }
+        for i in 0..6 { w[6 + i] = self.dma.read32(INPUT + self.context * (1 + dci as usize) + 4 * i); }
+        for i in 0..6 { w[12 + i] = self.dma.read32(output + self.context * dci as usize + 4 * i); }
+        w
+    }
     /// An endpoint's state in the device's output context: 1 running, 2 halted, 3 stopped, 4 error.
     pub fn endpoint_state(&mut self, output: usize, dci: u8) -> u32 { self.dma.read32(output + self.context * dci as usize) & 7 }
     /// The endpoints a Configure Endpoint drops (input control context's drop flags).
@@ -442,8 +452,15 @@ impl Xhci {
         };
         t.uframe = Some((uframe + t.step) & 0x3FFF);
         let control = TYPE_ISOCH << 10 | IOC | ((uframe >> 3) & 0x7FF) << FRAME_ID_SHIFT | if input { ISP } else { 0 };
+        let first = t.next == 0 && t.state.iter().all(|s| *s == Td::Free);
         let trb = Self::enqueue(&mut self.dma, &mut t.ring, address, length as u32, control);
         t.state[k] = Td::Armed(trb);
+        // The first TD of a stream as the controller reads it, its MFINDEX and USBSTS, for the log (000-DRV-0073).
+        if first {
+            let (slot, dci, at) = (t.slot, t.dci, (trb - self.dma.physical(0)) as usize);
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: FIRST TD AT {:X}: {:08X} {:08X} {:08X} {:08X}; MFINDEX {:04X}; USBSTS {:08X}", Tag(self.number), slot, dci, trb,
+                self.dma.read32(at), self.dma.read32(at + 4), self.dma.read32(at + 8), self.dma.read32(at + 12), mfindex, self.mmio.read32(self.op + 4));
+        }
     }
 
     /// IN stream `index`: its packets in order into `out` (two length bytes each, bit 15 for an error, then the packet;
