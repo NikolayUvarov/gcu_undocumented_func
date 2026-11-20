@@ -8085,7 +8085,21 @@ def camera_check(vm):
     require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
     assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    # 158-APP-0147: a camera the gateway does not list is refused with what it lists; n switches, and with one camera
+    # says so; Esc ends it.
+    require(vm.command("camera -c 1 -s data/cam1.bmp", timeout=30), "camera: camera 1: the video gateway lists one camera, number 0")
+    vm.send("camera -c 0\n")
+    vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S", timeout=30)
+    since = len(vm.log)
+    vm.hmp("sendkey n")
+    vm.serial(enter=False)
+    vm.logged("[CAMERA] ONE CAMERA ONLY: test pattern", since)
+    vm.hmp("sendkey esc")
+    vm.serial(enter=False)
+    require(vm.expect("SHELL RESUMED.", timeout=30), "[CAMERA] SHOWN ")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
+          "-c beyond the list refused, n with one camera named (158-APP-0147)", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 

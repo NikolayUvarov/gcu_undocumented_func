@@ -6,6 +6,7 @@
 extern crate alloc;
 #[path = "../../shell/src/bmp.rs"]
 mod bmp;
+mod pick;
 
 use alloc::format;
 use alloc::string::String;
@@ -24,12 +25,12 @@ mind::request!(REQUEST_CAMERA | REQUEST_FILES);
 const CAMERA: Endpoint = Endpoint(SLOT_CAMERA);
 const QUALITY: u8 = 75;
 
-struct Options { width: usize, height: usize, rate: u8, still: Option<String>, video: Option<(u32, String)> }
+struct Options { width: usize, height: usize, rate: u8, camera: u8, still: Option<String>, video: Option<(u32, String)> }
 
 fn options(args: &str) -> Result<Options, String> {
-    let mut options = Options { width: 320, height: 240, rate: 10, still: None, video: None };
+    let mut options = Options { width: 320, height: 240, rate: 10, camera: 0, still: None, video: None };
     let mut words = args.split_whitespace();
-    let usage = || String::from("usage: camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]");
+    let usage = || String::from("usage: camera [-c n] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]");
     while let Some(word) = words.next() {
         match word {
             "-z" => {
@@ -37,6 +38,7 @@ fn options(args: &str) -> Result<Options, String> {
                 (options.width, options.height) = (w.parse().map_err(|_| usage())?, h.parse().map_err(|_| usage())?);
             }
             "-r" => options.rate = words.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?,
+            "-c" => options.camera = words.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?,
             "-s" => options.still = Some(String::from(words.next().ok_or_else(usage)?)),
             "-t" => {
                 let seconds = words.next().and_then(|s| s.parse().ok()).filter(|&s| s > 0).ok_or_else(usage)?;
@@ -93,45 +95,82 @@ fn write_still(path: &str, pixels: &[u32], width: usize, height: usize) -> Resul
     Ok(out.len())
 }
 
-// Esc or q: the stream is closed before the program ends.
-fn quit_asked() -> bool {
-    let mut quit = false;
-    while let Some(key) = mind::input::read_key() { if key.is_escape() || key.char() == Some('q') { quit = true; } }
-    quit
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asked { Nothing, Quit, Next }
+
+// Esc or q: the stream is closed before the program ends; n or Tab: the next camera (158-APP-0147).
+fn asked() -> Asked {
+    let mut asked = Asked::Nothing;
+    while let Some(key) = mind::input::read_key() {
+        if key.is_escape() || key.char() == Some('q') { asked = Asked::Quit; }
+        else if asked == Asked::Nothing && matches!(key.char(), Some('n' | '\t')) { asked = Asked::Next; }
+    }
+    asked
+}
+
+// The cameras the gateway lists, and the one shown.
+struct Cameras { list: mind::idl::codec::List<idl::Camera, 4>, current: usize }
+
+impl Cameras {
+    fn name(&self) -> &str { self.list.as_slice()[self.current].name.as_str() }
+    fn title(&self) -> String { pick::title(self.current, self.list.len(), self.name()) }
+}
+
+// The stream moved to the next camera, at the same size and rate; the one before again if the next does not open.
+fn switch(cameras: &mut Cameras, options: &Options) {
+    let count = cameras.list.len();
+    if count < 2 { mind::println!("[CAMERA] ONE CAMERA ONLY: {}", cameras.name()); return; }
+    let before = cameras.current;
+    let next = pick::next(before, count);
+    let _ = idl::close(CAMERA);
+    let open = |index: usize| idl::open(CAMERA, index as u8, options.width as u16, options.height as u16, options.rate);
+    match open(next) {
+        Ok(Ok(())) => {
+            cameras.current = next;
+            mind::println!("[CAMERA] SWITCHED TO {} ({}/{})", cameras.name(), next + 1, count);
+        }
+        other => {
+            let name = cameras.list.as_slice()[next].name.as_str();
+            mind::println!("[CAMERA] {} DID NOT OPEN AT {}X{} {}/S ({:?}); BACK TO {}", name, options.width, options.height, options.rate, other, cameras.name());
+            let _ = open(before);
+        }
+    }
+    if let Some(surface) = mind::windowed::surface() { surface.set_title(&cameras.title()); }
 }
 
 fn fail(message: &str) -> ! { mind::println!("camera: {}", message); mind::process::exit_with(1) }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("camera — what a camera sees, through the video gateway (lent by the shell as it starts): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: 320x240 at 10 per second)\nEsc or q: stop.");
+    mind::about!("camera — what a camera sees, through the video gateway (lent by the shell as it starts): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-c n] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: camera 0, 320x240 at 10 per second)\nn or Tab: the next camera. Esc or q: stop.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let options = match options(mind::process::args_str()) { Ok(o) => o, Err(e) => fail(&e) };
     if mind::dev::cap_info(SLOT_CAMERA).0 != CAP_KIND_ENDPOINT { fail("no camera was granted (start camera from the shell and allow it)") }
-    let cameras = idl::cameras(CAMERA).unwrap_or_default();
-    let Some(camera) = cameras.as_slice().first() else { fail("no camera (the video gateway lists none)") };
+    let list = idl::cameras(CAMERA).unwrap_or_default();
+    let current = match pick::chosen(options.camera, list.len()) { Ok(index) => index, Err(e) => fail(&e) };
+    let mut cameras = Cameras { list, current };
     let (width, height) = (options.width, options.height);
-    match idl::open(CAMERA, 0, width as u16, height as u16, options.rate) {
+    match idl::open(CAMERA, current as u8, width as u16, height as u16, options.rate) {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => fail(&format!("cannot open {} at {}x{} {}/s: {:?}", camera.name.as_str(), width, height, options.rate, error)),
+        Ok(Err(error)) => fail(&format!("cannot open {} at {}x{} {}/s: {:?}", cameras.name(), width, height, options.rate, error)),
         Err(error) => fail(&format!("the gateway does not answer: {:?}", error)),
     }
-    mind::println!("[CAMERA] OPENED {} {}X{} AT {}/S", camera.name.as_str(), width, height, options.rate);
+    mind::println!("[CAMERA] OPENED {} {}X{} AT {}/S", cameras.name(), width, height, options.rate);
     let bytes = width * height * 4;
     let Some(pages) = Pages::new(bytes) else { let _ = idl::close(CAMERA); fail("no memory for a frame") };
     let Ok(cap) = pages.share() else { let _ = idl::close(CAMERA); fail("cannot share the frame buffer") };
     let mut buffer = Buffer { pages, cap };
-    let shown = mind::windowed::pixels(info, width, height, "camera");
+    let shown = mind::windowed::pixels(info, width, height, &cameras.title());
     let windowed = !core::ptr::eq(shown, info);
     let screen = Screen::new(shown);
     if let Some(screen) = &screen { screen.clear(0); }
-    let result = run(&options, &mut buffer, screen, windowed);
+    let result = run(&options, &mut cameras, &mut buffer, screen, windowed);
     let _ = idl::close(CAMERA);
     match result { Ok(summary) => mind::println!("[CAMERA] {}", summary), Err(e) => fail(&e) }
 }
 
 // Shows frames until Esc, or takes the still, or records; returns what it did.
-fn run(options: &Options, buffer: &mut Buffer, mut screen: Option<Screen>, windowed: bool) -> Result<String, String> {
+fn run(options: &Options, cameras: &mut Cameras, buffer: &mut Buffer, mut screen: Option<Screen>, windowed: bool) -> Result<String, String> {
     let (width, height) = (options.width, options.height);
     let mut at = screen.as_ref().map(|screen| place(screen, width, height, windowed));
     let bytes = width * height * 4;
@@ -189,6 +228,14 @@ fn run(options: &Options, buffer: &mut Buffer, mut screen: Option<Screen>, windo
                                   start.sequence, start.sequence + *total - 1, if on_grid { "ON THE RATE" } else { "OFF THE RATE" }, index.end() + table.len()));
             }
         }
-        if quit_asked() { return Ok(format!("SHOWN {} FRAMES", frames)); }
+        match asked() {
+            Asked::Quit => return Ok(format!("SHOWN {} FRAMES", frames)),
+            // Only while it shows: a still or a recording keeps its camera to the end.
+            Asked::Next if options.still.is_none() && recording.is_none() => {
+                switch(cameras, options);
+                (first, last) = (None, None);
+            }
+            _ => {}
+        }
     }
 }
