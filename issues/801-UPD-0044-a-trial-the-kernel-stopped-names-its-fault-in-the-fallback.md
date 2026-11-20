@@ -94,6 +94,8 @@ The check asks:
 - `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL'S RECORD IS OF ANOTHER SLOT'S RUN: NOT ITS REASON`;
 - `UPDATE: THE LAST FAILURE: version not known in slot B, falling back to slot A: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler.rs:1496:141 …`.
 
+With 801-UPD-0045 (round 158), the updater's line for this case became `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`, and the check now asks for that line. It passed once more here on round 158's candidate merged with this branch (56 s).
+
 The x86 boot group on Effector's machines is left before landing.
 
 **Left:** the slot the DEXP falls back to needs a release that carries this.
