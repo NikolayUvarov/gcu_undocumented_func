@@ -55,7 +55,8 @@ pub fn arm(r: &mut impl Registers, seconds: u32) -> Result<Armed, &'static str> 
     let (mut base, mut control) = (TIMER_DECODED, r.timer(TIMER_DECODED + CONTROL));
     if control == u32::MAX && isa & MMIOEN != 0 { (base, control) = (TIMER_IN_ACPI_MMIO, r.timer(TIMER_IN_ACPI_MMIO + CONTROL)); }
     let failure = if control == u32::MAX { Some("AMD FCH: ITS TIMER DOES NOT ANSWER") }
-        else if r.pm(DECODEEN3) & WDT_DISABLE != 0 || control & DISABLED != 0 { Some("AMD FCH: DISABLED BY THE FIRMWARE") } else { None };
+        else if r.pm(DECODEEN3) & WDT_DISABLE != 0 { Some("AMD FCH: DISABLED BY THE FIRMWARE (PM DECODEEN3'S WATCHDOG DISABLE KEPT)") }
+        else if control & DISABLED != 0 { Some("AMD FCH: DISABLED BY THE FIRMWARE (THE TIMER'S WATCHDOGDISABLE BIT)") } else { None };
     if let Some(why) = failure {
         if wanted != before { r.set_pm(DECODEEN3, before); }
         if decode & WDT_TMREN == 0 { r.set_pm(DECODEEN, decode); }
