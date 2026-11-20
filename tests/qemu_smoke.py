@@ -14481,6 +14481,8 @@ def rollback_suite(args):
         if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
                 answer.get("stdout") != f"fell back: slot A runs version 5, not 6; the updater: {reason}":
             problems.append(("the update command's answer", result))
+        # The agent removes its kept answer last, which leaves the volume marked changed until a flush.
+        require(vm.command("sync"), "OK")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     except BaseException:
         server.close()
@@ -14573,6 +14575,8 @@ def kernel_stopped_release(args, temp, image, server, server_tree, agent, extra,
             problems.append(("the kernel-stopped trial's answer", result))
         out = ANSI.sub("", vm.log)
         assert "KERNEL PANIC" not in out[out.find("BOOT: SLOT A LOADED"):], out[-2000:]
+        # As above: the agent's kept answer removed, the volume flushed before the machine is stopped.
+        require(vm.command("sync"), "OK")
     finally:
         vm.close()
         log_path("p3").write_text(vm.log)
