@@ -1183,26 +1183,36 @@ impl Updater {
     }
 
     /// Slot `other`'s trial fell back to this one (801-UPD-0044): when the kernel stopped it on a fault or at its deadline,
-    /// init holds the kernel's record, kept here as that trial's refusal the way init's are (801-UPD-0037), so that the
-    /// agent reports it until a trial is confirmed (801 S2). Asked before any request is served, so that the state names
-    /// it from the first answer on. `version` is the other slot's (0: not known).
+    /// init holds the kernel's record; when the platform's watchdog restarted it, init holds its mark (801-UPD-0045). Either
+    /// is kept here as that trial's refusal the way init's are (801-UPD-0037), so that the agent reports it until a trial
+    /// is confirmed (801 S2). Asked before any request is served, so that the state names it from the first answer on.
+    /// `version` is the other slot's (0: not known).
     fn fell_back(&mut self, version: u64) {
         let (other, asked) = (plan::other(self.slot), mind::time::uptime_ms());
         let fault = loop {
             match wire::with_timeout(ASK_MS as u32, || init::last_fault(Endpoint(SLOT_LIFECYCLE))) {
                 Err(mind::sys::Error::Other(ERR_TIMEOUT)) if mind::time::uptime_ms() - asked < FAULT_WAIT_MS => continue,
-                Ok(Ok(fault)) => break fault,
-                Ok(Err(_)) => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL RECORDED NO FAULT OF ITS RUN", slot_name(other)),
+                Ok(Ok(fault)) => break Some(fault),
+                Ok(Err(_)) => break None,
                 Err(error) => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; INIT DID NOT SAY HOW IT ENDED ({:?})", slot_name(other), error),
             }
         };
-        if fault.slot as u32 != if other == b'A' { BOOT_SLOT_A } else { BOOT_SLOT_B } {
-            return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL'S RECORD IS OF ANOTHER SLOT'S RUN: NOT ITS REASON", slot_name(other));
-        }
         use init::FaultKind::*;
-        let how = match fault.kind { Panic => "IN ITS PANIC", Exception => "ON AN EXCEPTION IN THE KERNEL", InitExited => "AS INIT EXITED", Unexpected => "ON AN INTERRUPT WITH NO HANDLER",
-                                     Deadline => "AT ITS DEADLINE", Unknown => "ON A FAULT OF A KIND NOT NAMED" };
-        let why = format!("THE KERNEL STOPPED THE TRIAL {}: {}", how, fault.line.as_str());
+        let (slot, why) = match fault {
+            Some(fault) => {
+                let how = match fault.kind { Panic => "IN ITS PANIC", Exception => "ON AN EXCEPTION IN THE KERNEL", InitExited => "AS INIT EXITED", Unexpected => "ON AN INTERRUPT WITH NO HANDLER",
+                                             Deadline => "AT ITS DEADLINE", Unknown => "ON A FAULT OF A KIND NOT NAMED" };
+                (fault.slot, format!("THE KERNEL STOPPED THE TRIAL {}: {}", how, fault.line.as_str()))
+            }
+            // No record: a run the watchdog restarted, by the slot its mark names.
+            None => match wire::with_timeout(ASK_MS as u32, || init::last_run(Endpoint(SLOT_LIFECYCLE))) {
+                Ok(Ok(run)) if run.watchdog => (run.slot, String::from("THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING")),
+                _ => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL RECORDED NO FAULT OF ITS RUN, NOR THE WATCHDOG A RESTART", slot_name(other)),
+            },
+        };
+        if slot as u32 != if other == b'A' { BOOT_SLOT_A } else { BOOT_SLOT_B } {
+            return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON", slot_name(other));
+        }
         let version = if version == 0 { String::from("not known") } else { format!("{}", version) };
         let kept = keep_refusal(&version, other, self.slot, &why, "not known");
         self.failure = format!("version {} in slot {}, falling back to slot {}: {}", version, slot_name(other), slot_name(self.slot), why);

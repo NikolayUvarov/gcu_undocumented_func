@@ -72,7 +72,7 @@ pub fn advance() -> bool {
         super::clock::on_second(seconds);
         super::watchdog::feed();
         // A test kernel stops every CPU for good 20 s after the machine's first boot: the watchdog must restart it (000-KRN-0076).
-        if cfg!(feature = "watchdog-test") && seconds == 20 && super::watchdog::fresh() {
+        if cfg!(any(feature = "watchdog-test", feature = "watchdog-late-test")) && seconds == 20 && super::watchdog::fresh() {
             crate::serial_print("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD\n");
             crate::cpu::freeze();
         }

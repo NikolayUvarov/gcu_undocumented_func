@@ -1,6 +1,6 @@
 # 801-UPD-0045 — A trial the platform's watchdog restarted names it in the fallback's reason
 
-**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-20) · **Blocked by:** [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) (the fallback's question to `init`) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -31,6 +31,21 @@ S2 asks that a fallback be reported with the step that failed. After 801-UPD-004
 - [ ] A trial the watchdog restarted is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
 - [ ] A freeze of the fallback slot's own run, with the records still naming the other slot's trial, is not reported as that trial's.
 - [ ] `init.wit` 1.15 in docs/idl.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/801-UPD-0045-watchdog-reset-trial`:
+- **`init.wit` 1.15:** `last-run` answers `unfinished { slot, watchdog }` from the mark `init` read as the boot started, or `not-found`.
+- **The updater's `fell_back`:** with no fault record, it asks `last-run`. A watchdog's restart of a run of the other slot is kept as the trial's refusal, and anything else as before.
+- **`watchdog-late-test`,** an x86 test kernel. It stops every CPU 20 s into a boot the watchdog did not restart, a trial's too, so past `init`'s mark. It is built by `scripts/x86_fixtures.sh` and given to the `watchdog` suite as `--watchdog-late-kernel` (ci_local and CI).
+- **The check, `watchdog_reset_trial` in the `watchdog` suite (q35):**
+  - slot B on trial holds that kernel, and `init` holds the trial for the server's word (an agent that cannot read its configuration);
+  - the TCO timer resets the frozen machine;
+  - slot A boots with B's try spent;
+  - its updater's line and `refused` name the watchdog.
+- **The kernel** is unchanged but for that test feature (7978 lines of 8000).
+
+**Not covered:** a trial that stops before `init` sets its mark. The last mark is then an older run's, or none.
 
 ## Related
 
