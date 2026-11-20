@@ -1,6 +1,6 @@
 # 100003 — MIND Hub: a user's request done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.1, 2026-11-18), stage 1 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.2; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stage 1 in progress · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 **History:**
 - **Recorded** by the kernel session, 2026-10-25, at the maintainer's request, as `improve`: a request to improve the OS from the phone, and its status (`MOB`).
@@ -26,7 +26,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
   - a public board of the requests that became tasks;
   - the updates: OS releases and module packages, signed by UPD's keys, which the hub never holds.
 - **Two forms, one API** (`hub-api 1`), one protocol crate (`improve/proto`), one conformance suite:
-  - the separate hub `tools/mindhub` first, Rust recommended;
+  - the separate hub `tools/mindhub` first, in Rust (the maintainer's choice, 2026-11-20);
   - the native hub on MIND Core later.
 - **Clients:**
   - `improve` on every MIND machine: the console, `wm`, the phone's screen with `MOB`;

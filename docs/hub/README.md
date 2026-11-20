@@ -1,6 +1,6 @@
 # MIND Hub: requests from users done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Version:** 0.1 (2026-11-18), a design · **Status:** a plan. Nothing here is built, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Version:** 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** a plan. Nothing here is built, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 ## 1. What it is
 
@@ -366,10 +366,15 @@ The same as `httpd` ([server.md](../update/server.md)):
 | 7 | numbered when it starts | the native hub on MIND Core |
 | 8 | at the maintainer's word | the agents' rule in AGENTS.md (7.3); the intake agent named |
 
-## 12. For the maintainer to decide
+## 12. The maintainer's choices (2026-11-20)
 
-1. **The separate hub's language.** Rust is recommended, for the shared crate and code (section 3). Go means a second implementation checked by the vectors.
-2. **Who takes intake first:** the tools session is proposed.
-3. **The public channels' names,** and the bands that reach `test` and `dev` (5.2 proposes 2 and 4).
-4. **The automatic trust bounds** of −256 … +512, and the deltas of 5.3.
-5. **Whether a user may stay anonymous** on the board by default. Proposed: yes.
+The maintainer: «Rust, остальное как предлагаешь, начинай с крейта».
+
+1. **The separate hub is in Rust,** sharing `improve/proto` and `tools/httpd`'s code (section 3). Go is not planned.
+2. **Intake is taken first by the tools session** (`APP`).
+3. **The channels:**
+   - the public channel is `stable`;
+   - `test` opens at band 2 (trust 256);
+   - `dev` opens at band 4 (trust 512), as 5.2 says.
+4. **The automatic trust bounds** are −256 … +512, with the deltas of 5.3.
+5. **A user stays anonymous** on the board unless they allow their name for a request.
