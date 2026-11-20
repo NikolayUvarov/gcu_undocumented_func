@@ -1,6 +1,6 @@
 # The Wi-Fi station: what joins by itself
 
-**Version:** 0.3 (2026-11-14) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.md) (the network a client joined, the access point a key joins) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Version:** 0.4 (2026-11-20) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues-done/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done) (the network a client joined, the access point a key joins) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 `wlan` is the 802.11 station, a boot service that runs when a radio does (`bcm_wifi`, or `wlansim` in the tests). A program joins a network through its `idl/wifi.wit` client (the `wifi` tool). The station also joins a network by itself, as this page describes. It is a boot service, so every release, including one put through the link, brings this behaviour with it. A script at the volume's root does not.
 
@@ -65,4 +65,9 @@ Each try ends in one line:
   - MIND-TEST joined without `--remember`, its radio restarted: the station joins it again by itself with the PMK it held, and `keystore` is not asked for its keys; after `wifi leave`, a fresh `wlan` says once that a join needs the user (801-NET-0084);
   - on x86, a fresh radio already on the station's channel (`wlansim` built with `self-tuned`): its `info` shows no restart, and the station knows it by the PID that answers, says so, gives it the country again and joins again by itself (801-NET-0085). The station is held by a CPU budget (`budget`) from before the kill until the fresh radio is up, so that no call of its finds the driver ended, the other sign;
   - `wificheck wifi`, a program lent the changing client, takes the reading one and drops its own; through it the link and the country are read, and `join`, `leave`, `forget` and `set-country` are each denied, the station joined and under its country as before (550-NET-0058).
-- These are QEMU runs against a stand-in radio. They say nothing yet about a real radio, such as the MacBook Pro's BCM4331 (MC-12.1).
+- These are QEMU runs against a stand-in radio, and say nothing of a real one by themselves (MC-12.1).
+- **On the Ryzen's RTL8852BE** (DRV, `fast-test` 92c2c6e9, 2026-11-19), for that machine and build only:
+  - a network joined without `--remember` was joined again by itself after `rtw89_wifi` was killed, and `keystore` was not asked (801-NET-0084);
+  - each restart was logged with its reason, `THE RADIO RESTARTED (IT HAS NO CHANNEL SET)`, and joined again by itself: the kill, and a stall of the radio's own at 2064 s (801-NET-0083, 801-NET-0085);
+  - the fresh radio's channel 0 told the restart there. The PID alone has told one only in QEMU.
+- The MacBook Pro's BCM4331 has no such run.

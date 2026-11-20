@@ -13,7 +13,7 @@ On boot 5 the shell was on the screen and typing did nothing. The logs showed:
 - **Not in the logs:** whether later reports came, and whether `usb_hid` made key events of them.
 
 **Two things may hide it:**
-- the shell was then stuck reading a COM1 the machine does not have ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), fixed since);
+- the shell was then stuck reading a COM1 the machine does not have ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done), fixed since);
 - the same build typed with a low-speed keyboard (046D:C31C) on the Intel i5 PC's xHCI, so the difference is the AMD xHCI or this keyboard.
 
 ## Plan
@@ -42,4 +42,4 @@ On the Ryzen this keyboard types in the shell, with the counters of plan step 2 
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), [214](214-intel-core-i5-pc.md).
+[213](213-amd-ryzen-pc.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done), [214](214-intel-core-i5-pc.md).
