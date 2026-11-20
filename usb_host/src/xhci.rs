@@ -87,6 +87,8 @@ pub struct Xhci {
     command: Ring, event: Ring, free: u64, completion: Option<(u32, u32)>, done: [Option<Done>; MAX_DONE], interrupts: [Option<Interrupt>; MAX_INTERRUPTS],
     streams: [Option<Stream>; MAX_STREAMS],
     pub last: u32, // completion code of the last command or transfer (0: no answer), for reports
+    /// A command had no answer: the controller is set up again, and no command waits on it until then (000-DRV-0075).
+    pub stuck: bool,
     pub number: u8, // which of usb_host's xHCI controllers, for the log (213-DRV-0048)
 }
 
@@ -125,7 +127,9 @@ impl Xhci {
         }
         let op = caplength;
         mmio.write32(op, mmio.read32(op) & !1);
-        if !wait(|| mmio.read32(op + 4) & 1 != 0) { return None; }
+        // One that does not halt (it left a command unanswered, 000-DRV-0075) is reset all the same: nothing else brings
+        // it back. The specification gives a halt 16 ms.
+        if !wait_for(1_500, || mmio.read32(op + 4) & 1 != 0) { mind::println!("[USB] {}THE CONTROLLER DID NOT HALT (USBSTS {:08X}): RESET ALL THE SAME", Tag(number), mmio.read32(op + 4)); }
         mmio.write32(op, 2);
         if !wait(|| mmio.read32(op) & 2 == 0 && mmio.read32(op + 4) & 1 << 11 == 0) { return None; }
         let scratch = ((hcs2 >> 21 & 0x1F) << 5 | hcs2 >> 27) as usize;
@@ -144,7 +148,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, number };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -238,13 +242,20 @@ impl Xhci {
         }
     }
 
+    // A command and its completion: the slot it names, on success. One without an answer in 5 s, as Linux waits, marks
+    // the controller stuck: the Ryzen's AMD xHCI stopped answering at a device's set-up there (000-DRV-0075).
     fn command(&mut self, parameter: u64, control: u32) -> Option<u32> {
+        if self.stuck { self.last = 0; return None; }
         self.completion = None;
         Self::enqueue(&mut self.dma, &mut self.command, parameter, 0, control);
         self.doorbell(0, 0);
         let mut result = None;
-        wait(|| { self.pump(); result = self.completion.take(); result.is_some() });
+        wait_for(1_500, || { self.pump(); result = self.completion.take(); result.is_some() });
         self.last = result.map_or(0, |r| r.0);
+        if result.is_none() {
+            self.stuck = true;
+            mind::println!("[USB] {}COMMAND {} HAD NO ANSWER IN 5 S (USBSTS {:08X}, CRCR {:08X})", Tag(self.number), control >> 10 & 0x3F, self.status(), self.mmio.read32(self.op + 0x18));
+        }
         let (code, slot) = result?;
         (code == SUCCESS).then_some(slot)
     }
