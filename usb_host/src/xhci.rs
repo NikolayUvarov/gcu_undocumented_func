@@ -101,6 +101,11 @@ impl core::fmt::Display for Tag {
 /// Busy-poll, then sleep: QEMU completes commands at once, transfers asynchronously; about 30 s in all.
 pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
 
+/// The attach debounce (000-DRV-0077): a new connection must hold this long, looked at in these steps, within the most.
+pub const DEBOUNCE_MS: u32 = 100;
+pub const DEBOUNCE_STEP_MS: u32 = 25;
+pub const DEBOUNCE_MAX_MS: u32 = 1_500;
+
 // Polls `done`: without pause for the first 20 ms (most transfers end within a few frames; when each wait began with a
 // sleep, the MacBook Pro's mouse moved once a second, 211-DRV-0017), then every 10 ms; `attempts` 1500 is about 5 s,
 // 4000 about 30 s.
@@ -306,6 +311,17 @@ impl Xhci {
     // PORTSC of root port `port` (1-based).
     fn portsc(&self, port: usize) -> usize { self.op + 0x400 + 0x10 * (port - 1) }
     pub fn connected(&self, port: usize) -> bool { self.mmio.read32(self.portsc(port)) & 1 != 0 }
+    /// Whether root port `port`'s new connection holds for 100 ms on end, looked at every 25 ms for at most 1.5 s: USB 2.0
+    /// 7.1.7.3's attach debounce (TATTDB), as Linux's `hub_port_debounce`. A device that has only just powered up is not
+    /// reset and addressed at once (000-DRV-0077).
+    pub fn debounced(&self, port: usize) -> bool {
+        let (mut stable, mut waited) = (0, 0);
+        while waited < DEBOUNCE_MAX_MS {
+            mind::time::sleep(DEBOUNCE_STEP_MS as usize); waited += DEBOUNCE_STEP_MS;
+            if self.connected(port) { stable += DEBOUNCE_STEP_MS; if stable >= DEBOUNCE_MS { return true; } } else { stable = 0; }
+        }
+        false
+    }
     pub fn port_status(&self, port: usize) -> u32 { self.mmio.read32(self.portsc(port)) }
     /// Clears a root port's change bits; true if the connection changed.
     pub fn acknowledge(&self, port: usize) -> bool {
