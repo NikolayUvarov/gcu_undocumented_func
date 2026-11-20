@@ -18214,6 +18214,51 @@ def watchdog_suite(args, disk):
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-hung-") as temp:
         boot_slots_check.hung_trial(restarting, temp, disk, disk / "kernel.elf", "x86")
+    if args.watchdog_late_kernel:
+        watchdog_reset_trial(args, disk)
+
+
+def watchdog_reset_trial(args, disk):
+    """801-UPD-0045: slot B on trial holds the `watchdog-late-test` kernel, which stops every CPU 20 s into a boot the
+    watchdog did not restart, past init's run mark. init holds the trial for the Effector server's word (an agent that
+    cannot read its configuration), so the trial is still open when it stops. The TCO timer resets the machine, the loader
+    boots slot A, B's one try spent, and A's updater keeps the watchdog's restart as the trial's refusal."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-watchdog-trial-"))
+    volume, other = temp / "volume", temp / "other"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+        (volume / name).parent.mkdir(parents=True, exist_ok=True)
+        (volume / name).write_bytes(data)
+    sign_manifest.sign_volume(volume)
+    shutil.copytree(volume, other)
+    (other / "kernel.elf").write_bytes(Path(args.watchdog_late_kernel).read_bytes())
+    sign_manifest.sign_volume(other)
+    slots = boot_slots.layout(volume, temp / "slots", both=True)
+    for name in boot_slots.boot_set(other):
+        shutil.copyfile(other / name, slots / "MIND" / "B" / name)
+    image = boot_slots.Image.create(temp / "watchdog-trial.img", slots)
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    why = "THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING"
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        out = vm.expect("BOOT: SLOT A LOADED", timeout=240)
+        require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        vm.expect("A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        line = re.search(r"\[UPDATER\] SLOT B'S TRIAL OF VERSION (\d+|not known) FELL BACK TO THIS SLOT: " + re.escape(why), log)
+        assert line, log[-3000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-watchdog-trial-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: watchdog: a trial that stopped for good past init's run mark, while init held it for the server's word, "
+          "was reset by the chipset's TCO timer; slot A booted with B's try spent, and its updater kept the watchdog's "
+          "restart as the trial's refusal, from init's `last-run` (801-UPD-0045)", flush=True)
 
 
 def no_serial_check(args, disk):
@@ -19386,6 +19431,7 @@ def main():
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
+    parser.add_argument("--watchdog-late-kernel", help="test-only kernel built with --features watchdog-late-test (watchdog suite, 801-UPD-0045)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
