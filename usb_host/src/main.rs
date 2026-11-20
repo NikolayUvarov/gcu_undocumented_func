@@ -300,6 +300,11 @@ impl Controller {
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
             if !connected { self.forget_suspects(port as u8, None); }
             if !connected || self.root_failed & 1 << (port - 1) != 0 || self.suspect(port as u8, 0) { continue; }
+            // A new connection is reset only once it held for 100 ms (000-DRV-0077); its own flaps are not another one.
+            if changed {
+                if !self.xhci.debounced(port) { mind::println!("[USB] {}PORT {}: THE CONNECTION DID NOT HOLD FOR {} MS", Tag(self.xhci.number), port, xhci::DEBOUNCE_MS); continue; }
+                self.xhci.acknowledge(port);
+            }
             self.step = "PORT RESET"; self.xhci.last = 0;
             let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             if self.xhci.stuck { self.add_suspect(port as u8, 0, format_args!("{}", port)); return; }
@@ -336,6 +341,10 @@ impl Controller {
                 let route = device.route | (port as u32) << (4 * device.depth as u32);
                 if !connected { self.forget_suspects(device.root, Some(route)); }
                 if !connected || self.devices[hub].is_none_or(|d| d.failed & bit != 0) || self.suspect(device.root, route) { continue; }
+                if change & 1 != 0 && !self.hub_debounced(hub, port) {
+                    mind::println!("[USB] {}PORT {}.{}: THE CONNECTION DID NOT HOLD FOR {} MS", Tag(self.xhci.number), Path(device.root, device.route), port, xhci::DEBOUNCE_MS);
+                    continue;
+                }
                 self.step = "HUB PORT RESET"; self.xhci.last = 0;
                 let set_up = self.reset_hub_port(hub, port).and_then(|speed| {
                     let hub_device = self.devices[hub]?;
@@ -347,6 +356,19 @@ impl Controller {
                 if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] {}PORT {}.{}: DEVICE NOT SET UP AT {} (COMPLETION {})", Tag(self.xhci.number), Path(device.root, device.route), port, self.step, self.xhci.last); }
             }
         }
+    }
+
+    // Whether a hub port's new connection holds for 100 ms on end (000-DRV-0077), as `Xhci::debounced` for a root port;
+    // a connection change seen meanwhile is cleared, so it is not taken for another one.
+    fn hub_debounced(&mut self, hub: usize, port: u8) -> bool {
+        let (mut stable, mut waited) = (0, 0);
+        while waited < xhci::DEBOUNCE_MAX_MS {
+            mind::time::sleep(xhci::DEBOUNCE_STEP_MS as usize); waited += xhci::DEBOUNCE_STEP_MS;
+            let Some((status, change)) = self.hub_port(hub, port) else { return false };
+            if change & hub::CHANGED_CONNECTION != 0 { let _ = self.control(hub, 0x23, 1, hub::C_PORT_CONNECTION, port as u16, 0); stable = 0; continue; }
+            if status & hub::CONNECTED != 0 { stable += xhci::DEBOUNCE_STEP_MS; if stable >= xhci::DEBOUNCE_MS { return true; } } else { stable = 0; }
+        }
+        false
     }
 
     // Resets a hub port; the speed of the device on it once enabled. A SuperSpeed hub's port that does not come up
