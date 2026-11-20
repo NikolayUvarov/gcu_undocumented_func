@@ -2,9 +2,12 @@
 #![no_main]
 
 //! bt_hci (700-BLT-0001): a Bluetooth controller's HCI over USB. It claims the controller usb_host gives its badge
-//! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C from data/firmware/rtl_bt/, says its
-//! version and address, then listens: an LE scan and a BR/EDR inquiry at start and every five minutes, each device
-//! heard logged once a round. The stack (bt_host) and its devices come after.
+//! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C or RTL8852B (700-BLT-0004) from
+//! data/firmware/rtl_bt/, says its
+//! version and address, then, when the disk asks with `data/bt-listen.txt`, listens: an LE scan and a BR/EDR inquiry
+//! at start and every five minutes, each device heard logged once a round. Without it the controller stays quiet: a
+//! controller that shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its
+//! inquiries until the Wi-Fi driver restarted (700-BLT-0003). The stack (bt_host) and its devices come after.
 
 use bt_hci::{hci, rtl};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DEV0, SLOT_VFS};
@@ -19,11 +22,19 @@ const PATCH: (&str, usize, [u8; 32]) = ("data/firmware/rtl_bt/rtl8821c_fw.bin", 
 const CONFIG: (&str, usize, [u8; 32]) = ("data/firmware/rtl_bt/rtl8821c_config.bin", 10, [
     0x29, 0x27, 0x17, 0xb0, 0x61, 0x0c, 0xe9, 0x20, 0xf6, 0x6b, 0x73, 0x4c, 0x29, 0x9d, 0x34, 0x9e,
     0xa5, 0x9a, 0x4c, 0x44, 0x00, 0x04, 0x40, 0x78, 0xd8, 0xfc, 0x65, 0x62, 0x5f, 0x17, 0xe3, 0x82]);
+/// The RTL8852B's patch, as scripts/firmware/rtl8852b_bt.py fetches it; it has no configuration file (700-BLT-0004).
+const PATCH_8852B: (&str, usize, [u8; 32]) = ("data/firmware/rtl_bt/rtl8852bu_fw.bin", 127_301, [
+    0xfa, 0x1a, 0x98, 0xb9, 0x62, 0x3e, 0xe1, 0xef, 0x90, 0x75, 0x41, 0x42, 0x9a, 0x48, 0x6c, 0x52,
+    0xca, 0x12, 0x40, 0x62, 0xa6, 0x46, 0x55, 0x00, 0x55, 0x74, 0x95, 0xa6, 0xb3, 0xf1, 0x4c, 0xba]);
+/// The largest patch image: the RTL8852B's for ROM version 0 is 67,133 bytes.
+const IMAGE_MAX: usize = 128 * 1024;
 /// How long a controller may take to enumerate, and a command to be answered.
 const CLAIM_MS: u64 = 30_000;
 const COMMAND_MS: u64 = 2_000;
 const SCAN_MS: u64 = 10_000;
 const ROUND_MS: u64 = 300_000;
+/// The file that turns the listening rounds on (700-BLT-0003).
+const LISTEN: &str = "data/bt-listen.txt";
 /// The default event mask with Extended Inquiry Result (bit 46) and the LE meta event (bit 61).
 const EVENT_MASK: u64 = 0x0000_1FFF_FFFF_FFFF | 1 << 46 | 1 << 61;
 /// The general inquiry access code, 0x9E8B33, and 8 × 1.28 s.
@@ -161,15 +172,25 @@ fn read((path, size, sha): (&'static str, usize, [u8; 32])) -> Result<Pages, Fai
     })
 }
 
-/// The RTL8821C's patch: its ROM version, the image from the files, the fragments downloaded, a reset.
-fn patch(hci: &mut Hci) -> Result<(), Fail> {
+/// A Realtek controller's patch: its ROM version, the image from its files, the fragments downloaded, a reset.
+fn patch(hci: &mut Hci, chip: &rtl::Chip) -> Result<(), Fail> {
     if mind::dev::cap_info(SLOT_VFS).0 != CAP_KIND_ENDPOINT { return Err(Fail::File("no file client")); }
     let rom = *hci.command(rtl::READ_ROM_VERSION, &[])?.get(1).ok_or(Fail::Status(rtl::READ_ROM_VERSION, 0xFF))?;
-    let (fw, config) = (read(PATCH)?, read(CONFIG)?);
-    let e = rtl::parse(&fw.as_slice()[..PATCH.1]).map_err(Fail::Patch)?;
-    let mut image = Pages::new(64 * 1024).ok_or(Fail::File("no memory"))?;
-    let len = rtl::image(&fw.as_slice()[..PATCH.1], &config.as_slice()[..CONFIG.1], &rtl::RTL8821C, rom, image.as_mut_slice()).map_err(Fail::Patch)?;
-    say(format_args!("ROM VERSION {}; PATCH {:08X} FOR PROJECT {}: {} BYTES IN {} FRAGMENTS", rom, e.version, e.project, len, rtl::fragments(len)));
+    let mut image = Pages::new(IMAGE_MAX).ok_or(Fail::File("no memory"))?;
+    let len = if *chip == rtl::RTL8852B {
+        let fw = read(PATCH_8852B)?;
+        let fw = &fw.as_slice()[..PATCH_8852B.1];
+        let e = rtl::parse_core(fw).map_err(Fail::Patch)?;
+        let len = rtl::image_core(fw, chip, rom, image.as_mut_slice()).map_err(Fail::Patch)?;
+        say(format_args!("ROM VERSION {}; PATCH {:016X} FOR PROJECT {} ({} OF {} SECTIONS): {} BYTES IN {} FRAGMENTS", rom, e.version, e.project, e.found, e.counted, len, rtl::fragments(len)));
+        len
+    } else {
+        let (fw, config) = (read(PATCH)?, read(CONFIG)?);
+        let e = rtl::parse(&fw.as_slice()[..PATCH.1]).map_err(Fail::Patch)?;
+        let len = rtl::image(&fw.as_slice()[..PATCH.1], &config.as_slice()[..CONFIG.1], chip, rom, image.as_mut_slice()).map_err(Fail::Patch)?;
+        say(format_args!("ROM VERSION {}; PATCH {:08X} FOR PROJECT {}: {} BYTES IN {} FRAGMENTS", rom, e.version, e.project, len, rtl::fragments(len)));
+        len
+    };
     let started = now();
     let mut params = [0u8; 1 + rtl::FRAGMENT];
     for i in 0..rtl::fragments(len) {
@@ -211,13 +232,13 @@ fn main(_info: &'static BootInfo) {
         hci.command(hci::RESET, &[])?;
         let v = hci.version()?;
         say(format_args!("VERSION: HCI {} REVISION {:04X}, LMP {} SUBVERSION {:04X}, MANUFACTURER {:04X}", v.hci, v.hci_rev, v.lmp, v.lmp_subver, v.manufacturer));
-        let c = rtl::RTL8821C;
-        if (v.manufacturer, v.lmp_subver, v.hci_rev) == (rtl::MANUFACTURER, c.lmp_subver, c.hci_rev) {
-            patch(&mut hci)?;
+        let unpatched = [rtl::RTL8821C, rtl::RTL8852B].into_iter().find(|c| (v.manufacturer, v.lmp_subver, v.hci_rev) == (rtl::MANUFACTURER, c.lmp_subver, c.hci_rev));
+        if let Some(c) = unpatched {
+            patch(&mut hci, &c)?;
             let v = hci.version()?;
             say(format_args!("{} PATCHED: LMP SUBVERSION {:04X}, HCI REVISION {:04X}", c.name, v.lmp_subver, v.hci_rev));
         } else {
-            say(format_args!("NOT AN UNPATCHED {}: NO PATCH", c.name));
+            say(format_args!("NOT AN UNPATCHED RTL8821C OR RTL8852B: NO PATCH"));
         }
         let a = hci::bd_addr(hci.command(hci::READ_BD_ADDR, &[])?).ok_or(Fail::Status(hci::READ_BD_ADDR, 0xFF))?;
         say(format_args!("ADDRESS {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", a[0], a[1], a[2], a[3], a[4], a[5]));
@@ -227,7 +248,11 @@ fn main(_info: &'static BootInfo) {
         Ok(())
     })();
     if let Err(e) = up { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle(); }
-    say(format_args!("UP: LISTENING EVERY {} S", ROUND_MS / 1000));
+    if mind::fs::File::open(LISTEN).is_err() {
+        say(format_args!("UP: NOT LISTENING (NO {}): A SCAN TAKES THE RADIO A WI-FI MAY SHARE", LISTEN));
+        idle();
+    }
+    say(format_args!("UP: LISTENING EVERY {} S ({})", ROUND_MS / 1000, LISTEN));
     loop {
         if let Err(e) = hci.round() { say(format_args!("ROUND FAILED: {:?}", e)); }
         // The kernel ends one wait at 60 s at most, so the round's wait is made of several (700-BLT-0002).

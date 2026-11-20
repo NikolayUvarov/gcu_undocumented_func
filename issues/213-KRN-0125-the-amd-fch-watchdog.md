@@ -72,6 +72,72 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
 
 **The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. On QEMU the boot line is `WATCHDOG: NONE (NO INTEL LPC BRIDGE AT 00:1F.0, NO AMD FCH AT 00:14.0)`; q35's Intel TCO watchdog still arms (`watchdog` suite).
 
+## The Ryzen's boot of 2026-11-19 (DRV)
+
+On `fast-test` 92c2c6e9 the boot line was `WATCHDOG: NONE (AMD FCH: DISABLED BY THE FIRMWARE)` (SMBus 1022:790B, revision 51).
+- The maintainer set the firmware setup's "CPU WDT" from Auto to Enabled. The line did not change, so that item is not the FCH's timer.
+- The refusal now says which of its two tests failed, on `claude/213-KRN-0262-loader-lines`:
+  - the PM register's disable bits stayed set after the write;
+  - the timer's own `WatchDogDisable` bit was set.
+
+  Linux's `sp5100_tco` makes the same two tests.
+- **Asked of DRV:** Linux's own line on that machine (`sp5100_tco`). `Watchdog hardware is disabled` would mean the firmware keeps the timer off for every OS. The last criterion then cannot be met on this firmware.
+
+## Linux arms it (DRV, 2026-11-20)
+
+DRV loaded `sp5100_tco` by hand once on the Ryzen's Ubuntu (kernel 7.0.0-43; Ubuntu blacklists the module):
+- `Using 0xfeb00000 for watchdog MMIO address`, `initialized. heartbeat=60 sec`, and no `Watchdog hardware is disabled`.
+- After it, read through `/dev/mem`:
+  - DECODEEN 0xF7, WDT_TMREN set;
+  - DECODEEN3 0xE3, the disable bits clear;
+  - ISACONTROL 0x02;
+  - the timer at 0xFEB0_0000: control 0, count 0.
+
+  These are Linux's writes, not the firmware's. DRV reads the firmware's own at the next fresh Linux boot.
+
+MIND Core's boot after the maintainer set "CPU WDT" to Enabled still said `WATCHDOG: NONE (AMD FCH: DISABLED BY THE FIRMWARE)` (release 202611200150, before the line named the bit).
+
+**What Linux does that this code did not** (`sp5100_tco_setupdevice_mmio`, read on 2026-11-20 as a cross-check, nothing copied):
+- It sets DECODEEN's WDT_TMREN when it is clear. The bit both decodes the timer at 0xFEB0_0000 and starts the timer's operation. It refuses only if the bit stays clear.
+- It always takes the timer at 0xFEB0_0000, the ACPI MMIO block's window only where that one cannot be mapped.
+- It clears DECODEEN3's disable bits, then reads the timer's own `WatchDogDisable` bit. It does not read DECODEEN3 back.
+
+This code took the timer at the ACPI MMIO block's window when WDT_TMREN was clear, and never set the bit. So the timer's operation was never started, which would read as disabled. The note above that Linux "makes the same two tests" was wrong: it makes only the second.
+
+**Changed** on `claude/213-KRN-0125-fch-tmren`:
+- WDT_TMREN is set when clear, and the refusal `AMD FCH: ITS TIMER COULD NOT BE ENABLED (PM DECODEEN'S WDT_TMREN STAYS CLEAR)` comes if it stays clear.
+- The timer is taken at 0xFEB0_0000, and at the ACPI MMIO block's window only where that one does not answer.
+- A refusal after that puts DECODEEN back as well as DECODEEN3.
+- The read-back of DECODEEN3 stays as a stricter test than Linux's.
+- `tests/fch_watchdog_host.rs`: the model starts with WDT_TMREN clear, and the timer answers at 0xFEB0_0000 only once it is set. Four cases were added: the order of the writes, a bit already set, the window, and a bit that stays clear. 9 tests pass.
+
+**Landed** in round 157 (main `1025ac6bbd`); the gate saw no change, as QEMU has no FCH. **Left:** the Ryzen's boot on a build with it (DRV's), whose line says whether the timer arms.
+
+## The firmware's own values (DRV, 2026-11-20)
+
+DRV read them through `/dev/mem`, read-only, on two fresh Ubuntu boots of un-rizen before any driver loaded. Both gave the same values:
+
+| What | Value |
+|---|---|
+| PM 0xFED80300..07 | `77 0b 07 e3 02 04 01 00` |
+| DECODEEN | 0x77: WDT_TMREN clear |
+| DECODEEN3 | 0xE3: the disable bits already clear, seconds |
+| ISACONTROL | 0x02: MMIOEN |
+| 0xFED80B00 (the ACPI MMIO window) | control `0x00000008`: WatchDogDisable set |
+| 0xFEB00000 | `0xFFFFFFFF`: not decoded |
+
+So the code before round 157 took the ACPI MMIO window and refused at its bit 3, which matches the stick's ABI 34 kernel saying only `DISABLED BY THE FIRMWARE`. Linux sets WDT_TMREN and finds the timer at 0xFEB00000 with bit 3 clear (DRV's earlier message).
+
+**A host test with these values** (`the_ryzens_firmware_values_arm_the_decoded_timer`, on `claude/213-KRN-0125-fch-firmware-values`). In the model, the ACPI window reads DISABLED while WDT_TMREN is clear. With these values, `main`'s `arm`:
+- writes DECODEEN 0xF7 and nothing else to PM;
+- arms the timer at 0xFEB00000.
+
+The code before round 157 (`38f3fe3db2`) fails this test with the refusal above.
+
+This is a model of what was read, not a run (MC-12.2). The Ryzen's boot on a kernel from round 157 or later is still left.
+
+**Landed (2026-11-20):** the host test with the firmware's values, in round 160 (`main` `dba0853c13`). The gate's host tests ran it. **Left:** the Ryzen's boot line on a kernel from round 157 or later (DRV's).
+
 ## Related
 
 [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the Intel TCO watchdog, the run mark, the safe start), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [213](213-amd-ryzen-pc.md).

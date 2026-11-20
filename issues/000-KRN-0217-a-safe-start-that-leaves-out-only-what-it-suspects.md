@@ -94,7 +94,7 @@ Taken up again for 801 S5 at the maintainer's word of 2026-11-15: a machine whos
 - **The repeat:** the group alone on x32 passed, in 1671 s.
 
 **Left:**
-- a panic as evidence (step 3), not done;
+- ~~a panic as evidence (step 3)~~: done in [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done) (round 154). A panic, an exception in the kernel or an interrupt with no handler, recorded as the kernel stops, is evidence like the watchdog's restart (ABI 35);
 - a bench machine's run;
 - step 5 (Effector's telemetry and the link's log), EFF's and LNK's to ask.
 

@@ -22,6 +22,8 @@ const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel
 
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
 const MANIFEST_PAGES: usize = 16; // 64 KiB: the largest boot manifest (350-UPD-0003)
+const WATCHDOG_S: usize = 300 + 2 * PHOTO_PAUSE_MAX_S as usize; // the firmware's five minutes, and the two pauses
+const WATCHDOG_CODE: u64 = 0x4D49_4E44; // "MIND"; the firmware keeps the codes up to 0xFFFF
 
 // aarch64's line (100000-PRT-0009): a UART the firmware names, the SPCR's PL011 or SBSA UART under ACPI, else the
 // console a device tree's `stdout-path` names, a PL011 or a 16550 in memory. None otherwise: no address is written that
@@ -181,6 +183,35 @@ fn safe_start(system_table: &mut SystemTable<Boot>) -> bool {
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
     let mut console = unsafe { system_table.unsafe_clone() };
     let _ = writeln!(console.stdout(), "MIND CORE BOOT: {}", args);
+    // Kept whole for the kernel's log, while it fits (213-KRN-0262).
+    let mut line = Said([0; 256], 0);
+    let _ = writeln!(line, "MIND CORE BOOT: {}", args);
+    let (said, at) = unsafe { (&mut *core::ptr::addr_of_mut!(SAID), SAID_LEN.load(Relaxed)) };
+    if at + line.1 <= said.len() { said[at..at + line.1].copy_from_slice(&line.0[..line.1]); SAID_LEN.store(at + line.1, Relaxed); }
+}
+
+// What say() showed, for the kernel's log (213-KRN-0262): only the screen had it.
+static mut SAID: [u8; abi::LOADER_LINES_MAX] = [0; abi::LOADER_LINES_MAX];
+static SAID_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+struct Said([u8; 256], usize);
+impl core::fmt::Write for Said {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let n = text.len().min(self.0.len() - self.1);
+        self.0[self.1..self.1 + n].copy_from_slice(&text.as_bytes()[..n]);
+        self.1 += n;
+        Ok(())
+    }
+}
+
+// The kept lines in a volatile variable the kernel reads, as boot services end: gone at the next reset.
+fn keep_said(system_table: &SystemTable<Boot>) {
+    let said: &[u8; abi::LOADER_LINES_MAX] = unsafe { &*core::ptr::addr_of!(SAID) };
+    let said = &said[..SAID_LEN.load(Relaxed)];
+    let mut name = [0u16; 32];
+    let Ok(name) = uefi::CStr16::from_str_with_buf(abi::LOADER_LINES_NAME, &mut name) else { return };
+    let vendor = uefi::table::runtime::VariableVendor(uefi::Guid::from_bytes(abi::RUN_MARK_GUID));
+    let attributes = uefi::table::runtime::VariableAttributes::BOOTSERVICE_ACCESS | uefi::table::runtime::VariableAttributes::RUNTIME_ACCESS;
+    if system_table.runtime_services().set_variable(name, &vendor, attributes, said).is_err() { let _ = writeln!(Serial, "BOOT: THE LOADER'S LINES NOT KEPT FOR THE KERNEL'S LOG\r"); }
 }
 
 // A graphics mode and its framebuffer as the progress lines show them.
@@ -727,6 +758,10 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let _ = writeln!(Serial, "\r\nBOOT: THE LINE: {} AT {:#x}, FROM THE {}\r", line::kind(), line::base(), if rsdp != 0 { "SPCR" } else { "DEVICE TREE" });
     }
     show_text(&system_table);
+    // The firmware's watchdog to the handover (801-KRN-0258), whether or not its boot manager set one: a loader that
+    // stops is restarted, and on a trial the next start is the fallback's. ExitBootServices ends it; from there the
+    // kernel arms the chipset's.
+    let _ = system_table.boot_services().set_watchdog_timer(WATCHDOG_S, WATCHDOG_CODE, None);
     // Started by the loader at EFI/BOOT/ for its slot (351-UPD-0010): that one chose the slot and asked for the pause
     // and the safe start's key.
     let chained = chained(system_table.boot_services(), image);
@@ -838,6 +873,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     }
     mark(system_table.boot_services(), image, mark::Stage::Handover);
     say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
+    keep_said(&system_table);
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.

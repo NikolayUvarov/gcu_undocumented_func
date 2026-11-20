@@ -121,8 +121,13 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             cpu::halt_here();
         }
         let info = &*raw_info;
+        // From here a panic on a trial restarts the machine: the loader has counted the try (801-KRN-0258).
+        trial::start(&info.boot_slot);
         // The board from ACPI, else from the device tree a board without ACPI gives (100000-PRT-0009).
         if info.acpi_rsdp != 0 || !platform::board_from_tree(info.device_tree) { acpi::init(info.acpi_rsdp); }
+        // The chipset watchdogs that need no page tables, armed before anything else can stop the kernel; the FADT
+        // names their PM base (801-KRN-0258, 801-KRN-0259).
+        watchdog::early();
         // The devices outside PCI that init may lend, from the tree or else from the firmware's tables (100000-KRN-0171).
         platform::nodes();
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
@@ -130,15 +135,24 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
-        trial::start(&info.boot_slot);
+        trial::announce();
+        // The other watchdogs, now that the chipset's MMIO and the FADT are reachable, and the boot line (801-KRN-0258).
+        // Their feed, the boot CPU's tick, starts after the scheduler; init's BootInfo says whether one restarted the last run.
+        watchdog::start();
+        // A test kernel on trial stops for good here, before init: only the chipset's watchdog restarts it (801-KRN-0258).
+        if cfg!(feature = "watchdog-test") && info.boot_slot.trial != 0 {
+            serial_print("MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT\n");
+            cpu::halt_here();
+        }
         firmware::init(info.efi_runtime);
+        // A run the kernel stopped on a fault of its own says so at the next boot, and init learns it (801-KRN-0261).
+        firmware::last_fault(info.boot_slot.slot);
+        // The loader's lines in the kernel's log, for a machine whose screen alone showed them (213-KRN-0262).
+        firmware::loader_lines();
         firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
-        // The watchdog before init starts, so that init's BootInfo says whether it restarted the last run (000-KRN-0217);
-        // the boot CPU's tick, which feeds it, starts a moment later.
-        watchdog::start();
         scheduler::spawn_init().expect("init spawn");
         // Printed before any task can run, so it never lands in the middle of a task's console output.
         serial_print("MIND CORE KERNEL: INIT STARTED\n");
@@ -177,21 +191,62 @@ impl core::fmt::Write for Fatal {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_only(text); screen::fatal(text); Ok(()) }
 }
 
+// A fatal report, its line kept for the next boot (801-KRN-0261): what `write` takes goes to the screen and COM1, and its
+// first line, to 160 bytes, into the record; a prefix written to `out` alone is not kept.
+pub struct Report { pub out: Fatal, text: [u8; firmware::FAULT_TEXT], length: usize, ended: bool }
+impl Report { pub fn begin() -> Self { cpu::stop_others(); Report { out: Fatal::begin(), text: [0; firmware::FAULT_TEXT], length: 0, ended: false } } }
+impl core::fmt::Write for Report {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let _ = self.out.write_str(text);
+        for &byte in text.as_bytes() {
+            if self.ended || byte == b'\n' { self.ended = true; } else if self.length < self.text.len() { self.text[self.length] = byte; self.length += 1; }
+        }
+        Ok(())
+    }
+}
+
+/// A stop the kernel chose that no task asked for, its report in one line after `prefix` (801-KRN-0261).
+pub fn fatal(kind: firmware::Fault, prefix: &str, report: core::fmt::Arguments) -> ! {
+    let mut r = Report::begin();
+    let _ = core::fmt::Write::write_str(&mut r.out, prefix);
+    let _ = core::fmt::Write::write_fmt(&mut r, report);
+    fatal_end(r, kind)
+}
+
+/// Every such stop, after its report: its line kept in a firmware variable for the next boot, then a trial not yet
+/// confirmed restarted into the fallback, its watchdogs left running in case the restart does not come (801-KRN-0258);
+/// any other run stops, its watchdog stopped first.
+#[allow(unreachable_code)] // x86's reset never returns; aarch64's does where the FADT names no PSCI
+pub fn fatal_end(mut r: Report, kind: firmware::Fault) -> ! {
+    use core::fmt::Write;
+    let kept = firmware::record_fault(kind, &r.text[..r.length]);
+    let _ = r.out.write_str(if kept { "THE FAULT IS RECORDED FOR THE NEXT BOOT\n" } else { "THE FAULT IS NOT RECORDED: THE FIRMWARE KEEPS NO VARIABLES, OR WAS IN USE\n" });
+    if trial::pending() {
+        let _ = r.out.write_str("TRIAL: RESTARTING INTO THE FALLBACK\n");
+        unsafe { acpi::reset(); }
+        cpu::freeze();
+    }
+    cpu::halt_all();
+}
+
 static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     use core::fmt::Write;
     unsafe { cpu::disable_interrupts(); }
-    // One report: a second panic (another CPU, or inside the formatting) only stops the machine.
-    if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { cpu::halt_all(); }
+    // A trial not yet confirmed restarts instead: the loader has counted its try, so the next boot is the fallback's,
+    // and the watchdog runs on in case the restart does not come (801-KRN-0258).
+    let trial = trial::pending();
+    // One report: a second panic (another CPU, or inside the formatting) only stops the machine, on a trial with the
+    // watchdog left running.
+    if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { if trial { cpu::freeze() } cpu::halt_all(); }
     // Other CPUs stop first, so their output does not interleave with the report.
-    cpu::stop_others();
-    let cpu = cpu::id();
-    let mut out = Fatal::begin();
-    let _ = write!(out, "\nKERNEL PANIC: {}", info.message());
-    if let Some(location) = info.location() { let _ = write!(out, " at {}:{}:{}", location.file(), location.line(), location.column()); }
-    let _ = write!(out, " CPU={}", cpu);
+    let (cpu, mut both) = (cpu::id(), Report::begin());
+    let _ = write!(both.out, "\nKERNEL PANIC: ");
+    let _ = write!(both, "{}", info.message());
+    if let Some(location) = info.location() { let _ = write!(both, " at {}:{}:{}", location.file(), location.line(), location.column()); }
+    let _ = write!(both, " CPU={}", cpu);
     let running = &cpu::RUNNING[cpu];
     let pid = running[0].load(core::sync::atomic::Ordering::Relaxed);
     if pid != 0 {
@@ -199,8 +254,8 @@ fn panic(info: &PanicInfo) -> ! {
         name[..8].copy_from_slice(&running[1].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
         name[8..].copy_from_slice(&running[2].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
         let len = name.iter().position(|&b| b == 0).unwrap_or(16);
-        let _ = write!(out, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
+        let _ = write!(both, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
     }
-    let _ = write!(out, "\n");
-    cpu::halt_all();
+    let _ = write!(both, "\n");
+    fatal_end(both, firmware::Fault::Panic)
 }

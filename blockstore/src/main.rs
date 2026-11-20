@@ -61,6 +61,8 @@ const SCRUB_STEP: u64 = 256;
 const SCRUB_PAUSE_MS: u32 = 20;
 // How often the calendar time is read and the terms acted on (312-STO-0050).
 const TERMS_EVERY_NS: u64 = 60 * 1_000_000_000;
+// How often a medium whose kept key keystore could not give yet is mounted again (801-STO-0052).
+const REMOUNT_EVERY_NS: u64 = 30 * 1_000_000_000;
 // init's rtc client for the store, without the setting badge (312-KRN-0239); empty when rtc does not run.
 const SLOT_STORE_RTC: usize = 5;
 const SCRUB_EVERY_NS: u64 = 24 * 3600 * 1_000_000_000;
@@ -139,15 +141,18 @@ impl Crypto for Sealing {
     fn random(&self, out: &mut [u8]) -> bool { mind::random::fill(out) }
 }
 
-// The volume key as the store's secret `volume-<id in hex>` in keystore (308-STO-0022).
-struct Secrets(Endpoint);
+// The volume key as the store's secret `volume-<id in hex>` in keystore (308-STO-0022); whether keystore's last answer
+// was that it holds no device key it may use, so that the store mounts again once it does (801-STO-0052).
+struct Secrets(Endpoint, bool);
 impl Keeper for Secrets {
     fn put(&mut self, id: &[u8; 8], key: &[u8; 32]) -> bool {
         matches!(mind::idl::keystore::secret_put(self.0, secret_name(id).as_str(), key), Ok(Ok(())))
     }
     fn get(&mut self, id: &[u8; 8]) -> Option<[u8; 32]> {
         let mut key = [0u8; 32];
-        matches!(mind::idl::keystore::secret_get(self.0, secret_name(id).as_str(), &mut key), Ok(Ok(32))).then_some(key)
+        let got = mind::idl::keystore::secret_get(self.0, secret_name(id).as_str(), &mut key);
+        self.1 = matches!(got, Ok(Err(mind::idl::keystore::Error::NoKey)));
+        matches!(got, Ok(Ok(32))).then_some(key)
     }
 }
 
@@ -453,7 +458,7 @@ fn mount(index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, lent: bool) ->
 fn updater(owner: u16) -> bool { owner < FIRST_DOMAIN_CLIENT && owner & OWNER_BITS == OWNER_UPDATER }
 
 // What a mount gave, logged: the store, or the reason every request is answered with.
-fn ready(mounted: Result<Store<'static, Medium>, store::Error>, ram: bool, lent: bool) -> Result<Store<'static, Medium>, Error> {
+fn ready(mounted: Result<Store<'static, Medium>, store::Error>, ram: bool, lent: bool, waiting: bool) -> Result<Store<'static, Medium>, Error> {
     let durability = if ram { Durability::Volatile } else { Durability::Flushed };
     match mounted {
         Ok(mut store) => {
@@ -489,7 +494,8 @@ fn ready(mounted: Result<Store<'static, Medium>, store::Error>, ram: bool, lent:
             Ok(store)
         }
         Err(store::Error::Kept(id)) => {
-            let why = if lent { "WHICH KEEPS NONE UNDER IT: ANOTHER MACHINE'S MEDIUM, OR ITS SECRET LOST" } else { "AND NO SECRETS CLIENT WAS LENT" };
+            let why = if waiting { "WHICH HOLDS NO DEVICE KEY IT MAY USE YET: TRIED AGAIN EVERY 30 S" }
+                else if lent { "WHICH KEEPS NONE UNDER IT: ANOTHER MACHINE'S MEDIUM, OR ITS SECRET LOST" } else { "AND NO SECRETS CLIENT WAS LENT" };
             mind::println!("[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {}, {}", secret_name(&id), why);
             Err(Error::Key)
         }
@@ -523,7 +529,7 @@ fn recover(key: &str, index: &mut Option<*mut [Entry]>, secrets: &mut Secrets, l
     wipe(&mut recovery);
     found?;
     let (mounted, ram) = mount(index, secrets, lent);
-    Ok(ready(mounted, ram, lent))
+    Ok(ready(mounted, ram, lent, false))
 }
 
 mind::entry!(main);
@@ -532,14 +538,16 @@ fn main(_info: &'static BootInfo) {
     // A RAM disk keeps its key in its own superblock, as nothing of it outlives a reset; any other medium's key is kept
     // by keystore, when init lent its client (308-STO-0022).
     let lent = mind::dev::cap_info(SECRETS).0 == CAP_KIND_ENDPOINT;
-    let mut secrets = Secrets(Endpoint(SECRETS));
+    let mut secrets = Secrets(Endpoint(SECRETS), false);
     let mut index = None;
     let (mounted, ram) = mount(&mut index, &mut secrets, lent);
     // How far a write reaches is the medium's: nothing outlives a reset on a RAM disk; elsewhere the driver acknowledged
     // a flush after it, and what that reaches is the driver's to state (307-STO-0019).
     let durability = if ram { Durability::Volatile } else { Durability::Flushed };
     // Without a medium every request is answered with the reason, so clients are not left waiting.
-    let mut store = ready(mounted, ram, lent);
+    let mut store = ready(mounted, ram, lent, secrets.1);
+    // A kept key keystore could not give yet: the medium is mounted again until it can (801-STO-0052).
+    let mut remount = (store.is_err() && secrets.1).then(|| mind::time::monotonic_ns() + REMOUNT_EVERY_NS);
     // The copy of chosen names on a second medium (309-STO-0040): read-only beside a store that did not mount (309-STO-0041).
     let mut copy_index = None;
     let mut copies = mount_copy(store.as_mut().ok(), ram, &mut secrets, lent, &mut copy_index);
@@ -563,11 +571,26 @@ fn main(_info: &'static BootInfo) {
                 let due = match copies.as_ref() { Some(c) if c.behind() > 0 => scrubs.next.min(retry), _ => scrubs.next };
                 (due.saturating_sub(now) / 1_000_000).clamp(1, u32::MAX as u64) as u32
             }
-            Err(_) => 0,
+            Err(_) => remount.map_or(0, |at| (at.saturating_sub(now) / 1_000_000).clamp(1, u32::MAX as u64) as u32),
         };
         let wait = if store.is_ok() { wait.min((terms_next.saturating_sub(now) / 1_000_000).clamp(1, u32::MAX as u64) as u32) } else { wait };
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else {
             let now = mind::time::monotonic_ns();
+            if store.is_err() && remount.is_some_and(|at| now >= at) {
+                let (mounted, _) = mount(&mut index, &mut secrets, lent);
+                match mounted {
+                    Err(store::Error::Kept(_)) if secrets.1 => remount = Some(now + REMOUNT_EVERY_NS),
+                    mounted => {
+                        remount = None;
+                        if mounted.is_ok() { mind::println!("[BLOCKSTORE] KEYSTORE GAVE THE KEPT VOLUME KEY NOW: THE MEDIUM MOUNTED"); }
+                        store = ready(mounted, ram, lent, false);
+                        // The copy read beside a store that did not mount goes first: a new one takes the same buffers.
+                        drop(copies.take());
+                        copies = mount_copy(store.as_mut().ok(), ram, &mut secrets, lent, &mut copy_index);
+                    }
+                }
+                continue;
+            }
             match (store.as_mut(), copies.as_mut()) {
                 // One name behind brought in step, then a step of the scrub of either medium (MC-5.1).
                 (Ok(s), Some(c)) => {

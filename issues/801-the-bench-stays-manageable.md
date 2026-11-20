@@ -153,3 +153,44 @@ On the maintainer's word of 2026-11-17 («прогоняй на DEXP и MacBook,
   - **A gap in the heartbeat:** about 8 minutes with none while the bundle downloaded. 801's "always connected" asks for a heartbeat throughout (EFF, asked in `requests-EFF.md`).
 - **Held:** the MacBook gets no release until the DEXP's cause is known, as the same restart could take it off the network too. The release that loses the network (S8's first check) waits too.
 - **Needed:** what the DEXP's screen shows (asked of the maintainer, 2026-11-17).
+- **Back, 2026-11-18 about 09:41 UTC:**
+  - the DEXP started again from slot A (`THE NEWER RECORD: SLOT B NOT CONFIRMED`);
+  - its clock read 07:20:38, about 2 h 21 min behind the server's;
+  - the agent answered the kept command `completed`: `fell back: slot A runs version 0, not 1; the updater: check: Missing`, and the operation's record holds that answer.
+- **So:** the fall-back took a start from outside, very likely a person's (not confirmed).
+  - Slot B's trial left no boot log, so it stopped before `log:` was mounted. The loader had counted its try.
+  - Neither the trial's deadline nor `init`'s bound runs that early, and the DEXP has no chipset watchdog (`WATCHDOG: NONE (THE LPC BRIDGE'S ACPI I/O IS OFF)`). Nor does the MacBook (`NO_REBOOT HELD BY THE FIRMWARE`).
+  - Taken as [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done).
+  - Why the release stopped there is not known: nothing of that boot was kept.
+- **Also seen in that boot:** `data/effector/effector.conf` names `mind-macbook-pro`, not this machine (`mind-n100`); the agent logs it and goes on under its own name.
+
+## The DEXP: a release that loses the network, rolled back (S8, 2026-11-19)
+
+MC-12.1: this machine, this network.
+
+**The release.** Release 15 was release 14's build (801-KRN-0259's kernel, 801-NET-0088's `netstack`) with `netstack.elf` left out, signed as usual. It went through `update_agent` while slot A ran release 14.
+
+**What happened:**
+1. The download, check and staging took 18:51:03 to 18:56:18 UTC, and the machine restarted into slot B's trial.
+2. Slot B had no network, so the agent said nothing to the server.
+3. At `init`'s 10-minute bound the trial was refused, the updater spent its tries, and slot A booted again.
+4. The agent was back at 19:07:35, 11 min 17 s after the restart. Its heartbeat carried `rolled_back`, build 15, and the reason. It answered the command:
+   ```
+   fell back: slot A runs version 14, not 15; the updater: version 15 in slot B, falling back to slot A: NO HEARTBEAT ACCEPTED IN 600 S: THE AGENT SAID NOTHING
+   ```
+
+Nobody touched the machine.
+
+**S8's first check is shown on the DEXP:** a release built to lose the network is rolled back on its own, with its report. The other machines of S8 are not done:
+- the MacBook gets no release yet;
+- the Ryzen is busy.
+
+The rewrite of all three disks is also left.
+
+## S1: every stop of a trial falls back (2026-11-19)
+
+[801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), round 154 (`main` `da1ee7647b`).
+- **What was wrong.** Only a panic on a trial restarted into the fallback. An exception in the kernel, `init`'s exit or an interrupt with no handler stopped the machine with its watchdog stopped, and only a person could bring it back.
+- **Now:** all four restart a trial into the fallback, and leave a record that the next boot names.
+- **Evidence:** QEMU, x86, a panic.
+- **Left:** the record reaching the server (S2) is [801-UPD-0044](../issues-done/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done).

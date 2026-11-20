@@ -1,5 +1,6 @@
 // xHCI: command and event rings, a pool of DMA pages for device contexts and transfer rings, input contexts, synchronous
-// control and bulk transfers, and interrupt IN endpoints kept polling with their reports queued (issue 164).
+// control and bulk transfers, interrupt IN endpoints kept polling with their reports queued (issue 164), and
+// isochronous endpoints streaming, IN and OUT (000-DRV-0073).
 use core::sync::atomic::{fence, Ordering};
 use mind::dev::{Dma, Mmio};
 
@@ -21,14 +22,21 @@ const POOL_SCRATCH: usize = POOL_PAGES / 2;
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
 const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
+const TYPE_ISOCH: u32 = 17;
+// An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
+// IDs: the Ryzen's AMD xHCI stopped with a host controller error on TDs that asked to start as soon as possible (SIA).
+const FRAME_ID_SHIFT: u32 = 20;
+// The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
+const FIRST_AHEAD: u32 = 8 * 8;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
+const RING_UNDERRUN: u32 = 14; const RING_OVERRUN: u32 = 15; const MISSED_SERVICE: u32 = 23;
 // PORTSC bits written back without side effects (no RW1C bits, no PED).
 const PORT_NEUTRAL: u32 = 0x4E00_FFE9; const PORT_PED: u32 = 1 << 1; const PORT_PR: u32 = 1 << 4; const PORT_CHANGES: u32 = 0x7F << 17; const PORT_PRC: u32 = 1 << 21;
 
 /// Endpoint context types.
-pub const EP_BULK_OUT: u32 = 2; pub const EP_INTERRUPT_OUT: u32 = 3; pub const EP_CONTROL: u32 = 4; pub const EP_BULK_IN: u32 = 6; pub const EP_INTERRUPT_IN: u32 = 7;
+pub const EP_ISOCH_OUT: u32 = 1; pub const EP_ISOCH_IN: u32 = 5; pub const EP_BULK_OUT: u32 = 2; pub const EP_INTERRUPT_OUT: u32 = 3; pub const EP_CONTROL: u32 = 4; pub const EP_BULK_IN: u32 = 6; pub const EP_INTERRUPT_IN: u32 = 7;
 
 #[derive(Clone, Copy, Default)]
 pub struct Ring { pub page: usize, trbs: usize, index: usize, cycle: u32 }
@@ -46,10 +54,41 @@ pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
+/// An isochronous stream's TDs: each one TRB, one service interval's packet, in a buffer of its own.
+pub const STREAM_TDS: usize = 32; const STREAM_PAGES: usize = 4; const MAX_STREAMS: usize = 4;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done (IN): the bytes received, and an error
+
+/// An isochronous endpoint streaming (000-DRV-0073). An IN stream keeps every TD free of a packet on its ring; the
+/// packets come back in order and wait until they are taken, then their TDs go on the ring again. An OUT stream puts each
+/// packet it is given on the ring while a TD is free; a TD is free again once the controller sent it. Each TD starts as
+/// soon as possible after the one before (SIA), so a ring that ran dry (a missed packet, under- or overrun) starts
+/// again with the next TD. The streams of an interface end with its setting.
+pub struct Stream {
+    pub slot: u8, pub dci: u8, pub interface: u8, input: bool, ring: Ring, packet: usize, size: usize, pages: [usize; STREAM_PAGES],
+    tds: usize, state: [Td; STREAM_TDS], next: usize, oldest: usize,
+    /// TDs the controller missed, times its ring ran dry, packets that came with an error.
+    missed: u32, dry: u32, damaged: u32, moved: u64, reported: bool,
+    // When a TD last ended, the completion codes already logged (a bit each, below 64), and when a stall was last said.
+    ended_ms: u64, codes: u64, said_ms: u64,
+    // The microframe the next TD runs in (MFINDEX's count, 14 bits: 2048 frames), None until the first TD or after the
+    // ring ran dry; the microframes between two TDs (2^interval).
+    uframe: Option<u32>, step: u32,
+}
+
+impl Stream {
+    // TD k's buffer: its page and offset.
+    fn buffer(&self, k: usize) -> usize { self.pages[k * self.size / PAGE] + k * self.size % PAGE }
+}
+
 pub struct Xhci {
     mmio: Mmio, pub dma: Dma, op: usize, runtime: usize, doorbells: usize, context: usize, ports: usize, pub slots: usize,
     command: Ring, event: Ring, free: u64, completion: Option<(u32, u32)>, done: [Option<Done>; MAX_DONE], interrupts: [Option<Interrupt>; MAX_INTERRUPTS],
+    streams: [Option<Stream>; MAX_STREAMS],
     pub last: u32, // completion code of the last command or transfer (0: no answer), for reports
+    /// A command had no answer: the controller is set up again, and no command waits on it until then (000-DRV-0075).
+    pub stuck: bool,
     pub number: u8, // which of usb_host's xHCI controllers, for the log (213-DRV-0048)
 }
 
@@ -88,7 +127,9 @@ impl Xhci {
         }
         let op = caplength;
         mmio.write32(op, mmio.read32(op) & !1);
-        if !wait(|| mmio.read32(op + 4) & 1 != 0) { return None; }
+        // One that does not halt (it left a command unanswered, 000-DRV-0075) is reset all the same: nothing else brings
+        // it back. The specification gives a halt 16 ms.
+        if !wait_for(1_500, || mmio.read32(op + 4) & 1 != 0) { mind::println!("[USB] {}THE CONTROLLER DID NOT HALT (USBSTS {:08X}): RESET ALL THE SAME", Tag(number), mmio.read32(op + 4)); }
         mmio.write32(op, 2);
         if !wait(|| mmio.read32(op) & 2 == 0 && mmio.read32(op + 4) & 1 << 11 == 0) { return None; }
         let scratch = ((hcs2 >> 21 & 0x1F) << 5 | hcs2 >> 27) as usize;
@@ -107,7 +148,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0, number };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -121,6 +162,14 @@ impl Xhci {
     }
 
     pub fn ports(&self) -> usize { self.ports }
+
+    /// USBSTS: bit 0 halted, bit 2 a host system error, bit 12 a host controller error.
+    pub fn status(&self) -> u32 { self.mmio.read32(self.op + 4) }
+    /// Whether the controller stopped by itself, with a host system or controller error (000-DRV-0073: the Ryzen's
+    /// second xHCI did, on its first isochronous TDs).
+    pub fn failed(&self) -> bool { let s = self.status(); s & 1 != 0 && s & (1 << 2 | 1 << 12) != 0 }
+    /// The controller set up anew on its registers and DMA region, after it failed: every device on it is gone.
+    pub fn start_again(self) -> Option<Self> { let Xhci { mmio, dma, number, .. } = self; Self::init(mmio, dma, number) }
 
     // DMA pages for device contexts and transfer rings.
     pub fn alloc(&mut self) -> Option<usize> {
@@ -178,7 +227,9 @@ impl Xhci {
             match (control >> 10) & 0x3F {
                 EVENT_COMMAND => self.completion = Some((status >> 24, control >> 24)),
                 EVENT_TRANSFER => {
-                    if let Some(index) = self.interrupts.iter().position(|i| i.as_ref().is_some_and(|i| i.slot == slot && i.dci == dci)) {
+                    if let Some(index) = self.streams.iter().position(|t| t.as_ref().is_some_and(|t| t.slot == slot && t.dci == dci)) {
+                        self.stream_event(index, pointer, status);
+                    } else if let Some(index) = self.interrupts.iter().position(|i| i.as_ref().is_some_and(|i| i.slot == slot && i.dci == dci)) {
                         self.report(index, pointer, status);
                     } else {
                         // A late completion nobody waits for may take the place of the oldest one.
@@ -191,13 +242,20 @@ impl Xhci {
         }
     }
 
+    // A command and its completion: the slot it names, on success. One without an answer in 5 s, as Linux waits, marks
+    // the controller stuck: the Ryzen's AMD xHCI stopped answering at a device's set-up there (000-DRV-0075).
     fn command(&mut self, parameter: u64, control: u32) -> Option<u32> {
+        if self.stuck { self.last = 0; return None; }
         self.completion = None;
         Self::enqueue(&mut self.dma, &mut self.command, parameter, 0, control);
         self.doorbell(0, 0);
         let mut result = None;
-        wait(|| { self.pump(); result = self.completion.take(); result.is_some() });
+        wait_for(1_500, || { self.pump(); result = self.completion.take(); result.is_some() });
         self.last = result.map_or(0, |r| r.0);
+        if result.is_none() {
+            self.stuck = true;
+            mind::println!("[USB] {}COMMAND {} HAD NO ANSWER IN 5 S (USBSTS {:08X}, CRCR {:08X})", Tag(self.number), control >> 10 & 0x3F, self.status(), self.mmio.read32(self.op + 0x18));
+        }
         let (code, slot) = result?;
         (code == SUCCESS).then_some(slot)
     }
@@ -289,9 +347,206 @@ impl Xhci {
         self.dma.write32(at + 16, average | esit);
     }
 
+    /// An isochronous endpoint's context (000-DRV-0073): no error count; a high-speed endpoint's extra transactions
+    /// (wMaxPacketSize bits 11-12) as its burst; interval as 2^n units of 125 µs.
+    pub fn endpoint_context_isochronous(&mut self, dci: u8, input: bool, packet: u16, interval: u8, ring: Ring) {
+        let at = INPUT + self.context * (1 + dci as usize);
+        let (size, burst) = ((packet & 0x7FF) as u32, (packet >> 11 & 3) as u32);
+        let esit = size * (burst + 1);
+        self.dma.write32(at, (interval as u32) << 16);
+        self.dma.write32(at + 4, (if input { EP_ISOCH_IN } else { EP_ISOCH_OUT }) << 3 | burst << 8 | size << 16);
+        let dequeue = self.dma.physical(ring.page) | 1;
+        self.dma.write64(at + 8, dequeue);
+        self.dma.write32(at + 16, esit | (esit & 0xFFFF) << 16);
+    }
+    /// The input slot context as the device's output one is, with `entries` (Linux's xhci_slot_copy): a Configure
+    /// Endpoint that adds endpoints to a running device changes nothing else of its slot.
+    pub fn slot_context_from(&mut self, output: usize, entries: u32) {
+        let slot = INPUT + self.context;
+        for i in 0..4 { let v = self.dma.read32(output + 4 * i); self.dma.write32(slot + 4 * i, v); }
+        let first = self.dma.read32(slot) & !(0x1F << 27) | entries << 27;
+        self.dma.write32(slot, first);
+    }
+    /// The raw words of the input context's control, slot and endpoint `dci` contexts and of the output's endpoint
+    /// `dci` context, for the log (000-DRV-0073: compared with Linux's on the same controller).
+    pub fn context_words(&mut self, output: usize, dci: u8) -> [u32; 18] {
+        let mut w = [0u32; 18];
+        for i in 0..2 { w[i] = self.dma.read32(INPUT + 4 * i); }
+        for i in 0..4 { w[2 + i] = self.dma.read32(INPUT + self.context + 4 * i); }
+        for i in 0..6 { w[6 + i] = self.dma.read32(INPUT + self.context * (1 + dci as usize) + 4 * i); }
+        for i in 0..6 { w[12 + i] = self.dma.read32(output + self.context * dci as usize + 4 * i); }
+        w
+    }
+    /// An endpoint's state in the device's output context: 1 running, 2 halted, 3 stopped, 4 error.
+    pub fn endpoint_state(&mut self, output: usize, dci: u8) -> u32 { self.dma.read32(output + self.context * dci as usize) & 7 }
+    /// The endpoints a Configure Endpoint drops (input control context's drop flags).
+    pub fn input_drop(&mut self, drop: u32) { self.dma.write32(INPUT, drop); }
+
+    /// A new stream of isochronous endpoint `dci` of `slot`, packets of up to `packet` bytes (with a high-speed
+    /// endpoint's extra transactions); its ring, for the endpoint's context. None when the pool has no room.
+    pub fn new_stream(&mut self, slot: u8, dci: u8, interface: u8, input: bool, packet: u16, interval: u8) -> Option<Ring> {
+        let at = self.streams.iter().position(Option::is_none)?;
+        let bytes = (packet & 0x7FF) as usize * ((packet >> 11 & 3) as usize + 1);
+        let size = bytes.max(64).next_power_of_two().min(PAGE);
+        if bytes > PAGE { return None; }
+        let tds = (STREAM_PAGES * PAGE / size).min(STREAM_TDS);
+        let ring = self.ring(false)?;
+        let mut pages = [0usize; STREAM_PAGES];
+        for n in 0..(tds * size).div_ceil(PAGE) {
+            match self.alloc() { Some(page) => pages[n] = page, None => { pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p)); self.release(ring.page); return None } }
+        }
+        let now = mind::time::uptime_ms() as u64;
+        self.streams[at] = Some(Stream { slot, dci, interface, input, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
+            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15) });
+        Some(ring)
+    }
+    /// The stream of endpoint `dci` of `slot`.
+    pub fn stream(&self, slot: u8, dci: u8) -> Option<usize> { self.streams.iter().position(|t| t.as_ref().is_some_and(|t| t.slot == slot && t.dci == dci)) }
+    /// The DCIs (a bit each) of the streams of `slot`'s interface `interface`, or of all its interfaces.
+    pub fn streams_of(&self, slot: u8, interface: Option<u8>) -> u32 {
+        self.streams.iter().flatten().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i)).fold(0, |m, t| m | 1 << t.dci)
+    }
+    /// Ends the streams of `slot`'s interface `interface` (all with None): their pages back to the pool. The endpoints
+    /// themselves are dropped by the caller's Configure Endpoint, or with the slot.
+    pub fn end_streams(&mut self, slot: u8, interface: Option<u8>) {
+        for at in 0..MAX_STREAMS {
+            let Some(t) = self.streams[at].as_ref().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i)) else { continue };
+            let (ring, pages) = (t.ring.page, t.pages);
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: STREAM ENDED: {} {}, {} MISSED, {} TIMES DRY, {} WITH ERRORS", Tag(self.number), t.slot, t.dci,
+                t.moved, if t.input { "BYTES" } else { "PACKETS SENT" }, t.missed, t.dry, t.damaged);
+            self.release(ring);
+            pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p));
+            self.streams[at] = None;
+        }
+    }
+
+    // A TD of stream `index` ended: an IN one's packet waits to be taken; an OUT one's TD is free. A ring that ran dry has
+    // no TD to name.
+    fn stream_event(&mut self, index: usize, pointer: u64, status: u32) {
+        let Some(t) = self.streams[index].as_mut() else { return };
+        let code = status >> 24;
+        // Each completion code other than success is said once a stream, with what the controller's status says.
+        if !matches!(code, SUCCESS | SHORT_PACKET) && code < 64 && t.codes & 1 << code == 0 {
+            t.codes |= 1 << code;
+            let (slot, dci, usbsts) = (t.slot, t.dci, self.mmio.read32(self.op + 4));
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: AN ISOCHRONOUS TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, code, usbsts);
+        }
+        let Some(t) = self.streams[index].as_mut() else { return };
+        // A ring that ran dry starts again from the controller's frame with its next TD.
+        if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; t.uframe = None; return; }
+        if code == MISSED_SERVICE { t.uframe = None; }
+        t.ended_ms = mind::time::uptime_ms() as u64;
+        let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
+        let good = matches!(code, SUCCESS | SHORT_PACKET);
+        if code == MISSED_SERVICE { t.missed += 1; } else if !good { t.damaged += 1; }
+        if !t.reported && good {
+            t.reported = true;
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: FIRST ISOCHRONOUS {} DONE ({} BYTES)", Tag(self.number), t.slot, t.dci, if t.input { "PACKET" } else { "SEND" }, t.packet.saturating_sub((status & 0xFF_FFFF) as usize));
+        }
+        t.state[k] = if t.input {
+            let got = if good { t.packet.saturating_sub((status & 0xFF_FFFF) as usize) } else { 0 };
+            t.moved += got as u64;
+            Td::Done(got as u16, !good && code != MISSED_SERVICE)
+        } else { if good { t.moved += 1; } Td::Free };
+    }
+
+    // Puts free TD k of stream `index` on its ring with `length` bytes; its TRB's address is how its end is known.
+    fn queue_td(&mut self, index: usize, k: usize, length: usize) {
+        let mfindex = self.mmio.read32(self.runtime) & 0x3FFF;
+        let Some(t) = self.streams[index].as_mut() else { return };
+        let (buffer, input) = (t.buffer(k), t.input);
+        let address = self.dma.physical(buffer);
+        // Its frame: the one after the TD before, or a little ahead of the controller; one that fell behind starts anew.
+        let uframe = match t.uframe {
+            Some(u) if (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= 16 => u,
+            _ => (mfindex + FIRST_AHEAD) & 0x3FFF,
+        };
+        t.uframe = Some((uframe + t.step) & 0x3FFF);
+        let control = TYPE_ISOCH << 10 | IOC | ((uframe >> 3) & 0x7FF) << FRAME_ID_SHIFT | if input { ISP } else { 0 };
+        let first = t.next == 0 && t.state.iter().all(|s| *s == Td::Free);
+        let trb = Self::enqueue(&mut self.dma, &mut t.ring, address, length as u32, control);
+        t.state[k] = Td::Armed(trb);
+        // The first TD of a stream as the controller reads it, its MFINDEX and USBSTS, for the log (000-DRV-0073).
+        if first {
+            let (slot, dci, at) = (t.slot, t.dci, (trb - self.dma.physical(0)) as usize);
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: FIRST TD AT {:X}: {:08X} {:08X} {:08X} {:08X}; MFINDEX {:04X}; USBSTS {:08X}", Tag(self.number), slot, dci, trb,
+                self.dma.read32(at), self.dma.read32(at + 4), self.dma.read32(at + 8), self.dma.read32(at + 12), mfindex, self.mmio.read32(self.op + 4));
+        }
+    }
+
+    /// IN stream `index`: its packets in order into `out` (two length bytes each, bit 15 for an error, then the packet;
+    /// empty ones left out), as far as they fit; their TDs and every other free one go on the ring again. The bytes written.
+    pub fn take_stream(&mut self, index: usize, out: &mut [u8]) -> usize {
+        let mut written = 0;
+        loop {
+            let Some(t) = self.streams[index].as_mut() else { return written };
+            let Td::Done(length, damaged) = t.state[t.oldest] else { break };
+            let length = length as usize;
+            if length > 0 {
+                if written + 2 + length > out.len() { break; }
+                let head = length as u16 | if damaged { 0x8000 } else { 0 };
+                out[written..written + 2].copy_from_slice(&head.to_le_bytes());
+                let buffer = t.buffer(t.oldest);
+                out[written + 2..written + 2 + length].copy_from_slice(self.dma.bytes(buffer, length));
+                written += 2 + length;
+            }
+            let Some(t) = self.streams[index].as_mut() else { return written };
+            t.state[t.oldest] = Td::Free;
+            t.oldest = (t.oldest + 1) % t.tds;
+        }
+        let mut queued = false;
+        loop {
+            let Some(t) = self.streams[index].as_ref() else { break };
+            let (k, packet) = (t.next, t.packet);
+            if !t.input || t.state[k] != Td::Free { break; }
+            self.queue_td(index, k, packet);
+            if let Some(t) = self.streams[index].as_mut() { t.next = (k + 1) % t.tds; }
+            queued = true;
+        }
+        if let (true, Some(t)) = (queued, self.streams[index].as_ref()) { self.doorbell(t.slot, t.dci as u32); }
+        written
+    }
+
+    /// OUT stream `index`: the packets in `packets` (two length bytes each, then the packet) go on the ring while TDs are
+    /// free. The bytes taken; what is left waits for the client's next call.
+    pub fn put_stream(&mut self, index: usize, packets: &[u8]) -> usize {
+        let mut at = 0;
+        let mut queued = false;
+        while at + 2 <= packets.len() {
+            let Some(t) = self.streams[index].as_ref() else { break };
+            let length = u16::from_le_bytes([packets[at], packets[at + 1]]) as usize & 0x7FFF;
+            let k = t.next;
+            if t.input || t.state[k] != Td::Free || length > t.packet || at + 2 + length > packets.len() { break; }
+            let buffer = t.buffer(k);
+            self.dma.bytes(buffer, length).copy_from_slice(&packets[at + 2..at + 2 + length]);
+            self.queue_td(index, k, length);
+            if let Some(t) = self.streams[index].as_mut() { t.next = (k + 1) % t.tds; }
+            at += 2 + length;
+            queued = true;
+        }
+        if let (true, Some(t)) = (queued, self.streams[index].as_ref()) { self.doorbell(t.slot, t.dci as u32); }
+        at
+    }
+    /// Streams with TDs on their ring and none ended for a second: said every 5 s at most, with the controller's
+    /// status (USBSTS: halted, host system error, controller error) and the TDs it holds.
+    pub fn watch_streams(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        let usbsts = self.mmio.read32(self.op + 4);
+        for t in self.streams.iter_mut().flatten() {
+            let armed = t.state[..t.tds].iter().filter(|s| matches!(s, Td::Armed(_))).count();
+            if armed == 0 || now < t.ended_ms + 1000 || now < t.said_ms + 5000 { continue; }
+            t.said_ms = now;
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: NO TD ENDED FOR {} MS, {} ON THE RING; USBSTS {:08X}; {} MOVED, {} MISSED, {} TIMES DRY",
+                Tag(self.number), t.slot, t.dci, now - t.ended_ms, armed, usbsts, t.moved, t.missed, t.dry);
+        }
+    }
+    /// Whether a stream runs: events are then taken every STREAM_MS, so the event ring never fills.
+    pub fn streaming(&self) -> bool { self.streams.iter().any(Option::is_some) }
+
     pub fn enable_slot(&mut self) -> Option<u8> { self.command(0, TYPE_ENABLE_SLOT << 10).map(|s| s as u8) }
     pub fn disable_slot(&mut self, slot: u8) {
         self.interrupts.iter_mut().filter(|i| i.as_ref().is_some_and(|i| i.slot == slot)).for_each(|i| *i = None);
+        self.end_streams(slot, None);
         let _ = self.command(0, TYPE_DISABLE_SLOT << 10 | (slot as u32) << 24);
         self.dma.write64(DCBAA + slot as usize * 8, 0);
     }

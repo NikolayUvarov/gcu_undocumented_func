@@ -259,6 +259,7 @@ pub unsafe fn early(_rsdp: u64) {}
 
 /// Resets through what needs no table and no other CPU stopped: port 0xCF9, the 8042 controller, then a triple fault.
 pub unsafe fn reset() -> ! {
+    super::watchdog::before_reset();
     serial_print("MIND CORE KERNEL: REBOOT VIA PORT 0xCF9\n");
     outb(0xCF9, 0x02); pause(); outb(0xCF9, 0x06); pause();
     serial_print("MIND CORE KERNEL: REBOOT VIA THE 8042 CONTROLLER\n");

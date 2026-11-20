@@ -67,6 +67,9 @@ const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
 // The last trial init refused, and why (801-UPD-0037): in the updater's own directory, which every slot's updater reads.
 const REFUSED: &str = "system/updater/refused";
 const REFUSED_MAX: usize = 512;
+// How long a fallback's start waits for init to say how the trial before it ended (801-UPD-0044): init answers once it
+// started the boot services.
+const FAULT_WAIT_MS: usize = 120_000;
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
 const TRIES_MAX: u8 = 9;
@@ -286,6 +289,14 @@ fn slot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error
 fn kind(path: &str) -> Kind { plan::kind(path, &BOOT_FILES, LOADER) }
 
 fn slot_name(slot: u8) -> &'static str { if slot == b'A' { "A" } else { "B" } }
+
+// A trial's refusal for the slot before to report (801-UPD-0037): the refused version, its slot and the fallback, why,
+// and the trial's log; whether it was written.
+fn keep_refusal(version: &str, slot: u8, fallback: u8, why: &str, log: &str) -> bool {
+    let text = format!("refused version {} in slot {}, falling back to slot {}\nwhy {}\nlog {}\n", version, slot_name(slot), slot_name(fallback), why, log);
+    let made = matches!(mind::fs::mkdir(TRUSTED_DIR), Ok(()) | Err(mind::fs::Error::Exists));
+    made && File::create(REFUSED).is_ok_and(|mut file| file.write_at(0, &text.as_bytes()[..text.len().min(REFUSED_MAX)]).is_ok())
+}
 
 struct Updater {
     config: Config,
@@ -1159,9 +1170,7 @@ impl Updater {
         let fallback = plan::newest(records).map_or(0, |(_, r)| r.fallback);
         let version = if self.running == 0 { String::from("not known") } else { format!("{}", self.running) };
         let log = if boot.log == 0 { String::from("none") } else { format!("log:boot{:04}.log", boot.log) };
-        let text = format!("refused version {} in slot {}, falling back to slot {}\nwhy {}\nlog {}\n", version, slot_name(self.slot), slot_name(fallback), why, log);
-        let made = matches!(mind::fs::mkdir(TRUSTED_DIR), Ok(()) | Err(mind::fs::Error::Exists));
-        let kept = made && File::create(REFUSED).is_ok_and(|mut file| file.write_at(0, &text.as_bytes()[..text.len().min(REFUSED_MAX)]).is_ok());
+        let kept = keep_refusal(&version, self.slot, fallback, why, &log);
         mind::println!("[UPDATER] THE REASON {} {} (VERSION {}, THIS BOOT'S LOG {})", if kept { "KEPT IN" } else { "NOT WRITTEN TO" }, REFUSED, version, log);
         match plan::spend(records, self.slot) {
             Some(write) => match self.write_record(write) {
@@ -1171,6 +1180,43 @@ impl Updater {
             None => mind::println!("[UPDATER] SLOT {}: NO TRY LEFT TO SPEND", slot_name(self.slot)),
         }
         let _ = self.restart();
+    }
+
+    /// Slot `other`'s trial fell back to this one (801-UPD-0044): when the kernel stopped it on a fault or at its deadline,
+    /// init holds the kernel's record; when the platform's watchdog restarted it, init holds its mark (801-UPD-0045). Either
+    /// is kept here as that trial's refusal the way init's are (801-UPD-0037), so that the agent reports it until a trial
+    /// is confirmed (801 S2). Asked before any request is served, so that the state names it from the first answer on.
+    /// `version` is the other slot's (0: not known).
+    fn fell_back(&mut self, version: u64) {
+        let (other, asked) = (plan::other(self.slot), mind::time::uptime_ms());
+        let fault = loop {
+            match wire::with_timeout(ASK_MS as u32, || init::last_fault(Endpoint(SLOT_LIFECYCLE))) {
+                Err(mind::sys::Error::Other(ERR_TIMEOUT)) if mind::time::uptime_ms() - asked < FAULT_WAIT_MS => continue,
+                Ok(Ok(fault)) => break Some(fault),
+                Ok(Err(_)) => break None,
+                Err(error) => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; INIT DID NOT SAY HOW IT ENDED ({:?})", slot_name(other), error),
+            }
+        };
+        use init::FaultKind::*;
+        let (slot, why) = match fault {
+            Some(fault) => {
+                let how = match fault.kind { Panic => "IN ITS PANIC", Exception => "ON AN EXCEPTION IN THE KERNEL", InitExited => "AS INIT EXITED", Unexpected => "ON AN INTERRUPT WITH NO HANDLER",
+                                             Deadline => "AT ITS DEADLINE", Unknown => "ON A FAULT OF A KIND NOT NAMED" };
+                (fault.slot, format!("THE KERNEL STOPPED THE TRIAL {}: {}", how, fault.line.as_str()))
+            }
+            // No record: a run the watchdog restarted, by the slot its mark names.
+            None => match wire::with_timeout(ASK_MS as u32, || init::last_run(Endpoint(SLOT_LIFECYCLE))) {
+                Ok(Ok(run)) if run.watchdog => (run.slot, String::from("THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING")),
+                _ => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL RECORDED NO FAULT OF ITS RUN, NOR THE WATCHDOG A RESTART", slot_name(other)),
+            },
+        };
+        if slot as u32 != if other == b'A' { BOOT_SLOT_A } else { BOOT_SLOT_B } {
+            return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON", slot_name(other));
+        }
+        let version = if version == 0 { String::from("not known") } else { format!("{}", version) };
+        let kept = keep_refusal(&version, other, self.slot, &why, "not known");
+        self.failure = format!("version {} in slot {}, falling back to slot {}: {}", version, slot_name(other), slot_name(self.slot), why);
+        mind::println!("[UPDATER] SLOT {}'S TRIAL OF VERSION {} FELL BACK TO THIS SLOT: {}; {} {}", slot_name(other), version, why, if kept { "KEPT IN" } else { "NOT WRITTEN TO" }, REFUSED);
     }
 
     // A trial refused before (801-UPD-0037): said at start, and the update state's failure until a trial is confirmed.
@@ -1330,9 +1376,9 @@ fn main(info: &'static BootInfo) {
         updater.slot_period(parser.endpoint());
         let (running, minimum) = kept.map_or((0, 0), |c| (c.version, c.minimum));
         updater.running = running; updater.minimum = minimum;
-        let staged = updater.kept(updater.other(), None, parser.endpoint()).map_or(0, |c| c.version);
+        let other = updater.kept(updater.other(), None, parser.endpoint()).map_or(0, |c| c.version);
         drop(parser);
-        updater.staged = if staged > running { staged } else { 0 };
+        updater.staged = if other > running { other } else { 0 };
         updater.say_other_formats();
         let recorded = plan::newest(updater.records());
         mind::println!("[UPDATER] SLOT {}{}, VERSION {}; THE NEWER RECORD: {}", slot_name(slot), if updater.trial { " ON TRIAL" } else { "" },
@@ -1350,6 +1396,10 @@ fn main(info: &'static BootInfo) {
         updater.keep_running();
         updater.trim();
         updater.refused_before();
+        // The newer record names the other slot's trial, unconfirmed, falling back to this one: it ended here.
+        if !updater.trial && plan::newest(updater.records()).is_some_and(|(_, r)| r.slot == plan::other(slot) && !r.confirmed && r.fallback == slot) {
+            updater.fell_back(other);
+        }
         if updater.trial {
             mind::println!("[UPDATER] TRIAL BOOT: CONFIRMED ON THE DISK ONLY ONCE INIT CONFIRMS IT");
             (waiting, ask_at) = (true, Some(0));

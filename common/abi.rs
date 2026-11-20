@@ -71,11 +71,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // disk's partitions in SLOT_VFS_PARTS_FIRST.. in place of the whole disk (307-KRN-0229). ABI 33 moves SLOT_DYNAMIC to 46
 // for SLOT_EFFECTOR, the shell's client of the Effector gateway badged as its owner (801-KRN-0246). ABI 34: the kernel
 // sets BOOT_WATCHDOG_RESTARTED in the tasks' BootInfo.boot_flags when the platform's watchdog restarted the last run (000-KRN-0217).
+// ABI 35: it sets BOOT_LAST_RUN_FAULTED when the last run of the same slot ended in a fault of its own, recorded in a
+// firmware variable (801-KRN-0261).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 34;
+pub const ABI_VERSION: u32 = 35;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -97,6 +99,9 @@ pub const BOOT_SAFE: u32 = 1;
 // Set by the kernel in the tasks' copy, never by the loader (ABI 34): the platform's watchdog restarted the last run, a
 // freeze's evidence (000-KRN-0217).
 pub const BOOT_WATCHDOG_RESTARTED: u32 = 2;
+// Set by the kernel in the tasks' copy (ABI 35): the last run of this slot ended in a kernel panic, an exception in the
+// kernel or an interrupt it has no handler for, which the kernel recorded as it stopped; a freeze's evidence (801-KRN-0261).
+pub const BOOT_LAST_RUN_FAULTED: u32 = 4;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
@@ -733,6 +738,22 @@ pub const FIRMWARE_HEADER: usize = 26;
 // (a freeze the watchdog reset, a cut power), and init starts safely. GUID {444E494D-4F43-4552-8076-52554E4D4152}.
 pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
 pub const RUN_MARK_NAME: &str = "MindCoreRun";
+// The loader's lines, as it showed them (213-KRN-0262): a volatile variable of RUN_MARK_GUID's vendor, written as it
+// leaves boot services, which the kernel copies into its log; UTF-8 lines, at most LOADER_LINES_MAX bytes.
+pub const LOADER_LINES_NAME: &str = "MindCoreLoaderSaid";
+pub const LOADER_LINES_MAX: usize = 2048;
+// The kernel's record of a run it stopped on a fault of its own (801-KRN-0261), or of a trial it restarted at its
+// deadline (801-KRN-0265): a non-volatile variable of RUN_MARK_GUID's vendor, FAULT_RECORD_VERSION, the run's slot
+// (BOOT_SLOT_*), its kind (FAULT_*), then the report's first line in UTF-8, at most FAULT_RECORD_TEXT bytes. The next
+// boot's kernel names it and leaves it; init reads it, deletes it and answers it as init.wit 1.14's `last-fault`.
+pub const FAULT_RECORD_NAME: &str = "MindCoreFault";
+pub const FAULT_RECORD_VERSION: u8 = 1;
+pub const FAULT_RECORD_TEXT: usize = 160;
+pub const FAULT_PANIC: u8 = 1;
+pub const FAULT_EXCEPTION: u8 = 2;
+pub const FAULT_INIT_EXITED: u8 = 3;
+pub const FAULT_UNEXPECTED: u8 = 4;
+pub const FAULT_DEADLINE: u8 = 5; // a trial not confirmed by its deadline, which the kernel restarted (801-KRN-0265)
 // TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
 // fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With the
 // CAP_KIND_CONSOLE writer (ABI 29) the bytes queue for the console instead, ERR_PEER once its channel ended. With

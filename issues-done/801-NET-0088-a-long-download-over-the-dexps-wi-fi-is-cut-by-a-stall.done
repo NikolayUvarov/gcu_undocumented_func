@@ -1,0 +1,95 @@
+# 801-NET-0088 — A long download over the DEXP's Wi-Fi is cut by a 10 s stall, and runs at an 8 KiB window — done
+
+**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-19) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S7, S8) · **Roadmap:** stage V · **Constitution:** MC-9.3, MC-12.1
+
+## Problem
+
+On 2026-11-19 the DEXP took releases of about 29 MB through Effector's `update_agent` (801-KRN-0258, 801-KRN-0259). Six of its ten archive downloads failed.
+
+**How they failed** (`/api/commands/file BODY: Transport`, the command `upload`):
+- they were cut after 184 to 439 s;
+- the agent then said `THE SERVER ANSWERS AGAIN, AFTER n S`;
+- the four taken lasted about 9 minutes each.
+
+**What the log ring shows around a cut** (`log:/` ring, 13:00 and 13:30 UTC):
+- The radio's ten-second counters run at about 1800 frames received and 390 sent, all acknowledged, none dropped.
+- In the last ten seconds before each cut they fall to 769, 1377 or 1078. The agent's read of a body waits 10 s for a byte (`effector/src/main.rs`, `Link::receive`, `REQUEST_MS`), so the stream stopped for 10 s.
+- The radio counted no frame lost. Where the stall comes from is not known: TCP's recovery after a loss, the server or the path.
+
+**The speed.** 29 MB in 9 minutes is about 54 KB/s, on a link the station joined at 24 Mb/s. `netstack` gives each TCP socket an 8 KiB receive buffer (`TCP_BUFFER`), so at most 8 KiB are in flight. 8 KiB a round trip is 54 KB/s at a round trip of about 150 ms, near enough to explain the speed, though the round trip is not measured. A window of five or six segments also gives few duplicate acknowledgements after a loss, so the server waits for its retransmission timer more often.
+
+The agent starts a cut download again from its first byte. Every try then needs its full 9 minutes with no stall of 10 s.
+
+## Plan
+
+1. **`netstack`:** a receive buffer of 64 KiB for a TCP connection a client opens, within the service's memory; the send buffer stays as it is. To measure:
+   - the `netbench` suite's speed before and after (QEMU, where the round trip is short);
+   - the DEXP's download time.
+2. **A stall named where it happens:** when a TCP connection's receive has seen nothing for 5 s, while data is still owed, `netstack` says so once, with smoltcp's state, window and the last sequence numbers. That way the next cut shows whether the window was closed or nothing arrived.
+3. **EFF's part,** recorded in `issues/requests-EFF.md`, not done here:
+   - a cut archive download goes on from the bytes the gateway holds, with a `Range` request, within the command's time;
+   - a body read waits longer than the 10 s bound of a short request.
+4. **The DEXP:** five downloads of a 29 MB release in a row, each taken, with their times.
+
+## Progress (2026-11-19)
+
+**Steps 1 and 2:** `3ba6f4abde` on `claude/801-NET-0088-a-wider-tcp-window`.
+- **The window:** a connection a client opens receives into 64 KiB, and listening sockets keep 8 KiB.
+- **The stall line:** a client that read bytes, asks again within a second and gets nothing for 5 s has its socket named once: `[NETSTACK] TCP SOCKET n TO …: NOTHING RECEIVED FOR … MS WHILE ITS CLIENT READS (state, QUEUE q OF c, u BYTES UNSENT)`. When bytes come again, `BYTES AGAIN AFTER … MS`.
+
+**The DEXP** (MC-12.1: that machine, its Wi-Fi to hesere.uz). The releases had this `netstack` with 801-KRN-0259's kernel.
+- **Release 8** came through the old `netstack`, and was taken at its first try.
+- **Releases 9 to 14** came through the new one. Each was taken at the first try. From the command's start to the agent's restart, which covers download, check and staging:
+
+  | Release | 9 | 10 | 11 | 12 | 13 | 14 |
+  |---|---|---|---|---|---|---|
+  | Seconds | 154 | 155 | 132 | 160 | 194 | 143 |
+
+  - **Before:** with 8 KiB, four of ten downloads were taken, in about 9 minutes each.
+  - **To the confirmed slot:** each of 10 to 14 took 177 to 234 s, through a trial on alternating slots.
+  - **The stall line:** whether it was printed is not known. The downloads' boots were replaced by the next ones before their log was read.
+
+**Landed in round 151** (`main` 3e6bbde056). The gate was green, 61 groups, among them the `net`, `tls` and Effector groups on x86 and aarch64.
+
+**`netbench` before and after** (2026-11-19, on i9 through Effector, x86, QEMU's user networking, one run each; `main` `e14a1bc415` before, `3e6bbde056` after):
+
+| | Offload off, before | Offload off, after | Offload on, before | Offload on, after |
+|---|---|---|---|---|
+| TCP down | 3851 KiB/s | 3868 KiB/s | 3645 KiB/s | 4246 KiB/s |
+| TCP up | 826 KiB/s | 794 KiB/s | 808 KiB/s | 861 KiB/s |
+| UDP round trips | 470 per s | 463 per s | 471 per s | 473 per s |
+
+- **What it shows:** no change beyond one run's noise. Here the round trip is short, so 8 KiB did not limit the speed; the send buffer did not change.
+- **The tap run** (`ci_local.sh --tap`) was not made. No machine has `mindtap0`, and making one needs `sudo` there, which is the maintainer's (2026-11-19: no machine had it, and `sudo` asks for a password).
+
+**The stall line, shown:** `claude/801-NET-0088-a-stall-shown` (`aa450065fe`, in round 152).
+- **The check:** the `download` suite's server stops a body after 50 000 bytes, then goes on with it on the same connection.
+- **The result:** the line is named once, `ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT`, then `BYTES AGAIN AFTER`, and the file is whole with no `Range`. It passed on i9 on x86 and aarch64, with the stream held 6 s.
+- **The format:** the line now prints the peer and the state as smoltcp's Display.
+
+**Left:**
+- EFF's part: a cut download goes on with `Range` (`requests-EFF.md`).
+- The tap run, if the maintainer makes `mindtap0` on a machine.
+
+## Acceptance criteria
+
+- [x] `netstack`'s TCP receive buffer is 64 KiB; the `net`, `download`, `tls` and `netbench` suites pass on x86 and aarch64, `netbench`'s speed before and after named (round 151's gate; `netbench` on x86 with user networking, above; the tap run not made).
+- [x] A stalled receive is named in the log with the socket's state: the `download` suite's check, landed in round 152 (`main` `ae50162c6c`).
+- [x] On the DEXP, five downloads of a 29 MB release are taken in a row, with their times (MC-12.1: that machine, that network): releases 10 to 14, 2026-11-19.
+
+## Resolution
+
+- **The window** (round 151, `main` `3e6bbde056`): a connection a client opens receives into 64 KiB, and listening sockets keep 8 KiB (`netstack/src/main.rs`).
+  - On the DEXP, releases 9 to 14 were each taken at the first try, in 132 to 194 s. With 8 KiB, four of ten had been taken.
+  - `netbench` on QEMU's user networking showed no change, as its round trip is short.
+- **The stall line** (round 152, `main` `ae50162c6c`): a stream that stops while its client reads is named once after 5 s, with its peer, state, queue and unsent bytes, and again when its bytes come.
+  - The `download` suite's check shows it on x86 and aarch64.
+  - No bench machine had shown it when this closed. Later the same day the Ryzen did (DRV's message to EFF, `EFF/2026-11-19T2235Z-DRV-a-release-download-broken-by-one-5-s-stall-on-the-ryzen.md`; `fast-test` 92c2c6e9, Wi-Fi only; MC-12.1: that machine). The line was `[NETSTACK] TCP SOCKET 1 TO 37.140.216.52:443: NOTHING RECEIVED FOR 5001 MS WHILE ITS CLIENT READS (ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT)`, 1.6 s before the agent's `BODY: Transport`.
+  - The radio had gone quiet under the same chip's Bluetooth inquiries (700-BLT-0003). The cut download is the case EFF's `Range` request covers.
+- **Not done here:**
+  - `Range` for a cut download is EFF's, asked in `requests-EFF.md`;
+  - `netbench` on a tap device needs a `mindtap0` the maintainer makes.
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md), [801-KRN-0259](801-KRN-0259-the-pchs-over-clocking-watchdog.done) (the runs, on its branch), [requests-EFF.md](../issues/requests-EFF.md).

@@ -1,6 +1,6 @@
 # 213-KRN-0122 — The platform's transmit power policy for one WLAN device: known limits, known absent, or unknown
 
-**Type:** kernel, `init` (an interface to choose: a typed result or a scoped snapshot) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the drivers track's 213-DRV-0032 waits for it before it lets the RTL8852BE transmit) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel, `init` (an interface to choose: a typed result or a scoped snapshot) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (the Ryzen's result recorded 2026-11-20; `KnownLimits` and another device's refusal left) · **Blocked by:** — (the drivers track's 213-DRV-0032 waits for it before it lets the RTL8852BE transmit) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -26,7 +26,7 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 
 - [ ] Host tests with fixtures: valid limits, a supported absence, truncated and malformed tables, an unsupported method, and a policy in an unrelated scope; each gives its own result with the device's identity and the source.
 - [ ] A service cannot get another device's result, and an error never becomes `KnownAbsent`.
-- [ ] On the Ryzen, the result for `03:00.0` is recorded with its log, apart from the fixtures.
+- [x] On the Ryzen, the result for `03:00.0` is recorded with its log, apart from the fixtures.
 
 ## Progress
 
@@ -67,6 +67,16 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 **Landed (2026-11-05).** Round 83 (`main` 3460771e) landed DRV's parser (444790b9) first, then `init`'s word (01863699). The gate was green on every group, but QEMU has no RTL8852BE, so no run gave the driver the word yet.
 
 **Left:** the result on the Ryzen with its log, from a build of `main` 3460771e or later; a service refused another device's result.
+
+## The Ryzen's result (2026-11-20)
+
+From DRV's run on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `…T2130Z-DRV-…` on `internal-dev-messages`):
+- `init`: `[INIT] PLATFORM POWER POLICY FOR WLAN: ABSENT (10 AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG)`;
+- `rtw89_wifi`: `PLATFORM POWER POLICY FROM INIT: ABSENT`.
+
+The third criterion is met for that machine and build (MC-12.1). The line names no device. `init` gave the result to the one `rtw89_wifi` it started, for the RTL8852BE at `03:00.0`.
+
+**Left:** `KnownLimits` and its fixtures (criterion 1), and a service refused another device's result (criterion 2).
 
 ## Related
 

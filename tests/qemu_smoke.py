@@ -4778,6 +4778,7 @@ def store_suite(vm):
           "effect cut short comes back pending and is reconciled before another begins, an operation sent again is "
           "applied once (also after the store restarted)", flush=True)
     tally_publish_check(vm)
+    tally_needs_check(vm)
     store_domains_check(vm)
     fm_store_check(vm)
     tally_messages_check(vm)
@@ -4813,6 +4814,30 @@ def reboot_blank_store(vm):
     vm.expect("MIND>", timeout=120)
     time.sleep(1); vm.collect(); vm.output = ""
     require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 ")
+
+
+def tally_needs_check(vm):
+    """313-STO-0053: a checkpoint's needs (format 4), rebound to what an instance holds now (MC-6.11, RFC 001 §9).
+    `tally as n` records the store's need in mode refuse and the files' in mode degrade. A copy whose request note asks
+    for no files (`tallynf`) restores the same component degraded: its effect and its move refused, a count applied
+    and saved. tally holding both again is told nothing missing, and its effect is done."""
+    def run(program, args):
+        vm.send(f"{program} {args}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"{program} {args}\n")
+    require(run("tally", "as n add pears 2"), "SAVED EPOCH 1 SEQUENCE 1: pears = 2")
+    out = run("tallynf", "as n add pears 3")
+    require_all(out, "tally: NEED files (mind:vfs@2, ram:) NOT MET: NOT HELD; DEGRADED", "SAVED EPOCH 2 SEQUENCE 2: pears = 5")
+    assert "NEED store" not in out and "NOT RESUMED" not in out, out
+    require(run("tallynf", "as n effect needs.txt"), "tally: effect refused: its need files is not met")
+    require(run("tallynf", "as n move ram:n.car"), "tally: move refused: its need files is not met")
+    out = run("tally", "as n show")
+    require(out, "TALLY EPOCH 2 SEQUENCE 2")
+    assert "NEED" not in out, out
+    require(run("tally", "as n effect needs.txt"), "EFFECT 1 DONE SAVED EPOCH 4")  # its intent saved at 3, its outcome at 4
+    require(vm.command("cat ram:needs.txt"), "done by tally")
+    print("PASS: a checkpoint's needs rebound to what an instance holds: tally without its files need restored degraded, "
+          "its effect and move refused and a count saved; holding both again, nothing missing and its effect done "
+          "(313-STO-0053)", flush=True)
 
 
 def tally_publish_check(vm):
@@ -5113,6 +5138,70 @@ def tally_move_check(vm):
           "before is fenced, every later run refused by the release, never fresh) and its copy written again the same from "
           "the names' history; after a reboot left the store blank, imported, it goes on from its sequence, count and "
           "outbox at the new store's next epoch, a repeated operation answered from the record", flush=True)
+
+
+def tally_two_machines_check(args):
+    """313: a component restored on another machine while the old one is fenced. Two machines run at once, each with
+    its own boot image and its own store on a RAM disk. On the first, `tally as m` counts and is moved to a file on its
+    boot volume. The host reads that file from the first's image, checks it against the SHA-256 tally printed, and puts
+    it on the second's image. The second imports it and goes on from the count at its store's next epoch. The first,
+    still running, refuses every run of `m` (released there) before and after the second saves."""
+    if not raw_tools():
+        print("SKIP: the two machines' check needs mkfs.fat and mtools", flush=True)
+        return
+    import copy
+    small = copy.copy(args)
+    small.cpus = 1  # two machines at once beside another lane of the gate (313-STO-0054)
+    began = time.monotonic()
+    def run(vm, program, line):
+        vm.send(f"{program} {line}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"{program} {line}\n")
+    with tempfile.TemporaryDirectory(prefix="smoke-two-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        (temp / "a").mkdir()
+        (temp / "b").mkdir()
+        a_image, a_start, _ = raw_fat_image(temp / "a")
+        b_image, b_start, _ = raw_fat_image(temp / "b")
+        a_part, b_part = f"{a_image}@@{a_start * 512}", f"{b_image}@@{b_start * 512}"
+        first = VM(small, a_image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        second = None
+        try:
+            require(run(first, "tally", "as m add plums 4 op shell 1"), "SAVED EPOCH 1 SEQUENCE 1: plums = 4")
+            require(run(first, "tally", "as m add plums 3"), "SAVED EPOCH 2 SEQUENCE 2: plums = 7")
+            first.command("mkdir data")
+            out = run(first, "tally", "as m move data/tally-m.car")
+            require(out, "RELEASED m EPOCH 3: NO INSTANCE IN THIS STORE SAVES IT AGAIN")
+            moved = re.search(r"^MOVED m EPOCH 2 TO data/tally-m\.car: 2 BLOCKS, (\d+) BYTES; SHA-256 ([0-9a-f]{64})\r?$", out, re.M)
+            assert moved, out
+            # The copy as the first machine's image holds it, once its bytes are those tally wrote.
+            copied = temp / "tally-m.car"
+            for _ in range(30):
+                subprocess.run(["mcopy", "-o", "-i", a_part, "::data/tally-m.car", str(copied)], env=MTOOLS_ENV, capture_output=True)
+                if copied.exists() and hashlib.sha256(copied.read_bytes()).hexdigest() == moved[2]:
+                    break
+                time.sleep(1)
+            assert copied.exists() and hashlib.sha256(copied.read_bytes()).hexdigest() == moved[2], "the copy did not reach the first machine's image"
+            subprocess.run(["mmd", "-i", b_part, "::data"], env=MTOOLS_ENV, capture_output=True)
+            subprocess.run(["mcopy", "-o", "-i", b_part, str(copied), "::data/tally-m.car"], env=MTOOLS_ENV, check=True, capture_output=True)
+            second = VM(small, b_image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            refused = "tally: RELEASED: m was moved out of this store at epoch 3; nothing restored or saved here (MC-6.12)"
+            require(run(first, "tally", "as m add plums 1"), refused)
+            require(run(second, "blocks", "import data/tally-m.car"), "(2 STORED, 0 REPAIRED, 0 HELD)")
+            require_all(run(second, "tally", "as m show"), "TALLY EPOCH 1 SEQUENCE 2", "plums = 7")
+            require(run(second, "tally", "as m add plums 3 op shell 1"), "REPEATED shell 1: ANSWERED 4, NOT APPLIED AGAIN")
+            require(run(second, "tally", "as m add plums 1"), "SAVED EPOCH 2 SEQUENCE 3: plums = 8")
+            for line in ("as m show", "as m add plums 1"):
+                out = run(first, "tally", line)
+                require(out, refused)
+                assert "SAVED" not in out and "TALLY EPOCH" not in out, out
+        finally:
+            first.close()
+            if second:
+                second.close()
+    print(f"TIME: the two machines' check took {time.monotonic() - began:.0f} s", flush=True)
+    print("PASS: a component restored on another machine while the old one is fenced: tally.m moved on the first to a "
+          "file, carried by the host to the second, imported and going on from its count there, a repeated operation "
+          "answered from the record; the first, still running, refused every run of it before and after (313)", flush=True)
 
 
 def store_journal_check(vm):
@@ -9097,18 +9186,42 @@ def test_timestamp(channel_file, version, hours=24, seeds=None, channel="stable"
     return body + release_tool.signature_lines(body, seeds or [release_tool.TEST_TIMESTAMP_SEED])
 
 
+def interleaved(text, line, slack=1):
+    """Whether `line` is in `text` whole, or with bytes of another writer between its own (000-KRN-0266): init lends the
+    console UART to the shell (COM1's ports, a PL011's page), which writes it while the kernel writes a line of its own,
+    and no lock of the kernel's orders the two. The other writer's bytes may come to `slack` times the line's length."""
+    if line in text:
+        return True
+    window = len(line) * (1 + slack)
+    start = text.find(line[0])
+    while start >= 0:
+        at, end = start, min(len(text), start + window)
+        for char in line[1:]:
+            at = text.find(char, at + 1, end)
+            if at < 0:
+                break
+        else:
+            return True
+        start = text.find(line[0], start + 1)
+    return False
+
+
 def trial_confirmed(vm, since, timeout, slot="B"):
     """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT
     <slot> LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot
-    answered took those lines with it (000-KRN-0210)."""
-    deadline, clean = time.monotonic() + timeout, ""
+    answered took those lines with it (000-KRN-0210). The kernel's line may come with the shell's bytes inside it
+    (000-KRN-0266), so it is looked for that way too, once a second."""
+    deadline, clean, looked = time.monotonic() + timeout, "", 0.0
+    line = "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED"
     while time.monotonic() < deadline:
         vm.collect()
-        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+        mixed = time.monotonic() - looked > 1 and vm.log.find(f"BOOT: SLOT {slot} LOADED ON TRIAL", since) >= 0
+        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or mixed or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+            looked = time.monotonic()
             clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean[-3000:])
-            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2]:
+            if interleaved(clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2], line):
                 vm.output = ""
                 return clean
         if vm.process.poll() is not None:
@@ -10661,6 +10774,55 @@ def hda_suite(args):
           f"the levels at 0 dB: volume {levels[1]} % of {levels[2]} settings{levels[3] or ''}, gain {levels[4]} % of {levels[5]}{levels[6] or ''}, boost {levels[7].lower()}", flush=True)
 
 
+def usbaudio_suite(args):
+    """000-DRV-0073: a USB Audio Class 1 device in audio_gw. QEMU's usb-audio (UAC1, 48 kHz stereo playback) on an xHCI
+    of its own: usb_host streams its isochronous OUT endpoint, the gateway takes it in the codec's place, and beep's
+    packets go out on it while beep plays; unplugged, the codec comes back."""
+    with tempfile.TemporaryDirectory(prefix="mind-uac-") as temp:
+        wav = Path(temp) / "usb.wav"
+        vm = VM(args, IMAGE, audio="none", audio_card="HDA",
+                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
+        try:
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "ATTACHED")
+                if "ATTACHED" in log:
+                    break
+            attached = re.search(r"\[AUDIO\] USB ([0-9A-F]{4}):([0-9A-F]{4}) ATTACHED: PLAYBACK YES \(INTERFACE (\d+), 2 CHANNELS, ENDPOINT ([0-9A-F]{2}), (\d+) BYTES", log)
+            assert attached, log
+            require(log, "[AUDIO] LEVELS USB DEVICE")
+            require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
+            output = ""
+            for _ in range(60):
+                output += vm.command("logs 1")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DEVICE=true RATE=48000")
+            time.sleep(2.5)
+            log = vm.service_logs("audio_gw", "USB PLAYBACK STOPPED")
+            require(log, "[AUDIO] USB PLAYBACK STARTED")
+            stopped = re.search(r"\[AUDIO\] USB PLAYBACK STOPPED: INTERFACE \d+; (\d+) PACKETS SENT, (\d+) OF THEM SILENCE", log)
+            assert stopped and int(stopped[1]) > 500, log
+            usb = vm.service_logs("usb_host", "STREAMS OUT")
+            require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            # Unplugged: the gateway goes back to the codec.
+            vm.qmp("device_del", id="uac")
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "THE CODEC AGAIN")
+                if "THE CODEC AGAIN" in log:
+                    break
+            require(log, "[AUDIO] LEVELS THE CODEC AGAIN")
+        finally:
+            vm.close()
+        # QEMU 8.2's xHCI ends each isochronous OUT TD with success and no byte taken: usb-audio gets nothing, and its
+        # wav backend keeps a bare header. What the device hears is checked on a real one (the STM-Speaker, the Ryzen).
+        print(f"NOTE: usb-audio's wav holds {wav.stat().st_size} bytes: QEMU's xHCI moves no isochronous OUT data", flush=True)
+    print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
+          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played; unplugged, the codec again", flush=True)
+
+
 def listen_suite(vm, starts):
     vm.wait = LOADED_WAIT
     # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
@@ -11442,6 +11604,7 @@ def download_check(args, disk):
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
+    pause = stall_server(small, 50_000, resume=True)  # stops a body and goes on with it: netstack names the stall (801-NET-0088)
     service = _service_server(certificates)
     api_stub = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # 000-NET-0047
     api_other = http_api_stub.serve(certificates / "server.pem", certificates / "server.key")  # another host for get's redirects
@@ -11455,7 +11618,7 @@ def download_check(args, disk):
     sftp = _SftpServer.start()  # 351-NET-0027
     sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], pause.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port, future_port))
                                         + f"webcheck 10.0.2.2 tcp {api_stub.server_address[1]} 600 {64 << 20}\n"
                                         + "".join(f"get 10.0.2.2 tcp {p} 600 {64 << 20}\n" for p in (port, tls_port, rogue_port, api_stub.server_address[1], api_other.server_address[1])))
@@ -11477,9 +11640,10 @@ def download_check(args, disk):
             sftp_runs(vm, sftp)
         else:
             print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
-        download_runs(vm, release, port, big, small, cut, 5 + len(sftp_port))
+        download_runs(vm, release, port, big, small, cut, 6 + len(sftp_port))
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
+        stalled_stream_check(vm, pause, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
         api_runs(vm, api_stub.server_address[1])
@@ -11489,6 +11653,7 @@ def download_check(args, disk):
         vm.close()
         held.go.set()
         stall.go.set()
+        pause.go.set()
         if sftp:
             sftp.stop()
         for server in (release, secure, rogue, held, stall, service, api_stub, api_other, api_asked, expired, future):
@@ -11907,10 +12072,11 @@ def session_parsers_check(vm, held, body):
           "netstat lists both connections as ESTABLISHED under download's name, and not after", flush=True)
 
 
-def stall_server(body, cut):
+def stall_server(body, cut, resume=False):
     """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
-    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
-    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    cuts the connection, or with `resume` sends the rest on it; a request with a Range gets the rest. `server.sent` is
+    set once the first part is out, and `server.ranges` lists each request's Range header (109-NET-0010: a download's
+    parser that ended meanwhile; 801-NET-0088: a stream that stops and goes on)."""
     go, sent, ranges = threading.Event(), threading.Event(), []
 
     class Stall(http.server.BaseHTTPRequestHandler):
@@ -11934,8 +12100,11 @@ def stall_server(body, cut):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body[:cut])
+            self.wfile.flush()
             sent.set()
             go.wait(60)
+            if resume:
+                self.wfile.write(body[cut:])
             self.close_connection = True
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
     server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
@@ -11972,6 +12141,45 @@ def parser_restart_check(vm, stall, body):
     assert stall.ranges == [None, "bytes=50000-"], stall.ranges
     require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
     print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
+
+
+def stalled_stream_check(vm, pause, body):
+    """801-NET-0088: a stream that stops while its client keeps reading is named once in netstack's log after 5 s with
+    nothing, with the socket's peer, state and queue (a 64 KiB window, empty: nothing arrived), and again when its
+    bytes come on the same connection; the file is whole."""
+    url = f"http://10.0.2.2:{pause.server_address[1]}"
+    started = time.monotonic()
+    require(vm.command(f"run download ram:p.bin {url}/p.bin &"), "NAME=download BACKGROUND")
+    assert pause.sent.wait(30), pause.ranges
+    stalled = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:(\d+): NOTHING RECEIVED FOR (\d+) MS WHILE ITS CLIENT READS "
+                         r"\(ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT\)")
+    # Only this server's connection: an earlier check's held stream may have been named too.
+    ours = lambda log: [m for m in stalled.finditer(log) if int(m[2]) == pause.server_address[1]]
+    log = ""  # `logs` gives the lines since its last call: they are kept here
+    for _ in range(120):  # 5 s after the last byte, as netstack's clock sees it; the log read takes its own time
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if ours(log):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("no stall named", log[-2000:]))
+    line = ours(log)[0]
+    assert int(line[3]) >= 5000, line[0]
+    held = time.monotonic() - started
+    pause.go.set()
+    for _ in range(120):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if f"[NETSTACK] TCP SOCKET {line[1]}: BYTES AGAIN AFTER" in log and not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the stream did not go on", log[-2000:]))
+    assert len(ours(log)) == 1, ("named once for one stop", [m[0] for m in ours(log)], pause.ranges,
+                                 [l for l in log.splitlines() if "TCP SOCKET" in l])
+    assert pause.ranges == [None], pause.ranges
+    require(vm.command("sha256 ram:p.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:p.bin")
+    print(f"PASS: a stream that stops while its client reads is named once in netstack's log after 5 s (ESTABLISHED, its 64 KiB "
+          f"window empty), and again when its bytes come on the same connection; the file is whole ({held:.0f} s held)", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
@@ -14273,11 +14481,20 @@ def rollback_suite(args):
         if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
                 answer.get("stdout") != f"fell back: slot A runs version 5, not 6; the updater: {reason}":
             problems.append(("the update command's answer", result))
+        # The agent removes its kept answer last, which leaves the volume marked changed until a flush.
+        require(vm.command("sync"), "OK")
         assert "PANIC" not in vm.log, vm.log[-2000:]
+    except BaseException:
+        server.close()
+        raise
     finally:
         vm.close()
-        server.close()
         (Path(tempfile.gettempdir()) / f"mind-core-rollback-a2-{args.cpus}cpu.log").write_text(vm.log)
+    try:
+        # x86 alone: aarch64 builds no panic kernel.
+        panicked = arch == "x86_64" and args.panic_kernel and kernel_stopped_release(args, temp, image, server, server_tree, agent, cpu + network, logged, restarted, problems)
+    finally:
+        server.close()
     boot_slots_check.fsck(image)
     assert not problems, problems
     shutil.rmtree(temp, ignore_errors=True)
@@ -14285,6 +14502,89 @@ def rollback_suite(args):
           "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
           "slot A came back on the server as the same agent, reported the fallback in its heartbeat and answered the update "
           "fell-back", flush=True)
+    if panicked:
+        print("PASS: rollback: release 7, whose kernel panics on its trial, taken through the agent: the kernel recorded the "
+              "panic and restarted into slot A, whose init took the record and whose updater kept it as the trial's refusal; "
+              "the heartbeat carried the panic's line and the update was answered fell-back with it (801-UPD-0044)", flush=True)
+
+
+def kernel_stopped_release(args, temp, image, server, server_tree, agent, extra, logged, restarted, problems):
+    """801-UPD-0044 (801 S2): release 7 carries the `panic-test` kernel, which panics at the first log line of a boot
+    after no fault record. Taken through the agent with one try, its trial panics; the kernel records the panic and
+    restarts into slot A (801-KRN-0261), whose init takes the record and deletes it (801-KRN-0265), and whose updater
+    keeps it as the trial's refusal: the heartbeat carries it and the update command is answered fell-back with it."""
+    release7 = temp / "release7"
+    shutil.copytree(temp / "release6", release7)
+    (release7 / "kernel.elf").write_bytes(Path(args.panic_kernel).read_bytes())
+    _, toolchain, locks = sign_manifest.build_inputs()
+    sign_manifest.sign_volume(release7, inputs=("release-7-whose-kernel-panics", toolchain, locks), version=7)
+    release_tool.publish(release_tool.stage(7, temp / "staged7", {"x86_64": release7}), server_tree)
+    release_tool.bundle(server_tree, temp / "release7.zip", arches=["x86_64"])
+    bundle = (temp / "release7.zip").read_bytes()
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 7, "tries": 1, "timeout_seconds": 1800}
+    log_path = lambda name: Path(tempfile.gettempdir()) / f"mind-core-rollback-{name}-{args.cpus}cpu.log"
+    # Slot A, release 5, takes release 7, stages it in slot B and restarts.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=True, extra=extra)
+    try:
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+        restarted(vm, 1500)
+    finally:
+        vm.close()
+        log_path("p1").write_text(vm.log)
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 1, False), chosen
+    # Slot B on trial, then slot A, in one run of QEMU: without flash, OVMF keeps a variable written after the boot
+    # services only in memory, which a restart keeps and a new QEMU does not. B's kernel panics at init's first log line,
+    # records it and restarts into the fallback; A's kernel names B's panic, init takes the record, the updater keeps
+    # it, and the agent reports it.
+    beats_then = len(server.beats)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, rtc="utc", ahci=True, extra=extra)
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        # The panic's report, which expect() takes for a failure: read from the output, and the output cut after it.
+        deadline, restarting = time.monotonic() + 120, "TRIAL: RESTARTING INTO THE FALLBACK"
+        report = re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n(.*\n)*THE FAULT IS RECORDED FOR THE NEXT BOOT\n(.*\n)*" + restarting)
+        while not report.search(vm.output.replace("\r", "")):
+            assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-3000:]
+            vm.collect(); time.sleep(.05)
+        vm.output = vm.output[vm.output.index(restarting) + len(restarting):]
+        require(vm.expect("BOOT: SLOT A LOADED", timeout=300), "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        vm.expect("MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=60)
+        vm.expect("MIND> ", timeout=180)
+        logged(vm, "init", "[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at src/scheduler.rs:", 120)
+        logged(vm, "updater", "[UPDATER] SLOT B'S TRIAL OF VERSION 7 FELL BACK TO THIS SLOT: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at ", 120)
+        # S2: the server hears the version, the slots and the panic's line, in the heartbeat and in the answer.
+        deadline = time.monotonic() + 180
+        while not (report := next((b for b in list(server.beats)[beats_then:] if b.get("agent_id") == agent and (b.get("update") or {}).get("build_number") == 7), None)):
+            assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
+            time.sleep(1)
+        reason = str(report["update"].get("result"))
+        if report["update"].get("state") != "rolled_back" or not re.fullmatch(
+                r"version 7 in slot B, falling back to slot A: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler\.rs:[^\n]+", reason):
+            problems.append(("the kernel-stopped trial's report in the heartbeat", report["update"]))
+        deadline = time.monotonic() + 300
+        while not (result := server.operation(on)):
+            assert time.monotonic() < deadline, "the update command was not answered"
+            time.sleep(1)
+        answer = result.get("result") or {}
+        if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
+                answer.get("stdout") != f"fell back: slot A runs version 5, not 7; the updater: {reason}":
+            problems.append(("the kernel-stopped trial's answer", result))
+        out = ANSI.sub("", vm.log)
+        assert "KERNEL PANIC" not in out[out.find("BOOT: SLOT A LOADED"):], out[-2000:]
+        # As above: the agent's kept answer removed, the volume flushed before the machine is stopped.
+        require(vm.command("sync"), "OK")
+    finally:
+        vm.close()
+        log_path("p3").write_text(vm.log)
+    # Kept for the slot before to report until a trial is confirmed, in the form init's refusals have.
+    refused = (image.read("system/updater/refused") or b"").decode()
+    if refused != f"refused version 7 in slot B, falling back to slot A\nwhy {reason.split(': ', 1)[1]}\nlog not known\n":
+        problems.append(("the kernel-stopped trial's refusal", refused, reason))
+    return True
 
 
 def refused_release(vm, server, agent, bundle, payload, logged):
@@ -15714,6 +16014,37 @@ def tpm_check(args, cpu):
             close(vm)
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
         assert back == plain, (plain, back)
+        # 801-NET-0087, 801-STO-0052: a TPM that answers late (keystore's test build takes none in the boot's first
+        # minute). A key for this boot only, the store not mounted while keystore gives it no key; once the TPM answers,
+        # A's sealed key is held in its place, and the store mounts and reads back its object, all in the same boot.
+        if getattr(args, "late_tpm_keystore_elf", None):
+            def keystore_elf(source):
+                files = temp / "files"
+                shutil.copyfile(source, files / "keystore.elf")
+                sign_manifest.sign_volume(files)
+                subprocess.run(["mcopy", "-o", "-s", "-i", part, *[str(p) for p in files.iterdir()], "::"], env=MTOOLS_ENV, check=True, capture_output=True)
+            keystore_elf(args.late_tpm_keystore_elf)
+            vm, log, temporary = boot("a")
+            try:
+                require(log, "[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN system/keystore/device.sealed, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY")
+                require(log, "[KEYSTORE] THE TPM IS ASKED AGAIN EVERY 10 S: THE KEY IT SEALED IS HELD ONCE IT ANSWERS")
+                require(service_log(vm, "blockstore", "[BLOCKSTORE] NOT MOUNTED"),
+                        f"[BLOCKSTORE] NOT MOUNTED: ITS VOLUME KEY IS KEPT BY KEYSTORE AS {volume[1]}, WHICH HOLDS NO DEVICE KEY IT MAY USE YET: TRIED AGAIN EVERY 30 S")
+                late = service_log(vm, "keystore", "THE TPM ANSWERS NOW", tries=300)
+                require(late, "[KEYSTORE] THE TPM ANSWERS NOW: DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM), HELD IN PLACE OF THE ONE FOR THIS BOOT")
+                require(late.partition("THE TPM ANSWERS NOW")[2], f"[KEYSTORE] DEVICE KEY READY: MIND {plain} ")
+                require(service_log(vm, "blockstore", "THE MEDIUM MOUNTED", tries=300), "[BLOCKSTORE] KEYSTORE GAVE THE KEPT VOLUME KEY NOW: THE MEDIUM MOUNTED")
+                store_opens(vm, root)
+            finally:
+                close(vm)
+            assert temporary != plain, (plain, temporary)
+            assert stored("device.sealed") and not stored("device.key") and not stored("services/blockstore.kept.before")
+            keystore_elf(ROOT / IMAGE / "keystore.elf")
+            print(f"PASS: a TPM that answers late: keystore's test build, with TPM A, took a key for this boot only and the store "
+                  f"waited unmounted; once the TPM answered, A's key (MIND {plain}) was held in its place and the store mounted and "
+                  f"read back its object, in the same boot, nothing in system/keystore changed (801-NET-0087, 801-STO-0052)", flush=True)
+        else:
+            print("SKIP: a TPM that answers late: no late-tpm-test build of keystore (scripts/x86_fixtures.sh; x86 only)", flush=True)
         # The disk without its TPM: another TPM does not open the blob, nor the store's disk the secret kept under it.
         vm, log, other = boot("b")
         try:
@@ -17787,7 +18118,8 @@ def watchdog_suite(args, disk):
     machine at its second expiry, 30 s on, and the next boot says so. With that evidence (ABI 34's BOOT_WATCHDOG_RESTARTED)
     init leaves out at once what the stopped run of this slot was starting of the safe start's list, prepared for `svc
     start`; what it left out starts again by itself from 120 s past READY, one at a time (000-KRN-0217); the run's mark is
-    cleared once they settled, and the boot after a reboot is a normal one."""
+    cleared once they settled, and the boot after a reboot is a normal one. Then a trial of that kernel, which stops for
+    good before init: the TCO timer resets it and slot A boots (801-KRN-0258)."""
     armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
     safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
@@ -17854,6 +18186,166 @@ def watchdog_suite(args, disk):
           f"privilege, {', '.join(f'{n} by itself {p} s past READY' for n, p in back) or 'none left to come back'}; it ran "
           f"past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left out; the boot "
           f"after a reboot was a normal one", flush=True)
+
+    def restarting(image, until):
+        vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+        try:
+            vm.expect(until, timeout=240)
+            return ANSI.sub("", vm.log)
+        finally:
+            vm.close()
+    with tempfile.TemporaryDirectory(prefix="mind-hung-") as temp:
+        boot_slots_check.hung_trial(restarting, temp, disk, disk / "kernel.elf", "x86")
+    if args.watchdog_late_kernel:
+        watchdog_reset_trial(args, disk)
+        own_freeze_after_a_fallback(args, disk)
+
+
+def watchdog_reset_trial(args, disk):
+    """801-UPD-0045: slot B on trial holds the `watchdog-late-test` kernel, which stops every CPU 20 s into a boot the
+    watchdog did not restart, past init's run mark. init holds the trial for the Effector server's word (an agent that
+    cannot read its configuration), so the trial is still open when it stops. The TCO timer resets the machine, the loader
+    boots slot A, B's one try spent, and A's updater keeps the watchdog's restart as the trial's refusal."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-watchdog-trial-"))
+    volume, other = temp / "volume", temp / "other"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+        (volume / name).parent.mkdir(parents=True, exist_ok=True)
+        (volume / name).write_bytes(data)
+    sign_manifest.sign_volume(volume)
+    shutil.copytree(volume, other)
+    (other / "kernel.elf").write_bytes(Path(args.watchdog_late_kernel).read_bytes())
+    sign_manifest.sign_volume(other)
+    slots = boot_slots.layout(volume, temp / "slots", both=True)
+    for name in boot_slots.boot_set(other):
+        shutil.copyfile(other / name, slots / "MIND" / "B" / name)
+    image = boot_slots.Image.create(temp / "watchdog-trial.img", slots)
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    why = "THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING"
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        out = vm.expect("BOOT: SLOT A LOADED", timeout=240)
+        require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        vm.expect("A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        line = re.search(r"\[UPDATER\] SLOT B'S TRIAL OF VERSION (\d+|not known) FELL BACK TO THIS SLOT: " + re.escape(why), log)
+        assert line, log[-3000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-watchdog-trial-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: watchdog: a trial that stopped for good past init's run mark, while init held it for the server's word, "
+          "was reset by the chipset's TCO timer; slot A booted with B's try spent, and its updater kept the watchdog's "
+          "restart as the trial's refusal, from init's `last-run` (801-UPD-0045)", flush=True)
+
+
+def own_fault_after_a_fallback(args, disk):
+    """801-UPD-0044: both slots hold the `panic-test` kernel. Slot B's trial panics at init's first log line, and slot A
+    boots with B's one try spent; its updater keeps B's panic. A's kernel then panics 20 s in, on a run of its own, and
+    stops. At A's next boot the records still name B's trial fallen back to A, but the kernel's record is A's own: the
+    updater takes it for no reason of B's, and B's panic stays the one kept."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-own-fault-"))
+    volume = temp / "volume"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    (volume / "kernel.elf").write_bytes(Path(args.panic_kernel).read_bytes())
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "own-fault.img", boot_slots.layout(volume, temp / "slots", both=True))
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+
+    def seen(lines, timeout):
+        # In this order in the output, whose panics expect() would take for failures.
+        deadline = time.monotonic() + timeout
+        while True:
+            vm.collect()
+            out, at = ANSI.sub("", vm.log).replace("\r", ""), 0
+            for line in lines:
+                if (at := out.find(line, at)) < 0:
+                    break
+            else:
+                return out
+            assert time.monotonic() < deadline and vm.process.poll() is None, (line, out[-3000:])
+            time.sleep(.05)
+    try:
+        seen(("BOOT: SLOT B LOADED ON TRIAL", "KERNEL PANIC: panic test at src/scheduler.rs:", "TRIAL: RESTARTING INTO THE FALLBACK",
+              "BOOT: SLOT A LOADED\n", "MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at ",
+              "KERNEL PANIC: panic test, 20 s past the boot at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT"), 300)
+        # Not a trial: the run stops, and a person would restart it.
+        vm.output = ""
+        vm.hmp("system_reset")
+        vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON")
+        require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+        status = vm.command("update status", raw=True)
+        assert "20 s past the boot" not in log + status, (log[-3000:], status)
+        require(status, "UPDATE: THE LAST FAILURE: ")
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-own-fault-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy THE KERNEL STOPPED THE TRIAL IN ITS PANIC: "
+                        r"panic test at src/scheduler\.rs:[^\n]+\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: a panic of slot A's own run, after slot B's trial fell back to it, is no reason of B's: the next boot's "
+          "updater says what ended the last run was another slot's, and B's panic stays the refusal kept (801-UPD-0044)", flush=True)
+
+
+def own_freeze_after_a_fallback(args, disk):
+    """801-UPD-0045: both slots hold the `watchdog-late-test` kernel, which stops for good on the first boot after QEMU
+    starts. Slot B's trial stops past init's run mark, the TCO timer resets the machine, and slot A boots with B's one
+    try spent; its updater keeps the watchdog's restart. A second QEMU then starts slot A afresh from the same disk: A
+    stops past its own mark, and the timer resets it. At A's boot after that the records still name B's trial fallen
+    back to A, but the run the watchdog restarted was A's own: the updater takes it for no reason of B's, and B's
+    refusal stays the one kept."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-own-freeze-"))
+    volume = temp / "volume"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n",
+                       "kernel.elf": Path(args.watchdog_late_kernel).read_bytes()}.items():
+        (volume / name).parent.mkdir(parents=True, exist_ok=True)
+        (volume / name).write_bytes(data)
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "own-freeze.img", boot_slots.layout(volume, temp / "slots", both=True))
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    why = "THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING"
+    restarted = "A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN"
+    logs = []
+
+    def stopped_then_a(trial):
+        # A machine started afresh: its first boot stops for good, and the timer's reset boots slot A.
+        vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+        try:
+            vm.expect("BOOT: SLOT B LOADED ON TRIAL" if trial else "BOOT: SLOT A LOADED", timeout=120)
+            vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+            vm.expect("BOOT: SLOT A LOADED", timeout=240)
+            vm.expect(restarted, timeout=90)
+            vm.expect("MIND> ", timeout=180)
+            return vm.service_logs("updater", "FELL BACK TO THIS SLOT"), vm.command("update status", raw=True)
+        finally:
+            vm.close()
+            logs.append(vm.log)
+            (Path(tempfile.gettempdir()) / f"mind-core-own-freeze-{args.cpus}cpu.log").write_text("".join(logs))
+    log, _ = stopped_then_a(True)
+    require(log, "[UPDATER] SLOT B'S TRIAL OF VERSION ")
+    log, status = stopped_then_a(False)
+    require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON")
+    require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+    assert "FELL BACK TO THIS SLOT: " not in log, log[-3000:]
+    require(status, "UPDATE: THE LAST FAILURE: ")
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: watchdog: slot A stopped for good on a run of its own after slot B's trial fell back to it, and the TCO "
+          "timer reset it; at A's next boot its updater said what ended the last run was another slot's, and B's refusal "
+          "stays the one kept (801-UPD-0045)", flush=True)
+
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
@@ -18410,7 +18902,11 @@ def efivar_check(args, disk):
         vm.send_bytes(answer)
         return vm.expect("MIND> ", timeout=20)
 
+    # 213-KRN-0262: the loader's lines, kept in a volatile variable, reach the system log with the kernel's, which init
+    # copies there under its own name; each boot's own (the second is checked after the firmware's shell).
+    loader = "MIND CORE BOOT: USING GOP "
     try:
+        require(vm.command("dmesg -s init", raw=True), loader)
         require(efivar("efivar", b"n"), "efivar: the firmware's variables were not granted")
         listing = efivar("efivar", b"y")
         current = re.search(r"BootCurrent: ([0-9A-F]{4})", listing)
@@ -18436,11 +18932,13 @@ def efivar_check(args, disk):
         time.sleep(1); vm.collect(); vm.output = ""
         listing = efivar("efivar", b"y")
         assert f"BootCurrent: {current[1]}" in listing and "BootNext: not set" in listing, listing
+        require(vm.command("dmesg -s init", raw=True), loader)
     finally:
         vm.close()
     marked = f"; Boot{network[1]} ({network[2]}) marked as network boot and refused as BootNext and in BootOrder" if network else ""
     print(f"PASS: efivar lists the boot entries after the user allows it (refused without); BootNext {shell[1]} boots the "
-          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed{marked}", flush=True)
+          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed{marked}; both boots' system logs hold "
+          f"the loader's lines (213-KRN-0262)", flush=True)
 
 
 def devicetree_suite(args, disk):
@@ -18873,25 +19371,75 @@ def boot_suite(args, disk):
         finally:
             vm.close()
     print("PASS: reboot through the ACPI reset register (q35) and port 0xCF9 (pc); the system boots again", flush=True)
+
+    def restarting(image, until):
+        vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+        try:
+            vm.expect(until, timeout=180)
+            return ANSI.sub("", vm.log)
+        finally:
+            vm.close()
     if args.panic_kernel:
         # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
         target = disk / "kernel.elf"
         target.write_bytes(Path(args.panic_kernel).read_bytes())
         sign_manifest.sign_volume(disk)
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
-        try:
-            deadline, pattern = time.monotonic() + 30, re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n")
-            while not pattern.search(vm.output.replace("\r", "")):
-                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False, reboot=True)
+
+        def panicked(pattern, timeout):
+            # A panic's report and its record, which expect() would take for a failure; the output cleared after them.
+            deadline, pattern = time.monotonic() + timeout, re.compile(pattern + r"\n(.*\n)*THE FAULT IS RECORDED FOR THE NEXT BOOT\n")
+            while not (found := pattern.search(vm.output.replace("\r", ""))):
+                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-3000:]
                 vm.collect(); time.sleep(.05)
+            vm.output = ""
+            return found
+        try:
+            panicked(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", 30)
             # 211-KRN-0013: the boot line and the report are on the screen too, for a machine without a serial port.
             screen = "\n".join(line.rstrip() for line in screen_text(vm))
             assert re.search(r"MIND CORE KERNEL: INIT STARTED\n(.*\n)*KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", screen), screen
+            # 801-KRN-0261: the record outlives the reset, and the next boot names it. That one panics 20 s past its start,
+            # on the tick, while the safe start's list is still starting (its starts settle 30 s past READY).
+            vm.hmp("system_reset")
+            vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=90)
+            # On the tick: the task it cut, if any, is named after the CPU (round 153: PID=5 NAME=compositor).
+            panicked(r"KERNEL PANIC: panic test, 20 s past the boot at src/arch/x86_64/interrupts\.rs:\d+:\d+ CPU=0(?: PID=\d+ NAME=\S+)?", 90)
+            # A fault the kernel recorded is a freeze's evidence (ABI 35): what that run was starting is left out at once.
+            vm.hmp("system_reset")
+            vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            decided = re.search(r"\[INIT\] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE KERNEL STOPPED IT ON A FAULT; NOT STARTED: ([^\r\n]+)", log)
+            assert decided, [line for line in log.splitlines() if "LAST RUN" in line or "MARK" in line] or log[:3000]
+            left = decided[1].split(", ")
+            assert left and set(left) <= set(SAFE_LIST), left
+            require(log, "[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM 120 S PAST READY")
         finally:
             vm.close()
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
-        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
+        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen; "
+              f"it is recorded in a firmware variable, the next boot names it, and a panic while the safe start's list was "
+              f"starting leaves out at once what was starting ({', '.join(left)}) (801-KRN-0261)", flush=True)
+
+        def past_the_panic(image, until):
+            # `until` once slot A is loaded: slot B's panic comes first, which expect() takes for a failure (801-KRN-0258).
+            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+            try:
+                deadline = time.monotonic() + 180
+                while True:
+                    vm.collect()
+                    out = ANSI.sub("", vm.log).replace("\r", "")
+                    if until in out.partition("BOOT: SLOT A LOADED\n")[2]:
+                        return out
+                    assert time.monotonic() < deadline and vm.process.poll() is None, out[-3000:]
+                    time.sleep(.05)
+            finally:
+                vm.close()
+        with tempfile.TemporaryDirectory(prefix="mind-panicked-") as temp:
+            boot_slots_check.panicked_trial(past_the_panic, temp, disk, args.panic_kernel, "x86")
+        own_fault_after_a_fallback(args, disk)
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
@@ -18931,14 +19479,6 @@ def boot_suite(args, disk):
         sign_manifest.sign_volume(disk)
         print("PASS: a bootloader of another handoff version: outside a trial the kernel stops before init and stays stopped, "
               "with the reason on COM1 and on the screen", flush=True)
-
-        def restarting(image, until):
-            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
-            try:
-                vm.expect(until, timeout=180)
-                return ANSI.sub("", vm.log)
-            finally:
-                vm.close()
         with tempfile.TemporaryDirectory(prefix="mind-refused-") as temp:
             boot_slots_check.refused_trial(restarting, temp, disk, args.loader_abi_kernel, "x86")
     if args.trial_kernel:
@@ -18978,6 +19518,7 @@ def main():
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
+    parser.add_argument("--watchdog-late-kernel", help="test-only kernel built with --features watchdog-late-test (watchdog suite, 801-UPD-0045)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
@@ -19023,6 +19564,9 @@ def main():
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     tuned = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-selftuned-target/x86_64-unknown-none/release/wlansim"
     args.self_tuned_radio_elf = str(tuned) if args.arch == "x86_64" and tuned.exists() else None
+    # keystore's build that takes no TPM in the boot's first minute (801-NET-0087): x86 only.
+    late_keys = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-keystore-late-target/x86_64-unknown-none/release/keystore"
+    args.late_tpm_keystore_elf = str(late_keys) if args.arch == "x86_64" and late_keys.exists() else None
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.disk == "ahci":
@@ -19089,6 +19633,9 @@ def main():
             continue
         if suite == "hda":
             hda_suite(args)
+            continue
+        if suite == "usbaudio":
+            usbaudio_suite(args)
             continue
         if suite == "link":
             link_suite(args)
@@ -19171,6 +19718,11 @@ def main():
                 note = elf.index(b"MINDREQ1") + 8
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
+                # tallynf: tally asking for no files (REQUEST_FILES 32), for its needs rebound (313-STO-0053).
+                elf = bytearray((disk / "tally.elf").read_bytes())
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~32).to_bytes(4, "little")
+                (disk / "tallynf.elf").write_bytes(elf)
             if suite == "tools" and args.clip_elf:
                 # The clipboard's stub (000-APP-0032), and a copy whose request note asks for no clipboard
                 # (REQUEST_CLIPBOARD 524288), as blocksro is made below.
@@ -19289,6 +19841,7 @@ def main():
                 store_copy_disk_check(args, disk)
                 store_rebuild_check(args, disk)  # another, the store's disk replaced by a blank one (309-STO-0041)
                 store_partition_disk_check(args, disk)  # two more, the store on an NVMe and an AHCI partition (307-STO-0044)
+                tally_two_machines_check(args)  # two machines at once, a component moved from one to the other (313)
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The tts suite's model disk (252-KRN-0230): its manifest alone, read-only, as models: holds it.
             models = model_disk(Path(tempfile.mkdtemp(prefix="mind-tts-models-"))) if suite == "tts" else None

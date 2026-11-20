@@ -146,9 +146,10 @@ def run(boot, temp, volume, label, updater=None):
         print(f"SKIP ({label}): the update zone's client: no test stand-in for the updater was built", flush=True)
 
 
-def refused_trial(boot, temp, volume, kernel, label):
-    """Slot B on trial holds `kernel`, built with `loader-abi-test`: it refuses the handoff, says why and restarts the
-    machine; the loader then boots slot A, B's one try spent. `boot` lets the machine restart."""
+def stopped_trial(boot, temp, volume, kernel, lines, after=()):
+    """Slot B on trial holds `kernel`, a test kernel that stops before its boot is confirmed: `lines` must follow in
+    order, then the loader boots slot A, B's one try spent, and A's kernel says `after`. `boot` lets the machine restart.
+    The boot's output."""
     temp = Path(temp)
     source = quiet_volume(volume, temp / "volume")
     other = temp / "other"
@@ -158,18 +159,47 @@ def refused_trial(boot, temp, volume, kernel, label):
     slots = boot_slots.layout(source, temp / "slots", both=True)
     for name in boot_slots.boot_set(other):
         shutil.copyfile(other / name, slots / "MIND" / "B" / name)
-    image = boot_slots.Image.create(temp / "refused.img", slots)
+    image = boot_slots.Image.create(temp / "stopped.img", slots)
     for path in (source, other, slots):
         shutil.rmtree(path)
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     out = boot(image.path, STARTED).replace("\r", "")
     at = 0
-    for line in ("BOOT: SLOT B LOADED ON TRIAL", "KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION", "TRIAL: RESTARTING INTO THE FALLBACK",
-                 "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", STARTED):
+    for line in ("BOOT: SLOT B LOADED ON TRIAL", *lines, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", *after, STARTED):
         at = out.find(line, at)
         assert at >= 0, (line, out[-3000:])
+    return out
+
+
+def refused_trial(boot, temp, volume, kernel, label):
+    """Slot B on trial holds `kernel`, built with `loader-abi-test`: it refuses the handoff, says why and restarts the
+    machine; the loader then boots slot A, B's one try spent."""
+    stopped_trial(boot, temp, volume, kernel, ("KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION", "TRIAL: RESTARTING INTO THE FALLBACK"))
     print(f"PASS ({label}): a trial whose kernel refuses the loader's handoff restarts the machine, and the loader boots "
           "slot A with B's try spent", flush=True)
+
+
+def panicked_trial(boot, temp, volume, kernel, label):
+    """801-KRN-0258: slot B on trial holds `kernel`, built with `panic-test`, which panics inside the scheduler lock at
+    init's first log line: on a trial the panic restarts the machine instead of stopping it, and slot A boots. Slot A's
+    kernel names B's panic, from the record B's kept as it stopped, and init takes no evidence from it (801-KRN-0261)."""
+    out = stopped_trial(boot, temp, volume, kernel, ("MIND CORE KERNEL: SLOT B ON TRIAL", "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK"),
+                        ("MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:",))
+    assert "KERNEL PANIC" not in out[out.find("BOOT: SLOT A LOADED\n"):], out[-3000:]
+    print(f"PASS ({label}): a kernel panic on a trial, inside the scheduler lock, restarts the machine, and the loader "
+          "boots slot A with B's try spent; A's kernel names B's panic from its record", flush=True)
+
+
+def hung_trial(boot, temp, volume, kernel, label):
+    """801-KRN-0258: slot B on trial holds `kernel`, built with `watchdog-test`, which stops for good with interrupts
+    off once the watchdog is armed, before init: neither its tick nor init can restart it, the chipset's TCO timer
+    does, and slot A boots, its kernel told the watchdog ended the last run."""
+    armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
+    out = stopped_trial(boot, temp, volume, kernel, (armed + "\n", "MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT"),
+                        (armed + "; IT RESTARTED THE LAST RUN",))
+    assert "INIT STARTED" not in out[:out.find("BOOT: SLOT B NOT CONFIRMED")], out[-3000:]
+    print(f"PASS ({label}): a trial that stops for good before init, its tick stopped, is reset by the chipset's "
+          "watchdog, and the loader boots slot A with B's try spent; A's kernel says the watchdog ended the last run", flush=True)
 
 
 def update_zone(boot, temp, volume, label, updater):

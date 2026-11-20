@@ -1,0 +1,59 @@
+# 313-STO-0053 — Rebinding by the description of needs: a checkpoint's needs, rebound to what an instance holds now — done
+
+**Type:** storage (library, pilot) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-11-18) · **Blocked by:** — · **Main task:** [313](../issues/313-persistent-actors.md) · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.11, RFC 001 §9
+
+## Problem
+
+313's plan names rebinding by the description of needs, and it was not built. A checkpoint lists its authorities as bare text such as `files`. `rebind` only says which of them the instance does not hold.
+
+RFC 001 §9 asks for more: capabilities replaced by descriptions of needs (the logical resource, the interface, constraints and the binding), and a restore that issues the permitted handles or returns a definite refusal.
+
+## Plan
+
+- **Manifest format 4** (`mind::checkpoint`):
+  - each need is a binding, an interface with its major version, a logical resource and a mode (refuse or degrade);
+  - a binding is named once;
+  - format 3 is refused by its number, as formats 1 and 2 are. No checkpoint is converted (the rule of 2026-10-25).
+- **`rebind(manifest, offer)`:**
+  - the component says, for each need, what it holds now: held as described, missing, the interface at another major version, or refused by its service;
+  - `refused()` is the first unmet need in mode refuse: the component is not resumed;
+  - an unmet need in mode degrade refuses only what needs that binding.
+- **`tally`, the pilot:**
+  - `store` (`mind:blockstore`, its major, `checkpoint`), mode refuse;
+  - `files` (`mind:vfs`, its major, `ram:`), mode degrade, without which its effects and moves are refused;
+  - each unmet need is logged with what was found.
+
+## Acceptance criteria
+
+- **Host** (`tests/checkpoint_host.rs`):
+  - needs encoded and found again after a save and a restore;
+  - every answer of `rebind` and the mode's decision;
+  - a binding twice, a mode out of range, and formats 1 to 3 refused;
+  - the largest manifest is `MAX` bytes.
+- **QEMU,** the `store` suite (aarch64 and x86): a copy of `tally` whose request note asks for no files (`tallynf`):
+  - it restores the same component degraded, its effect and its move refused, and a count saved;
+  - `tally`, holding both again, is told nothing and does the effect.
+- `docs/storage/checkpoints.md` describes format 4 and rebinding.
+
+## Resolution
+
+Done on `claude/relaxed-meitner-5bmhpz` as 671d5237, with the check's expectation fixed in f88c7fcd.
+- **`mind::checkpoint` format 4:**
+  - each need is a binding, an interface with its major version, a logical resource and a mode, refuse or degrade;
+  - `rebind(manifest, offer)` asks the component, for each need, what it holds now: held, missing, another major, or refused by its service;
+  - `refused()` decides whether the component is resumed;
+  - formats 1 to 3 are refused by their number.
+- **`tally`:**
+  - `store` (`mind:blockstore`, refuse) and `files` (`mind:vfs`, degrade);
+  - each unmet need is logged with what was found;
+  - without `files`, its effects and moves are refused.
+- **Tests:**
+  - `tests/checkpoint_host.rs`: 23 passed;
+  - the `store` suite's `tally_needs_check`, on images built from 514cf529 with the test of f88c7fcd: x86 (35 checks passed) and on aarch64 the store suite (41 checks) and the tls suite (13 passed, the late TPM's check skipped, as it is x86's) passed. `tallynf`, whose request note asks for no files, restored `tally.n` degraded: its effect and move were refused and a count saved. `tally`, holding both again, was told nothing and did the effect.
+- **docs/storage/checkpoints.md 6.**
+- **Not built:** a contract's migration of its needs. A need saved under another major stays unmet, as RFC 001 asks of an incompatible transition: a refusal, not a guess.
+- **Landed** in round 148 (`main` 8a40c274, gate `land-r148` green, 52 groups). The aarch64 store group ended once at the 3500-s limit on acc-2 beside another lane, its logs not read, and passed alone on x32 in 1019 s: 313-STO-0054, on the storage branch.
+
+## Related
+
+[313](../issues/313-persistent-actors.md), [306](306-checkpoints-and-rebinding.done), [313-STO-0036](313-STO-0036-an-effect-its-target-can-tell.done), RFC 001 §9.

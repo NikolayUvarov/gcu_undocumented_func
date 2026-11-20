@@ -15,6 +15,10 @@
 //! interfaces (class 0xE0, subclass 1, protocol 1). Its `control` may also send the HCI's commands, which go to the
 //! device as a whole as class requests (request type 0x20, request 0); its bulk IN endpoint is polled by `reports`, as
 //! a converter's is. The wire is unchanged.
+//!
+//! 1.5 (000-DRV-0073): `mind::usb::BADGE_AUDIO` names `audio_gw`, which claims audio class interfaces (class 1). On
+//! xHCI a selected setting's isochronous endpoints stream both ways: `isochronous` takes an IN endpoint's packets, as on
+//! EHCI, and the new `isochronous-out` gives an OUT endpoint its packets.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -24,7 +28,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:usb";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -125,6 +129,19 @@ pub fn isochronous(endpoint: Endpoint, handle: u32, address: u8, offset: u32, le
     Ok(wire::field(&reply, 0, 16, 32) as u32)
 }
 
+/// 1.5 (000-DRV-0073): packets for the selected setting's isochronous OUT endpoint `address`, at `offset` in the
+/// buffer, `length` bytes: each as two length bytes, low first, and the packet (at most the endpoint's packet size).
+/// Each goes out in its own service interval, in order, after those given before. Returns the bytes taken: packets
+/// for which usb_host has no room yet are left for the next call (a full queue takes none). Errors as for
+/// `isochronous`; invalid, no OUT stream (EHCI streams IN only).
+pub fn isochronous_out(endpoint: Endpoint, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
+    let words = [10 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48, ((offset) as usize) << 0 | ((length) as usize) << 32];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_error(&reply)?;
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 32) as u32)
+}
+
 /// A request to the `usb` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -137,6 +154,7 @@ pub enum Request {
     ReportsUpTo { handle: u32, address: u8, longest: u16 },
     Select { handle: u32, alternate: u8 },
     Isochronous { handle: u32, address: u8, offset: u32, length: u32 },
+    IsochronousOut { handle: u32, address: u8, offset: u32, length: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -182,6 +200,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::Isochronous { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8, offset: wire::field(&words, 1, 0, 32) as u32, length: wire::field(&words, 1, 32, 32) as u32 }, Call::words(request, cap)))
         }
+        10 => {
+            wire::body(request, cap, [0xffffffffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::IsochronousOut { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8, offset: wire::field(&words, 1, 0, 32) as u32, length: wire::field(&words, 1, 32, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -219,6 +241,10 @@ pub fn reply_select(call: Call, value: Result<()>) -> Result<()> {
     wire::finish(call, [0, 0])
 }
 pub fn reply_isochronous(call: Call, value: Result<u32>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_isochronous_out(call: Call, value: Result<u32>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::finish(call, [((value) as usize) << 16, 0])
 }

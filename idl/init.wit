@@ -6,7 +6,7 @@
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
 /// A client badged `BADGE_NOTICE` (the Effector agent's, 1.12, 750-KRN-0194) may ask `stop-notice`, say `agent-step`
 /// (1.13) and ask what any client may ask; it gets `denied` (`rights` for `run`) for every lifecycle change.
-package mind:init@1.13.0;
+package mind:init@1.15.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -102,4 +102,23 @@ interface init {
     /// 9.9). Only the agent's own client (`BADGE_NOTICE`, while the agent runs, from any of its tasks) may say it; others get
     /// `denied`.
     agent-step: func(step: agent-step, detail: string<64>) -> result<_, error>;
+    /// What stopped a run the kernel stopped on a fault of its own (1.14, 801-KRN-0265): its panic, an exception in the
+    /// kernel, init's exit, an interrupt it has no handler for, a trial's deadline passed with no confirmation, or a kind
+    /// this init does not name.
+    enum fault-kind { panic, exception, init-exited, unexpected, deadline, unknown }
+    /// The kernel's record of such a run (`FAULT_RECORD_NAME`, common/abi.rs): its slot (`BOOT_SLOT_*`), what stopped
+    /// it and its report's first line.
+    record fault { slot: u8, kind: fault-kind, line: string<160> }
+    /// The record the last run left, which init read and deleted as this boot started (1.14, 801-KRN-0265); `not-found`
+    /// when it left none. The updater of the slot a trial fell back to reports a fault of the trial's slot as that
+    /// trial's refusal (801-UPD-0044). Any client may ask.
+    last-fault: func() -> result<fault, error>;
+    /// The last run that did not end as asked (1.15, 801-UPD-0045): its slot (`BOOT_SLOT_*`), from the run's mark init
+    /// read as this boot started (000-KRN-0217), and whether the platform's watchdog restarted it (ABI 34's
+    /// `BOOT_WATCHDOG_RESTARTED`).
+    record unfinished { slot: u8, watchdog: bool }
+    /// That run, when it left a mark this init reads; `not-found` when the last run ended as asked or left none. The
+    /// updater of the slot a trial fell back to reports the watchdog's restart of that trial's run as its refusal. Any
+    /// client may ask.
+    last-run: func() -> result<unfinished, error>;
 }

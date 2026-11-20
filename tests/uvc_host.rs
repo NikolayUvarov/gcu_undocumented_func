@@ -189,3 +189,70 @@ fn a_frame_of_any_size_for_motion_jpeg() {
     assert_eq!(a.feed(&payload(FID | EOF, &[]), false), None, "a new ID with nothing in the frame before it ends nothing");
     assert_eq!(a.good, 1);
 }
+
+// 158-DRV-0072: a bulk camera's payloads span transfers; the header is at a payload's start only.
+#[test]
+fn bulk_payloads_span_transfers_and_end_short_or_at_their_size() {
+    // Payloads of up to 6 bytes: a 2-byte header and 4 of data.
+    let mut a = Assembler::new(8, true);
+    let mut b = Bulk::new(6);
+    assert_eq!(b.next(4), 4);
+    assert_eq!(b.transfer(&mut a, &[2, 0, 1, 2], 4), None); // the first part of a payload, full
+    assert_eq!(b.next(4), 2); // no more than the payload has left
+    assert_eq!(b.transfer(&mut a, &[3, 4], 2), None); // the payload reached its size: ended, no EOF
+    assert_eq!(b.next(64), 6);
+    assert_eq!(b.transfer(&mut a, &[2, EOF, 5, 6, 7, 8], 6), Some(true)); // a whole payload with EOF ends the frame
+    assert_eq!(a.ready(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+    // A short transfer ends its payload early; the next transfer starts with a header.
+    let mut b = Bulk::new(1000);
+    assert_eq!(b.transfer(&mut a, &[2, FID, 9, 9, 9, 9], 64), None);
+    assert_eq!(b.transfer(&mut a, &[2, FID | EOF, 9, 9, 9, 9], 64), Some(true));
+    assert_eq!(a.good, 2);
+}
+
+#[test]
+fn bulk_payloads_split_anywhere_and_a_failed_transfer_spoils_its_frame() {
+    // The data split across three transfers of 3 bytes, then a short one, like 512-byte packets.
+    let mut a = Assembler::new(8, true);
+    let mut b = Bulk::new(100);
+    assert_eq!(b.transfer(&mut a, &[2, 0, 1], 3), None);
+    assert_eq!(b.transfer(&mut a, &[2, 3, 4], 3), None);
+    assert_eq!(b.transfer(&mut a, &[5, 6, 7], 3), None);
+    assert_eq!(b.transfer(&mut a, &[8], 3), None); // short: the payload ends, no EOF yet
+    assert_eq!(b.transfer(&mut a, &[2, EOF], 64), Some(true)); // an empty payload with EOF ends the frame
+    assert_eq!(a.ready(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+    // A transfer fails mid-payload: the frame is broken, and the next transfer is read as a new payload's start.
+    assert_eq!(b.transfer(&mut a, &[2, FID, 1, 2, 3], 5), None);
+    b.failed(&mut a);
+    assert_eq!(b.transfer(&mut a, &[2, FID | EOF, 4, 5, 6, 7, 8], 64), Some(false));
+    assert_eq!((a.good, a.broken), (1, 1));
+    // The frame ID's change ends the frame before it; a zero-length transfer between payloads carries nothing.
+    assert_eq!(b.transfer(&mut a, &[], 64), None);
+    assert_eq!(b.transfer(&mut a, &[2, 0, 1, 2, 3, 4, 5, 6, 7, 8], 64), None);
+    assert_eq!(b.transfer(&mut a, &[2, FID, 1], 64), Some(true));
+    // A bad header at a payload's start spoils the frame.
+    let mut a = Assembler::new(2, true);
+    let mut b = Bulk::new(10);
+    assert_eq!(b.transfer(&mut a, &[9, 0, 1], 3), None);
+    assert_eq!(b.transfer(&mut a, &[2, EOF, 1, 2], 64), Some(false));
+}
+
+#[test]
+fn a_bulk_camera_is_parsed_with_its_endpoint_and_no_settings() {
+    let mut c = vec![9, 2, 0, 0, 2, 1, 0, 0x80, 0xFA];
+    c.extend(interface(0, 0, 1, 1));
+    c.extend([13, 0x24, 1, 0x00, 0x01, 13, 0, 0x80, 0x8D, 0x5B, 0, 1, 1]); // VC header, UVC 1.00
+    c.extend(interface(1, 0, 1, 2));
+    c.extend([14, 0x24, 1, 1, 0, 0, 0x81, 0, 0, 0, 0, 0, 0, 0]); // VS input header, endpoint 81
+    let mut format = vec![27, 0x24, 4, 1, 1];
+    format.extend(GUID_YUY2); format.extend([16, 1, 0, 0, 0, 0]);
+    c.extend(format);
+    c.extend(frame(5, 1, 640, 480, 400_000, &[400_000], None));
+    c.extend(endpoint(0x81, 2, 512, 0)); // bulk IN in setting 0
+    let len = c.len() as u16; c[2..4].copy_from_slice(&le16(len));
+    let cam = parse(&c).expect("a bulk camera");
+    assert!(cam.bulk);
+    assert_eq!(cam.endpoint, 0x81);
+    assert!(cam.alternates.is_empty());
+    assert_eq!(cam.choose(640, 480).map(|f| (f.width, f.height)), Some((640, 480)));
+}

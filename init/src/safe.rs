@@ -1,7 +1,7 @@
 // Which services a start after an unfinished run leaves out (000-KRN-0217, 801 S5). The run's mark holds the slot whose
 // run set it and a bit for each service of the safe start's list whose start had not settled. Only those are suspected,
-// only in a run of the same slot, and only at once with the watchdog's evidence of a freeze, else after two such runs in
-// a row. Pure: the mark's bytes in, the decision out; init keeps the bytes in the firmware variable RUN_MARK_NAME.
+// only in a run of the same slot, and only at once with the evidence of a freeze (the watchdog's, or the kernel's record
+// of a fault), else after two such runs in a row. Pure: the mark's bytes in, the decision out; init keeps the bytes in the firmware variable RUN_MARK_NAME.
 
 /// The mark's format, its first byte; version 1 was the one byte `1`, which said nothing of what was starting.
 pub const VERSION: u8 = 2;
@@ -46,7 +46,8 @@ pub enum Why {
     Once,
     /// Some were starting the run before too: those are left out.
     Twice,
-    /// The watchdog restarted the run: what was starting is left out at once.
+    /// The watchdog restarted the run, or the kernel recorded a fault as it stopped it (801-KRN-0261): what was starting
+    /// is left out at once.
     Evidence,
 }
 
@@ -55,7 +56,7 @@ pub enum Why {
 pub struct Decision { pub left_out: u8, pub named: u8, pub suspected: u8, pub why: Why }
 
 /// The decision after the last run: `last` none when it left no mark, `slot` this boot's, `evidence` when the
-/// watchdog restarted it.
+/// watchdog restarted it or the kernel stopped it on a fault.
 pub fn decide(last: Option<Read>, slot: u8, evidence: bool) -> Decision {
     let plain = |why| Decision { left_out: 0, named: 0, suspected: 0, why };
     let mark = match last {

@@ -72,6 +72,7 @@ const RADIOS: [&str; 4] = ["bcm_wifi", "rtw88_wifi", "rtw89_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
+const SLOT_AUDIO_USB: usize = 8; // audio_gw: usb_host's client badged for audio (213-KRN-0263)
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
@@ -209,7 +210,10 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // the safe start's list started until that start settled, what this boot left out and what has not come back.
               run_mark: Option<usize>, mark: safe::Mark, settling: [Option<usize>; SAFE_LEFT_OUT.len()], left_out: u8, returning: u8,
               // When init said READY, and whether it said since the last start of the list that every start settled.
-              ready: Option<usize>, settled_said: bool }
+              ready: Option<usize>, settled_said: bool,
+              // The kernel's record of the last run it stopped on a fault, taken as the boot started (801-KRN-0265), and
+              // the last run that did not end as asked, from its mark (801-UPD-0045).
+              fault: Option<idl_init::Fault>, unfinished: Option<idl_init::Unfinished> }
 
 // A trial held for the Effector agent's word (801-KRN-0242): READY's time, the agent's last step and its detail, and
 // when a refused trial restarts the machine.
@@ -1157,6 +1161,9 @@ impl Init {
                         grants.copy(SLOT_MEM, self.dma(index, AUDIO_DMA_BYTES)?, 0);
                     }
                 }
+                // A USB audio device's interfaces (213-KRN-0263, 000-DRV-0073): after the codecs, so a machine with only
+                // a USB device gets it too.
+                if self.running(service_index("usb_host")) { grants.add(SLOT_AUDIO_USB, self.badged(&mut minted, "usb_host", mind::usb::BADGE_AUDIO)?, CLIENT); }
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
             // The video gateway (issue 158): the boot disk for video/synthetic, the compositor for the camera mark, and
@@ -1857,6 +1864,8 @@ impl Init {
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
             // Answered at once: a trial that waits for the Effector server says so (801-KRN-0242).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
+            Request::LastFault => idl_init::reply_last_fault(call, self.fault.as_ref().ok_or(idl_init::Error::NotFound)),
+            Request::LastRun => idl_init::reply_last_run(call, self.unfinished.as_ref().ok_or(idl_init::Error::NotFound)),
             // Only the running agent's own client says how far it got (801-KRN-0242).
             Request::AgentStep { step, detail } => {
                 // BADGE_NOTICE is the agent's alone, lent only to its own worker (750-KRN-0159), which may make the call.
@@ -2572,6 +2581,25 @@ fn last_mark(firmware: usize) -> Option<safe::Read> {
     Some(safe::Mark::read(&bytes[..length.min(bytes.len())]))
 }
 
+// The kernel's record of the last run it stopped on a fault (801-KRN-0265): deleted once read, so that a later boot
+// names only a newer one, and answered as `last-fault`.
+fn take_fault(firmware: usize) -> Option<idl_init::Fault> {
+    let mut bytes = [0u8; 3 + FAULT_RECORD_TEXT];
+    let (_, length) = mind::firmware::get_in(firmware, FAULT_RECORD_NAME, &RUN_MARK_GUID, &mut bytes).ok()?;
+    let deleted = if mind::firmware::set_in(firmware, FAULT_RECORD_NAME, &RUN_MARK_GUID, 0, &[]).is_ok() { "DELETED" } else { "NOT DELETED: THE NEXT BOOT NAMES IT AGAIN" };
+    let bytes = &bytes[..length.min(bytes.len())];
+    if bytes.len() < 3 || bytes[0] != FAULT_RECORD_VERSION {
+        mind::println!("[INIT] THE KERNEL'S FAULT RECORD IS OF VERSION {}, NOT {}: {}", bytes.first().copied().unwrap_or(0), FAULT_RECORD_VERSION, deleted);
+        return None;
+    }
+    use idl_init::FaultKind::*;
+    let (kind, how) = match bytes[2] { FAULT_PANIC => (Panic, "THE KERNEL'S PANIC"), FAULT_EXCEPTION => (Exception, "AN EXCEPTION IN THE KERNEL"), FAULT_INIT_EXITED => (InitExited, "INIT'S EXIT"),
+                                       FAULT_UNEXPECTED => (Unexpected, "AN INTERRUPT WITH NO HANDLER"), FAULT_DEADLINE => (Deadline, "ITS TRIAL'S DEADLINE"), _ => (Unknown, "A FAULT OF A KIND NOT NAMED") };
+    let line = core::str::from_utf8(&bytes[3..]).unwrap_or_else(|e| core::str::from_utf8(&bytes[3..3 + e.valid_up_to()]).unwrap_or(""));
+    mind::println!("[INIT] THE LAST RUN, OF {}, ENDED IN {}; THE KERNEL'S RECORD {}: {}", slot_name(bytes[1] as u32), how, deleted, line);
+    Some(idl_init::Fault { slot: bytes[1], kind, line: wire_text(line) })
+}
+
 // A service's place in the safe start's list.
 fn listed(name: &str) -> Option<usize> { SAFE_LEFT_OUT.iter().position(|&n| n == name) }
 
@@ -2651,7 +2679,7 @@ fn boot(info: &'static BootInfo) {
                          modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
                          configuration: idl_init::Configuration::Absent, shell_nn: None, shell_clipboard: None, test_key: info.launch.test_key != 0, safe: false, flow_looked: 0, owner_kept: None, notices: [const { None }; UNITS],
                          power: hardware::power_policy(), nodes: hardware::Nodes::default(), trial: Trial::default(),
-                         run_mark: None, mark: safe::Mark::default(), settling: [None; SAFE_LEFT_OUT.len()], left_out: 0, returning: 0, ready: None, settled_said: false };
+                         run_mark: None, mark: safe::Mark::default(), settling: [None; SAFE_LEFT_OUT.len()], left_out: 0, returning: 0, ready: None, settled_said: false, fault: None, unfinished: None };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The tables' transmit power policy for a WLAN radio, kept for its starts (213-KRN-0122). Unknown is a finding, held
@@ -2673,12 +2701,16 @@ fn boot(info: &'static BootInfo) {
                        if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
     }
     // The last run's mark (000-KRN-0076): found, it stopped early. A safe start leaves out only what that run of this slot
-    // was starting, at once with the watchdog's evidence of a freeze, else after a second such run in a row (000-KRN-0217).
+    // was starting, at once with the evidence of a freeze (the watchdog's restart, or a fault the kernel recorded as it
+    // stopped, 801-KRN-0261), else after a second such run in a row (000-KRN-0217).
     // The privilege is kept until the mark is cleared, a minute after READY once every start settled.
     let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
     let slot = info.boot_slot.slot as u8;
     let last = firmware.and_then(last_mark);
-    let decision = safe::decide(last, slot, info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0);
+    init.fault = firmware.and_then(take_fault);
+    let (restarted, faulted) = (info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0, info.boot_flags & BOOT_LAST_RUN_FAULTED != 0);
+    if let Some(safe::Read::Kept(mark)) = last { init.unfinished = Some(idl_init::Unfinished { slot: mark.slot, watchdog: restarted }); }
+    let decision = safe::decide(last, slot, restarted || faulted);
     init.mark = safe::Mark { slot, starting: 0, suspected: decision.suspected };
     let marked = firmware.is_some_and(|f| mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &init.mark.bytes()).is_ok());
     let (named, back) = (names_of(decision.named), safe::RETURN_MS / 1000);
@@ -2691,7 +2723,8 @@ fn boot(info: &'static BootInfo) {
         // Each line fits logd's 200-byte record with every name of the list.
         (safe::Why::Once, _) => mind::println!("[INIT] THE LAST RUN DID NOT END AS ASKED, NO SIGN OF A FREEZE: A NORMAL START; A SECOND SUCH RUN LEAVES OUT: {}", named.as_str()),
         (safe::Why::Twice, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE SECOND IN A ROW WHILE THESE STARTED; NOT STARTED: {}", named.as_str()),
-        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, THE WATCHDOG RESTARTED IT; NOT STARTED: {}", named.as_str()),
+        (safe::Why::Evidence, _) => mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED, {}; NOT STARTED: {}",
+                                                   if restarted { "THE WATCHDOG RESTARTED IT" } else { "THE KERNEL STOPPED IT ON A FAULT" }, named.as_str()),
     }
     if decision.left_out != 0 { mind::println!("[INIT] WHAT THE SAFE START LEFT OUT STARTS AGAIN BY ITSELF FROM {} S PAST READY", back); }
     let first = decision.suspected & !decision.left_out;

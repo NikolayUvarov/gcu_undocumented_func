@@ -220,15 +220,29 @@ impl Assembler {
         let header = payload[0] as usize;
         if header < 2 || header > payload.len() { self.bad = true; return None; }
         let info = payload[1];
-        let mut ended = None;
-        if self.fid.is_some_and(|f| f != info & FID) { ended = self.end(); }
+        let ended = self.begin(info, damaged);
+        self.data(&payload[header..]);
+        self.finish(info).or(ended)
+    }
+
+    // A payload's header: a changed frame ID ends the frame before it; an error or damage spoils the frame.
+    fn begin(&mut self, info: u8, damaged: bool) -> Option<bool> {
+        let ended = if self.fid.is_some_and(|f| f != info & FID) { self.end() } else { None };
         self.fid = Some(info & FID);
         if damaged || info & ERR != 0 { self.bad = true; }
-        let data = &payload[header..];
-        if self.filling.len() + data.len() > self.capacity { self.bad = true; } else { self.filling.extend_from_slice(data); }
-        if info & EOF != 0 { ended = self.end().or(ended); }
         ended
     }
+
+    // A payload's bytes after its header.
+    fn data(&mut self, data: &[u8]) {
+        if self.filling.len() + data.len() > self.capacity { self.bad = true; } else { self.filling.extend_from_slice(data); }
+    }
+
+    // A payload's end: EOF in its header ends the frame.
+    fn finish(&mut self, info: u8) -> Option<bool> { if info & EOF != 0 { self.end() } else { None } }
+
+    // A payload broken off: its frame is spoiled.
+    fn spoil(&mut self) { self.bad = true; }
 
     // The frame so far ends; None if it had nothing (no bytes, no error).
     fn end(&mut self) -> Option<bool> {
@@ -244,4 +258,40 @@ impl Assembler {
 
     /// The last good frame.
     pub fn ready(&self) -> &[u8] { &self.ready }
+}
+
+/// Payloads from a bulk endpoint (158-DRV-0072): a payload of up to `max` bytes (the committed dwMaxPayloadTransferSize)
+/// may span several transfers, and its header is at the start of its first. It ends with a short transfer, or when it
+/// reaches `max`.
+pub struct Bulk { max: usize, at: usize, info: u8 }
+
+impl Bulk {
+    pub fn new(max: u32) -> Self { Self { max: (max as usize).max(2), at: 0, info: 0 } }
+
+    /// How many bytes to ask the next transfer for, at most `limit`: no more than the payload has left.
+    pub fn next(&self, limit: usize) -> usize { (self.max - self.at).min(limit).max(1) }
+
+    /// One transfer of `asked` bytes that brought `data`. Some(good) when a frame ended with it.
+    pub fn transfer(&mut self, assembler: &mut Assembler, data: &[u8], asked: usize) -> Option<bool> {
+        let mut ended = None;
+        let mut body = data;
+        if self.at == 0 {
+            if data.is_empty() { return None; } // a zero-length transfer between payloads
+            let header = data[0] as usize;
+            if data.len() < 2 || header < 2 || header > data.len() { assembler.spoil(); return None; }
+            self.info = data[1];
+            ended = assembler.begin(self.info, false);
+            body = &data[header..];
+        }
+        assembler.data(body);
+        self.at += data.len();
+        if data.len() < asked || self.at >= self.max {
+            self.at = 0;
+            ended = assembler.finish(self.info).or(ended);
+        }
+        ended
+    }
+
+    /// A transfer that failed: the payload in progress is dropped, its frame spoiled, and the next transfer starts anew.
+    pub fn failed(&mut self, assembler: &mut Assembler) { if self.at != 0 { assembler.spoil(); } self.at = 0; }
 }

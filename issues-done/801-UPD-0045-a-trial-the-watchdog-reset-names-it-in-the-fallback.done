@@ -1,0 +1,103 @@
+# 801-UPD-0045 — A trial the platform's watchdog restarted names it in the fallback's reason — done
+
+**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+
+## Problem
+
+S2 asks that a fallback be reported with the step that failed. After 801-UPD-0044, the slot a trial fell back to reports:
+- a trial `init` refused (801-UPD-0037);
+- one the kernel stopped on a fault or at its deadline (801-KRN-0265).
+
+**A trial that froze so hard that only the platform's watchdog restarted it** is still reported with no step. On the DEXP, 801-KRN-0259's trial built to stop before `init` came back as `fell back: slot A runs version 4, not 5` and nothing more. The boot after it knew: the kernel sets ABI 34's `BOOT_WATCHDOG_RESTARTED`.
+
+**The flag alone is not enough.** It says that the last run was restarted, not whose run it was. After a fallback, slot A runs on with the records still naming B's spent trial. A freeze of A's own run later would be reported as B's.
+
+**`init` knows the slot.** The run's mark, which `init` reads at boot (000-KRN-0217), holds the slot of the run that did not end as asked.
+
+## Plan
+
+1. **`init.wit` 1.15, `last-run`:**
+   - the slot of the last run that did not end as asked (from its mark), and whether the watchdog restarted it (`BOOT_WATCHDOG_RESTARTED`);
+   - `not-found` when the last run ended as asked.
+
+   A function added at the end, a minor version.
+2. **The updater**, at a fallback with no fault record (`last-fault` `not-found`), asks `last-run`.
+   - When the watchdog restarted a run of the other slot, it keeps `why THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING` in `refused`, as 801-UPD-0044 does.
+   - A run of this slot, or one the watchdog did not restart, changes nothing.
+3. **QEMU:** the `boot` suite's hung trial (801-KRN-0258's, x86's TCO on q35). Slot A's updater must name the watchdog; this needs a check of slot A's state.
+
+## Acceptance criteria
+
+- [x] A trial the watchdog restarted is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
+- [x] A freeze of the fallback slot's own run, with the records still naming the other slot's trial, is not reported as that trial's.
+- [x] `init.wit` 1.15 in docs/idl.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/801-UPD-0045-watchdog-reset-trial`:
+- **`init.wit` 1.15:** `last-run` answers `unfinished { slot, watchdog }` from the mark `init` read as the boot started, or `not-found`.
+- **The updater's `fell_back`:** with no fault record, it asks `last-run`. A watchdog's restart of a run of the other slot is kept as the trial's refusal, and anything else as before.
+- **`watchdog-late-test`,** an x86 test kernel. It stops every CPU 20 s into a boot the watchdog did not restart, a trial's too, so past `init`'s mark. It is built by `scripts/x86_fixtures.sh` and given to the `watchdog` suite as `--watchdog-late-kernel` (ci_local and CI).
+- **The check, `watchdog_reset_trial` in the `watchdog` suite (q35):**
+  - slot B on trial holds that kernel, and `init` holds the trial for the server's word (an agent that cannot read its configuration);
+  - the TCO timer resets the frozen machine;
+  - slot A boots with B's try spent;
+  - its updater's line and `refused` name the watchdog.
+- **The kernel** is unchanged but for that test feature (7978 lines of 8000).
+
+**Not covered:** a trial that stops before `init` sets its mark. The last mark is then an older run's, or none.
+
+**Tested** through Effector (QEMU only, MC-12.1), on `c47e293899`:
+
+| Group | Machine | Result |
+|---|---|---|
+| x86: the watchdog (with the new check) | x32-2 | PASS, 348 s, twice |
+| x86: a release that loses the server, rolled back | x32-2 | PASS, 717 s |
+| aarch64: a release that loses the server, rolled back | acc-1 | PASS, 712 s |
+| aarch64: boot and fault containment | acc-1 | PASS, 165 s |
+| host: `idl_fuzz` | here | PASS |
+
+The check's lines (x32-2):
+- `MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD` in slot B's trial;
+- `BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT`;
+- `WATCHDOG: INTEL TCO, …; IT RESTARTED THE LAST RUN`;
+- `[UPDATER] SLOT B'S TRIAL OF VERSION not known FELL BACK TO THIS SLOT: THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING; KEPT IN system/updater/refused`.
+
+The second criterion has no run: no test freezes the fallback slot's own run with the records still naming the other's trial. The updater keeps the reason only when `last-run`'s slot is the other's.
+
+## Landed (2026-11-20)
+
+In round 158 (`main` `7a1e938a6b`), the gate green on both architectures. Its x86 `watchdog` group ran the new check (acc-1, 350 s), and both `rollback` groups passed.
+
+**Left:** the second criterion. Its check is made and passed twice here (`own_freeze_after_a_fallback`, on `claude/801-UPD-0044-own-fault-not-a-fallback`). It lands with 801-UPD-0044's.
+
+## The second criterion (2026-11-20)
+
+**The check** (`own_freeze_after_a_fallback`, the x86 `watchdog` suite, on `claude/801-UPD-0044-own-fault-not-a-fallback`). Both slots hold the `watchdog-late-test` kernel. It stops for good only on the first boot after QEMU starts (`watchdog::fresh`), so the check runs two QEMU processes on one disk:
+1. **The first:** slot B's trial stops past `init`'s mark, the TCO timer resets the machine, and slot A boots with B's one try spent. A's updater keeps the watchdog's restart in `refused`.
+2. **The second**, started afresh, boots slot A: A stops past its own mark, and the timer resets it. At the boot after that, the boot records still name B's trial fallen back to A, and `last-run` names A.
+
+The check asks:
+- that the updater says `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`;
+- that it keeps no new reason;
+- that `refused` holds B's refusal as before.
+
+**Runs:** two here, in QEMU (x86 q35, 4 CPUs, this session's container), on round 158's candidate merged with this branch. Each passed, in 128 s. The lines of the second boot of A:
+- `SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts, video_gw …`;
+- `[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version not known in slot B, falling back to slot A; THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING`;
+- `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`.
+
+**On Effector's machines** (`6fd343ffcf`, `main` merged): x32, `x86: the watchdog` PASS, 467 s, with the check's line `PASS: watchdog: slot A stopped for good on a run of its own after slot B's trial fell back to it, and the TCO timer reset it; …`.
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done), [801-KRN-0259](../issues-done/801-KRN-0259-the-pchs-over-clocking-watchdog.done), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
+
+## Resolution
+
+Done (2026-11-20).
+- **Criterion 1:** in `main` since round 158 (`7a1e938a6b`). The x86 `watchdog` suite's `watchdog_reset_trial`.
+- **Criterion 2:** in `main` since round 160 (`dba0853c13`). The `watchdog` suite's `own_freeze_after_a_fallback`: slot A's own freeze, after slot B's trial fell back to it, is no reason of B's. It ran in round 160's gate (i9, 492 s).
+- **Criterion 3:** `init.wit` 1.15 in docs/idl.
+
+**Not covered here:** a trial that stops before `init` sets its mark, or after `init` cleared it a minute past `READY`. That is 801-UPD-0046, on `claude/801-UPD-0046-a-trial-reset-with-no-mark`, not yet in `main`.

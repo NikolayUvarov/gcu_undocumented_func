@@ -52,6 +52,8 @@ struct Keys {
     lock: lock::Lock, tpm: bool, serial: [u8; 16],
     // Whether the boot is on trial, and whether the key held is the one the disk keeps, not one for this boot (801-NET-0079).
     trial: bool, kept: bool, release: [u8; 32],
+    // A key a TPM sealed is there and no TPM answered or unsealed it: asked again from `next_try` on (801-NET-0087).
+    awaiting: bool, next_try: usize,
 }
 
 // A key held: the one the disk keeps, or one for this boot only, which nothing is written under (801-NET-0079).
@@ -61,16 +63,26 @@ enum Held { Kept, ThisBoot }
 // How long a TPM that does not answer at the start is waited for while a key it sealed is there.
 const TPM_WAIT_MS: usize = 5000;
 const TPM_STEP_MS: usize = 250;
+// Then how often it is asked again, and how long each call may take, so that a TPM service that stopped holds nothing up.
+const TPM_RETRY_MS: usize = 10_000;
+const TPM_CALL_MS: u32 = 5000;
+// The test build's first minute without a TPM (late-tpm-test).
+#[cfg(feature = "late-tpm-test")]
+const LATE_TEST_MS: usize = 60_000;
 
 impl Keys {
     fn new(trial: bool, release: &[u8; 32]) -> Self {
         if trial { mind::println!("[KEYSTORE] THE BOOT IS ON TRIAL: NOTHING IN {} THE SLOT BEFORE READS IS WRITTEN, MOVED OR REMOVED UNTIL A BOOT NOT ON TRIAL", stored::DIR); }
         let mut keys = Self { key: None, certificate: Vec::new(), usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi: None, served: 0, hosted: 0, minute: mind::time::uptime_ms(),
-                              secrets: secrets::Clients::new(), lock: lock::Lock::new(), tpm: tpm(), serial: [0; 16], trial, kept: false, release: *release };
+                              secrets: secrets::Clients::new(), lock: lock::Lock::new(), tpm: tpm(), serial: [0; 16], trial, kept: false, release: *release, awaiting: false, next_try: 0 };
         // Without the random source no key is made or used: the service fails closed, as the TLS service does.
         if !random(&mut keys.serial) { return keys; }
         let mut seed = [0u8; 32];
-        if let Some(held) = Self::seed(&mut seed, keys.tpm, &mut keys.lock, trial) { keys.hold(&seed, held, release); }
+        if let Some(held) = Self::seed(&mut seed, keys.tpm, &mut keys.lock, trial, &mut keys.awaiting) { keys.hold(&seed, held, release); }
+        if keys.awaiting {
+            keys.next_try = mind::time::uptime_ms() + TPM_RETRY_MS;
+            mind::println!("[KEYSTORE] THE TPM IS ASKED AGAIN EVERY {} S: THE KEY IT SEALED IS HELD ONCE IT ANSWERS", TPM_RETRY_MS / 1000);
+        }
         // The seed is the private key: wipe the stack copy (SigningKey wipes its own on drop).
         stored::wipe(&mut seed);
         keys
@@ -146,10 +158,10 @@ impl Keys {
     // The stored seed, or a new one made and stored (351-NET-0005); none without the random source, and where a
     // passphrase seals it (`lock` then holds the file it waits on) or a sealed file does not open (1.6). A key that is
     // there but does not open is never replaced on a boot on trial, nor one a TPM sealed while no TPM answers (801-NET-0079).
-    fn seed(seed: &mut [u8; 32], tpm: bool, lock: &mut lock::Lock, trial: bool) -> Option<Held> {
+    fn seed(seed: &mut [u8; 32], tpm: bool, lock: &mut lock::Lock, trial: bool, awaiting: &mut bool) -> Option<Held> {
         if tpm {
             if lock::present() { mind::println!("[KEYSTORE] {} LEFT AS IT IS: THE TPM SEALS THE DEVICE KEY, NOT A PASSPHRASE", passlock::FILE); }
-            return Self::sealed_seed(seed, trial);
+            return Self::sealed_seed(seed, trial, awaiting);
         }
         // A key sealed under a passphrase is never replaced: a file that does not open leaves no key, and stays.
         let kept = |why: core::fmt::Arguments| { mind::println!("[KEYSTORE] {} {}: NO DEVICE KEY, THE FILE LEFT AS IT IS AND NO NEW KEY MADE", passlock::FILE, why); None };
@@ -168,6 +180,7 @@ impl Keys {
         // A key a TPM sealed, and no TPM answers this boot: it may answer at the next, so nothing is replaced (801-NET-0079).
         if stored::sealed_present() {
             mind::println!("[KEYSTORE] THE DEVICE KEY IS SEALED BY A TPM IN {}, BUT NO TPM ANSWERS: A KEY FOR THIS BOOT ONLY, NOTHING IN {} CHANGED", stored::SEALED, stored::DIR);
+            *awaiting = true;
             return this_boot(seed);
         }
         mind::println!("[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED");
@@ -198,7 +211,7 @@ impl Keys {
     // With a TPM (351-NET-0006): the sealed key; a key kept unencrypted before is sealed, and its file removed; a blob
     // this TPM does not open (another machine's, or a TPM cleared since) is replaced by a new key. On a boot on trial the
     // sealing and the removal wait, and nothing is replaced (801-NET-0079).
-    fn sealed_seed(seed: &mut [u8; 32], trial: bool) -> Option<Held> {
+    fn sealed_seed(seed: &mut [u8; 32], trial: bool, awaiting: &mut bool) -> Option<Held> {
         let made = |seed: &mut [u8; 32], why: &str| -> Option<Held> {
             if !random(seed) { return None; }
             match stored::seal(seed) {
@@ -245,7 +258,33 @@ impl Keys {
             stored::Unsealed::Damaged => replaced(seed, stored::SEALED, |seed| made(seed, " ANEW: THE SEALED ONE WAS DAMAGED")),
             stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}: A KEY FOR THIS BOOT ONLY, THE FILE LEFT AS IT IS", error); this_boot(seed) }
             // The sealed key is kept for the next boot: a key for this boot only.
-            stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); this_boot(seed) }
+            stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); *awaiting = true; this_boot(seed) }
+        }
+    }
+
+    // A key a TPM sealed, while the key held is one for this boot only: once the TPM answers and unseals it, it is held in
+    // its place, with the networks and secrets under it (801-NET-0087). Nothing is written: the files are as they were.
+    fn retry_tpm(&mut self) {
+        let now = mind::time::uptime_ms();
+        if !self.awaiting || now < self.next_try { return; }
+        self.next_try = now + TPM_RETRY_MS;
+        if !answers(TPM_CALL_MS) { return; }
+        self.tpm = true;
+        match mind::idl::wire::with_timeout(TPM_CALL_MS, stored::unseal) {
+            stored::Unsealed::Seed(mut unsealed) => {
+                self.awaiting = false;
+                mind::println!("[KEYSTORE] THE TPM ANSWERS NOW: DEVICE KEY FROM {} (SEALED BY THE TPM), HELD IN PLACE OF THE ONE FOR THIS BOOT", stored::SEALED);
+                let release = self.release;
+                self.hold(&unsealed, Held::Kept, &release);
+                stored::wipe(&mut unsealed);
+            }
+            // Asked again: the service may be starting, or the file be read at the next try.
+            stored::Unsealed::Failed | stored::Unsealed::Unreadable(_) => {}
+            other => {
+                self.awaiting = false;
+                let why = match other { stored::Unsealed::Missing => "IS NOT THERE", stored::Unsealed::Refused => "DOES NOT OPEN ON THIS TPM", _ => "IS DAMAGED" };
+                mind::println!("[KEYSTORE] THE TPM ANSWERS NOW, BUT THE SEALED KEY {}: THE KEY FOR THIS BOOT ONLY STAYS, NOTHING CHANGED", why);
+            }
         }
     }
 
@@ -330,12 +369,21 @@ fn untouched(seed: &mut [u8; 32], why: &str) -> Option<Held> {
 
 // Whether the TPM answers; while a key it sealed is there, it is waited for a few seconds, as its service may be starting.
 fn tpm() -> bool {
+    if !stored::sealed_present() { return answers(0); }
     let start = mind::time::uptime_ms();
     loop {
-        if stored::tpm() { return true; }
-        if !stored::sealed_present() || mind::time::uptime_ms() - start >= TPM_WAIT_MS { return false; }
+        if answers(TPM_CALL_MS) { return true; }
+        if mind::time::uptime_ms() - start >= TPM_WAIT_MS { return false; }
         mind::time::sleep(TPM_STEP_MS);
     }
+}
+
+// Whether the TPM service says it has a TPM, its call given up after `ms` (0: no limit); in the late-tpm-test build, not
+// in the boot's first minute.
+fn answers(ms: u32) -> bool {
+    #[cfg(feature = "late-tpm-test")]
+    if mind::time::uptime_ms() < LATE_TEST_MS { return false; }
+    mind::idl::wire::with_timeout(ms, stored::tpm)
 }
 
 // Random bytes, or a line in the log saying the service has no key without them.
@@ -352,7 +400,10 @@ fn main(info: &'static BootInfo) {
     // A secret's value passes through here: the copy is wiped after each request that carried one.
     let mut scratch = alloc::boxed::Box::new([0u8; keystore::REQUEST_MAX]);
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        // While a sealed key waits for its TPM, a request or the retry period, whichever comes first (801-NET-0087).
+        keys.retry_tpm();
+        let wait = if keys.awaiting { TPM_RETRY_MS as u32 } else { 0 };
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
         if !request.is_call { continue; }
         let mut carried = false;
         let _ = match keystore::decode(&request, RECEIVED, &mut scratch) {
