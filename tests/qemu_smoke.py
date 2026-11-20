@@ -14461,22 +14461,19 @@ def kernel_stopped_release(args, temp, image, server, server_tree, agent, extra,
         log_path("p1").write_text(vm.log)
     chosen = boot_slots.newest(boot_slots.records(image.path))[1]
     assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 1, False), chosen
-    # Slot B on trial: its kernel panics at init's first log line, records it and restarts into the fallback.
-    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, rtc="utc", ahci=True, extra=extra)
+    # Slot B on trial, then slot A, in one run of QEMU: without flash, OVMF keeps a variable written after the boot
+    # services only in memory, which a restart keeps and a new QEMU does not. B's kernel panics at init's first log line,
+    # records it and restarts into the fallback; A's kernel names B's panic, init takes the record, the updater keeps
+    # it, and the agent reports it.
+    beats_then = len(server.beats)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, rtc="utc", ahci=True, extra=extra)
     try:
         vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
-        restarted(vm, 300)
-    finally:
-        vm.close()
-        log_path("p2").write_text(vm.log)
-    require_all(ANSI.sub("", vm.log), "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK")
-    # Slot A again: its kernel names B's panic, init takes the record, the updater keeps it; the agent reports it.
-    beats_then = len(server.beats)
-    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=True, extra=extra)
-    try:
-        boot = ANSI.sub("", vm.log)
-        require_all(boot, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED",
-                    "MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:")
+        trial = vm.expect("BOOT: SLOT A LOADED", timeout=300)
+        require_all(ANSI.sub("", trial), "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK",
+                    "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        vm.expect("MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=60)
+        vm.expect("MIND> ", timeout=180)
         logged(vm, "init", "[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at src/scheduler.rs:", 120)
         logged(vm, "updater", "[UPDATER] SLOT B'S TRIAL OF VERSION 7 FELL BACK TO THIS SLOT: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at ", 120)
         # S2: the server hears the version, the slots and the panic's line, in the heartbeat and in the answer.
