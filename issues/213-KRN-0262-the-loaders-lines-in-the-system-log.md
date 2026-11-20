@@ -1,6 +1,6 @@
 # 213-KRN-0262 — The loader's lines in the system log, the graphics outputs among them
 
-**Type:** `bootloader`, kernel (`kernel/src/firmware.rs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (2026-11-19) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `bootloader`, kernel (`kernel/src/firmware.rs`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (2026-11-20; in `main` since round 155, the Ryzen's boot left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -54,6 +54,8 @@ On `fe559655c9`, whose loader and kernel are the same:
 2. Then a `dmesg` run there moved the next program's PID.
 
 It is now in `efivar_check`, at two boots in a row.
+
+**Landed in round 155** (`main` `20a8df9e6c2a`, gate GREEN with BLT's 700-BLT-0003 and DRV's 158-DRV-0072).
 
 **The Ryzen's boot is left** (DRV).
 
