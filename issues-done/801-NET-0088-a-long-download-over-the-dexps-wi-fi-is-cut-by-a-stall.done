@@ -84,7 +84,8 @@ The agent starts a cut download again from its first byte. Every try then needs 
   - `netbench` on QEMU's user networking showed no change, as its round trip is short.
 - **The stall line** (round 152, `main` `ae50162c6c`): a stream that stops while its client reads is named once after 5 s, with its peer, state, queue and unsent bytes, and again when its bytes come.
   - The `download` suite's check shows it on x86 and aarch64.
-  - No bench machine has shown it.
+  - No bench machine had shown it when this closed. Later the same day the Ryzen did (DRV's message to EFF, `EFF/2026-11-19T2235Z-DRV-a-release-download-broken-by-one-5-s-stall-on-the-ryzen.md`; `fast-test` 92c2c6e9, Wi-Fi only; MC-12.1: that machine). The line was `[NETSTACK] TCP SOCKET 1 TO 37.140.216.52:443: NOTHING RECEIVED FOR 5001 MS WHILE ITS CLIENT READS (ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT)`, 1.6 s before the agent's `BODY: Transport`.
+  - The radio had gone quiet under the same chip's Bluetooth inquiries (700-BLT-0003). The cut download is the case EFF's `Range` request covers.
 - **Not done here:**
   - `Range` for a cut download is EFF's, asked in `requests-EFF.md`;
   - `netbench` on a tap device needs a `mindtap0` the maintainer makes.
