@@ -46,7 +46,18 @@ struct Device {
 // slots (213-DRV-0048).
 // `no_isochronous`: the controller stopped with an error once while it streamed, and was set up again: it takes no stream
 // any more (000-DRV-0073).
-struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64], no_isochronous: bool }
+// `suspects`: devices the controller stopped answering at while they were set up, by root port and route (0: on the root
+// port itself); they are left alone, across the controller's new set-up, until unplugged (000-DRV-0075). `restarts`: the
+// times it was set up again, each within 10 minutes of the one before; `since`: the uptime it was set up at, in ms.
+struct Controller {
+    xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64], no_isochronous: bool,
+    suspects: [Option<(u8, u32)>; 4], restarts: u8, since: u64,
+}
+
+// A controller set up again this many times in a row, 10 minutes apart at most, is left off: something on it stops it
+// whatever is left alone (000-DRV-0075).
+const MAX_RESTARTS: u8 = 8;
+const RESTARTS_APART_MS: u64 = 600_000;
 
 struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2] }
 
@@ -260,17 +271,38 @@ impl Controller {
         Some((u16::from_le_bytes([s[0], s[1]]), u16::from_le_bytes([s[2], s[3]])))
     }
 
+    fn suspect(&self, root: u8, route: u32) -> bool { self.suspects.contains(&Some((root, route))) }
+
+    // A device the controller stopped answering at: left alone until unplugged (000-DRV-0075).
+    fn add_suspect(&mut self, root: u8, route: u32, port: core::fmt::Arguments) {
+        mind::println!("[USB] {}PORT {}: THE CONTROLLER STOPPED ANSWERING AT ITS DEVICE'S {}: THE DEVICE IS LEFT ALONE UNTIL IT IS UNPLUGGED", Tag(self.xhci.number), port, self.step);
+        if self.suspect(root, route) { return; }
+        let at = self.suspects.iter().position(Option::is_none).unwrap_or(0);
+        self.suspects[at] = Some((root, route));
+    }
+
+    // Nothing on a port any more: the devices left alone there (any route, for a root port) may be tried again.
+    fn forget_suspects(&mut self, root: u8, route: Option<u32>) {
+        for s in self.suspects.iter_mut().filter(|s| s.is_some_and(|(r, t)| r == root && route.is_none_or(|x| x == t))) {
+            mind::println!("[USB] {}A DEVICE LEFT ALONE ON PORT {} IS GONE", Tag(self.xhci.number), root);
+            *s = None;
+        }
+    }
+
     /// Looks at every root and hub port: new devices are set up, gone ones removed.
     fn scan(&mut self) {
+        if self.xhci.stuck { return; } // set up again first
         for port in 1..=self.xhci.ports().min(64) {
             let changed = self.xhci.acknowledge(port);
             let connected = self.xhci.connected(port);
             let present = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent.is_none() && d.root as usize == port));
             if changed { self.root_failed &= !(1 << (port - 1)); self.root_tries[port - 1] = 0; mind::println!("[USB] {}PORT {}: {} (PORTSC {:08X})", Tag(self.xhci.number), port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
-            if !connected || self.root_failed & 1 << (port - 1) != 0 { continue; }
+            if !connected { self.forget_suspects(port as u8, None); }
+            if !connected || self.root_failed & 1 << (port - 1) != 0 || self.suspect(port as u8, 0) { continue; }
             self.step = "PORT RESET"; self.xhci.last = 0;
             let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
+            if self.xhci.stuck { self.add_suspect(port as u8, 0, format_args!("{}", port)); return; }
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
             // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
             // Three tries a connection, a scan apart: a device that is slow after the firmware let it go may answer later.
@@ -291,6 +323,7 @@ impl Controller {
             }
             if let Some(d) = self.devices[hub].as_mut() { d.pending = 0; }
             for port in (1..=device.hub_ports).filter(|&p| pending & 1 << p != 0) {
+                if self.xhci.stuck { return; }
                 let Some((status, change)) = self.hub_port(hub, port) else { break };
                 if change & hub::CHANGED_CONNECTION != 0 { let _ = self.control(hub, 0x23, 1, hub::C_PORT_CONNECTION, port as u16, 0); } // CLEAR_FEATURE
                 // The other changes (a SuperSpeed hub's link state among them) cleared, so the hub stops reporting them.
@@ -300,13 +333,16 @@ impl Controller {
                 let child = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent == Some((hub, port))));
                 let connected = status & hub::CONNECTED != 0;
                 if let Some(index) = child { if !connected || change & 1 != 0 { self.remove(index); } else { continue; } }
-                if !connected || self.devices[hub].is_none_or(|d| d.failed & bit != 0) { continue; }
+                let route = device.route | (port as u32) << (4 * device.depth as u32);
+                if !connected { self.forget_suspects(device.root, Some(route)); }
+                if !connected || self.devices[hub].is_none_or(|d| d.failed & bit != 0) || self.suspect(device.root, route) { continue; }
                 self.step = "HUB PORT RESET"; self.xhci.last = 0;
                 let set_up = self.reset_hub_port(hub, port).and_then(|speed| {
                     let hub_device = self.devices[hub]?;
                     let route = hub_device.route | (port as u32) << (4 * hub_device.depth as u32);
                     self.enumerate(hub_device.root, route, hub_device.depth + 1, speed, Some((hub, port)))
                 });
+                if self.xhci.stuck { self.add_suspect(device.root, route, format_args!("{}.{}", Path(device.root, device.route), port)); return; }
                 if self.hub_port(hub, port).is_some_and(|(_, change)| change & 1 != 0) { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); }
                 if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] {}PORT {}.{}: DEVICE NOT SET UP AT {} (COMPLETION {})", Tag(self.xhci.number), Path(device.root, device.route), port, self.step, self.xhci.last); }
             }
@@ -830,7 +866,7 @@ fn main(_info: &'static BootInfo) {
         // streams: it takes no stream until that is understood (000-DRV-0073), and a USB audio device falls to the codec.
         let amd = config(0) & 0xFFFF == 0x1022;
         if amd { mind::println!("[USB] {}AMD CONTROLLER: NO ISOCHRONOUS STREAM ON IT YET (000-DRV-0073)", tag); }
-        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: amd });
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: amd, suspects: [None; 4], restarts: 0, since: mind::time::uptime_ms() as u64 });
     }
     if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
@@ -857,14 +893,23 @@ fn main(_info: &'static BootInfo) {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
         for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.watch_streams(); } }
         // A controller that stopped with an error is set up again, its devices found anew by the next scan, and it takes
-        // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073).
+        // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073). So is
+        // one that left a command unanswered, the device it stopped at left alone (000-DRV-0075): the boot stick and
+        // the Bluetooth on the Ryzen's first AMD xHCI were lost with it, when a speakerphone was plugged in there.
         for slot in host.roots.iter_mut() {
-            if !slot.as_ref().is_some_and(|r| r.xhci.failed()) { continue; }
+            if !slot.as_ref().is_some_and(|r| r.xhci.failed() || r.xhci.stuck) { continue; }
             let Some(old) = slot.take() else { continue };
             let (number, status, generation) = (old.xhci.number, old.xhci.status(), old.generation);
-            mind::println!("[USB] {}THE CONTROLLER STOPPED WITH AN ERROR (USBSTS {:08X}): SET UP AGAIN, ITS DEVICES FOUND ANEW, NO STREAM ON IT FROM NOW", Tag(number), status);
+            let halted = old.xhci.failed();
+            let no_isochronous = old.no_isochronous || halted || old.xhci.streaming();
+            if halted { mind::println!("[USB] {}THE CONTROLLER STOPPED WITH AN ERROR (USBSTS {:08X}): SET UP AGAIN, ITS DEVICES FOUND ANEW, NO STREAM ON IT FROM NOW", Tag(number), status); }
+            else { mind::println!("[USB] {}THE CONTROLLER LEFT A COMMAND UNANSWERED (USBSTS {:08X}): SET UP AGAIN, ITS DEVICES FOUND ANEW{}", Tag(number), status, if no_isochronous { ", NO STREAM ON IT" } else { "" }); }
+            let now = mind::time::uptime_ms() as u64;
+            let restarts = if now.saturating_sub(old.since) > RESTARTS_APART_MS { 1 } else { old.restarts.saturating_add(1) };
+            if restarts > MAX_RESTARTS { mind::println!("[USB] {}THE CONTROLLER WAS SET UP AGAIN {} TIMES IN A ROW: LEFT OFF", Tag(number), old.restarts); continue; }
+            let suspects = old.suspects;
             match old.xhci.start_again() {
-                Some(xhci) => *slot = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: generation.wrapping_add(1), root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: true }),
+                Some(xhci) => *slot = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: generation.wrapping_add(1), root_failed: 0, step: "", root_tries: [0; 64], no_isochronous, suspects, restarts, since: now }),
                 None => mind::println!("[USB] {}THE CONTROLLER DID NOT START AGAIN", Tag(number)),
             }
         }

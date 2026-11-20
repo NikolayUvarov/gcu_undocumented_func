@@ -54,7 +54,13 @@
   - such a controller is set up again at once, its devices found anew, and it takes no stream afterwards;
   - the link's converter, on the same controller, comes back within a second;
   - `audio_gw` goes back to the codec until the device is plugged in again.
+- **Straight into a root port of the first AMD xHCI** (05:00.3, port 1, in camera 1's place; the boot stick and the Bluetooth are on that controller), the speakerphone stops the controller at its first control transfer, before any stream:
+  - in MIND Core, ADDRESS DEVICE and ENABLE SLOT got no completion;
+  - in Linux, at boot and again after a PCI remove and rescan, `xHCI host not responding to stop endpoint command … assume dead`;
+  - the STM-Speaker project's own Windows measurements on this machine show a transaction error on the feedback endpoint, then a command timeout and an internal controller reset on PCI 5:0:4.
+
+  So the fault belongs to this device (or its cable) on this AMD controller in every system, not to MIND Core's isochronous TDs alone. 000-DRV-0075 keeps such a controller in use: it is set up again, and the device is left alone. **Next:** the speakerphone on the DEXP's Intel xHCI, and another cable for its CN13.
 
 ## Related
 
-[213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
+[000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.md) (an xHCI that stops answering is set up again), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
