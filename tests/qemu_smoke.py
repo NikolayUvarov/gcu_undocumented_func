@@ -14469,9 +14469,14 @@ def kernel_stopped_release(args, temp, image, server, server_tree, agent, extra,
     vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, rtc="utc", ahci=True, extra=extra)
     try:
         vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
-        trial = vm.expect("BOOT: SLOT A LOADED", timeout=300)
-        require_all(ANSI.sub("", trial), "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK",
-                    "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        # The panic's report, which expect() takes for a failure: read from the output, and the output cut after it.
+        deadline, restarting = time.monotonic() + 120, "TRIAL: RESTARTING INTO THE FALLBACK"
+        report = re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n(.*\n)*THE FAULT IS RECORDED FOR THE NEXT BOOT\n(.*\n)*" + restarting)
+        while not report.search(vm.output.replace("\r", "")):
+            assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-3000:]
+            vm.collect(); time.sleep(.05)
+        vm.output = vm.output[vm.output.index(restarting) + len(restarting):]
+        require(vm.expect("BOOT: SLOT A LOADED", timeout=300), "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
         vm.expect("MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:", timeout=60)
         vm.expect("MIND> ", timeout=180)
         logged(vm, "init", "[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at src/scheduler.rs:", 120)
