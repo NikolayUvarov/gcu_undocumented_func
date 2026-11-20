@@ -16,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 14, 0);
+pub const VERSION: (u8, u8, u8) = (1, 15, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -173,6 +173,17 @@ impl Wire for Fault {
     const MAX: usize = <u8 as Wire>::MAX + <FaultKind as Wire>::MAX + <Text<160> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.kind.encode(w)?; self.line.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, kind: Wire::decode(r)?, line: Wire::decode(r)? }) }
+}
+
+/// The last run that did not end as asked (1.15, 801-UPD-0045): its slot (`BOOT_SLOT_*`), from the run's mark init
+/// read as this boot started (000-KRN-0217), and whether the platform's watchdog restarted it (ABI 34's
+/// `BOOT_WATCHDOG_RESTARTED`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unfinished { pub slot: u8, pub watchdog: bool }
+impl Wire for Unfinished {
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.watchdog.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, watchdog: Wire::decode(r)? }) }
 }
 
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
@@ -404,6 +415,22 @@ pub fn last_fault(endpoint: Endpoint) -> Result<core::result::Result<Fault, Erro
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Fault as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// That run, when it left a mark this init reads; `not-found` when the last run ended as asked or left none. The
+/// updater of the slot a trial fell back to reports the watchdog's restart of that trial's run as its refusal. Any
+/// client may ask.
+pub fn last_run(endpoint: Endpoint) -> Result<core::result::Result<Unfinished, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 17 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Unfinished as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -423,6 +450,7 @@ pub enum Request {
     StopNotice,
     AgentStep { step: AgentStep, detail: Text<64> },
     LastFault,
+    LastRun,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -539,6 +567,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::LastFault, call))
         }
+        17 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 2, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::LastRun, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -604,6 +639,10 @@ pub fn reply_agent_step(call: Call, value: core::result::Result<(), Error>) -> R
     wire::reply_buffer(call, |_| Some(()))
 }
 pub fn reply_last_fault(call: Call, value: core::result::Result<&Fault, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_last_run(call: Call, value: core::result::Result<&Unfinished, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

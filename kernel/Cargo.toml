@@ -19,6 +19,7 @@ bar-move-test = [] # packs a small BAR into another device's page, as Apple's fi
 protection-test = [] # x86: the kernel reads and jumps into a program's page once; SMAP and SMEP must fault (000-KRN-0039)
 xsave-pad-test = [] # the vector area padded to AMX's size (11 KiB), for the larger frames QEMU cannot emulate (174-KRN-0037)
 watchdog-test = [] # every CPU stopped for good 20 s after the machine's first boot on x86, after each boot on aarch64, and a trial boot at once once the watchdog is armed, for the watchdog to reset (000-KRN-0076, 100004-PRT-0015, 801-KRN-0258)
+watchdog-late-test = [] # x86: every CPU stopped for good 20 s after a boot the watchdog did not restart, a trial's too, past init's run mark, for the fallback to name the watchdog (801-UPD-0045)
 tsc-skew-test = [] # x86: the TSC's first measure 9% high, as a stretched calibration left it; measured again at 1 s (000-KRN-0100)
 
 [profile.release]

@@ -9186,18 +9186,42 @@ def test_timestamp(channel_file, version, hours=24, seeds=None, channel="stable"
     return body + release_tool.signature_lines(body, seeds or [release_tool.TEST_TIMESTAMP_SEED])
 
 
+def interleaved(text, line, slack=1):
+    """Whether `line` is in `text` whole, or with bytes of another writer between its own (000-KRN-0266): init lends the
+    console UART to the shell (COM1's ports, a PL011's page), which writes it while the kernel writes a line of its own,
+    and no lock of the kernel's orders the two. The other writer's bytes may come to `slack` times the line's length."""
+    if line in text:
+        return True
+    window = len(line) * (1 + slack)
+    start = text.find(line[0])
+    while start >= 0:
+        at, end = start, min(len(text), start + window)
+        for char in line[1:]:
+            at = text.find(char, at + 1, end)
+            if at < 0:
+                break
+        else:
+            return True
+        start = text.find(line[0], start + 1)
+    return False
+
+
 def trial_confirmed(vm, since, timeout, slot="B"):
     """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT
     <slot> LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot
-    answered took those lines with it (000-KRN-0210)."""
-    deadline, clean = time.monotonic() + timeout, ""
+    answered took those lines with it (000-KRN-0210). The kernel's line may come with the shell's bytes inside it
+    (000-KRN-0266), so it is looked for that way too, once a second."""
+    deadline, clean, looked = time.monotonic() + timeout, "", 0.0
+    line = "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED"
     while time.monotonic() < deadline:
         vm.collect()
-        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+        mixed = time.monotonic() - looked > 1 and vm.log.find(f"BOOT: SLOT {slot} LOADED ON TRIAL", since) >= 0
+        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or mixed or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+            looked = time.monotonic()
             clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean[-3000:])
-            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2]:
+            if interleaved(clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2], line):
                 vm.output = ""
                 return clean
         if vm.process.poll() is not None:
@@ -18168,6 +18192,51 @@ def watchdog_suite(args, disk):
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-hung-") as temp:
         boot_slots_check.hung_trial(restarting, temp, disk, disk / "kernel.elf", "x86")
+    if args.watchdog_late_kernel:
+        watchdog_reset_trial(args, disk)
+
+
+def watchdog_reset_trial(args, disk):
+    """801-UPD-0045: slot B on trial holds the `watchdog-late-test` kernel, which stops every CPU 20 s into a boot the
+    watchdog did not restart, past init's run mark. init holds the trial for the Effector server's word (an agent that
+    cannot read its configuration), so the trial is still open when it stops. The TCO timer resets the machine, the loader
+    boots slot A, B's one try spent, and A's updater keeps the watchdog's restart as the trial's refusal."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-watchdog-trial-"))
+    volume, other = temp / "volume", temp / "other"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    for name, data in {"data/mode.conf": b"development\n", "data/effector/effector.conf": b"effector-config 1\nnot a line of the configuration\n"}.items():
+        (volume / name).parent.mkdir(parents=True, exist_ok=True)
+        (volume / name).write_bytes(data)
+    sign_manifest.sign_volume(volume)
+    shutil.copytree(volume, other)
+    (other / "kernel.elf").write_bytes(Path(args.watchdog_late_kernel).read_bytes())
+    sign_manifest.sign_volume(other)
+    slots = boot_slots.layout(volume, temp / "slots", both=True)
+    for name in boot_slots.boot_set(other):
+        shutil.copyfile(other / name, slots / "MIND" / "B" / name)
+    image = boot_slots.Image.create(temp / "watchdog-trial.img", slots)
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    why = "THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING"
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        out = vm.expect("BOOT: SLOT A LOADED", timeout=240)
+        require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+        vm.expect("A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        line = re.search(r"\[UPDATER\] SLOT B'S TRIAL OF VERSION (\d+|not known) FELL BACK TO THIS SLOT: " + re.escape(why), log)
+        assert line, log[-3000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-watchdog-trial-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: watchdog: a trial that stopped for good past init's run mark, while init held it for the server's word, "
+          "was reset by the chipset's TCO timer; slot A booted with B's try spent, and its updater kept the watchdog's "
+          "restart as the trial's refusal, from init's `last-run` (801-UPD-0045)", flush=True)
 
 
 def no_serial_check(args, disk):
@@ -19340,6 +19409,7 @@ def main():
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
+    parser.add_argument("--watchdog-late-kernel", help="test-only kernel built with --features watchdog-late-test (watchdog suite, 801-UPD-0045)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
