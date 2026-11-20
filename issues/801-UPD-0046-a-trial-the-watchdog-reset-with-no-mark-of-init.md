@@ -31,9 +31,9 @@ Then the slot it fell back to logs `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS S
 
 ## Acceptance criteria
 
-- [ ] A trial the watchdog restarted, with no mark of `init`'s, is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
-- [ ] A later boot of the fallback slot, with the same newer record, does not ask how the trial ended and keeps nothing new (QEMU, x86).
-- [ ] The groups that run 801-UPD-0044's and 0045's checks pass: `x86: boot, display, shell, memory, clock` and `x86: the watchdog`.
+- [x] A trial the watchdog restarted, with no mark of `init`'s, is reported with that step, in the update state's failure and in `refused` (QEMU, x86).
+- [x] A later boot of the fallback slot, with the same newer record, does not ask how the trial ended and keeps nothing new (QEMU, x86).
+- [x] The groups that run 801-UPD-0044's and 0045's checks pass: `x86: boot, display, shell, memory, clock` and `x86: the watchdog`.
 
 **Not covered:** the first boot of the fallback slot itself stopped by the watchdog before its updater kept the record's sequence. The boot after it would take that restart for the trial's.
 
@@ -55,7 +55,18 @@ Then the slot it fell back to logs `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS S
 - `own_freeze_after_a_fallback` in 127 s.
 - `own_fault_after_a_fallback` in 56 s.
 
-The x86 boot and watchdog groups on Effector's machines are left before landing.
+**On Effector's machines** (`f94d1f3fb4`, `main` `28b5b8dc22` merged), each PASS:
+
+| Group | Machine | Time |
+|---|---|---|
+| x86: boot, display, shell, memory, clock | i9 | 1770 s |
+| x86: the watchdog | x32 | 512 s |
+| x86: a release that loses the server, rolled back | x32 | 727 s |
+| x86: the updater and an update through the link | x32-2 | 1373 s |
+| aarch64: the updater and the modes | acc-1 | 1169 s |
+| aarch64: a release that loses the server, rolled back | acc-1 | 711 s |
+
+The watchdog group's own lines were not kept, since it passed; the lines above are from the runs here.
 
 ## Related
 
