@@ -1204,14 +1204,15 @@ impl Updater {
     /// is kept here as that trial's refusal the way init's are (801-UPD-0037), so that the agent reports it until a trial
     /// is confirmed (801 S2). Asked before any request is served, so that the state names it from the first answer on.
     /// `version` is the other slot's (0: not known).
-    fn fell_back(&mut self, version: u64, restarted: bool) {
+    /// Whether `init` answered: else a later boot asks again.
+    fn fell_back(&mut self, version: u64, restarted: bool) -> bool {
         let (other, asked) = (plan::other(self.slot), mind::time::uptime_ms());
         let fault = loop {
             match wire::with_timeout(ASK_MS as u32, || init::last_fault(Endpoint(SLOT_LIFECYCLE))) {
                 Err(mind::sys::Error::Other(ERR_TIMEOUT)) if mind::time::uptime_ms() - asked < FAULT_WAIT_MS => continue,
                 Ok(Ok(fault)) => break Some(fault),
                 Ok(Err(_)) => break None,
-                Err(error) => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; INIT DID NOT SAY HOW IT ENDED ({:?})", slot_name(other), error),
+                Err(error) => { mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; INIT DID NOT SAY HOW IT ENDED ({:?})", slot_name(other), error); return false }
             }
         };
         use init::FaultKind::*;
@@ -1226,16 +1227,18 @@ impl Updater {
                 Ok(Ok(run)) if run.watchdog => (run.slot, String::from(WATCHDOG_WHY)),
                 // No mark: the run restarted was the boot before this first one after the fallback, the trial's (801-UPD-0046).
                 Ok(Err(init::Error::NotFound)) if restarted => ((if other == b'A' { BOOT_SLOT_A } else { BOOT_SLOT_B }) as u8, String::from(WATCHDOG_WHY)),
-                _ => return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL RECORDED NO FAULT OF ITS RUN, NOR THE WATCHDOG A RESTART", slot_name(other)),
+                _ => { mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL RECORDED NO FAULT OF ITS RUN, NOR THE WATCHDOG A RESTART", slot_name(other)); return true }
             },
         };
         if slot as u32 != if other == b'A' { BOOT_SLOT_A } else { BOOT_SLOT_B } {
-            return mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON", slot_name(other));
+            mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON", slot_name(other));
+            return true;
         }
         let version = if version == 0 { String::from("not known") } else { format!("{}", version) };
         let kept = keep_refusal(&version, other, self.slot, &why, "not known");
         self.failure = format!("version {} in slot {}, falling back to slot {}: {}", version, slot_name(other), slot_name(self.slot), why);
         mind::println!("[UPDATER] SLOT {}'S TRIAL OF VERSION {} FELL BACK TO THIS SLOT: {}; {} {}", slot_name(other), version, why, if kept { "KEPT IN" } else { "NOT WRITTEN TO" }, REFUSED);
+        true
     }
 
     // A trial refused before (801-UPD-0037): said at start, and the update state's failure until a trial is confirmed.
@@ -1422,8 +1425,8 @@ fn main(info: &'static BootInfo) {
                 if fell_back_taken() == Some(r.sequence) {
                     mind::println!("[UPDATER] SLOT {}'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD {}): WHAT ENDED IT WAS ASKED THEN", slot_name(r.slot), r.sequence);
                 } else {
-                    updater.fell_back(other, info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0);
-                    if !keep_fell_back(r.sequence) { mind::println!("[UPDATER] {} NOT WRITTEN: A LATER BOOT ASKS AGAIN HOW THE TRIAL ENDED", FELL_BACK); }
+                    let asked = updater.fell_back(other, info.boot_flags & BOOT_WATCHDOG_RESTARTED != 0);
+                    if asked && !keep_fell_back(r.sequence) { mind::println!("[UPDATER] {} NOT WRITTEN: A LATER BOOT ASKS AGAIN HOW THE TRIAL ENDED", FELL_BACK); }
                 }
             }
             _ => {}

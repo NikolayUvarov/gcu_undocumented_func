@@ -40,7 +40,7 @@ Then the slot it fell back to logs `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS S
 ## Progress (2026-11-20)
 
 **Made** on `claude/801-UPD-0046-a-trial-reset-with-no-mark`, on top of 801-UPD-0044's branch (round 159), as the plan says:
-- **`updater`:** `system/updater/fell-back` holds `record n`, written once the fallback was asked about. A later boot with the same newer record says so and asks nothing.
+- **`updater`:** `system/updater/fell-back` holds `record n`, written once `init` answered how the trial ended. When `init` does not answer in 120 s, nothing is written, and the next boot asks again. A later boot with the same newer record says so and asks nothing.
   - At the first boot, `last-run`'s `not-found` with `BOOT_WATCHDOG_RESTARTED` set is taken for the trial's restart.
   - A record or mark of another slot is still no reason of the trial's.
 - **The `watchdog` suite's `hung_trial_reported`**, with that suite's `watchdog-test` kernel in both slots.
