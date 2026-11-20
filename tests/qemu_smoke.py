@@ -1073,10 +1073,6 @@ def hardware_report_check(vm):
         time.sleep(.5)
     size = re.search(r"\[INIT\] HARDWARE REPORT: NO LOG VOLUME, NOT WRITTEN \((\d+) BYTES\)", log)
     assert size and int(size[1]) > 4000, log[-2000:]
-    # 213-KRN-0262: the loader's lines, kept in a volatile variable, reach the system log with the kernel's (U-Boot's
-    # runtime variables are not relied on).
-    if not getattr(vm.args, "uboot", None):
-        require(log, "MIND CORE BOOT: USING GOP ")
 
 
 def normal_suite(vm):
@@ -18663,7 +18659,11 @@ def efivar_check(args, disk):
         vm.send_bytes(answer)
         return vm.expect("MIND> ", timeout=20)
 
+    # 213-KRN-0262: the loader's lines, kept in a volatile variable, reach the system log with the kernel's, which init
+    # copies there under its own name; each boot's own (the second is checked after the firmware's shell).
+    loader = "MIND CORE BOOT: USING GOP "
     try:
+        require(vm.command("dmesg -s init", raw=True), loader)
         require(efivar("efivar", b"n"), "efivar: the firmware's variables were not granted")
         listing = efivar("efivar", b"y")
         current = re.search(r"BootCurrent: ([0-9A-F]{4})", listing)
@@ -18689,11 +18689,13 @@ def efivar_check(args, disk):
         time.sleep(1); vm.collect(); vm.output = ""
         listing = efivar("efivar", b"y")
         assert f"BootCurrent: {current[1]}" in listing and "BootNext: not set" in listing, listing
+        require(vm.command("dmesg -s init", raw=True), loader)
     finally:
         vm.close()
     marked = f"; Boot{network[1]} ({network[2]}) marked as network boot and refused as BootNext and in BootOrder" if network else ""
     print(f"PASS: efivar lists the boot entries after the user allows it (refused without); BootNext {shell[1]} boots the "
-          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed{marked}", flush=True)
+          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed{marked}; both boots' system logs hold "
+          f"the loader's lines (213-KRN-0262)", flush=True)
 
 
 def devicetree_suite(args, disk):
