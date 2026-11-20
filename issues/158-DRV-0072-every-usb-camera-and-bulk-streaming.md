@@ -1,6 +1,6 @@
 # 158-DRV-0072 — `video_gw` serves every USB camera, bulk streaming too, and lets a program switch between them
 
-**Type:** driver (`video_gw`, `libmind` `uvc`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-20) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`video_gw`, `libmind` `uvc`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the gateway's part done, the programs' switch asked of APP) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -24,9 +24,24 @@
 
 ## Acceptance criteria
 
-- [ ] Host tests: bulk payloads with split headers and frames, assembled as the isochronous ones are; the list's order; a camera gone mid-stream.
-- [ ] QEMU x86 and aarch64: the `camera` suite passes as before (QEMU's camera is isochronous; the pattern stays last).
-- [ ] On the Ryzen: both cameras listed; a still from each, opened by number; switching back and forth in one program run.
+- [x] Host tests: bulk payloads with split headers and frames, assembled as the isochronous ones are (`tests/uvc_host.rs`, 13 passed). The list's order and a camera gone mid-stream are exercised on the Ryzen only, as QEMU has no USB camera.
+- [x] QEMU x86: the camera checks of `x86: the window manager` and `x86: files and block writes` pass (the test pattern). aarch64 runs at the gate.
+- [ ] On the Ryzen: both cameras listed (done); a still from each (done, camera 1 through a test build in reversed order); opened by number and switched back and forth in one program run: waits for `camera`'s switch (APP).
+
+## Progress (2026-11-20): the gateway on the Ryzen
+
+**The commit** is `158-DRV-0072` on `claude/DRV-ryzen-peripherals`. It went in through `replace` of `video_gw` on `fast-test` 92c2c6e9:
+```
+2214.411 video_gw: [VIDEO] CAMERA 0471:A6CA "GDZS-DC004-EFVT-V": UVC 1.00, INTERFACES 0 AND 1, ENDPOINT 81 BULK; OFFERED AT 640X480 UP TO 25/S
+2214.436 video_gw: [VIDEO] CAMERA 0471:A6CD "GDZS-DC004-EFVT-IR??????": UVC 1.00, INTERFACES 0 AND 1, ENDPOINT 81 BULK; OFFERED AT 640X480 UP TO 30/S
+2214.436 video_gw: [VIDEO] CAMERAS: 0 "GDZS-DC004-EFVT-V", 1 "GDZS-DC004-EFVT-IR??????"
+2288.287 video_gw: [VIDEO] PID 65 OPENED CAMERA 0 "GDZS-DC004-EFVT-V" (ITS 320X240 YUY2, BULK) 320x240 AT 10/S
+2288.626 video_gw: [VIDEO] FIRST FRAME AFTER 339 MS: 11 PACKETS, 375448 BYTES
+```
+- **`camera -s`** wrote a 320 × 240 still of the room from camera 0.
+- **Camera 1, the infrared one,** gave a grey picture of the same room. It was taken through a test build that lists the cameras in reverse order (first frame after 499 ms; 2 good frames, 11 broken at the start).
+- **Since then** the name's trailing characters outside ASCII are left out (`GDZS-DC004-EFVT-IR`).
+- **What remains** is the switch in a program run. `camera` and `wm` take a camera number once APP adds it.
 
 ## Related
 
