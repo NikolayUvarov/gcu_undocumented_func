@@ -6,7 +6,7 @@
 
 Since [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), the kernel keeps a record of each stop it chooses (a panic, an exception in the kernel, `init`'s exit, an interrupt with no handler) in the firmware variable `MindCoreFault`. The next boot's kernel names it on COM1 and the screen, then deletes it.
 
-**No task can read it.** So the slot a trial fell back to cannot say why the trial ended. [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) needs the record in the updater of that slot.
+**No task can read it.** So the slot a trial fell back to cannot say why the trial ended. [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done) needs the record in the updater of that slot.
 
 **A trial the kernel restarts at its deadline leaves no record at all.** That is a trial `init` never confirmed: a boot service that did not start, the boot volume not mounted, or `init` stuck.
 
@@ -68,4 +68,4 @@ Landed in round 157 (main `1025ac6bbd`), the gate green on every group of both a
 
 ## Related
 
-[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
