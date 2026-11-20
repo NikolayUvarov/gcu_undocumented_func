@@ -1,6 +1,6 @@
-# 000-KRN-0266 — The kernel's lines and the shell's bytes interleave on the console UART
+# 000-KRN-0266 — The kernel's lines and the shell's bytes interleave on the console UART — done
 
-**Type:** tests (`tests/qemu_smoke.py`), the console UART the kernel and the shell share · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`), the console UART the kernel and the shell share · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -52,4 +52,10 @@ Neither run had a mixed line, so they show that the helper keeps these suites gr
 
 ## Related
 
-[801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) (round 156 found it), [000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a read the new boot's prompt answered, another way a line was lost).
+[801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) (round 156 found it), [000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a read the new boot's prompt answered, another way a line was lost).
+
+## Resolution
+
+Done (2026-11-20). Landed in round 158 (`main` `7a1e938a6b`), with the gate green on both architectures. Its `x86: the updater and an update through the link` (x32-2, 1398 s) and `aarch64: the updater and the modes` (acc-1, 1167 s) ran `trial_confirmed` through `interleaved`.
+
+No kernel change. The UART is shared with the shell by design (see the Problem), so a line the shell's bytes cut is found, not prevented.
