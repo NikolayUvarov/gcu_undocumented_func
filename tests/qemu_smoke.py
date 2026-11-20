@@ -9186,18 +9186,42 @@ def test_timestamp(channel_file, version, hours=24, seeds=None, channel="stable"
     return body + release_tool.signature_lines(body, seeds or [release_tool.TEST_TIMESTAMP_SEED])
 
 
+def interleaved(text, line, slack=1):
+    """Whether `line` is in `text` whole, or with bytes of another writer between its own (000-KRN-0266): init lends the
+    console UART to the shell (COM1's ports, a PL011's page), which writes it while the kernel writes a line of its own,
+    and no lock of the kernel's orders the two. The other writer's bytes may come to `slack` times the line's length."""
+    if line in text:
+        return True
+    window = len(line) * (1 + slack)
+    start = text.find(line[0])
+    while start >= 0:
+        at, end = start, min(len(text), start + window)
+        for char in line[1:]:
+            at = text.find(char, at + 1, end)
+            if at < 0:
+                break
+        else:
+            return True
+        start = text.find(line[0], start + 1)
+    return False
+
+
 def trial_confirmed(vm, since, timeout, slot="B"):
     """The console from position `since` of its log, once init's confirmation of the trial boot follows `BOOT: SLOT
     <slot> LOADED ON TRIAL` there. Read from the log, not from what expect() left: a command whose prompt the new boot
-    answered took those lines with it (000-KRN-0210)."""
-    deadline, clean = time.monotonic() + timeout, ""
+    answered took those lines with it (000-KRN-0210). The kernel's line may come with the shell's bytes inside it
+    (000-KRN-0266), so it is looked for that way too, once a second."""
+    deadline, clean, looked = time.monotonic() + timeout, "", 0.0
+    line = "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED"
     while time.monotonic() < deadline:
         vm.collect()
-        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+        mixed = time.monotonic() - looked > 1 and vm.log.find(f"BOOT: SLOT {slot} LOADED ON TRIAL", since) >= 0
+        if vm.log.find("THE TRIAL BOOT IS CONFIRMED", since) >= 0 or mixed or "KERNEL EXCEPTION" in vm.output or "KERNEL PANIC" in vm.output:
+            looked = time.monotonic()
             clean = to_ordinal(ANSI.sub("", vm.log[since:]).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean[-3000:])
-            if "MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED" in clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2]:
+            if interleaved(clean.partition(f"BOOT: SLOT {slot} LOADED ON TRIAL")[2], line):
                 vm.output = ""
                 return clean
         if vm.process.poll() is not None:
