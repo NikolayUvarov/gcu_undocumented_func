@@ -32,7 +32,7 @@ The machine falls back, but nothing writes `refused`. The agent's answer is then
 ## Acceptance criteria
 
 - [x] A trial the kernel stopped on a fault is reported to the server with the fault's line, in the answer and in each heartbeat until a trial is confirmed (QEMU, x86).
-- [ ] A record of this slot's own run (a confirmed slot that panicked) is not reported as a fallback.
+- [x] A record of this slot's own run (a confirmed slot that panicked) is not reported as a fallback.
 - [x] `init.wit`'s new version and the record's layout are in `docs/api`.
 
 ## Progress (2026-11-20)
@@ -75,6 +75,28 @@ Its lines:
 In round 157 (main `1025ac6bbd`), the gate green on both architectures; its x86 `rollback` group ran the new check (x32, 722 s).
 
 **Left:** the second criterion has no run yet, and the slot the DEXP falls back to needs a release that carries this. 801-UPD-0045 takes the trial the watchdog restarts.
+
+## The second criterion (2026-11-20)
+
+**The check** (`own_fault_after_a_fallback`, the x86 `boot` suite, on `claude/801-UPD-0044-own-fault-not-a-fallback`). Both slots hold the `panic-test` kernel:
+1. Slot B's trial panics at `init`'s first log line, and slot A boots with B's one try spent. A's updater keeps B's panic.
+2. A's kernel panics 20 s in, on a run of its own. It is not a trial, so it stops, and the check restarts it.
+3. At A's next boot the boot records still name B's trial fallen back to A, and the kernel's record is A's own.
+
+The check asks:
+- that the updater says `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL'S RECORD IS OF ANOTHER SLOT'S RUN: NOT ITS REASON`;
+- that neither its log nor `update status` names A's panic;
+- that `refused` still holds B's panic, kept at A's first boot.
+
+**Runs:** three here, in QEMU (x86, 4 CPUs, this session's container), each PASS in 57 to 60 s. The lines of the first run:
+- `MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at src/arch/x86_64/interrupts.rs:80:120 CPU=0`;
+- `[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version not known in slot B, falling back to slot A; THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler.rs:1496:141 CPU=0 PID=1 NAME=init`;
+- `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL'S RECORD IS OF ANOTHER SLOT'S RUN: NOT ITS REASON`;
+- `UPDATE: THE LAST FAILURE: version not known in slot B, falling back to slot A: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler.rs:1496:141 …`.
+
+The x86 boot group on Effector's machines is left before landing.
+
+**Left:** the slot the DEXP falls back to needs a release that carries this.
 
 ## Related
 
