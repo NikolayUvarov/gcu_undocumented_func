@@ -72,6 +72,7 @@ const RADIOS: [&str; 4] = ["bcm_wifi", "rtw88_wifi", "rtw89_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
+const SLOT_AUDIO_USB: usize = 8; // audio_gw: usb_host's client badged for audio (213-KRN-0263)
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const SLOT_STORE_COPY: usize = 4; // blockstore: the write client of its copy's disk (309-KRN-0209)
@@ -1159,6 +1160,9 @@ impl Init {
                         grants.copy(SLOT_MEM, self.dma(index, AUDIO_DMA_BYTES)?, 0);
                     }
                 }
+                // A USB audio device's interfaces (213-KRN-0263, 000-DRV-0073): after the codecs, so a machine with only
+                // a USB device gets it too.
+                if self.running(service_index("usb_host")) { grants.add(SLOT_AUDIO_USB, self.badged(&mut minted, "usb_host", mind::usb::BADGE_AUDIO)?, CLIENT); }
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
             // The video gateway (issue 158): the boot disk for video/synthetic, the compositor for the camera mark, and

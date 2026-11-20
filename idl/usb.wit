@@ -14,7 +14,11 @@
 /// interfaces (class 0xE0, subclass 1, protocol 1). Its `control` may also send the HCI's commands, which go to the
 /// device as a whole as class requests (request type 0x20, request 0); its bulk IN endpoint is polled by `reports`, as
 /// a converter's is. The wire is unchanged.
-package mind:usb@1.4.0;
+///
+/// 1.5 (000-DRV-0073): `mind::usb::BADGE_AUDIO` names `audio_gw`, which claims audio class interfaces (class 1). On
+/// xHCI a selected setting's isochronous endpoints stream both ways: `isochronous` takes an IN endpoint's packets, as on
+/// EHCI, and the new `isochronous-out` gives an OUT endpoint its packets.
+package mind:usb@1.5.0;
 
 interface usb {
     /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -55,4 +59,10 @@ interface usb {
     /// the controller reported an error for it), and the packet; empty packets are left out. Returns the bytes written.
     /// Packets that do not fit wait for the next call; while usb_host's queue is full, new ones are dropped (and counted).
     isochronous: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
+    /// 1.5 (000-DRV-0073): packets for the selected setting's isochronous OUT endpoint `address`, at `offset` in the
+    /// buffer, `length` bytes: each as two length bytes, low first, and the packet (at most the endpoint's packet size).
+    /// Each goes out in its own service interval, in order, after those given before. Returns the bytes taken: packets
+    /// for which usb_host has no room yet are left for the next call (a full queue takes none). Errors as for
+    /// `isochronous`; invalid, no OUT stream (EHCI streams IN only).
+    isochronous-out: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
 }
