@@ -47,6 +47,20 @@ It lands with `DRV`'s service loop or after it, never before (point 4): it waits
 
 **Left:** the criteria, on the Ryzen and the MacBook Pro once `DRV` admits the datapath.
 
+## The Ryzen's order (2026-11-20)
+
+From DRV's run on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `…T2130Z-DRV-…` on `internal-dev-messages`):
+- `SERVING WLANHW` at 2.426 s;
+- `COUNTRY RU` applied at 4.486 s;
+- `DATAPATH ADMITTED ON CHANNEL 8` at 6.225 s;
+- joined at 6.550 s, DHCP at 7.099 s, 3 of 3 pings.
+
+The first scan was passive, and nothing was sent before the country. `init` gave the word `absent` (213-KRN-0122). `rtw89_wifi`'s board read was `BOARD READ: CUT 1, RFE 1, XTAL 7C`.
+
+**Not ticked:** DRV's report has no calibration line, so the second criterion's order is seen only up to the board read. DRV is asked for it.
+
+**The third criterion:** the Ryzen's association, DHCP and pings were not under test load, and the MacBook Pro has no run.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).
