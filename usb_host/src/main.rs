@@ -121,7 +121,13 @@ impl Controller {
     }
 
     // Gives back a slot and its pages.
-    fn discard(&mut self, slot: u8, pages: &[usize]) { self.xhci.disable_slot(slot); for &page in pages { self.xhci.release(page); } }
+    // The completion code of the step that failed stays for the report: Disable Slot's own would take its place.
+    fn discard(&mut self, slot: u8, pages: &[usize]) {
+        let last = self.xhci.last;
+        self.xhci.disable_slot(slot);
+        if !self.xhci.stuck { self.xhci.last = last; }
+        for &page in pages { self.xhci.release(page); }
+    }
 
     /// Sets up the device on a port: address, descriptors, configuration, its endpoints or, for a hub, its ports.
     fn enumerate(&mut self, root: u8, route: u32, depth: u8, speed: u8, parent: Option<(usize, u8)>) -> Option<usize> {
@@ -306,7 +312,7 @@ impl Controller {
                 self.xhci.acknowledge(port);
             }
             self.step = "PORT RESET"; self.xhci.last = 0;
-            let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
+            let set_up = self.xhci.enable_port(port, self.root_tries[port - 1] > 0).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             if self.xhci.stuck { self.add_suspect(port as u8, 0, format_args!("{}", port)); return; }
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
             // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
