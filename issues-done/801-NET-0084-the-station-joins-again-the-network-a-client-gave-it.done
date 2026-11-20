@@ -1,6 +1,6 @@
-# 801-NET-0084 — The station joins again, by itself, the network a client joined this boot, remembered or not; a key joins a WPA2 access point alone; a word when nothing can be joined
+# 801-NET-0084 — The station joins again, by itself, the network a client joined this boot, remembered or not; a key joins a WPA2 access point alone; a word when nothing can be joined — done
 
-**Type:** `wlan`, `dot11` · **Owner:** `NET` · **Priority:** P1 · **Status:** open (2026-11-14; landed in round 138, the Ryzen's run left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.3, MC-11.6, MC-11.9
+**Type:** `wlan`, `dot11` · **Owner:** `NET` · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.3, MC-11.6, MC-11.9
 
 ## Problem
 
@@ -42,7 +42,7 @@ A second gap, in `dot11`. A join takes the strongest access point of the name, w
   - its radio is restarted, and the station joins it again by itself with the PMK it held. `keystore` is not asked for its keys;
   - after `wifi leave`, a fresh `wlan` says once that a join needs the user, and joins nothing.
 - [x] `docs/network/station.md` says what is held, for how long, and which access point a key joins.
-- [ ] On the Ryzen, the machine joined by `wifijoin.msh` without `--remember` joins again by itself after `rtw89_wifi` restarts (DRV's run).
+- [x] On the Ryzen, the machine joined by `wifijoin.msh` without `--remember` joins again by itself after `rtw89_wifi` restarts (DRV's run).
 
 ## Progress (2026-11-15)
 
@@ -60,4 +60,17 @@ QEMU against `wlansim` says nothing yet of a real radio (MC-12.1). The Ryzen's r
 
 ## Related
 
-[801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.md) (the restart found), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join), [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (remembered networks), [801-ASR-0015](801-ASR-0015-the-bench-join-remembers-its-network.md) (the bench join remembers its network), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the receive stall itself).
+[801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.done) (the restart found), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join), [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (remembered networks), [801-ASR-0015](../issues/801-ASR-0015-the-bench-join-remembers-its-network.md) (the bench join remembers its network), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (the receive stall itself).
+
+## Resolution
+
+Done (2026-11-20). The last criterion, DRV's runs on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `KRN/2026-11-19T2130Z-DRV-…` on `internal-dev-messages`), second boot:
+1. The maintainer forgot CoolNet2 in `wifi`'s window. The boot logged `WI-FI: 0 REMEMBERED NETWORKS`, then `AUTO-JOIN: NO REMEMBERED NETWORK; A JOIN NEEDS THE USER`.
+2. DRV typed `wifi join "CoolNet2" --passphrase-file …` over the cable, without `--remember`, the command `wifijoin.msh` runs. It joined at 58.153 s, with no `keystore` line.
+3. `kill` of `rtw89_wifi`:
+   - `107.446 wlan: [WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY RU AGAIN`;
+   - `108.800 wlan: [WLAN] AUTO-JOIN CoolNet2: THE NETWORK A CLIENT JOINED THIS BOOT, NOT REMEMBERED (TRY 1)`;
+   - `109.154 wlan: [WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 1)`;
+   - DHCP at 109.878 s, and `EFFECTOR: CONNECTED TO hesere.uz (PINNED)` at 110.798 s.
+
+`keystore` was not asked. For that machine and build only (MC-12.1).

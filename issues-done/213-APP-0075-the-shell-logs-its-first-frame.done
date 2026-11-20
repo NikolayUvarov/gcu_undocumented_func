@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`), diagnostics · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-30) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3
 
-**Recorded by:** the kernel track (KRN), 2026-10-13, in `requests-APP.md`, for [213-KRN-0098](../issues/213-KRN-0098-black-screen-when-the-shell-takes-it.md). Numbered by the tools track on 2026-10-14.
+**Recorded by:** the kernel track (KRN), 2026-10-13, in `requests-APP.md`, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.done). Numbered by the tools track on 2026-10-14.
 
 ## Problem
 
@@ -48,4 +48,4 @@ On the maintainer's Ryzen machine the screen went black when the shell took it. 
   - around it, the compositor's `SCREEN IN FRONT` lines, so the log tells the shell's frame from the screens before and after it.
 - **What it is evidence for.** This line, on this machine and this build (MC-12.1). The Ryzen PC of 213, where the screen went black, has not given a boot log with this code yet.
 
-[213-KRN-0098](../issues/213-KRN-0098-black-screen-when-the-shell-takes-it.md) (the black screen, the compositor's lines), [213](../issues/213-amd-ryzen-pc.md) (the Ryzen PC).
+[213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.done) (the black screen, the compositor's lines), [213](../issues/213-amd-ryzen-pc.md) (the Ryzen PC).

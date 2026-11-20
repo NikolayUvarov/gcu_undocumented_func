@@ -12,7 +12,7 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 - the boot stick on the first xHCI (05:00.3), the USB keyboard 1C4F:000E, the first NVMe disk (1ED0:2283), the log partition: each boot's log and hardware report were written.
 
 **What did not:**
-- **the screen:** the white boot lines showed, then the screen went black when the shell should have shown its green text, on boots 1–3 but not on boot 5 ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md));
+- **the screen:** the white boot lines showed, then the screen went black when the shell should have shown its green text, on boots 1–3 but not on boot 5 ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done));
 - **the keyboard:** on boot 5, with the shell on the screen, typing did nothing. The low-speed USB keyboard 1C4F:000E was found and its boot reports reach `usb_host` on the first xHCI (a first report is logged on boots 1–3), but no key reached the shell (requests-DRV.md);
 - **sound:** `audio_gw` took the GPU's HDMI controller (05:00.1, codec 1002:AA01, no output path), not the analog one (05:00.6, 1022:15E3), which it did not try;
 - **the second xHCI** (05:00.4) and **the second NVMe disk** (04:00.0, 1F40:1202) have no driver;
@@ -20,7 +20,7 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 
 ## Plan
 
-1. The black screen first: [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md).
+1. The black screen first: [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
 2. Every xHCI controller: [213-KRN-0099](../issues-done/213-KRN-0099-a-usb-host-for-every-xhci.done) (`init`) with the drivers track's `usb_host`.
 3. The drivers track's part, asked in [requests-DRV.md](requests-DRV.md): the analog HDA codec, the RTL8168 Ethernet card, the second NVMe disk.
 4. Runs without a person at the machine: one boot of MIND Core from Ubuntu and back ([000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md)), and a restart after a freeze by the FCH's watchdog ([213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md)).
@@ -35,7 +35,7 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
   - What the code does today: `vfs_server` mounts only the boot volume the bootloader named, the log partition on the same disk, a `MIND MODELS` volume read-only and the RAM disk. Another disk's sectors are read only to find the boot volume. The block store refuses a medium that is neither blank nor its own.
 - **The order:**
   1. the network, Wi-Fi (RTL8852BE, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)) and the wired card (RTL8168, [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md));
-  2. the screen, the mouse and the keyboard, checked as they are now ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) for the screen);
+  2. the screen, the mouse and the keyboard, checked as they are now ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done) for the screen);
   3. Bluetooth after these ([700](700-bluetooth.md)).
 - **Who:**
   - `EFF`, and the session that debugged Wi-Fi on the MacBook Pro, connect `effector485` (MIND Link, [800](800-mind-link.md)) to this machine;

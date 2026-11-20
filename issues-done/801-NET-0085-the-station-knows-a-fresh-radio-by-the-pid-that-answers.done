@@ -1,6 +1,6 @@
-# 801-NET-0085 — The station knows a fresh radio by the PID that answers it, whatever the radio says of its channel
+# 801-NET-0085 — The station knows a fresh radio by the PID that answers it, whatever the radio says of its channel — done
 
-**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-15; landed in round 144, a bench run left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
+**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S5) · **Roadmap:** stage V · **Constitution:** MC-6.4, MC-11.6
 
 ## Problem
 
@@ -9,7 +9,7 @@ DRV's correction (`NET/2026-11-15T1014Z-DRV-a-correction-rtw89-did-take-channel-
 **What happened on the Ryzen** (2026-11-14, 20:50 UTC, `fast-test` 8c067849):
 - `rtw89_wifi` restarted. The station, still joined, sent before it had tuned the new driver.
 - The fresh driver took the world rules and admitted its own channel 1, so its `info` said 1.
-- [801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.md) finds a fresh driver by an ended call or by channel 0, and neither came. The machine was off its Effector server for 13 h.
+- [801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.done) finds a fresh driver by an ended call or by channel 0, and neither came. The machine was off its Effector server for 13 h.
 
 **What 801-DRV-0071 changes:** the driver now refuses a send before the station's own tune, and keeps channel 0. That closes this path in `rtw89_wifi`. But the station still learns of a restart only from what a driver chooses to report, and every Wi-Fi driver has to keep that rule.
 
@@ -67,6 +67,14 @@ DRV proposed a start number in `info` instead (a new major version of `wlanhw.wi
 
 ## Related
 
-- [801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.md), [801-NET-0084](801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.md)
+- [801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.done), [801-NET-0084](801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done)
 - 801-DRV-0071, DRV's fix in `rtw89_wifi`
-- [801](801-the-bench-stays-manageable.md), S5
+- [801](../issues/801-the-bench-stays-manageable.md), S5
+
+## Resolution
+
+Done (2026-11-20). The bench run, DRV's runs on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `KRN/2026-11-19T2130Z-DRV-…` on `internal-dev-messages`): `kill` of `rtw89_wifi` while joined.
+- `wlan` logged `THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY RU AGAIN` 0.45 s later.
+- It joined again 2.2 s after the kill, and the agent was back at 4.5 s.
+
+**Which sign told it.** There the fresh radio's channel 0 told it, the reason named first (801-DRV-0071 keeps a fresh rtw89 at channel 0). The PID alone told a restart only in QEMU, with `wlansim` built `self-tuned` (`fresh_radio_check`). No bench run has shown that case, so none is claimed (MC-12.1).

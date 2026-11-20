@@ -67,6 +67,17 @@
 
 **Landed** in round 133 (`main` ae418d30, 2026-11-14): the check before a tune. Every group of the gate passed, both arches' "network, TLS and Effector" among them (acc-1 1462 s, PCU 1435 s); "x86: RAM above 4 GiB" failed once on i9 in `timed_check` (111-NET-0078) and passed on x32. **Left:** DRV's Ryzen runs: the one-in-two case of 2026-11-13, and the criterion's data-mode failure with the cable out.
 
+## The Ryzen (2026-11-20)
+
+From DRV's run on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `…T2130Z-DRV-…` on `internal-dev-messages`):
+- **A data-mode failure** at 2064 s of the first boot:
+  - `RECEIVE STALLED ON CHANNEL 8: NO FRAME FOR 10001 MS (5 SENT, 0 ACKNOWLEDGED)`;
+  - `rtw89_wifi` exited cleanly, and `init` started a fresh one;
+  - `wlan` logged `THE RADIO RESTARTED … ITS COUNTRY RU AGAIN` and took the network's keys from `keystore` 2 s later.
+- **A `kill` of `rtw89_wifi`** while joined: the same line 0.45 s after, joined 2.2 s after, and the agent back on its server at 4.5 s.
+
+**Left for the Ryzen's criterion:** that failure's `JOINED` line and Effector's reconnect after it. DRV's report gives them only for the kill. DRV is asked for those lines.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the Ryzen's RTL8852BE), [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) (the country), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join).
