@@ -1073,10 +1073,10 @@ def hardware_report_check(vm):
         time.sleep(.5)
     size = re.search(r"\[INIT\] HARDWARE REPORT: NO LOG VOLUME, NOT WRITTEN \((\d+) BYTES\)", log)
     assert size and int(size[1]) > 4000, log[-2000:]
-    # 213-KRN-0262: the loader's lines, kept in a volatile variable, reach the system log with the kernel's (U-Boot's
-    # runtime variables are not relied on).
+    # 213-KRN-0262: the loader's lines, kept in a volatile variable, reach the system log with the kernel's, which init
+    # copies there under its own name (`logs 1` keeps only its last 4 KiB; U-Boot's runtime variables are not relied on).
     if not getattr(vm.args, "uboot", None):
-        require(log, "MIND CORE BOOT: USING GOP ")
+        require(vm.command("dmesg -s init", raw=True), "MIND CORE BOOT: USING GOP ")
 
 
 def normal_suite(vm):
