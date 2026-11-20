@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the path is done and passes in QEMU; the Ryzen's AMD xHCI stops on its first isochronous TD) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the hardware runs with the fix follow) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -30,7 +30,7 @@
 ## Acceptance criteria
 
 - [x] Host tests (`tests/uac_host.rs`, 5 passed): the STM-Speaker's own descriptor bytes; formats it cannot use left out; feedback read in 10.14 and 16.16; the pacer; one channel to and from two.
-- [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, and unplugged, the codec comes back. QEMU 8.2's xHCI ends each OUT TD with no byte taken, so the sound itself is not checked there.
+- [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, the device hears the tone (its wav holds at least a quarter of a second of loud samples), and unplugged, the codec comes back.
 - [ ] On the Ryzen, with the maintainer: the speakerphone plays `say` and a tone, and `listen` hears its microphones. The STM-Speaker's own counters (underruns, overruns, clock faults) stay at zero for 5 minutes.
 
 ## Progress (2026-11-20): the path, and the Ryzen's AMD xHCI
@@ -65,6 +65,24 @@
   - here: USBCMD `0x1`, IMAN 0, IMOD at its reset value, 16 slots, one segment, no interrupt, physical addresses.
 - **The interrupter as Linux's made no difference.** Test release 202611201000 set IMOD `0xA0`, IMAN.IE and USBCMD.INTE; the first isochronous TD still stopped the controller (`USBSTS 00001019`).
 - **Next:** the IOMMU, from Linux's side. With the controller's IOMMU group in the identity domain, Linux's DMA uses physical addresses as ours does. If Linux's playback then stops the controller too, the addresses are the cause.
+
+## The Isoch TRB was written as type 17 (2026-11-20, evening)
+
+**`usb_host/src/xhci.rs` had `TYPE_ISOCH = 17`.** In xHCI 1.2's table 6-91 the Isoch transfer TRB is type 5. Type 17 is the Reset Device command, which has no place on a transfer ring.
+
+**What each controller did with it** (QEMU's is shown by the fix; the two real controllers' stops are put down to it until their runs with the fix):
+- **QEMU 8.2** takes a TD by its endpoint's type and looks at a TRB's type only to gather its buffer. It ended each TD with success and moved no byte. That is the "no byte taken" this issue put down to QEMU.
+- **The Ryzen's AMD xHCI** stopped with a host controller error at the first TD.
+- **On the DEXP's Intel xHCI** (release 202611201739, the first isochronous stream there, to its own USB audio 0573:1573) everything on the controller stopped at `beep`, twice. Its keyboard, the cable, the Wi-Fi adapter and the boot stick are all on that controller, so the machine looked hung and no log of it was kept. Whether the controller set an error bit is not known.
+
+**Why the comparison with Linux missed it.** Linux's debugfs and trace show a TRB decoded (`Isoch, IOC, ISP, TBC 0, TLBPC 0`). Our fields were compared with that text, never the raw control word with the specification's table. The interrupter, the IOMMU, TD pacing, the slot context and the cache flushes tried since were not the cause.
+
+**The fix:** `TYPE_ISOCH = 5`. In QEMU `usb-audio`'s wav then holds `beep`'s tone (336,968 bytes where a bare header was), and the suite asserts that the device heard it.
+
+**Still open:**
+- the DEXP and the Ryzen with the fix, on their own controllers;
+- the AMD gate (`no_isochronous` for 1022) stays until the Ryzen's run shows a stream there;
+- what this issue said of the root port (the fault "belongs to this device") is too strong, as the STM-Speaker project answered: the board was short of power in those runs.
 
 ## Related
 

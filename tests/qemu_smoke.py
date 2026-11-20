@@ -10799,11 +10799,13 @@ def hda_suite(args):
 def usbaudio_suite(args):
     """000-DRV-0073: a USB Audio Class 1 device in audio_gw. QEMU's usb-audio (UAC1, 48 kHz stereo playback) on an xHCI
     of its own: usb_host streams its isochronous OUT endpoint, the gateway takes it in the codec's place, and beep's
-    packets go out on it while beep plays; unplugged, the codec comes back."""
+    packets go out on it while beep plays; unplugged, the codec comes back. 000-DRV-0080: a second one plugged in beside
+    it is the one that plays, and the first plays again once the second is gone."""
     with tempfile.TemporaryDirectory(prefix="mind-uac-") as temp:
-        wav = Path(temp) / "usb.wav"
+        wav, wav2 = Path(temp) / "usb.wav", Path(temp) / "usb2.wav"
         vm = VM(args, IMAGE, audio="none", audio_card="HDA",
-                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
+                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-audiodev", f"wav,id=usnd2,path={wav2}",
+                       "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
         try:
             log = ""
             for _ in range(20):
@@ -10828,6 +10830,34 @@ def usbaudio_suite(args):
             assert stopped and int(stopped[1]) > 500, log
             usb = vm.service_logs("usb_host", "STREAMS OUT")
             require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            # A device plugged in beside it is the one used; the first waits, and comes back when that one goes.
+            vm.qmp("device_add", driver="usb-audio", bus="axhci.0", audiodev="usnd2", id="uac2")
+            waits, again = "WAITS: A DEVICE SET UP AFTER IT IS USED", "AGAIN: THE DEVICE SET UP AFTER IT WENT"
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", waits)
+                if waits in log:
+                    break
+            require(log, "ATTACHED: PLAYBACK YES")
+            require(log, waits)
+            second = re.search(r"PID=(\d+) NAME=beep BACKGROUND", vm.command("run beep &"))
+            assert second, "beep did not start for the second device"
+            output = ""
+            for _ in range(60):
+                output += vm.command(f"logs {second[1]}")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DONE")
+            time.sleep(2.5)
+            require(vm.service_logs("audio_gw", "USB PLAYBACK STOPPED"), "[AUDIO] USB PLAYBACK STOPPED")
+            vm.qmp("device_del", id="uac2")
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", again)
+                if again in log:
+                    break
+            require(log, again)
             # Unplugged: the gateway goes back to the codec.
             vm.qmp("device_del", id="uac")
             log = ""
@@ -10838,11 +10868,20 @@ def usbaudio_suite(args):
             require(log, "[AUDIO] LEVELS THE CODEC AGAIN")
         finally:
             vm.close()
-        # QEMU 8.2's xHCI ends each isochronous OUT TD with success and no byte taken: usb-audio gets nothing, and its
-        # wav backend keeps a bare header. What the device hears is checked on a real one (the STM-Speaker, the Ryzen).
-        print(f"NOTE: usb-audio's wav holds {wav.stat().st_size} bytes: QEMU's xHCI moves no isochronous OUT data", flush=True)
+        # What the device heard: usb-audio's wav holds beep's tone. With the Isoch TRB written as type 17, QEMU ended each
+        # TD with success and took no byte of it, and the wav kept a bare header (000-DRV-0073).
+        heard = []
+        for file in (wav, wav2):
+            with wave.open(str(file), "rb") as sound:
+                rate, channels, width, frames = sound.getframerate(), sound.getnchannels(), sound.getsampwidth(), sound.readframes(sound.getnframes())
+            assert width == 2, width
+            loud = sum(1 for (sample,) in struct.iter_unpack("<h", frames[: len(frames) & ~1]) if abs(sample) > 1000)
+            assert loud >= rate * channels // 4, f"{file.name}: usb-audio heard {loud} loud samples of {len(frames) // 2} at {rate} Hz: beep's tone did not reach it"
+            heard.append(loud / channels / rate)
     print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
-          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played; unplugged, the codec again", flush=True)
+          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
+          f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
+          f"unplugged, the codec again", flush=True)
 
 
 def listen_suite(vm, starts):

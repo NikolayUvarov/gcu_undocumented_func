@@ -22,9 +22,10 @@ const POOL_SCRATCH: usize = POOL_PAGES / 2;
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
 const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
-const TYPE_ISOCH: u32 = 17;
+// The Isoch transfer TRB is type 5 (xHCI 1.2, table 6-91); 17, which stood here, is the Reset Device command's.
+const TYPE_ISOCH: u32 = 5;
 // An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
-// IDs: the Ryzen's AMD xHCI stopped with a host controller error on TDs that asked to start as soon as possible (SIA).
+// IDs.
 const FRAME_ID_SHIFT: u32 = 20;
 // The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
 const FIRST_AHEAD: u32 = 8 * 8;
@@ -105,6 +106,8 @@ pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
 pub const DEBOUNCE_MS: u32 = 100;
 pub const DEBOUNCE_STEP_MS: u32 = 25;
 pub const DEBOUNCE_MAX_MS: u32 = 1_500;
+// After a root port's reset, before its device is addressed: USB 2.0's 10 ms recovery and more; Linux's 50 ms on a retry.
+const RESET_RECOVERY_MS: usize = 20; const RESET_RECOVERY_AGAIN_MS: usize = 50;
 
 // Polls `done`: without pause for the first 20 ms (most transfers end within a few frames; when each wait began with a
 // sleep, the MacBook Pro's mouse moved once a second, 211-DRV-0017), then every 10 ms; `attempts` 1500 is about 5 s,
@@ -300,11 +303,12 @@ impl Xhci {
         // every later request would wait in vain (211-DRV-0003).
         let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16 | if input { ISP } else { 0 }), status_trb];
         let result = if length == 0 { self.transfer_for(1_500, slot, 1, ring, &[setup_trb, status_trb]) } else { self.transfer_for(1_500, slot, 1, ring, &trbs) };
-        let residue = result.inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?;
+        // The transfer's own completion code stays for the report: the commands that put the endpoint right have theirs.
+        let residue = result.inspect_err(|&code| { self.restart(slot, 1, ring, code != 0); self.last = code; })?;
         // A short IN data stage reports its residue on the data TRB (ISP), and the status stage completes after it. The
         // length is what came, not what was asked: a report descriptor read with room to spare came with the bytes of
         // earlier transfers after it, and a mouse's layout was lost (211-DRV-0008).
-        if self.last == SHORT_PACKET { self.completion_for(1_500, slot, 1).inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?; }
+        if self.last == SHORT_PACKET { self.completion_for(1_500, slot, 1).inspect_err(|&code| { self.restart(slot, 1, ring, code != 0); self.last = code; })?; }
         Ok((length as u32).saturating_sub(residue) as usize)
     }
 
@@ -329,16 +333,18 @@ impl Xhci {
         if value & PORT_CHANGES != 0 { self.mmio.write32(register, (value & PORT_NEUTRAL) | (value & PORT_CHANGES)); }
         value & 1 << 17 != 0
     }
-    /// Enables a connected root port (USB 3 enables itself, USB 2 is reset); its speed (1 FS, 2 LS, 3 HS, 4 SS).
-    pub fn enable_port(&mut self, port: usize) -> Option<u8> {
+    /// Enables a connected root port (USB 3 enables itself, USB 2 is reset); its speed (1 FS, 2 LS, 3 HS, 4 SS). `again`,
+    /// a further try at its device, resets an enabled port too and gives the device Linux's 50 ms after it: the try
+    /// before left the device addressed or half set up, and it answers at address 0 only after a reset (000-DRV-0079).
+    pub fn enable_port(&mut self, port: usize, again: bool) -> Option<u8> {
         let register = self.portsc(port);
         let value = self.mmio.read32(register);
         if value & 1 == 0 { return None; }
-        if value & PORT_PED == 0 {
+        if value & PORT_PED == 0 || again {
             self.mmio.write32(register, (value & PORT_NEUTRAL) | PORT_PR);
             if !wait(|| self.mmio.read32(register) & PORT_PRC != 0) { return None; }
             let value = self.mmio.read32(register); self.mmio.write32(register, (value & PORT_NEUTRAL) | PORT_PRC);
-            mind::time::sleep(20);
+            mind::time::sleep(if again { RESET_RECOVERY_AGAIN_MS } else { RESET_RECOVERY_MS });
         }
         let value = self.mmio.read32(register);
         (value & PORT_PED != 0).then_some(((value >> 10) & 0xF) as u8)
