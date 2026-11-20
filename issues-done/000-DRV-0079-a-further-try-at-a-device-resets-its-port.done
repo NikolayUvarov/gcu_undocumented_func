@@ -1,6 +1,6 @@
-# 000-DRV-0079 — `usb_host`: a further try at a root port's device resets the port, and its report names the step's own completion code
+# 000-DRV-0079 — `usb_host`: a further try at a root port's device resets the port, and its report names the step's own completion code — done
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
@@ -25,10 +25,17 @@ The device's own fault is the transaction error (completion 4) on a control tran
 
 ## Acceptance criteria
 
-- [ ] Builds. The QEMU suites with USB devices pass: `x86: keys, shell, tools` (`usb`, `ehci`) and `usbaudio`.
-- [ ] On the DEXP, with the speakerphone in a root port: a failed try is reported with its step's own completion code, and the tries after it start from a port reset.
-  - **The code: met.** Release 202611201916 (the DEXP's ABI 34 tree with this change), 2026-11-20: `PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 1 OF 3)`, and the same for tries 2 and 3. Completion 4 is a USB transaction error: the device gave no handshake to SET_ADDRESS.
-  - **The reset:** not yet shown by a log. Its line was added after that release.
+- [x] Builds. The QEMU suites with USB devices pass on LEG9: the group `x86: keys, shell, tools` (`usb`, `ehci`) and the suite `usbaudio`.
+- [x] On the DEXP, with the speakerphone in a root port: a failed try is reported with its step's own completion code, and the tries after it start from a port reset. Release 202611202012 (the DEXP's ABI 34 tree with this change), 2026-11-20:
+  ```
+  0.614 usb_host: [USB] PORT 2: CONNECTED (PORTSC 000006E1)
+  0.809 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 1 OF 3)
+  2.302 usb_host: [USB] PORT 2: RESET FOR ANOTHER TRY (PORTSC 00000603, THEN 00000603)
+  2.307 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 2 OF 3)
+  2.560 usb_host: [USB] PORT 2: RESET FOR ANOTHER TRY (PORTSC 00000603, THEN 00000603)
+  2.565 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 3 OF 3)
+  ```
+  Completion 4 is a USB transaction error: the device gave no handshake to SET_ADDRESS.
 
 ## Tried on the DEXP and not kept
 
@@ -36,6 +43,12 @@ The device's own fault is the transaction error (completion 4) on a control tran
 
 **What this says of the speakerphone:** in the DEXP's root port it answers neither request after a port reset, with 20 ms or 50 ms of recovery. Through the Genesys hub on the Ryzen it is set up. That is recorded for its own project as its task `19-usb-root-port-02-intel-set-address-transaction-error`.
 
+## Resolution
+
+Done on 2026-11-20 in `usb_host/src/xhci.rs` (`enable_port(port, again)`, the two recovery times, `control` keeping a failed transfer's code) and `usb_host/src/main.rs` (`discard` keeping the code, the reset's line in `scan`).
+
+It holds for the DEXP's Intel xHCI and this device (MC-12.1). It does not make the speakerphone work in a root port: every try still fails, now for a reason the log shows. No device here is known that a further try with a reset sets up.
+
 ## Related
 
-[000-DRV-0077](000-DRV-0077-a-new-connection-debounced-before-its-reset.md) (the attach debounce), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone), [000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering).
+[000-DRV-0077](../issues/000-DRV-0077-a-new-connection-debounced-before-its-reset.md) (the attach debounce), [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone), [000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering).

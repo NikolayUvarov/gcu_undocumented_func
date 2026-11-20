@@ -23,6 +23,7 @@
 
 - [x] QEMU (`--suites usbaudio`): a second `usb-audio` plugged in beside the first is attached and the first waits; `beep` then reaches the second one's wav (0.86 s of tone); unplugged, the first is in use again; with the first unplugged too, the codec comes back.
 - [ ] On the DEXP: the speakerphone plugged in plays in place of 0573:1573, and with it unplugged 0573:1573 plays again.
+  - **Not yet run.** The DEXP has this change since release 202611201947 (2026-11-20), and its own 0573:1573 is attached at each boot as before. The speakerphone is not set up in its root port (000-DRV-0079), so no second device has come. The run needs it through a hub, which needs hands.
 
 ## Related
 
