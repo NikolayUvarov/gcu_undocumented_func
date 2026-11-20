@@ -20,12 +20,21 @@ The device's own fault is the transaction error (completion 4) on a control tran
 ## Plan
 
 - **`enable_port(port, again)`.** A further try (`root_tries > 0`) resets the port even when it is enabled, and waits 50 ms after the reset before the device is addressed, as Linux's `hub_port_reset` does (10 ms of USB 2.0's recovery and 40 more). The first try keeps its 20 ms.
-- **`discard`** keeps the completion code of the step that failed across its Disable Slot.
+- **`discard`** keeps the completion code of the step that failed across its Disable Slot. **`Xhci::control`** keeps a failed transfer's own code across the commands that put endpoint 0 right after it.
+- **The reset before a further try is logged** with the port's status before and after it.
 
 ## Acceptance criteria
 
 - [ ] Builds. The QEMU suites with USB devices pass: `x86: keys, shell, tools` (`usb`, `ehci`) and `usbaudio`.
 - [ ] On the DEXP, with the speakerphone in a root port: a failed try is reported with its step's own completion code, and the tries after it start from a port reset.
+  - **The code: met.** Release 202611201916 (the DEXP's ABI 34 tree with this change), 2026-11-20: `PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 1 OF 3)`, and the same for tries 2 and 3. Completion 4 is a USB transaction error: the device gave no handshake to SET_ADDRESS.
+  - **The reset:** not yet shown by a log. Its line was added after that release.
+
+## Tried on the DEXP and not kept
+
+**The order Linux and Windows use first** (release 202611202000): on a further try, Address Device with BSR (the slot and endpoint 0 set up, no SET_ADDRESS), the device descriptor asked at address 0, the port reset once more, then SET_ADDRESS. The speakerphone failed the descriptor request at address 0 as it had failed SET_ADDRESS. So the order of the set-up is not what stops this device on a root port, and no device here is known to need it. The code was taken out again.
+
+**What this says of the speakerphone:** in the DEXP's root port it answers neither request after a port reset, with 20 ms or 50 ms of recovery. Through the Genesys hub on the Ryzen it is set up. That is recorded for its own project as its task `19-usb-root-port-02-intel-set-address-transaction-error`.
 
 ## Related
 

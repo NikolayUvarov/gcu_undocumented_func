@@ -303,11 +303,12 @@ impl Xhci {
         // every later request would wait in vain (211-DRV-0003).
         let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16 | if input { ISP } else { 0 }), status_trb];
         let result = if length == 0 { self.transfer_for(1_500, slot, 1, ring, &[setup_trb, status_trb]) } else { self.transfer_for(1_500, slot, 1, ring, &trbs) };
-        let residue = result.inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?;
+        // The transfer's own completion code stays for the report: the commands that put the endpoint right have theirs.
+        let residue = result.inspect_err(|&code| { self.restart(slot, 1, ring, code != 0); self.last = code; })?;
         // A short IN data stage reports its residue on the data TRB (ISP), and the status stage completes after it. The
         // length is what came, not what was asked: a report descriptor read with room to spare came with the bytes of
         // earlier transfers after it, and a mouse's layout was lost (211-DRV-0008).
-        if self.last == SHORT_PACKET { self.completion_for(1_500, slot, 1).inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?; }
+        if self.last == SHORT_PACKET { self.completion_for(1_500, slot, 1).inspect_err(|&code| { self.restart(slot, 1, ring, code != 0); self.last = code; })?; }
         Ok((length as u32).saturating_sub(residue) as usize)
     }
 
