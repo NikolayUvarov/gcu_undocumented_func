@@ -96,9 +96,11 @@ The check asks:
 
 With 801-UPD-0045 (round 158), the updater's line for this case became `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON`, and the check now asks for that line. It passed once more here on round 158's candidate merged with this branch (56 s).
 
-The x86 boot group on Effector's machines is left before landing.
+**On Effector's machines** (`6fd343ffcf`, `main` merged): i9, `x86: boot, display, shell, memory, clock` PASS, 1791 s, with the check's line `PASS: a panic of slot A's own run, after slot B's trial fell back to it, is no reason of B's …`.
 
 **Left:** the slot the DEXP falls back to needs a release that carries this.
+
+**Since 801-UPD-0046** the later boot does not ask at all: the fallback was taken at A's first boot. The check now asks for `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD n): WHAT ENDED IT WAS ASKED THEN` instead.
 
 ## Related
 
