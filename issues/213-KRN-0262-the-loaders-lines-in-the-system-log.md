@@ -24,7 +24,7 @@ No handoff change. A kernel that finds no variable says nothing, and a loader wi
 
 ## Acceptance criteria
 
-- [ ] In QEMU, x86 and aarch64 (OVMF, AAVMF), the system log holds `MIND CORE BOOT: USING GOP …` (`hardware_report_check` in the normal suite). U-Boot's runtime variables are not relied on, so that check is skipped there.
+- [ ] In QEMU, x86 and aarch64 (OVMF, AAVMF), the system log holds `MIND CORE BOOT: USING GOP …` at two boots in a row (`efivar_check`: the `boot` suite on x86, the `efivar` suite on aarch64). U-Boot's runtime variables are not relied on, and no U-Boot suite checks it.
 - [ ] One boot of the Ryzen reads its outputs from the hardware report (DRV's run; MC-12.1: that machine only).
 
 ## Related
