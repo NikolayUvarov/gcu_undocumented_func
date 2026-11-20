@@ -105,6 +105,8 @@ pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
 pub const DEBOUNCE_MS: u32 = 100;
 pub const DEBOUNCE_STEP_MS: u32 = 25;
 pub const DEBOUNCE_MAX_MS: u32 = 1_500;
+// After a root port's reset, before its device is addressed: USB 2.0's 10 ms recovery and more; Linux's 50 ms on a retry.
+const RESET_RECOVERY_MS: usize = 20; const RESET_RECOVERY_AGAIN_MS: usize = 50;
 
 // Polls `done`: without pause for the first 20 ms (most transfers end within a few frames; when each wait began with a
 // sleep, the MacBook Pro's mouse moved once a second, 211-DRV-0017), then every 10 ms; `attempts` 1500 is about 5 s,
@@ -329,16 +331,18 @@ impl Xhci {
         if value & PORT_CHANGES != 0 { self.mmio.write32(register, (value & PORT_NEUTRAL) | (value & PORT_CHANGES)); }
         value & 1 << 17 != 0
     }
-    /// Enables a connected root port (USB 3 enables itself, USB 2 is reset); its speed (1 FS, 2 LS, 3 HS, 4 SS).
-    pub fn enable_port(&mut self, port: usize) -> Option<u8> {
+    /// Enables a connected root port (USB 3 enables itself, USB 2 is reset); its speed (1 FS, 2 LS, 3 HS, 4 SS). `again`,
+    /// a further try at its device, resets an enabled port too and gives the device Linux's 50 ms after it: the try
+    /// before left the device addressed or half set up, and it answers at address 0 only after a reset (000-DRV-0079).
+    pub fn enable_port(&mut self, port: usize, again: bool) -> Option<u8> {
         let register = self.portsc(port);
         let value = self.mmio.read32(register);
         if value & 1 == 0 { return None; }
-        if value & PORT_PED == 0 {
+        if value & PORT_PED == 0 || again {
             self.mmio.write32(register, (value & PORT_NEUTRAL) | PORT_PR);
             if !wait(|| self.mmio.read32(register) & PORT_PRC != 0) { return None; }
             let value = self.mmio.read32(register); self.mmio.write32(register, (value & PORT_NEUTRAL) | PORT_PRC);
-            mind::time::sleep(20);
+            mind::time::sleep(if again { RESET_RECOVERY_AGAIN_MS } else { RESET_RECOVERY_MS });
         }
         let value = self.mmio.read32(register);
         (value & PORT_PED != 0).then_some(((value >> 10) & 0xF) as u8)
