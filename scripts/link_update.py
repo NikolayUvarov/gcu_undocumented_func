@@ -57,6 +57,8 @@ DONE = re.compile(r"\[UPDATER\] SLOT ([AB]) CONFIRMED ON THE DISK")
 FAILED = re.compile(r"\[UPDATER\] [^\n]*(REFUSED|ROLLBACK)[^\n]*")
 NO_SOURCE = "[UPDATER] NO update.txt: IT ACTS ONLY WHEN ASKED, AND HAS NO SOURCE"  # an updater that reads only update.txt's source
 CHECKED = re.compile(r"\[UPDATER\] CHECK \S+: VERSION (\d+)")
+STAGED = re.compile(r"\[UPDATER\] FETCH: VERSION (\d+) STAGED IN SLOT ([AB])")
+TRIAL = re.compile(r"\[UPDATER\] SLOT ([AB]) ON TRIAL, VERSION (\d+)")
 ANCHOR = 8  # lines that mark where the last read of the log ended
 BOOT_S = 60  # a log whose first line is this young is a new boot's
 
@@ -137,10 +139,20 @@ def latest(lines):
     return next((s for s in map(stamp, reversed(lines)) if s is not None), None)
 
 
-def fresh(lines, anchor, last=None):
+def within(lines, read):
+    """Whether `lines` is a run of the lines of `read`, its last line perhaps cut short: a read of the same log that
+    ended early."""
+    n = len(lines)
+    return bool(n) and any(read[i:i + n - 1] == lines[:-1] and read[i + n - 1].startswith(lines[-1])
+                           for i in range(len(read) - n + 1) if read[i] == lines[0] or n == 1)
+
+
+def fresh(lines, anchor, last=None, read=()):
     """The lines after `anchor`, the last lines read before, and whether this read is current. Without the anchor
     (800-LNK-0034: a long read of a large log lost it and took old lines for new), by the uptimes after `last`, the
-    latest read: all lines for the next boot, whose log begins again; none for a read that ends before `last`."""
+    latest read: all lines for the next boot, whose log begins again; none for a read that ends before `last`, nor for
+    one that is a part of `read`, the log as it was last read whole (000-LNK-0049: a read cut short as the machine
+    restarted began at the boot's start and was taken for the next boot's)."""
     n = len(anchor)
     for i in range(len(lines) - n, -1, -1) if n else ():
         if lines[i:i + n] == anchor:
@@ -149,7 +161,7 @@ def fresh(lines, anchor, last=None):
     if last is None or not stamps:
         return lines, True
     if stamps[-1] < last:
-        return (lines, True) if stamps[0] < BOOT_S else ([], False)
+        return (lines, True) if stamps[0] < BOOT_S and not within(lines, list(read)) else ([], False)
     seen = set(anchor)
     return [line for line in lines if (stamp(line) or 0) > last or (stamp(line) == last and line not in seen)], True
 
@@ -160,18 +172,25 @@ def follow(link, timeout, say=print, pause=5, before="", version=None):
     check that read another version is not this update's: the channel as it was before the put (the MacBook Pro,
     2026-11-09)."""
     deadline, anchor, trial, checked = time.monotonic() + timeout, before.splitlines()[-ANCHOR:], False, None
-    last = latest(before.splitlines())
+    last, read = latest(before.splitlines()), before.splitlines()
+    # The slot this release was staged in, and the version the boot being read runs on trial: a confirmation of
+    # another slot, or in a boot that tries another version, is an earlier update's (000-LNK-0049).
+    staged, trying = None, None
     while time.monotonic() < deadline:
         text = link.log()
         if text is None:
             time.sleep(pause)
             continue
         lines = text.splitlines()
-        new, current = fresh(lines, anchor, last)
+        new, current = fresh(lines, anchor, last, read)
         for line in new:
             if "[UPDATER]" in line or "TRIAL" in line:
                 say(line)
-            if DONE.search(line):
+            fetched, tried, done = STAGED.search(line), TRIAL.search(line), DONE.search(line)
+            if fetched and (version is None or int(fetched.group(1)) == version):
+                staged = fetched.group(2)
+            trying = int(tried.group(2)) if tried else trying
+            if done and (staged is None or done.group(1) == staged) and (version is None or trying is None or trying == version):
                 return line
             trial = trial or "ON TRIAL, VERSION" in line
             seen = CHECKED.search(line)
@@ -183,7 +202,7 @@ def follow(link, timeout, say=print, pause=5, before="", version=None):
             if FAILED.search(line) and "REFUSED: Missing" not in line and not (trial and "REFUSED: Older" in line):
                 raise RuntimeError(line.strip())
         if current:
-            anchor, last = lines[-ANCHOR:] or anchor, latest(lines) if lines else last
+            anchor, last, read = lines[-ANCHOR:] or anchor, latest(lines) if lines else last, lines or read
         time.sleep(pause)
     raise RuntimeError(f"no confirmation within {timeout} s")
 
