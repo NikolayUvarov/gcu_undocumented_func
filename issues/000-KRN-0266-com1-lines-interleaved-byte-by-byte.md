@@ -36,8 +36,19 @@ The rerun of the group alone was green, so the gate was too. The failure was thi
 
 ## Acceptance criteria
 
-- [ ] `interleaved` finds round 156's line (`MEMORY MANAGER: MIND CORE KERNEL: THE TRIAL BOOT I6S CONFIR4MED MB HEAP.`), and does not take `THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING` for it.
-- [ ] The groups that use `trial_confirmed` pass on both architectures: `aarch64: the updater and the modes` and `x86: the updater and an update through the link`.
+- [x] `interleaved` finds round 156's line (`MEMORY MANAGER: MIND CORE KERNEL: THE TRIAL BOOT I6S CONFIR4MED MB HEAP.`), and does not take `THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING` for it.
+- [x] The groups that use `trial_confirmed` pass on both architectures: `aarch64: the updater and the modes` and `x86: the updater and an update through the link`.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/000-KRN-0266-com1-interleave` (`fbe308b90a`, `main` merged at `e9a5657d8b`).
+
+**Checked:**
+- `interleaved` against round 156's line (found) and against `THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING` and `SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT` (not found), run here.
+- `aarch64: the updater and the modes`: acc-1, PASS, 1168 s.
+- `x86: the updater and an update through the link`: x32, PASS, 1405 s.
+
+Neither run had a mixed line, so they show that the helper keeps these suites green, not that it took a mixed line in a VM.
 
 ## Related
 
