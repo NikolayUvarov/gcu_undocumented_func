@@ -1,6 +1,6 @@
 # 801-UPD-0044 — A trial the kernel stopped names its fault in the fallback's reason
 
-**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** [801-KRN-0265](801-KRN-0265-init-takes-the-kernels-fault-record.md) (`init` takes the record; on the same branch) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -69,6 +69,12 @@ Its lines:
 - The x86 boot group and the aarch64 groups are in 801-KRN-0265.
 
 **Not shown by a run:** a record of this slot's own run alongside a fallback. The updater asks only when the records show the other slot's trial fell back, and keeps the record only when it is that slot's (`fell_back`); no test makes the two disagree.
+
+## Landed (2026-11-20)
+
+In round 157 (main `1025ac6bbd`), the gate green on both architectures; its x86 `rollback` group ran the new check (x32, 722 s).
+
+**Left:** the second criterion has no run yet, and the slot the DEXP falls back to needs a release that carries this. 801-UPD-0045 takes the trial the watchdog restarts.
 
 ## Related
 
