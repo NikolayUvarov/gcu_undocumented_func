@@ -20,8 +20,10 @@ A debounce does not cure a device that is short of power. It keeps a connection 
 
 ## Acceptance criteria
 
-- [ ] Builds. The QEMU suites with USB devices (`usb`, `ehci`, `files`' storage, `usbaudio`, the link's converter) pass. Their devices come up 100 ms later each.
+- [x] Builds. The QEMU suites with USB devices pass on LEG9: `x86: keys, shell, tools` (`usb`, `ehci`), `x86: files and block writes`, `x86: the updater and an update through the link`, and the suites `usbaudio` and `link`. Their devices come up 100 ms later each.
 - [ ] On the Ryzen: the devices at boot and a device plugged in are set up as before.
+  - **At boot: met.** Release 202611201516 (the stick's ABI 34 tree with this commit) set up all nine, 2026-11-20, 15:22 UTC: camera 1, the Bluetooth and the boot stick on the first xHCI; the hub, camera 2, the link's converter, the keyboard's receiver and the speakerphone on the second.
+  - **A device plugged in under it:** not yet seen.
 
 ## Related
 
