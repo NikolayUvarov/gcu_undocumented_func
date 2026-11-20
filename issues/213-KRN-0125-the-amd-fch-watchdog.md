@@ -72,6 +72,17 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
 
 **The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. On QEMU the boot line is `WATCHDOG: NONE (NO INTEL LPC BRIDGE AT 00:1F.0, NO AMD FCH AT 00:14.0)`; q35's Intel TCO watchdog still arms (`watchdog` suite).
 
+## The Ryzen's boot of 2026-11-19 (DRV)
+
+On `fast-test` 92c2c6e9 the boot line was `WATCHDOG: NONE (AMD FCH: DISABLED BY THE FIRMWARE)` (SMBus 1022:790B, revision 51).
+- The maintainer set the firmware setup's "CPU WDT" from Auto to Enabled. The line did not change, so that item is not the FCH's timer.
+- The refusal now says which of its two tests failed, on `claude/213-KRN-0262-loader-lines`:
+  - the PM register's disable bits stayed set after the write;
+  - the timer's own `WatchDogDisable` bit was set.
+
+  Linux's `sp5100_tco` makes the same two tests.
+- **Asked of DRV:** Linux's own line on that machine (`sp5100_tco`). `Watchdog hardware is disabled` would mean the firmware keeps the timer off for every OS. The last criterion then cannot be met on this firmware.
+
 ## Related
 
 [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the Intel TCO watchdog, the run mark, the safe start), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [213](213-amd-ryzen-pc.md).
