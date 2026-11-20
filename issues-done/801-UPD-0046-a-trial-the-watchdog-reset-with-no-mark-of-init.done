@@ -1,6 +1,6 @@
-# 801-UPD-0046 — A trial the watchdog restarted with no mark of `init`'s is reported too, and a fallback is taken once
+# 801-UPD-0046 — A trial the watchdog restarted with no mark of `init`'s is reported too, and a fallback is taken once — done
 
-**Type:** `updater` · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3
+**Type:** `updater` · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3
 
 ## Problem
 
@@ -70,4 +70,13 @@ The watchdog group's own lines were not kept, since it passed; the lines above a
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S2), [801-UPD-0045](../issues-done/801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.done), [801-UPD-0044](../issues-done/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done) (the `watchdog-test` kernel's stop before `init`).
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-UPD-0045](../issues-done/801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.done), [801-UPD-0044](../issues-done/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done) (the `watchdog-test` kernel's stop before `init`).
+
+## Resolution
+
+Done (2026-11-20). Landed in round 161 (`main` `fe18987db7`), the gate green on both architectures.
+- **The fallback is taken once:** `system/updater/fell-back` keeps the newer record's sequence once `init` answered. A later boot with the same record asks nothing.
+- **A watchdog restart with no mark,** at that first boot, is kept as the trial's refusal (`hung_trial_reported`, the x86 `watchdog` suite).
+- 801-UPD-0044's and 0045's later-boot checks pass with the taken-once line.
+
+**Not covered:** the fallback slot's first boot itself stopped by the watchdog before its updater took the fallback. Its next boot would take that restart for the trial's. No bench machine has run this.
