@@ -376,6 +376,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [000-DRV-0070](../issues-done/000-DRV-0070-usb-keyboards-lock-lights.done) | USB keyboards' lock lights: every keyboard shows Caps, Num and Scroll Lock, one plugged in later at once | on the Ryzen the Lenovo 17EF:60A1 plugged in with both on was sent `03` at once, and each press reached both keyboards; the maintainer saw the lights and the letters agree |
 | [000-LNK-0048](../issues-done/000-LNK-0048-sizes-in-gb-and-mb.done) | The writer shows a disk's size in GB and the image's in MB | a `GB` column in `--list` and the disk's details, MB beside the image's bytes, and one line with the image's size after the build; seen on LEG9 with disk 2 |
 | [000-DRV-0070](../issues-done/000-DRV-0070-usb-keyboards-lock-lights.done) | USB keyboards' lock lights: every keyboard shows Caps, Num and Scroll Lock, one plugged in later at once | on the Ryzen the Lenovo 17EF:60A1 plugged in with both on was sent `03` at once, and each press reached both keyboards; the maintainer saw the lights and the letters agree |
 | [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done) | Every stop the kernel chooses falls back on a trial and is recorded for the next boot | a panic, an exception in the kernel, `init`'s exit and an interrupt with no handler restart a trial into the fallback and leave a record the next boot names; ABI 35's flag makes a fault a freeze's evidence for the safe start (round 154) |

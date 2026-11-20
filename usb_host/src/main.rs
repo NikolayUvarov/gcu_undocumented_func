@@ -44,7 +44,9 @@ struct Device {
 
 // One xHCI controller and the devices on its ports: the first init grants in SLOT_DEV0, further ones in mind::usb::XHCI's
 // slots (213-DRV-0048).
-struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64] }
+// `no_isochronous`: the controller stopped with an error once while it streamed, and was set up again: it takes no stream
+// any more (000-DRV-0073).
+struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64], no_isochronous: bool }
 
 struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2] }
 
@@ -350,7 +352,7 @@ impl Controller {
         let mut planned = [(0u8, false, 0u16, 0u8, Ring::default()); MAX_ENDPOINTS];
         let mut count = 0;
         for e in endpoints.iter().filter(|e| e.is_isochronous()) {
-            let Some(ring) = self.xhci.new_stream(slot, dci(e.address), number, e.is_in(), e.packet) else {
+            let Some(ring) = self.xhci.new_stream(slot, dci(e.address), number, e.is_in(), e.packet, iso_interval(device.speed, e.interval)) else {
                 self.xhci.end_streams(slot, Some(number));
                 mind::println!("[USB] {}SLOT {} ENDPOINT {:02X}: NO ROOM FOR A STREAM", Tag(self.xhci.number), slot, e.address);
                 return Err(Error::NoMemory);
@@ -363,12 +365,30 @@ impl Controller {
         let entries = 31 - (kept | 2).leading_zeros();
         self.xhci.input_reset(add);
         self.xhci.input_drop(old & !1);
-        self.xhci.slot_context(device.route, device.speed, entries, device.root, None, device.tt);
+        self.xhci.slot_context_from(device.output, entries);
         for &(target, input, packet, interval, ring) in &planned[..count] { self.xhci.endpoint_context_isochronous(target, input, packet, interval, ring); }
         if self.xhci.configure(slot).is_none() {
             self.xhci.end_streams(slot, Some(number));
             mind::println!("[USB] {}SLOT {} INTERFACE {}: CONFIGURE ENDPOINT FOR ITS STREAMS FAILED (COMPLETION {})", Tag(self.xhci.number), slot, number, self.xhci.last);
             return Err(Error::Invalid);
+        }
+        if count > 0 {
+            let mut states = [0u32; MAX_ENDPOINTS];
+            for (i, p) in planned[..count].iter().enumerate() { states[i] = self.xhci.endpoint_state(device.output, p.0); }
+            mind::println!("[USB] {}SLOT {} INTERFACE {}: {} STREAMS CONFIGURED, ENTRIES {}; THEIR STATES {:?}; USBSTS {:08X}", Tag(self.xhci.number), slot, number, count, entries, &states[..count], self.xhci.status());
+            // The hub whose transaction translator the device's packets go through: its output slot context.
+            if let Some((hub_slot, _)) = device.tt {
+                if let Some(hub) = self.devices.iter().flatten().find(|d| d.slot == hub_slot).copied() {
+                    let at = hub.output;
+                    let words = [self.xhci.dma.read32(at), self.xhci.dma.read32(at + 4), self.xhci.dma.read32(at + 8), self.xhci.dma.read32(at + 12)];
+                    mind::println!("[USB] {}HUB SLOT {} OUTPUT SLOT CONTEXT {:08X} {:08X} {:08X} {:08X}", Tag(self.xhci.number), hub_slot, words[0], words[1], words[2], words[3]);
+                }
+            }
+            for p in &planned[..count] {
+                let w = self.xhci.context_words(device.output, p.0);
+                mind::println!("[USB] {}SLOT {} DCI {}: CONTROL {:08X} {:08X}; SLOT {:08X} {:08X} {:08X} {:08X}; IN {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}; OUT {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                    Tag(self.xhci.number), slot, p.0, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15], w[16], w[17]);
+            }
         }
         Ok(())
     }
@@ -650,6 +670,10 @@ impl Host {
         let (config, total) = root.config_of(index).ok_or(Error::Other(ERR_TIMEOUT))?;
         let (endpoints, count) = setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?;
         let streams = &endpoints[..count as usize];
+        if root.no_isochronous && streams.iter().any(EndpointInfo::is_isochronous) {
+            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED, OR IS AN AMD ONE)", Tag(root.xhci.number), device.slot, info.number, alternate);
+            return Err(Error::Invalid);
+        }
         if root.xhci.streams_of(device.slot, Some(info.number)) != 0 || streams.iter().any(EndpointInfo::is_isochronous) {
             root.streams(index, info.number, streams)?;
         }
@@ -660,8 +684,9 @@ impl Host {
         for t in streams.iter().filter(|e| e.is_isochronous()) {
             let Some(at) = root.xhci.stream(device.slot, dci(t.address)) else { continue };
             if t.is_in() { root.xhci.take_stream(at, &mut []); } // every TD on the ring
-            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: ENDPOINT {:02X} STREAMS {} ({} BYTES EVERY {} US)", Tag(root.xhci.number), device.slot, info.number, alternate,
-                t.address, if t.is_in() { "IN" } else { "OUT" }, (t.packet & 0x7FF) as u32 * ((t.packet >> 11 & 3) as u32 + 1), 125u32 << iso_interval(device.speed, t.interval));
+            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: ENDPOINT {:02X} STREAMS {} ({} BYTES EVERY {} US); STATE {}, USBSTS {:08X}", Tag(root.xhci.number), device.slot, info.number, alternate,
+                t.address, if t.is_in() { "IN" } else { "OUT" }, (t.packet & 0x7FF) as u32 * ((t.packet >> 11 & 3) as u32 + 1), 125u32 << iso_interval(device.speed, t.interval),
+                root.xhci.endpoint_state(device.output, dci(t.address)), root.xhci.status());
         }
         (info.endpoints, info.count) = (endpoints, count);
         info.encode(self.buffer(badge)?);
@@ -801,7 +826,11 @@ fn main(_info: &'static BootInfo) {
         }
         // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
         for port in 1..=xhci.ports() { mind::println!("[USB] {}PORT {} PORTSC {:08X}", tag, port, xhci.port_status(port)); }
-        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64] });
+        // AMD's xHCI (the Ryzen's 1022:1639) stops with a host controller error on the first isochronous TD, where Linux
+        // streams: it takes no stream until that is understood (000-DRV-0073), and a USB audio device falls to the codec.
+        let amd = config(0) & 0xFFFF == 0x1022;
+        if amd { mind::println!("[USB] {}AMD CONTROLLER: NO ISOCHRONOUS STREAM ON IT YET (000-DRV-0073)", tag); }
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: amd });
     }
     if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
@@ -826,7 +855,19 @@ fn main(_info: &'static BootInfo) {
     loop {
         let streaming = host.ehci.iter().flatten().any(|bus| bus.streaming.is_some()) || host.roots.iter().flatten().any(|r| r.xhci.streaming());
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
-        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); }
+        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.watch_streams(); } }
+        // A controller that stopped with an error is set up again, its devices found anew by the next scan, and it takes
+        // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073).
+        for slot in host.roots.iter_mut() {
+            if !slot.as_ref().is_some_and(|r| r.xhci.failed()) { continue; }
+            let Some(old) = slot.take() else { continue };
+            let (number, status, generation) = (old.xhci.number, old.xhci.status(), old.generation);
+            mind::println!("[USB] {}THE CONTROLLER STOPPED WITH AN ERROR (USBSTS {:08X}): SET UP AGAIN, ITS DEVICES FOUND ANEW, NO STREAM ON IT FROM NOW", Tag(number), status);
+            match old.xhci.start_again() {
+                Some(xhci) => *slot = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: generation.wrapping_add(1), root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: true }),
+                None => mind::println!("[USB] {}THE CONTROLLER DID NOT START AGAIN", Tag(number)),
+            }
+        }
         for bus in host.ehci.iter_mut().flatten() { bus.hc.pump(); }
         let now = mind::time::uptime_ms() as u64;
         if now >= host.scanned + SCAN_MS {

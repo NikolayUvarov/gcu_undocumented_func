@@ -32,7 +32,7 @@ struct Attached { name: [u16; 2], playback: Option<(u32, Setting)>, capture: Opt
 pub struct Usb {
     host: Host, attached: Option<Attached>, looked: u64,
     // Playback: the queue's oldest byte and length; the stream selected; when it last had something to play.
-    head: usize, queued: usize, playing: bool, pacer: Pacer, fed_ms: u64, sent: u64, silent: u64,
+    head: usize, queued: usize, playing: bool, pacer: Pacer, fed_ms: u64, sent: u64, silent: u64, started_ms: u64, fast: bool, told: bool,
     // Capture: the kept bytes (whole frames), an overflow not yet reported.
     capturing: bool, kept_head: usize, kept: usize, lost: bool,
     pub out_factor: u32, pub in_factor: u32,
@@ -43,7 +43,7 @@ impl Usb {
     pub fn open() -> Option<Self> {
         if mind::dev::cap_info(SLOT_USB).0 != CAP_KIND_ENDPOINT { return None; }
         let host = Host::new(Endpoint(SLOT_USB)).ok()?;
-        Some(Self { host, attached: None, looked: 0, head: 0, queued: 0, playing: false, pacer: Pacer::new(1), fed_ms: 0, sent: 0, silent: 0,
+        Some(Self { host, attached: None, looked: 0, head: 0, queued: 0, playing: false, pacer: Pacer::new(1), fed_ms: 0, sent: 0, silent: 0, started_ms: 0, fast: false, told: false,
                     capturing: false, kept_head: 0, kept: 0, lost: false, out_factor: 1 << 15, in_factor: 1 << 15 })
     }
 
@@ -99,6 +99,16 @@ impl Usb {
         self.attached = Some(Attached { name: [first.1.vendor, first.1.product], playback, capture, handles, count: n, high_speed: speed >= 3 });
         (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head) = (0, 0, false, false, 0, 0);
         true
+    }
+
+    // usb_host refused the device's stream (its controller takes none): the codec again, and the device's interfaces stay
+    // claimed, so it is not taken again until it is plugged in again.
+    fn refused(&mut self, why: mind::Error) {
+        if let Some(a) = self.attached.take() {
+            mind::println!("[AUDIO] USB {:04X}:{:04X}: ITS STREAM REFUSED ({:?}): THE CODEC AGAIN UNTIL IT IS PLUGGED IN AGAIN", a.name[0], a.name[1], why);
+        }
+        (self.playing, self.capturing, self.queued, self.kept) = (false, false, 0, 0);
+        self.looked = mind::time::uptime_ms() as u64;
     }
 
     // The device went away (usb_host refused its handles): the gateway goes back to the codec.
@@ -159,9 +169,10 @@ impl Usb {
                 self.playing = true;
                 self.pacer = Pacer::new(s.packet as usize / s.frame());
                 self.fed_ms = mind::time::uptime_ms() as u64;
+                (self.started_ms, self.sent, self.silent, self.fast, self.told) = (self.fed_ms, 0, 0, false, false);
                 mind::println!("[AUDIO] USB PLAYBACK STARTED: INTERFACE {} SETTING {}", s.interface, s.alternate);
             }
-            Err(e) => { mind::println!("[AUDIO] USB PLAYBACK SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } }
+            Err(e) => { mind::println!("[AUDIO] USB PLAYBACK SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } }
         }
     }
 
@@ -211,10 +222,22 @@ impl Usb {
         }
     }
 
-    // Packets for the playback stream while usb_host takes them.
+    // Packets for the playback stream while usb_host takes them, ROUNDS calls at most: a host that takes packets faster
+    // than a millisecond each (its transfers end at once) cannot hold the gateway here.
     fn feed(&mut self, handle: u32, s: Setting) -> mind::Result<()> {
-        let now = mind::time::uptime_ms() as u64;
-        loop {
+        for _ in 0..ROUNDS {
+            let now = mind::time::uptime_ms() as u64;
+            // Two seconds in, what went: a stream that does not move shows here.
+            if !self.told && now >= self.started_ms + 2000 {
+                self.told = true;
+                mind::println!("[AUDIO] USB PLAYBACK 2 S IN: {} PACKETS TAKEN ({} SILENCE), {} BYTES QUEUED, RATE {}.{:03} FRAMES A MS",
+                    self.sent, self.silent, self.queued, self.pacer.rate() >> 16, (self.pacer.rate() & 0xFFFF) * 1000 >> 16);
+            }
+            // Packets go out one a millisecond: many more than the time since the start is a host that does not send them.
+            if !self.fast && self.sent > now.saturating_sub(self.started_ms) + 2 * STREAM_PACKETS {
+                self.fast = true;
+                mind::println!("[AUDIO] USB PLAYBACK: {} PACKETS TAKEN IN {} MS: THE HOST ENDS THEM FASTER THAN THEY CAN GO OUT", self.sent, now - self.started_ms);
+            }
             // Up to PACKETS packets at the buffer's start: two length bytes each, then the samples on the wire. A
             // packet's frames, or SILENT for one of silence.
             let mut at = 0;
@@ -258,6 +281,7 @@ impl Usb {
             self.queued -= used * FRAME;
             if taken < at { return Ok(()); }
         }
+        Ok(())
     }
 
     // A capture packet into the kept ring as the gateway's stereo frames; a full ring drops the oldest buffer.
@@ -278,7 +302,7 @@ impl Usb {
         if self.capturing { return true; }
         match self.host.select(handle, s.alternate) {
             Ok(_) => { (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
-            Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); false }
+            Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } false }
         }
     }
     pub fn record_stop(&mut self) {
@@ -300,3 +324,6 @@ impl Usb {
 
 // A packet of silence among those built.
 const SILENT: usize = usize::MAX;
+// Calls of isochronous-out a pump at most, and the packets usb_host holds for a stream.
+const ROUNDS: usize = 8;
+const STREAM_PACKETS: u64 = 32;
