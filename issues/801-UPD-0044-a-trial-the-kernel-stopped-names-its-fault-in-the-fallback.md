@@ -100,6 +100,8 @@ With 801-UPD-0045 (round 158), the updater's line for this case became `[UPDATER
 
 **Left:** the slot the DEXP falls back to needs a release that carries this.
 
+**Since 801-UPD-0046** the later boot does not ask at all: the fallback was taken at A's first boot. The check now asks for `[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD n): WHAT ENDED IT WAS ASKED THEN` instead.
+
 ## Related
 
 [801](801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done).
