@@ -31,6 +31,18 @@ The `isolation` suite checks that the compositor copies whole frames. `app2` num
 - [ ] The cause named from runs, or the check made to tell a stale screen from a torn frame, with the reason.
 - [ ] Ten runs of each group on i9 pass after the fix.
 
+## Progress (2026-11-20)
+
+**Alone on i9, after round 154** (`main` `20a8df9e6c`). Each group ran five times, alternating, with no other KRN operation on the machine. All ten passed:
+- `x86: x2APIC`: 292 to 295 s;
+- `x86: padded vector area`: 151 to 153 s.
+
+**So the failure needs company.** In the two gates, i9 ran one KRN lane beside other tracks' operations on the same machine. Without them it did not come back.
+
+**Left:**
+- runs beside a loaded i9, or with QEMU's CPU time cut, to bring it back;
+- the whole picture of a failing first screen.
+
 ## Related
 
 000-KRN-0086 (the whole-frame copy), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done) (round 154), [000-KRN-0233](000-KRN-0233-the-compositor-compares-every-frame-of-an-idle-shell.md).
