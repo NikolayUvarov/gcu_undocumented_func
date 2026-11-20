@@ -1,6 +1,6 @@
-# 213-DRV-0074 — The Ryzen's second monitor stays dark
+# 213-DRV-0074 — The Ryzen's second monitor stays dark — done
 
-**Type:** display (`bootloader`, `compositor`; a display driver later) · **Owner:** `DRV`, with `KRN` for the loader and compositor · **Priority:** P3 · **Status:** open (2026-11-20) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** display (`bootloader`, `compositor`; a display driver later) · **Owner:** `DRV`, with `KRN` for the loader and compositor · **Priority:** P3 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -18,13 +18,32 @@
 
 ## Acceptance criteria
 
-- [ ] The run's graphics outputs recorded from the log, with the connectors as Linux names them.
-- [ ] A decision recorded: two firmware framebuffers, or a display driver as a separate task.
+- [x] The run's graphics outputs recorded from the log, with the connectors as Linux names them.
+- [x] A decision recorded: two firmware framebuffers, or a display driver as a separate task.
 
 ## Progress (2026-11-20)
 
 - **Linux on the Ryzen** sees two connected outputs, `card1-DP-2` and `card1-HDMI-A-1`. `DP-1` and `HDMI-A-2` are not connected. The firmware's framebuffer is one `simple-framebuffer` until `amdgpu` takes over.
 - **The loader's GOP lines** reach the system log since KRN's 213-KRN-0262 (`fast-test` 87d9aadac9 on). That branch is ABI 35, and the Ryzen's stick is ABI 34, so they come with the next disk write.
+
+## Resolution
+
+**What the firmware offers: one output.** Test release 202611201453 carried KRN's 213-KRN-0262 (the loader's lines in the system log) onto the stick's ABI 34 tree. Its boot logged:
+```
+0.502 init: MIND CORE BOOT: 1 GRAPHICS OUTPUTS
+0.502 init: MIND CORE BOOT: GOP 0: 2560x1600 STRIDE 2560 BGR FB 0x00000000D0000000 CONSOLE
+0.502 init: MIND CORE BOOT: GOP 0: EDID (ACTIVE, 256 BYTES): THE MONITOR PREFERS 2560x1600
+0.502 init: MIND CORE BOOT: 13 MODES; KEPT THE FIRMWARE'S 2560x1600: THE MONITOR'S PREFERRED
+0.502 init: MIND CORE BOOT: USING GOP 0: 2560x1600 STRIDE 2560 BGR FB 0x00000000D0000000
+```
+The maintainer saw the boot's log on one screen only.
+
+**The connectors, from Linux:**
+- `card1-DP-2` is connected, preferring 2560x1600. That is the firmware's output, the screen MIND Core shows on.
+- `card1-HDMI-A-1` is connected, preferring 3440x1440. That is the dark one.
+- `amdgpu` names the display engine: VBIOS `113-CEZANNE-021`, DCN 2.1, with its DMUB firmware loaded through the PSP.
+
+**The decision.** With one firmware framebuffer, there is nothing for the loader to pass for the HDMI monitor. Lighting it needs a native driver for the Radeon's display engine. That is a task of its own: [213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md).
 
 ## Related
 
