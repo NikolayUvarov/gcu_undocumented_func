@@ -57,6 +57,8 @@ pub fn advance(ticks: u64) -> bool {
             crate::serial_print("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD\n");
             super::cpu::freeze();
         }
+        // The panic test's second panic, while the safe start's list is starting (801-KRN-0261).
+        #[cfg(feature = "panic-test")] if (before + ticks) / second == 20 && crate::firmware::PANIC_STAGE.load(Ordering::Relaxed) == 1 { panic!("panic test, 20 s past the boot"); }
     }
     before / slice != (before + ticks) / slice
 }

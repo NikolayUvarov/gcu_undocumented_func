@@ -55,8 +55,9 @@ unsafe fn set_handler(index: usize, address: u64, cs: u16) {
     };
 }
 
-extern "x86-interrupt" fn unexpected(_frame: &mut InterruptFrame) {
-    crate::cpu::halt_all();
+// A vector with no handler: reported, recorded, and on a trial a restart into the fallback (801-KRN-0261).
+extern "x86-interrupt" fn unexpected(frame: &mut InterruptFrame) {
+    crate::fatal(crate::firmware::Fault::Unexpected, "KERNEL EXCEPTION: ", format_args!("AN INTERRUPT WITH NO HANDLER AT RIP={:016X}\n", frame.rip))
 }
 // The tick comes from the boot CPU's LAPIC timer rather than the PIT through the 8259 (211-PRT-0003).
 static LAPIC_TICK: AtomicBool = AtomicBool::new(false);
@@ -75,6 +76,8 @@ pub fn advance() -> bool {
             crate::serial_print("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD\n");
             crate::cpu::freeze();
         }
+        // The panic test's second panic, while the safe start's list is starting (801-KRN-0261).
+        #[cfg(feature = "panic-test")] if seconds == 20 && crate::firmware::PANIC_STAGE.load(Ordering::Relaxed) == 1 { panic!("panic test, 20 s past the boot"); }
     }
     ticks % (QUANTUM_MS / TICK_MS) == 0
 }
