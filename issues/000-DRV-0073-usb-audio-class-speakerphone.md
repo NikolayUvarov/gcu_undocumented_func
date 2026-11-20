@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the path is done and passes in QEMU; the Ryzen's AMD xHCI stops on its first isochronous TD) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -29,9 +29,31 @@
 
 ## Acceptance criteria
 
-- [ ] Host tests: the UAC1 descriptors of the STM-Speaker and of a plain USB headset parsed; the feedback value (10.14) turned into the frames a millisecond; a malformed descriptor refused with its reason.
-- [ ] QEMU: `usb-audio` (QEMU's UAC1 device) plays a tone, and the `audio` suite passes as before.
+- [x] Host tests (`tests/uac_host.rs`, 5 passed): the STM-Speaker's own descriptor bytes; formats it cannot use left out; feedback read in 10.14 and 16.16; the pacer; one channel to and from two.
+- [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, and unplugged, the codec comes back. QEMU 8.2's xHCI ends each OUT TD with no byte taken, so the sound itself is not checked there.
 - [ ] On the Ryzen, with the maintainer: the speakerphone plays `say` and a tone, and `listen` hears its microphones. The STM-Speaker's own counters (underruns, overruns, clock faults) stay at zero for 5 minutes.
+
+## Progress (2026-11-20): the path, and the Ryzen's AMD xHCI
+
+**On `claude/000-DRV-0073-usb-audio`:**
+- `usb_host` streams isochronous endpoints on xHCI both ways. Each TD names its frame, as Linux does on this host.
+- `usb.wit` is 1.5 (`isochronous-out`, `BADGE_AUDIO`), and `init` gives `audio_gw` the client (213-KRN-0263, carried here).
+- `audio_gw` drives a UAC1 device in the codec's place while it is plugged in.
+
+**On the Ryzen** (test releases through the cable's `data/link/rel`, each confirmed by its trial):
+- The STM-Speaker is attached: `PLAYBACK YES (INTERFACE 1, 2 CHANNELS, ENDPOINT 01, 196 BYTES, FEEDBACK), CAPTURE YES (INTERFACE 2, 1 CHANNELS, ENDPOINT 81, 98 BYTES)`.
+- **The second xHCI (AMD 1022:1639) stops with a host controller error** (`USBSTS 00001011`) within 2 ms of the first isochronous TD. That happens for playback and capture alike, before the TD's own frame comes, with SIA and with frame IDs. The Configure Endpoint succeeds and leaves both endpoints running.
+- **Linux on the same machine plays through the speakerphone** (`speaker-test`, no xHCI error). Its debugfs gives the same decoded contexts as ours, word for word:
+  - `00030000 00C40008 … 00C400C4` for the OUT endpoint;
+  - `00030000 00030028 … 00030003` for the feedback endpoint;
+  - the slot `38100001 00010000 00000101`;
+  - TDs `Isoch, IOC, ISP, TBC 0, TLBPC 0`, consecutive frame IDs.
+- **What did not help:** the hub's TT think time 0, and no hub fields at all, as Linux's hub slot shows. Both were reverted.
+- **Not yet compared:** the memory the rings and buffers lie in (ours at 0xC199xxxx, Linux's at 0xFEDxxxxx), and the controller's set-up (USBCMD, IMAN, CONFIG).
+- **The bench is kept:**
+  - such a controller is set up again at once, its devices found anew, and it takes no stream afterwards;
+  - the link's converter, on the same controller, comes back within a second;
+  - `audio_gw` goes back to the codec until the device is plugged in again.
 
 ## Related
 
