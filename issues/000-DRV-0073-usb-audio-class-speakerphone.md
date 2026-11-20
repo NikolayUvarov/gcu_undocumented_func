@@ -60,7 +60,12 @@
   - the STM-Speaker project's own Windows measurements on this machine show a transaction error on the feedback endpoint, then a command timeout and an internal controller reset on PCI 5:0:4.
 
   So the fault belongs to this device (or its cable) on this AMD controller in every system, not to MIND Core's isochronous TDs alone. 000-DRV-0075 keeps such a controller in use: it is set up again, and the device is left alone. **Next:** the speakerphone on the DEXP's Intel xHCI, and another cable for its CN13.
+- **The controller's own set-up compared with Linux's** (debugfs on the Ryzen while Linux plays through the hub):
+  - Linux: USBCMD `0x5` (INTE), IMAN `0x2` (IE), IMOD `0xA0`, CONFIG 64 slots, an event ring of 2 segments, MSI-X, its DMA through the IOMMU (AMD-Vi, addresses `0xFEDxxxxx`);
+  - here: USBCMD `0x1`, IMAN 0, IMOD at its reset value, 16 slots, one segment, no interrupt, physical addresses.
+- **The interrupter as Linux's made no difference.** Test release 202611201000 set IMOD `0xA0`, IMAN.IE and USBCMD.INTE; the first isochronous TD still stopped the controller (`USBSTS 00001019`).
+- **Next:** the IOMMU, from Linux's side. With the controller's IOMMU group in the identity domain, Linux's DMA uses physical addresses as ours does. If Linux's playback then stops the controller too, the addresses are the cause.
 
 ## Related
 
-[000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.md) (an xHCI that stops answering is set up again), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
+[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (an xHCI that stops answering is set up again), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).

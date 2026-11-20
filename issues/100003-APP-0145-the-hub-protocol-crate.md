@@ -1,6 +1,6 @@
 # 100003-APP-0145 — The hub's protocol crate, `improve/proto`: forms, bounds, states, trust, buckets, signatures, vectors
 
-**Type:** library (`no_std`, `alloc`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 1 · **Roadmap:** track G · **Constitution:** MC-3.8, MC-10.3, MC-11.5, MC-12.2
+**Type:** library (`no_std`, `alloc`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (2026-11-20: the maintainer chose Rust and the proposed bounds) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 1 · **Roadmap:** track G · **Constitution:** MC-3.8, MC-10.3, MC-11.5, MC-12.2
 
 ## Problem
 

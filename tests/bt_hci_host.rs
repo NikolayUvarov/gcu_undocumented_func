@@ -95,6 +95,56 @@ fn fragments_of_252_bytes_with_their_index_bytes() {
     assert_eq!(rtl::fragment(len, 0x7F).0, 0x7F);
     assert_eq!(rtl::fragment(len, 0x80).0, 0x01);
     assert_eq!(rtl::fragment(len, 200), (0x80 | 0x49, 200 * 252..len));
+    // As many times again: 0xFE is 0x7F, and the 256th fragment is 1, not the last one's mark (700-BLT-0004).
+    let len = 400 * 252 + 7;
+    assert_eq!(rtl::fragment(len, 0xFE).0, 0x7F);
+    assert_eq!(rtl::fragment(len, 0xFF).0, 0x01);
+    assert_eq!(rtl::fragment(len, 381).0, 0x7F);
+    assert_eq!(rtl::fragment(len, 382).0, 0x01);
+    assert_eq!(rtl::fragment(len, 400), (0x80 | 19, 400 * 252..len));
+}
+
+/// An "RTBTCore" file: the head counting `counted` sections, `sections` as (opcode, parts of (eco, priority, bytes)),
+/// then the extension naming `project`.
+fn core(counted: u32, sections: &[(u32, &[(u8, u8, &[u8])])], project: u8) -> Vec<u8> {
+    let mut f = b"RTBTCore".to_vec();
+    f.extend_from_slice(&0x0002_33C4_0135_01F1u64.to_le_bytes());
+    f.extend_from_slice(&counted.to_le_bytes());
+    for (opcode, parts) in sections {
+        let mut body = (parts.len() as u16).to_le_bytes().to_vec();
+        body.extend_from_slice(&[0, 0]);
+        for (eco, priority, bytes) in parts.iter() {
+            body.extend_from_slice(&[*eco, *priority, 0, 0]);
+            body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            body.extend_from_slice(bytes);
+        }
+        f.extend_from_slice(&opcode.to_le_bytes());
+        f.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        f.extend_from_slice(&body);
+    }
+    f.extend_from_slice(&[0, 0, 0, 0xFF, project, 1, 0, 0x51, 0x04, 0xFD, 0x77]);
+    f
+}
+
+#[test]
+fn an_rtbtcore_patch_is_its_parts_for_the_rom_version_in_rising_priority() {
+    let (a, b, c) = ([0xA1u8; 5], [0xB2u8; 3], [0xC3u8; 4]);
+    let fw = core(2, &[(1, &[(1, 2, &a), (1, 1, &b), (2, 1, &c)])], 20);
+    assert!(rtl::is_core(&fw) && !rtl::is_core(&epatch(10)));
+    assert_eq!(rtl::parse_core(&fw), Ok(rtl::Core { version: 0x0002_33C4_0135_01F1, counted: 2, found: 1, project: 20 }));
+    let mut out = vec![0u8; 64];
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 0, &mut out), Ok(8));
+    assert_eq!(&out[..8], &[0xB2, 0xB2, 0xB2, 0xA1, 0xA1, 0xA1, 0xA1, 0xA1]);
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 1, &mut out), Ok(4));
+    assert_eq!(&out[..4], &c);
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 5, &mut out), Err(rtl::Error::NoPatch(5)));
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 0, &mut out[..6]), Err(rtl::Error::TooLarge));
+    assert_eq!(rtl::image_core(&core(1, &[(1, &[(1, 1, &b)])], 10), &rtl::RTL8852B, 0, &mut out), Err(rtl::Error::Project(10)));
+    // A dummy section's parts count as patch bytes; a security section asks for a key, two of one priority for an order.
+    assert_eq!(rtl::image_core(&core(2, &[(1, &[(1, 1, &b)]), (2, &[(1, 2, &a)])], 20), &rtl::RTL8852B, 0, &mut out), Ok(8));
+    assert_eq!(rtl::image_core(&core(2, &[(1, &[(1, 1, &b)]), (3, &[(1, 2, &a)])], 20), &rtl::RTL8852B, 0, &mut out), Err(rtl::Error::Security));
+    assert_eq!(rtl::image_core(&core(1, &[(1, &[(1, 1, &b), (1, 1, &a)])], 20), &rtl::RTL8852B, 0, &mut out), Err(rtl::Error::Priority(1)));
+    assert_eq!(rtl::parse_core(b"RTBTCorX\0\0\0\0\0\0\0\0\0\0\0\0"), Err(rtl::Error::Signature));
 }
 
 #[test]
@@ -112,4 +162,18 @@ fn the_rtl8821c_files_when_fetched() {
     let n2 = rtl::image(&fw, &config, &rtl::RTL8821C, 1, &mut out).unwrap();
     assert_eq!((n1, n2), (0x4C14 + 10, 0x8864 + 10));
     assert!(rtl::fragments(n2) < 0xFF);
+}
+
+#[test]
+fn the_rtl8852b_file_when_fetched() {
+    let Ok(fw) = std::fs::read(Path::new("proprietary/firmware/rtl_bt/rtl8852bu_fw.bin")) else {
+        println!("SKIP: proprietary/firmware/rtl_bt/rtl8852bu_fw.bin not fetched");
+        return;
+    };
+    // Two sections: the patch, with a part for each of ROM versions 0 and 1, and an empty one with opcode 8.
+    assert_eq!(rtl::parse_core(&fw), Ok(rtl::Core { version: 0x0002_33C4_0135_01F1, counted: 2, found: 2, project: 20 }));
+    let mut out = vec![0u8; 128 * 1024];
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 0, &mut out), Ok(67_133));
+    assert_eq!(rtl::image_core(&fw, &rtl::RTL8852B, 1, &mut out), Ok(60_101));
+    assert_eq!(rtl::fragments(67_133), 267);
 }
