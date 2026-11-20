@@ -60,8 +60,34 @@ The image also has tables 3, 5, 6, 7, 11, 13 and 17.
 
 How Linux's connector names map onto these paths is not read yet. The guess is that `DP-2` is path 4 and `HDMI-A-1` is path 0; the DCN registers of the lit pipe will tell.
 
+## Linux's display state with both monitors
+
+This is `amdgpu`'s own configuration, not the firmware's. DC prints it through debugfs (`amdgpu_dm_dtn_log`, read on 2026-11-20). It shows a working set-up of this engine for both monitors.
+
+**The pipes.** Four HUBP/DPP pipes are used. Each monitor is split over two pipes through MPC combining:
+
+| Pipe | HUBP width × height | MPCC → OPP | Monitor |
+|---|---|---|---|
+| 0 | 1720 × 1440 | MPCC 0 → OPP 0 (bottom MPCC 3) | HDMI, 3440x1440 |
+| 3 | 1720 × 1440 | MPCC 3 → OPP 0 | HDMI |
+| 1 | 1280 × 1600 | MPCC 1 → OPP 1 (bottom MPCC 2) | DP, 2560x1600 |
+| 2 | 1280 × 1600 | MPCC 2 → OPP 1 | DP |
+
+All four scan out format 8h, swizzle mode 19h (tiled), with DCC on. Their DPP colour paths are bypassed (DGAM, shaper, 3D LUT, RGAM).
+
+**The timing generators:**
+
+| OTG | Total h × v | Horizontal blank end/start | Vertical blank end/start | Sync widths | Polarity | Monitor |
+|---|---|---|---|---|---|---|
+| 0 | 3600 × 1500 | 112 / 3552 | 57 / 1497 | h 32, v 5 | v+ | HDMI, 3440x1440 |
+| 1 | 2720 × 1646 | 112 / 2672 | 43 / 1643 | h 32, v 10 | v+ | DP, 2560x1600 |
+
+**DSC** is off on both. HUBBUB's watermark set 0 has urgent 16.3 µs and self-refresh enter/exit 84.3/19.9 µs.
+
+**The smallest driver** needs fewer pipes than Linux uses. The HDMI monitor at 3440x1440 is within one pipe's width on DCN 2.1, so one HUBP, DPP, MPCC, OPP and OTG would drive it, with a linear framebuffer and no DCC. Linux splits the pipes for power and bandwidth, not for need. That is to be confirmed against the engine's limits.
+
 ## Not done yet
 
-- The DCN 2.1 registers of the lit pipe: HUBP, DPP, MPC, OPP and OTG, the DIG, the PHY and DCCG's clocks.
+- **The firmware's own state** for `DP-2` before `amdgpu` takes over: one pipe at 2560x1600, linear, at 0xD0000000. Linux replaces it, so MIND Core has to read it itself: the HUBP, OTG, DIG and DCCG registers at the DCN 2.1 register base.
 - Which command tables DC uses on DCN 2.1.
 - Whether a mode set on a second output needs DMUB.
