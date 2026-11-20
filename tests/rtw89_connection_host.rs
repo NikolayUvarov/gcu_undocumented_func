@@ -56,3 +56,15 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/txdesc.rs"]mod txdesc;
 #[path="../rtw89_wifi/src/tx.rs"]mod tx;
 #[path="../rtw89_wifi/src/frames.rs"]mod frames;
+
+// The WLAN scoreboard's high-LNA bit as Linux's `_set_bt_rx_agc` writes it: only while Bluetooth's differs from what is
+// wanted. Bluetooth takes up a written bit, and then nothing more is written; the earlier rule cleared ours whenever
+// Bluetooth's was set, and the two flipped each other (213-DRV-0076).
+#[test]
+fn the_high_lna_bit_is_written_only_while_bluetooths_differs() {
+    use btc_context::hi_lna;
+    assert_eq!((hi_lna(true, false), hi_lna(true, true), hi_lna(false, true), hi_lna(false, false)), (Some(true), None, Some(false), None));
+    let (mut wlan, mut bluetooth, mut writes) = (false, false, 0);
+    for _ in 0..10 { if let Some(v) = hi_lna(true, bluetooth) { wlan = v; writes += 1; } bluetooth = wlan; }
+    assert_eq!((wlan, bluetooth, writes), (true, true, 1));
+}
