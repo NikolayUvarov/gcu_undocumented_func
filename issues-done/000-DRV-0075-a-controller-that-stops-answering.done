@@ -1,6 +1,6 @@
-# 000-DRV-0075 — `usb_host`: an xHCI that stops answering is set up again, and the device it stopped at is left alone
+# 000-DRV-0075 — `usb_host`: an xHCI that stops answering is set up again, and the device it stopped at is left alone — done
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-11-20: done on `claude/000-DRV-0073-usb-audio`, passes in QEMU; not yet seen on the Ryzen) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -39,10 +39,39 @@ The STM-Speaker project's own measurements show the same controller and device f
 ## Acceptance criteria
 
 - [x] Builds. The QEMU suites `usb`, `ehci`, `usbaudio`, `services` and `files` pass: the paths that work are unchanged.
-- [ ] On the Ryzen with the speakerphone in 05:00.3 port 1, the log shows that the command had no answer, then that the controller was set up again and its device left alone. The boot stick and the Bluetooth come back.
-- [ ] Once the speakerphone is unplugged there, the log says the device left alone is gone. The port works again (camera 1).
+- [x] On the Ryzen with the speakerphone in 05:00.3 port 1, the log shows that the command had no answer, then that the controller was set up again and its device left alone. The boot stick and the Bluetooth come back.
+- [x] Once the speakerphone is unplugged there, the log says the device left alone is gone. The port works again (camera 1).
+
+## Resolution
+
+Landed in `main` 1025ac6bbd (round 157). On the Ryzen it ran as test release 202611200415, the ABI 34 tree with this commit, from 2026-11-20. Three times there the speakerphone's own USB (its CN13, `CAFE:4014`) went straight into an AMD root port, and three times the controller came back:
+
+```
+5419.175 usb_host: [USB] XHCI 1: COMMAND 11 HAD NO ANSWER IN 5 S (USBSTS 00000010, CRCR 00000008)
+5419.175 usb_host: [USB] XHCI 1: PORT 2: THE CONTROLLER STOPPED ANSWERING AT ITS DEVICE'S ADDRESS DEVICE: THE DEVICE IS LEFT ALONE UNTIL IT IS UNPLUGGED
+5419.175 usb_host: [USB] XHCI 1: THE CONTROLLER LEFT A COMMAND UNANSWERED (USBSTS 00000010): SET UP AGAIN, ITS DEVICES FOUND ANEW, NO STREAM ON IT
+5419.740 usb_host: [USB] XHCI 1: 1A86:7523 ON PORT 1.4 (FULL SPEED)
+6228.760 usb_host: [USB] XHCI 1: A DEVICE LEFT ALONE ON PORT 2 IS GONE
+6999.854 usb_host: [USB] XHCI 1: 0483:374B ON PORT 2 (FULL SPEED)
+7012.796 usb_host: [USB] COMMAND 11 HAD NO ANSWER IN 5 S (USBSTS 00000010, CRCR 00000008)
+7012.900 usb_host: [USB] 0BDA:B85B ON PORT 3 (FULL SPEED)
+7012.979 usb_host: [USB] 152D:2329 ON PORT 4 (HIGH SPEED)
+7021.382 vfs_server: [VFS] THE USB DRIVE ANSWERS AGAIN WITH THE SAME MEDIUM
+7517.462 usb_host: [USB] A DEVICE LEFT ALONE ON PORT 1 IS GONE
+```
+
+**On the second controller** (05:00.4, port 2), twice:
+- the hub, the keyboard's receiver and the link's converter came back within 0.6 s;
+- the cable carried the log reads that followed;
+- once the device was gone, the port took the ST-LINK.
+
+**On the first** (05:00.3, port 1):
+- the Bluetooth and the boot stick came back, and `usb_storage` claimed the stick again;
+- `vfs_server` found the same medium 8.6 s after the restart.
+
+In Linux 7.0 the same device leaves that controller dead until a PCI remove and rescan. The device's side went to the STM-Speaker project as its task `19-usb-amd-root-port-01-first-control-transfer` (the maintainer's word, 2026-11-20).
 
 ## Related
 
-- [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md): the speakerphone, and the recovery from a controller that halted with an error.
+- [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md): the speakerphone, and the recovery from a controller that halted with an error.
 - STM-Speaker `docs/windows-delivery-2026-10-01.md`, section "Reproduced USB failure and limits".
