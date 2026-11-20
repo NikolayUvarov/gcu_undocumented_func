@@ -136,6 +136,8 @@ The code before round 157 (`38f3fe3db2`) fails this test with the refusal above.
 
 This is a model of what was read, not a run (MC-12.2). The Ryzen's boot on a kernel from round 157 or later is still left.
 
+**Landed (2026-11-20):** the host test with the firmware's values, in round 160 (`main` `dba0853c13`). The gate's host tests ran it. **Left:** the Ryzen's boot line on a kernel from round 157 or later (DRV's).
+
 ## Related
 
 [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the Intel TCO watchdog, the run mark, the safe start), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [213](213-amd-ryzen-pc.md).

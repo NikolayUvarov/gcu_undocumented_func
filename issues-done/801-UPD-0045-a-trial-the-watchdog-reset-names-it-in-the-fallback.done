@@ -1,6 +1,6 @@
-# 801-UPD-0045 — A trial the platform's watchdog restarted names it in the fallback's reason
+# 801-UPD-0045 — A trial the platform's watchdog restarted names it in the fallback's reason — done
 
-**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20; landed in round 158, the second criterion's check on `claude/801-UPD-0044-own-fault-not-a-fallback`) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -91,4 +91,13 @@ The check asks:
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S2), [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done), [801-KRN-0259](../issues-done/801-KRN-0259-the-pchs-over-clocking-watchdog.done), [000-KRN-0217](000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done), [801-KRN-0259](../issues-done/801-KRN-0259-the-pchs-over-clocking-watchdog.done), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
+
+## Resolution
+
+Done (2026-11-20).
+- **Criterion 1:** in `main` since round 158 (`7a1e938a6b`). The x86 `watchdog` suite's `watchdog_reset_trial`.
+- **Criterion 2:** in `main` since round 160 (`dba0853c13`). The `watchdog` suite's `own_freeze_after_a_fallback`: slot A's own freeze, after slot B's trial fell back to it, is no reason of B's. It ran in round 160's gate (i9, 492 s).
+- **Criterion 3:** `init.wit` 1.15 in docs/idl.
+
+**Not covered here:** a trial that stops before `init` sets its mark, or after `init` cleared it a minute past `READY`. That is 801-UPD-0046, on `claude/801-UPD-0046-a-trial-reset-with-no-mark`, not yet in `main`.

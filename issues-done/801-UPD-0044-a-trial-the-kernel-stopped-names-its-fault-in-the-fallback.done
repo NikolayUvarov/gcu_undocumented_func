@@ -1,6 +1,6 @@
-# 801-UPD-0044 — A trial the kernel stopped names its fault in the fallback's reason
+# 801-UPD-0044 — A trial the kernel stopped names its fault in the fallback's reason — done
 
-**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -102,4 +102,15 @@ With 801-UPD-0045 (round 158), the updater's line for this case became `[UPDATER
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done).
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0037](../issues-done/801-UPD-0037-a-refused-trial-spent-and-its-reason-kept.done), [801-UPD-0042](../issues-done/801-UPD-0042-a-refused-trials-reason-reaches-the-server-whole.done).
+
+## Resolution
+
+Done (2026-11-20).
+- **Criterion 1:** in `main` since round 157. The x86 `rollback` suite's release 7 carries the `panic-test` kernel and comes back `fell-back` with the panic's line in the answer and the heartbeat.
+- **Criterion 2:** in `main` since round 160 (`dba0853c13`). The x86 `boot` suite's `own_fault_after_a_fallback`: a panic of slot A's own run after slot B's trial fell back to it is no reason of B's.
+- **Criterion 3:** `init.wit` 1.14 and the record's layout in `docs/api`.
+
+**Round 159's red gate was this task's.** Release 7's check stopped its machine before the agent's last write was flushed, so the suite's final `fsck.fat` found the dirty bit, twice on x32. Round 160 landed the fix: `sync` before the machine stops, in release 6's part and in release 7's check, as the updater-through-the-agent check already did. With it, the group passed in round 160's gate (x32, 726 s).
+
+**Not claimed:** a bench machine's run. The slot the DEXP falls back to needs a release that carries this first (801 S8). 801-UPD-0046 takes a fallback once, so a later boot of the fallback slot does not ask again.

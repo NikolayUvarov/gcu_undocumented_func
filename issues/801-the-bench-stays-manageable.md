@@ -193,4 +193,4 @@ The rewrite of all three disks is also left.
 - **What was wrong.** Only a panic on a trial restarted into the fallback. An exception in the kernel, `init`'s exit or an interrupt with no handler stopped the machine with its watchdog stopped, and only a person could bring it back.
 - **Now:** all four restart a trial into the fallback, and leave a record that the next boot names.
 - **Evidence:** QEMU, x86, a panic.
-- **Left:** the record reaching the server (S2) is [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md).
+- **Left:** the record reaching the server (S2) is [801-UPD-0044](../issues-done/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done).
