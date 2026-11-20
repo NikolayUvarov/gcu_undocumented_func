@@ -29,12 +29,34 @@ Since [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-bac
 
 ## Acceptance criteria
 
-- [ ] The `boot` suite's panic check (x86) and the panicked trial still pass. The second boot's panic, 20 s in, comes after `init` took the record.
-- [ ] In the x86 `rollback` suite, slot A's `init` names the trial's panic and deletes the record (801-UPD-0044's check).
+- [x] The `boot` suite's panic check (x86) and the panicked trial still pass. The second boot's panic, 20 s in, comes after `init` took the record.
+- [x] In the x86 `rollback` suite, slot A's `init` names the trial's panic and deletes the record (801-UPD-0044's check).
 - [ ] aarch64 builds, and its suites pass.
-- [ ] docs/api describes the record; docs/idl lists 1.14; docs/profile says who deletes it.
+- [x] docs/api describes the record; docs/idl lists 1.14; docs/profile says who deletes it.
 
 **Not claimed:** a run of the deadline's record. No test restarts a trial at its deadline with the record checked.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/801-UPD-0044-kernel-fault-reported` (`21a8baac38`), with 801-UPD-0044. The kernel grew by 1 line (7977 of 8000).
+
+**Tested** through Effector (QEMU only, MC-12.1):
+
+| Group | Machine | Commit | Result |
+|---|---|---|---|
+| x86: boot, display, shell, memory, clock | i9 | `6d7ad40f25` | PASS, 1692 s |
+| x86: boot, display, shell, memory, clock | x32 | `1d0fb7c82c` (main merged) | PASS, 1521 s |
+| x86: a release that loses the server, rolled back | i9 | `c8a5d6c8ad` | PASS, 854 s |
+| aarch64: boot and fault containment | acc-1 | `1d0fb7c82c` | PASS, 165 s |
+| aarch64: the updater and the modes | acc-1 | `1d0fb7c82c` | PASS, 1167 s |
+| aarch64: a release that loses the server, rolled back | acc-1 | `1d0fb7c82c` | PASS, 717 s |
+| host: `idl_fuzz`, `updater` | this session | `6d7ad40f25` | PASS |
+
+Slot A's lines in the rollback check (i9):
+- `MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:1496:141 CPU=0 PID=1 NAME=init`
+- `[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at …`
+
+**Left:** aarch64's other suites, in the landing gate.
 
 ## Related
 
