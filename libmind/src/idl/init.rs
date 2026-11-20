@@ -16,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 13, 0);
+pub const VERSION: (u8, u8, u8) = (1, 14, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -147,6 +147,32 @@ impl Wire for AgentStep {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// What stopped a run the kernel stopped on a fault of its own (1.14, 801-KRN-0265): its panic, an exception in the
+/// kernel, init's exit, an interrupt it has no handler for, a trial's deadline passed with no confirmation, or a kind
+/// this init does not name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FaultKind { #[default] Panic = 0, Exception = 1, InitExited = 2, Unexpected = 3, Deadline = 4, Unknown = 5 }
+impl FaultKind {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Panic), 1 => Some(Self::Exception), 2 => Some(Self::InitExited), 3 => Some(Self::Unexpected), 4 => Some(Self::Deadline), 5 => Some(Self::Unknown), _ => None } }
+}
+impl Wire for FaultKind {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// The kernel's record of such a run (`FAULT_RECORD_NAME`, common/abi.rs): its slot (`BOOT_SLOT_*`), what stopped
+/// it and its report's first line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fault { pub slot: u8, pub kind: FaultKind, pub line: Text<160> }
+impl Wire for Fault {
+    const MAX: usize = <u8 as Wire>::MAX + <FaultKind as Wire>::MAX + <Text<160> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.kind.encode(w)?; self.line.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, kind: Wire::decode(r)?, line: Wire::decode(r)? }) }
 }
 
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
@@ -362,6 +388,22 @@ pub fn agent_step(endpoint: Endpoint, step: AgentStep, detail: &str) -> Result<c
     Ok(Ok(()))
 }
 
+/// The record the last run left, which init read and deleted as this boot started (1.14, 801-KRN-0265); `not-found`
+/// when it left none. The updater of the slot a trial fell back to reports a fault of the trial's slot as that
+/// trial's refusal (801-UPD-0044). Any client may ask.
+pub fn last_fault(endpoint: Endpoint) -> Result<core::result::Result<Fault, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 16 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 164, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Fault as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -380,6 +422,7 @@ pub enum Request {
     Configuration,
     StopNotice,
     AgentStep { step: AgentStep, detail: Text<64> },
+    LastFault,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -489,6 +532,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::AgentStep { step, detail }, call))
         }
+        16 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 164, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::LastFault, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -552,4 +602,8 @@ pub fn reply_stop_notice(call: Call, value: core::result::Result<StopReason, Err
 pub fn reply_agent_step(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_last_fault(call: Call, value: core::result::Result<&Fault, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

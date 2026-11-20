@@ -742,6 +742,18 @@ pub const RUN_MARK_NAME: &str = "MindCoreRun";
 // leaves boot services, which the kernel copies into its log; UTF-8 lines, at most LOADER_LINES_MAX bytes.
 pub const LOADER_LINES_NAME: &str = "MindCoreLoaderSaid";
 pub const LOADER_LINES_MAX: usize = 2048;
+// The kernel's record of a run it stopped on a fault of its own (801-KRN-0261), or of a trial it restarted at its
+// deadline (801-KRN-0265): a non-volatile variable of RUN_MARK_GUID's vendor, FAULT_RECORD_VERSION, the run's slot
+// (BOOT_SLOT_*), its kind (FAULT_*), then the report's first line in UTF-8, at most FAULT_RECORD_TEXT bytes. The next
+// boot's kernel names it and leaves it; init reads it, deletes it and answers it as init.wit 1.14's `last-fault`.
+pub const FAULT_RECORD_NAME: &str = "MindCoreFault";
+pub const FAULT_RECORD_VERSION: u8 = 1;
+pub const FAULT_RECORD_TEXT: usize = 160;
+pub const FAULT_PANIC: u8 = 1;
+pub const FAULT_EXCEPTION: u8 = 2;
+pub const FAULT_INIT_EXITED: u8 = 3;
+pub const FAULT_UNEXPECTED: u8 = 4;
+pub const FAULT_DEADLINE: u8 = 5; // a trial not confirmed by its deadline, which the kernel restarted (801-KRN-0265)
 // TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
 // fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With the
 // CAP_KIND_CONSOLE writer (ABI 29) the bytes queue for the console instead, ERR_PEER once its channel ended. With
