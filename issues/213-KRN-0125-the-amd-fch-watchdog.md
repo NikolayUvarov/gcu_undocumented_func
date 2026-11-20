@@ -113,6 +113,29 @@ This code took the timer at the ACPI MMIO block's window when WDT_TMREN was clea
 
 **Landed** in round 157 (main `1025ac6bbd`); the gate saw no change, as QEMU has no FCH. **Left:** the Ryzen's boot on a build with it (DRV's), whose line says whether the timer arms.
 
+## The firmware's own values (DRV, 2026-11-20)
+
+DRV read them through `/dev/mem`, read-only, on two fresh Ubuntu boots of un-rizen before any driver loaded. Both gave the same values:
+
+| What | Value |
+|---|---|
+| PM 0xFED80300..07 | `77 0b 07 e3 02 04 01 00` |
+| DECODEEN | 0x77: WDT_TMREN clear |
+| DECODEEN3 | 0xE3: the disable bits already clear, seconds |
+| ISACONTROL | 0x02: MMIOEN |
+| 0xFED80B00 (the ACPI MMIO window) | control `0x00000008`: WatchDogDisable set |
+| 0xFEB00000 | `0xFFFFFFFF`: not decoded |
+
+So the code before round 157 took the ACPI MMIO window and refused at its bit 3, which matches the stick's ABI 34 kernel saying only `DISABLED BY THE FIRMWARE`. Linux sets WDT_TMREN and finds the timer at 0xFEB00000 with bit 3 clear (DRV's earlier message).
+
+**A host test with these values** (`the_ryzens_firmware_values_arm_the_decoded_timer`, on `claude/213-KRN-0125-fch-firmware-values`). In the model, the ACPI window reads DISABLED while WDT_TMREN is clear. With these values, `main`'s `arm`:
+- writes DECODEEN 0xF7 and nothing else to PM;
+- arms the timer at 0xFEB00000.
+
+The code before round 157 (`38f3fe3db2`) fails this test with the refusal above.
+
+This is a model of what was read, not a run (MC-12.2). The Ryzen's boot on a kernel from round 157 or later is still left.
+
 ## Related
 
 [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the Intel TCO watchdog, the run mark, the safe start), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [213](213-amd-ryzen-pc.md).
