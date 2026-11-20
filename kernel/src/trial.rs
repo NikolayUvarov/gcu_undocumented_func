@@ -34,6 +34,7 @@ pub fn check(now_ms: u64) {
     if deadline == 0 || now_ms < deadline { return; }
     DEADLINE_MS.store(0, Relaxed);
     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN {} S: RESTARTING\n", deadline / 1000));
+    crate::firmware::record_fault(crate::firmware::Fault::Deadline, b"THE TRIAL BOOT WAS NOT CONFIRMED IN TIME"); // for the fallback (801-KRN-0265)
     unsafe { crate::acpi::reboot() }
 }
 
