@@ -52,7 +52,7 @@ Neither run had a mixed line, so they show that the helper keeps these suites gr
 
 ## Related
 
-[801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) (round 156 found it), [000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a read the new boot's prompt answered, another way a line was lost).
+[801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done) (round 156 found it), [000-KRN-0210](../issues-done/000-KRN-0210-the-updater-group-ran-past-its-limit-once.done) (a read the new boot's prompt answered, another way a line was lost).
 
 ## Resolution
 

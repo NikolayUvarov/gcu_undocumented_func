@@ -14,6 +14,7 @@ struct Model {
     pm_sticks: bool,
     tmren_sticks: bool,
     decoded: bool,
+    acpi_disabled: bool, // the ACPI MMIO window reads DISABLED while WDT_TMREN is clear, as on the Ryzen
     control: u32,
     count: u32,
     pm_reads: usize,
@@ -24,7 +25,7 @@ impl Model {
     // As the Ryzen's firmware may leave it: WDT_TMREN clear, the ACPI MMIO block decoded, the watchdog disabled in PM.
     fn zen() -> Self {
         Model { smbus: (SMBUS, 0x51), pm: [0, 0, 0, WDT_DISABLE, MMIOEN, 0, 0, 0], pm_sticks: true, tmren_sticks: true, decoded: true,
-                control: POWER_OFF, count: 0xFFFF, pm_reads: 0, log: Vec::new() }
+                acpi_disabled: false, control: POWER_OFF, count: 0xFFFF, pm_reads: 0, log: Vec::new() }
     }
     fn answers(&self, address: u32) -> bool {
         let base = address & !0xF;
@@ -44,7 +45,9 @@ impl Registers for Model {
     fn timer(&mut self, address: u32) -> u32 {
         assert!(address & 0xF == CONTROL || address & 0xF == COUNT, "{address:#x}");
         if !self.answers(address) { return u32::MAX; }
-        if address & 0xF == COUNT { self.count } else { self.control }
+        if address & 0xF == COUNT { return self.count; }
+        let tmren = self.pm[DECODEEN as usize] & WDT_TMREN != 0;
+        if address & !0xF == TIMER_IN_ACPI_MMIO && self.acpi_disabled && !tmren { self.control | DISABLED } else { self.control }
     }
     fn set_timer(&mut self, address: u32, value: u32) {
         assert!(self.answers(address), "a write where the timer does not answer: {address:#x}");
@@ -80,6 +83,21 @@ fn a_timer_the_firmware_decoded_already_is_armed_with_nothing_more_set() {
     m.pm[DECODEEN as usize] = WDT_TMREN | 0x77;
     assert_eq!(arm(&mut m, 30).map(|a| a.base), Ok(TIMER_DECODED));
     assert!(!m.log.contains(&(PM + DECODEEN as u32, (WDT_TMREN | 0x77) as u32)), "DECODEEN not written again: {:x?}", m.log);
+}
+
+// The values DRV read on the Ryzen's two fresh boots, before any driver (2026-11-20). Linux's sp5100_tco then set
+// WDT_TMREN and found the timer at TIMER_DECODED enabled.
+#[test]
+fn the_ryzens_firmware_values_arm_the_decoded_timer() {
+    let mut m = Model::zen();
+    m.pm = [0x77, 0x0B, 0x07, 0xE3, 0x02, 0x04, 0x01, 0x00];
+    (m.control, m.count, m.acpi_disabled) = (0, 0, true);
+    assert_eq!((m.timer(TIMER_IN_ACPI_MMIO + CONTROL), m.timer(TIMER_DECODED + CONTROL)), (DISABLED, u32::MAX), "as read");
+    assert_eq!(arm(&mut m, 30), Ok(Armed { base: TIMER_DECODED, restarted: false }));
+    let pm_writes: Vec<_> = m.log.iter().copied().filter(|(a, _)| (PM..PM + 8).contains(a)).collect();
+    assert_eq!(pm_writes, vec![(PM + DECODEEN as u32, 0xF7)], "WDT_TMREN alone set, DECODEEN3 left as it was");
+    assert!(timer_writes(&m).iter().all(|(a, _)| a & !0xF == TIMER_DECODED), "{:x?}", m.log);
+    assert_eq!((m.count, m.control & (RUN | POWER_OFF)), (30, RUN));
 }
 
 #[test]

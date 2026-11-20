@@ -48,7 +48,7 @@ A release that breaks the kernel or `init` must roll its slot back (801 S1). Sin
 
 **Not claimed:** a bench machine's run, and a trial ended by an exception in the kernel, `init`'s exit or an interrupt with no handler. Those take the panic's path, but no test makes one.
 
-**Left to [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md):** the record's line reaches neither the updater nor the server, so a fallback from a trial the kernel stopped is reported without its step (S2).
+**Left to [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done):** the record's line reaches neither the updater nor the server, so a fallback from a trial the kernel stopped is reported without its step (S2).
 
 ## Progress (2026-11-19)
 
@@ -91,7 +91,7 @@ Landed in round 154 (`main` `da1ee7647b`, gate GREEN on `f6ec9ab9f5bb`, with LNK
 - **Not shown:**
   - a bench machine's run;
   - a trial ended by an exception in the kernel, `init`'s exit or an interrupt with no handler.
-- **Left:** the record's line reaching the server is [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md).
+- **Left:** the record's line reaching the server is [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done).
 
 ## Related
 
