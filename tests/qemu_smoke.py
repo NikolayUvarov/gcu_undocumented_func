@@ -18199,6 +18199,7 @@ def watchdog_suite(args, disk):
     if args.watchdog_late_kernel:
         watchdog_reset_trial(args, disk)
         own_freeze_after_a_fallback(args, disk)
+    hung_trial_reported(args, disk)
 
 
 def watchdog_reset_trial(args, disk):
@@ -18248,7 +18249,7 @@ def own_fault_after_a_fallback(args, disk):
     """801-UPD-0044: both slots hold the `panic-test` kernel. Slot B's trial panics at init's first log line, and slot A
     boots with B's one try spent; its updater keeps B's panic. A's kernel then panics 20 s in, on a run of its own, and
     stops. At A's next boot the records still name B's trial fallen back to A, but the kernel's record is A's own: the
-    updater takes it for no reason of B's, and B's panic stays the one kept."""
+    updater took B's fallback at A's first boot and does not ask again (801-UPD-0046), and B's panic stays the one kept."""
     temp = Path(tempfile.mkdtemp(prefix="mind-own-fault-"))
     volume = temp / "volume"
     shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
@@ -18281,7 +18282,7 @@ def own_fault_after_a_fallback(args, disk):
         vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
         vm.expect("MIND> ", timeout=180)
         log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
-        require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON")
+        require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD ")  # 801-UPD-0046: taken once
         require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
         status = vm.command("update status", raw=True)
         assert "20 s past the boot" not in log + status, (log[-3000:], status)
@@ -18294,7 +18295,51 @@ def own_fault_after_a_fallback(args, disk):
                         r"panic test at src/scheduler\.rs:[^\n]+\nlog not known\n", refused), refused
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: a panic of slot A's own run, after slot B's trial fell back to it, is no reason of B's: the next boot's "
-          "updater says what ended the last run was another slot's, and B's panic stays the refusal kept (801-UPD-0044)", flush=True)
+          "updater took B's fallback at an earlier boot and asks nothing, and B's panic stays the refusal kept (801-UPD-0044)", flush=True)
+
+
+def hung_trial_reported(args, disk):
+    """801-UPD-0046: slot B on trial holds this suite's `watchdog-test` kernel, which stops for good before `init`, so its
+    run leaves no mark of init's. The TCO timer resets the machine, and slot A boots with B's one try spent. A's updater
+    takes the watchdog's restart for the trial's, as it is the first boot after the fallback, and keeps it as the trial's
+    refusal. A's next boot takes that fallback as taken and keeps nothing new."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-hung-reported-"))
+    volume = temp / "volume"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    (volume / "data").mkdir(exist_ok=True)
+    (volume / "data/mode.conf").write_bytes(b"development\n")
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "hung-reported.img", boot_slots.layout(volume, temp / "slots", both=True))
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    why = "THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING"
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True, extra=("-machine", "q35"))
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: THE TRIAL STOPPED FOR GOOD BEFORE INIT", timeout=120)
+        vm.expect("BOOT: SLOT A LOADED", timeout=240)
+        vm.expect("A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK; IT RESTARTED THE LAST RUN", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        assert re.search(r"\[UPDATER\] SLOT B'S TRIAL OF VERSION (\d+|not known) FELL BACK TO THIS SLOT: " + re.escape(why), log), log[-3000:]
+        require(vm.command("update status", raw=True), "UPDATE: THE LAST FAILURE: ")
+        # A restart by hand: the same newer record, its fallback taken.
+        vm.hmp("system_reset")
+        vm.expect("BOOT: SLOT A LOADED", timeout=120)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD ")
+        require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+        assert "FELL BACK TO THIS SLOT: " not in log, log[-3000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-hung-reported-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
+    assert re.fullmatch(r"record \d+\n", (image.read("system/updater/fell-back") or b"").decode())
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: watchdog: a trial that stopped for good before init, leaving no mark, was reset by the chipset's TCO timer; "
+          "slot A's updater kept the watchdog's restart as the trial's refusal at its first boot after the fallback, and "
+          "took the fallback as taken at the next (801-UPD-0046)", flush=True)
 
 
 def own_freeze_after_a_fallback(args, disk):
@@ -18302,7 +18347,7 @@ def own_freeze_after_a_fallback(args, disk):
     starts. Slot B's trial stops past init's run mark, the TCO timer resets the machine, and slot A boots with B's one
     try spent; its updater keeps the watchdog's restart. A second QEMU then starts slot A afresh from the same disk: A
     stops past its own mark, and the timer resets it. At A's boot after that the records still name B's trial fallen
-    back to A, but the run the watchdog restarted was A's own: the updater takes it for no reason of B's, and B's
+    back to A, but the run the watchdog restarted was A's own: the updater took B's fallback at A's first boot and does not ask again (801-UPD-0046), and B's
     refusal stays the one kept."""
     temp = Path(tempfile.mkdtemp(prefix="mind-own-freeze-"))
     volume = temp / "volume"
@@ -18335,7 +18380,7 @@ def own_freeze_after_a_fallback(args, disk):
     log, _ = stopped_then_a(True)
     require(log, "[UPDATER] SLOT B'S TRIAL OF VERSION ")
     log, status = stopped_then_a(False)
-    require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; WHAT ENDED THE LAST RUN WAS ANOTHER SLOT'S: NOT ITS REASON")
+    require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT AT AN EARLIER BOOT (RECORD ")  # 801-UPD-0046: taken once
     require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
     assert "FELL BACK TO THIS SLOT: " not in log, log[-3000:]
     require(status, "UPDATE: THE LAST FAILURE: ")
@@ -18343,7 +18388,7 @@ def own_freeze_after_a_fallback(args, disk):
     assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy " + re.escape(why) + r"\nlog not known\n", refused), refused
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: watchdog: slot A stopped for good on a run of its own after slot B's trial fell back to it, and the TCO "
-          "timer reset it; at A's next boot its updater said what ended the last run was another slot's, and B's refusal "
+          "timer reset it; at A's next boot its updater took B's fallback as taken at an earlier boot, and B's refusal "
           "stays the one kept (801-UPD-0045)", flush=True)
 
 
