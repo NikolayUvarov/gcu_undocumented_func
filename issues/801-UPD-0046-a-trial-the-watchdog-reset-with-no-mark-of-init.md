@@ -4,7 +4,7 @@
 
 ## Problem
 
-S2 asks that after a fallback the slot that had the connection report the refused release's version, the step that failed and its lines. Since [801-UPD-0045](801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.md), a trial the platform's watchdog restarted is reported as such. That holds only when `init`'s run mark names the trial's slot.
+S2 asks that after a fallback the slot that had the connection report the refused release's version, the step that failed and its lines. Since [801-UPD-0045](../issues-done/801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.done), a trial the platform's watchdog restarted is reported as such. That holds only when `init`'s run mark names the trial's slot.
 
 **The trial leaves no mark when:**
 - it stops before `init` starts a service of the safe start's list, where `init` first writes its mark: in the kernel, or in `init` before it;
@@ -59,4 +59,4 @@ The x86 boot and watchdog groups on Effector's machines are left before landing.
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md) (S2), [801-UPD-0045](801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.md), [801-UPD-0044](801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done) (the `watchdog-test` kernel's stop before `init`).
+[801](801-the-bench-stays-manageable.md) (S2), [801-UPD-0045](../issues-done/801-UPD-0045-a-trial-the-watchdog-reset-names-it-in-the-fallback.done), [801-UPD-0044](../issues-done/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.done), [801-KRN-0258](../issues-done/801-KRN-0258-a-trial-that-hangs-before-init-needs-a-watchdog.done) (the `watchdog-test` kernel's stop before `init`).
