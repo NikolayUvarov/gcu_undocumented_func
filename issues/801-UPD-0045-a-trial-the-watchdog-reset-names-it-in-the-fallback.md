@@ -1,6 +1,6 @@
 # 801-UPD-0045 — A trial the platform's watchdog restarted names it in the fallback's reason
 
-**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`, a new minor version) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20; landed in round 158, the second criterion's check on `claude/801-UPD-0044-own-fault-not-a-fallback`) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -64,6 +64,12 @@ The check's lines (x32-2):
 - `[UPDATER] SLOT B'S TRIAL OF VERSION not known FELL BACK TO THIS SLOT: THE PLATFORM'S WATCHDOG RESTARTED THE TRIAL: IT STOPPED ANSWERING; KEPT IN system/updater/refused`.
 
 The second criterion has no run: no test freezes the fallback slot's own run with the records still naming the other's trial. The updater keeps the reason only when `last-run`'s slot is the other's.
+
+## Landed (2026-11-20)
+
+In round 158 (`main` `7a1e938a6b`), the gate green on both architectures. Its x86 `watchdog` group ran the new check (acc-1, 350 s), and both `rollback` groups passed.
+
+**Left:** the second criterion. Its check is made and passed twice here (`own_freeze_after_a_fallback`, on `claude/801-UPD-0044-own-fault-not-a-fallback`). It lands with 801-UPD-0044's.
 
 ## The second criterion (2026-11-20)
 

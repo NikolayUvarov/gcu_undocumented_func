@@ -151,6 +151,12 @@ That makes two of about twenty-five such boots, with the same signs as 2026-11-0
 - The watchdog (213-KRN-0125) restarts a kernel whose tick stops, but it is armed only with that tick. So 18 minutes dark would put the hang before it, if `boot0017.log` shows the watchdog armed. DRV is asked to check.
 - **The mark of how far a boot got** is [000-KRN-0211](000-KRN-0211-the-loaders-mark-of-how-far-a-boot-got.md). The loader writes `MIND/REACHED` at three points of each boot, and `logs` reads it, so the next hang is split by stage with nobody at the screen.
 
+## The switch of 2026-11-19 (DRV)
+
+`boot_switch.py once --reboot` from Ubuntu at 20:40:07 UTC started MIND Core from the stick (`fast-test` 92c2c6e9, slot A). Its agent was on hesere at 20:40:45. The next day's reads were made from Ubuntu again (`KRN/2026-11-20T0903Z-DRV-…`).
+
+**Left for the Ryzen's criterion:** that the run's `reboot` came back to Ubuntu, and `logs` copying that boot's log. DRV's reports do not say. DRV is asked.
+
 ## Related
 
 [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) (`efivar`, `BootNext` from MIND Core), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (each slot's own loader, which the one at `EFI/BOOT/` starts), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (the watchdog), [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md), [000-KRN-0108](000-KRN-0108-tests-on-a-real-machine-through-effector.md) (the rig), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) (`write_usb_linux.py`), [docs/write-disk.md](../docs/write-disk.md), [docs/effector.md](../docs/effector.md).
