@@ -46,7 +46,8 @@ struct Device {
 // slots (213-DRV-0048).
 // `no_isochronous`: the controller stopped with an error once while it streamed, and was set up again: it takes no stream
 // any more (000-DRV-0073).
-struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64], no_isochronous: bool }
+// `vendor`: its PCI vendor ID, for what one vendor's controllers need.
+struct Controller { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, root_failed: u64, step: &'static str, root_tries: [u8; 64], no_isochronous: bool, vendor: u16 }
 
 struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2] }
 
@@ -224,7 +225,9 @@ impl Controller {
         if let Some(d) = self.devices[index].as_mut() { d.rings = rings; d.ring_count = ring_count; d.interfaces = interfaces; d.count = count; }
         if ring_count > 0 || hub.is_some() {
             self.xhci.input_reset(add);
-            let hub_fields = hub.map(|(ports, think, _)| (ports, if device.speed == 3 { think } else { 0 }));
+            // AMD's xHCI (the Ryzen's 1022:1639) is given no TT think time: Linux's hub slot there holds 0 and streams
+            // through the TT, and ours with the hub's 3 stopped the controller on its first isochronous TD (000-DRV-0073).
+            let hub_fields = hub.map(|(ports, think, _)| (ports, if device.speed == 3 && self.vendor != 0x1022 { think } else { 0 }));
             self.xhci.slot_context(device.route, device.speed, entries, device.root, hub_fields, device.tt);
             for (&(target, kind, packet, interval), &(_, ring)) in planned[..ring_count].iter().zip(&rings[..ring_count]) {
                 self.xhci.endpoint_context(target, kind, packet, interval, ring);
@@ -826,7 +829,7 @@ fn main(_info: &'static BootInfo) {
         }
         // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
         for port in 1..=xhci.ports() { mind::println!("[USB] {}PORT {} PORTSC {:08X}", tag, port, xhci.port_status(port)); }
-        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: false });
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: false, vendor: (config(0) & 0xFFFF) as u16 });
     }
     if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
@@ -857,10 +860,10 @@ fn main(_info: &'static BootInfo) {
         for slot in host.roots.iter_mut() {
             if !slot.as_ref().is_some_and(|r| r.xhci.failed()) { continue; }
             let Some(old) = slot.take() else { continue };
-            let (number, status, generation) = (old.xhci.number, old.xhci.status(), old.generation);
+            let (number, status, generation, vendor) = (old.xhci.number, old.xhci.status(), old.generation, old.vendor);
             mind::println!("[USB] {}THE CONTROLLER STOPPED WITH AN ERROR (USBSTS {:08X}): SET UP AGAIN, ITS DEVICES FOUND ANEW, NO STREAM ON IT FROM NOW", Tag(number), status);
             match old.xhci.start_again() {
-                Some(xhci) => *slot = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: generation.wrapping_add(1), root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: true }),
+                Some(xhci) => *slot = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: generation.wrapping_add(1), root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: true, vendor }),
                 None => mind::println!("[USB] {}THE CONTROLLER DID NOT START AGAIN", Tag(number)),
             }
         }
