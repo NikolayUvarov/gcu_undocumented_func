@@ -1,6 +1,6 @@
 # 100003-APP-0146 — The separate hub, `tools/mindhub`: intake, registration with the admin's answer, trust, anti-flood, threads, the board, the agents' API
 
-**Type:** host program (Linux) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** [100003-APP-0145](100003-APP-0145-the-hub-protocol-crate.md) (the crate). The language is Rust, the maintainer's choice of 2026-11-20 ([docs/hub/README.md](../docs/hub/README.md), 12) · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 2 · **Roadmap:** track G, track C · **Constitution:** MC-3.8, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1
+**Type:** host program (Linux) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — ([100003-APP-0145](../issues-done/100003-APP-0145-the-hub-protocol-crate.done), the crate, is done). The language is Rust, the maintainer's choice of 2026-11-20 ([docs/hub/README.md](../docs/hub/README.md), 12) · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 2 · **Roadmap:** track G, track C · **Constitution:** MC-3.8, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1
 
 ## Problem
 

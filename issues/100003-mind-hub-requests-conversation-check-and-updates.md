@@ -1,6 +1,6 @@
 # 100003 — MIND Hub: a user's request done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.2; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stage 1 in progress · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.2; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stage 1 done (100003-APP-0145), stage 2 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 **History:**
 - **Recorded** by the kernel session, 2026-10-25, at the maintainer's request, as `improve`: a request to improve the OS from the phone, and its status (`MOB`).
@@ -56,7 +56,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
 
 | Stage | Task | What |
 |---|---|---|
-| 1 | [100003-APP-0145](100003-APP-0145-the-hub-protocol-crate.md) | the protocol crate and its vectors |
+| 1 | [100003-APP-0145](../issues-done/100003-APP-0145-the-hub-protocol-crate.done), done | the protocol crate and its vectors |
 | 2 | [100003-APP-0146](100003-APP-0146-the-separate-hub.md) | the separate hub: intake, registration, trust, anti-flood, threads, the board, the admin pages, the agents' API |
 | 3 | numbered when it starts | the hub's updates (needs UPD's `COMMIT` beside a release; restricted channels need UPD's signed fetch) |
 | 4 | numbered when it starts | `improve` on MIND Core, the console |

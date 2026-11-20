@@ -1,0 +1,68 @@
+# 100003-APP-0145 — The hub's protocol crate, `improve/proto`: forms, bounds, states, trust, buckets, signatures, vectors — done
+
+**Type:** library (`no_std`, `alloc`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), stage 1 · **Roadmap:** track G · **Constitution:** MC-3.8, MC-10.3, MC-11.5, MC-12.2
+
+## Problem
+
+The hub's two forms and its clients must agree byte for byte ([docs/hub/README.md](../docs/hub/README.md), sections 3 and 10):
+- on the forms and bounds of a request and a message;
+- on the state machine;
+- on the trust bands and their token buckets;
+- on what a signature covers.
+
+Written three times, they would drift.
+
+## Plan
+
+- **`improve/proto`,** a crate for MIND Core's programs, the native hub, `tools/mindhub` and the host `improve`:
+  - **the forms** of a device's registration, a request, an attachment's entry, a message of each kind, a state change, a board entry, with their JSON and their bounds (design 5.4);
+  - **the state machine** of design 6.1: which role moves which state to which;
+  - **the bands** of design 5.2, with the limits each gives, and a token bucket on a clock it is given;
+  - the automatic trust changes and their bounds (5.3);
+  - **the repeat check:** a request's normalised title and text;
+  - **the signature's bytes:** the method, the path, the body's SHA-256 and the challenge, verified with Ed25519 (the crate the project already uses for releases);
+  - the proof of work's check (5.4).
+- **Test vectors** as files: signatures, buckets over time, every state transition allowed and refused. A hub in another language passes them (design 10.3).
+- **Third-party code:** none new. The Ed25519 and SHA-256 crates are those the updater already uses ([THIRD_PARTY.md](../THIRD_PARTY.md)).
+
+## Acceptance criteria
+
+- **Host tests:**
+  - each bound at its limit and one past it;
+  - each band's bucket over a simulated day;
+  - every state transition by every role, allowed or refused;
+  - the automatic trust bounds;
+  - a repeat;
+  - signatures good, over a stale challenge and over a changed body;
+  - the proof of work.
+- **The vectors** are checked by the tests that make them.
+- **`improve/proto` builds** for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat` as well as the host.
+
+## Resolution
+
+- **`improve/proto`** (`improve-proto`, `no_std` with `alloc`, `#![forbid(unsafe_code)]`):
+  - **`form`:** a registration, a request, an attachment's entry, a message, a state change and a board entry.
+    - Their bounds: a title of 120 characters, a text of 8 KiB, names of 64, a contact, pairing codes of 8 characters without look-alikes, the client's ID.
+    - A request's links and attachments are bounded by the band.
+    - A security report is private.
+    - `may_post` says which role posts which message.
+  - **`state`:** the 13 states and the table of who moves which. The admin takes a closed request back to intake; nothing else goes back.
+  - **`trust`:**
+    - −1023 … +1023, eight bands of 128, the pending device's limits, `access`;
+    - the channels: `test` from 256, `dev` from 512;
+    - the hub's own changes within −256 … +512 (the maintainer's choices of 2026-11-20).
+  - **`bucket`:** a token bucket in units of a millisecond times the rate, so that frequent calls lose nothing to rounding. The first version did, and the band test caught it.
+  - **`repeat`:** the normalised text and its digest.
+  - **`sign`:** the signed bytes over the hub's challenge, the `Hub-Signature` header, a strict verification that refuses small-order keys, and a device's ID.
+  - **`work`:** the proof of work, at most 28 bits.
+  - **`json`:** a strict reader, with one encoding, depth 8, 64 KiB, duplicate keys refused, integers only. A writer that writes the API's one encoding.
+  - **`wire`:** the forms in JSON, exactly their keys. On MIND Core the tree comes from `parse` (MC-11.11).
+- **Tests** (`improve/proto/tests/proto.rs`, 11): every acceptance criterion above, on the host.
+- **Vectors** (`improve/proto/vectors/`, with a README): the signature, every allowed move, the trust changes, a bucket, the repeat digests, the proof of work, a request. Each is checked by the test that makes it.
+- **Builds** for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`, with curve25519-dalek's serial backend as the programs set it (`improve/proto/.cargo/config.toml`).
+- **`scripts/host_tests.sh`** runs the tests and the `x86_64-unknown-none` build.
+- **THIRD_PARTY.md** names the crate among the users of `sha2` and `ed25519-dalek`; nothing new is added.
+
+## Related
+
+[100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), [docs/hub/README.md](../docs/hub/README.md), [100003-APP-0146](../issues/100003-APP-0146-the-separate-hub.md).
