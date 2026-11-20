@@ -21,8 +21,14 @@ On the Ryzen, once `bt_hci` patched the RTL8852B (700-BLT-0004), the Bluetooth s
 
 - [x] **Host test** (`tests/rtw89_connection_host.rs`, `the_high_lna_bit_is_written_only_while_bluetooths_differs`): the four cases, and a Bluetooth that takes up the bit, after which nothing more is written.
 - [x] **On the Ryzen,** with the patched RTL8852B: one scoreboard change in 110 s after this `rtw89_wifi` went in, where there had been hundreds a second. Bluetooth then keeps its high LNA (`4000250B`).
-- [ ] **On the Ryzen:** the Wi-Fi through inquiries every 80 s for half an hour, compared with the hour before the fix:
-  - before the fix: three data-mode stops in 48 inquiries, one of them a coexistence reconcile's register fault (`Coexistence(Session(Register(Fault { PowerState, 0x38 })))`).
+- [x] **On the Ryzen:** the Wi-Fi through inquiries every 80 s, compared with the hour before the fix (2026-11-20, a test `bt_hci` with a round a minute, `rtw89_wifi` through `replace`):
+
+  | | inquiries | scoreboard changes | data-mode stops |
+  |---|---|---|---|
+  | before the fix, about 70 minutes | 48 | hundreds a second | 3, one of them a coexistence reconcile's register fault (`Coexistence(Session(Register(Fault { PowerState, 0x38 })))`) |
+  | with it, 33 minutes | 24 | 1 | 0 |
+
+  With the fix, one heartbeat had a transport error, and the agent was connected again 3 s later. One machine and one access point (MC-12.1).
 
 ## Related
 
