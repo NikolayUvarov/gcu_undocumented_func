@@ -14409,10 +14409,17 @@ def rollback_suite(args):
                 answer.get("stdout") != f"fell back: slot A runs version 5, not 6; the updater: {reason}":
             problems.append(("the update command's answer", result))
         assert "PANIC" not in vm.log, vm.log[-2000:]
+    except BaseException:
+        server.close()
+        raise
     finally:
         vm.close()
-        server.close()
         (Path(tempfile.gettempdir()) / f"mind-core-rollback-a2-{args.cpus}cpu.log").write_text(vm.log)
+    try:
+        # x86 alone: aarch64 builds no panic kernel.
+        panicked = arch == "x86_64" and args.panic_kernel and kernel_stopped_release(args, temp, image, server, server_tree, agent, cpu + network, logged, restarted, problems)
+    finally:
+        server.close()
     boot_slots_check.fsck(image)
     assert not problems, problems
     shutil.rmtree(temp, ignore_errors=True)
@@ -14420,6 +14427,85 @@ def rollback_suite(args):
           "and refused it, the updater kept the reason and spent it with tries left, and nothing slot A reads was changed; "
           "slot A came back on the server as the same agent, reported the fallback in its heartbeat and answered the update "
           "fell-back", flush=True)
+    if panicked:
+        print("PASS: rollback: release 7, whose kernel panics on its trial, taken through the agent: the kernel recorded the "
+              "panic and restarted into slot A, whose init took the record and whose updater kept it as the trial's refusal; "
+              "the heartbeat carried the panic's line and the update was answered fell-back with it (801-UPD-0044)", flush=True)
+
+
+def kernel_stopped_release(args, temp, image, server, server_tree, agent, extra, logged, restarted, problems):
+    """801-UPD-0044 (801 S2): release 7 carries the `panic-test` kernel, which panics at the first log line of a boot
+    after no fault record. Taken through the agent with one try, its trial panics; the kernel records the panic and
+    restarts into slot A (801-KRN-0261), whose init takes the record and deletes it (801-KRN-0265), and whose updater
+    keeps it as the trial's refusal: the heartbeat carries it and the update command is answered fell-back with it."""
+    release7 = temp / "release7"
+    shutil.copytree(temp / "release6", release7)
+    (release7 / "kernel.elf").write_bytes(Path(args.panic_kernel).read_bytes())
+    _, toolchain, locks = sign_manifest.build_inputs()
+    sign_manifest.sign_volume(release7, inputs=("release-7-whose-kernel-panics", toolchain, locks), version=7)
+    release_tool.publish(release_tool.stage(7, temp / "staged7", {"x86_64": release7}), server_tree)
+    release_tool.bundle(server_tree, temp / "release7.zip", arches=["x86_64"])
+    bundle = (temp / "release7.zip").read_bytes()
+    payload = {"size": len(bundle), "sha256": hashlib.sha256(bundle).hexdigest(), "version": 7, "tries": 1, "timeout_seconds": 1800}
+    log_path = lambda name: Path(tempfile.gettempdir()) / f"mind-core-rollback-{name}-{args.cpus}cpu.log"
+    # Slot A, release 5, takes release 7, stages it in slot B and restarts.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=True, extra=extra)
+    try:
+        logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
+        on = server.queue(agent, "update_agent", payload, program="MIND Core")
+        server.publish(bundle, command_id=on, bundle=True)
+        logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
+        restarted(vm, 1500)
+    finally:
+        vm.close()
+        log_path("p1").write_text(vm.log)
+    chosen = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert (chosen["slot"], chosen["fallback"], chosen["tries"], chosen["confirmed"]) == ("B", "A", 1, False), chosen
+    # Slot B on trial: its kernel panics at init's first log line, records it and restarts into the fallback.
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, rtc="utc", ahci=True, extra=extra)
+    try:
+        vm.expect("BOOT: SLOT B LOADED ON TRIAL", timeout=120)
+        restarted(vm, 300)
+    finally:
+        vm.close()
+        log_path("p2").write_text(vm.log)
+    require_all(ANSI.sub("", vm.log), "KERNEL PANIC: panic test at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT", "TRIAL: RESTARTING INTO THE FALLBACK")
+    # Slot A again: its kernel names B's panic, init takes the record, the updater keeps it; the agent reports it.
+    beats_then = len(server.beats)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=True, extra=extra)
+    try:
+        boot = ANSI.sub("", vm.log)
+        require_all(boot, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED",
+                    "MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:")
+        logged(vm, "init", "[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at src/scheduler.rs:", 120)
+        logged(vm, "updater", "[UPDATER] SLOT B'S TRIAL OF VERSION 7 FELL BACK TO THIS SLOT: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at ", 120)
+        # S2: the server hears the version, the slots and the panic's line, in the heartbeat and in the answer.
+        deadline = time.monotonic() + 180
+        while not (report := next((b for b in list(server.beats)[beats_then:] if b.get("agent_id") == agent and (b.get("update") or {}).get("build_number") == 7), None)):
+            assert time.monotonic() < deadline, [b.get("update") for b in list(server.beats)[-5:]]
+            time.sleep(1)
+        reason = str(report["update"].get("result"))
+        if report["update"].get("state") != "rolled_back" or not re.fullmatch(
+                r"version 7 in slot B, falling back to slot A: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler\.rs:[^\n]+", reason):
+            problems.append(("the kernel-stopped trial's report in the heartbeat", report["update"]))
+        deadline = time.monotonic() + 300
+        while not (result := server.operation(on)):
+            assert time.monotonic() < deadline, "the update command was not answered"
+            time.sleep(1)
+        answer = result.get("result") or {}
+        if result.get("status") != "failed" or answer.get("error") != "fell-back" or \
+                answer.get("stdout") != f"fell back: slot A runs version 5, not 7; the updater: {reason}":
+            problems.append(("the kernel-stopped trial's answer", result))
+        out = ANSI.sub("", vm.log)
+        assert "KERNEL PANIC" not in out[out.find("BOOT: SLOT A LOADED"):], out[-2000:]
+    finally:
+        vm.close()
+        log_path("p3").write_text(vm.log)
+    # Kept for the slot before to report until a trial is confirmed, in the form init's refusals have.
+    refused = (image.read("system/updater/refused") or b"").decode()
+    if refused != f"refused version 7 in slot B, falling back to slot A\nwhy {reason.split(': ', 1)[1]}\nlog not known\n":
+        problems.append(("the kernel-stopped trial's refusal", refused, reason))
+    return True
 
 
 def refused_release(vm, server, agent, bundle, payload, logged):
