@@ -111,7 +111,7 @@ This code took the timer at the ACPI MMIO block's window when WDT_TMREN was clea
 - The read-back of DECODEEN3 stays as a stricter test than Linux's.
 - `tests/fch_watchdog_host.rs`: the model starts with WDT_TMREN clear, and the timer answers at 0xFEB0_0000 only once it is set. Four cases were added: the order of the writes, a bit already set, the window, and a bit that stays clear. 9 tests pass.
 
-**Left:** the gate (QEMU has no FCH), and the Ryzen's boot on a build with it (DRV's), whose line says whether the timer arms.
+**Landed** in round 157 (main `1025ac6bbd`); the gate saw no change, as QEMU has no FCH. **Left:** the Ryzen's boot on a build with it (DRV's), whose line says whether the timer arms.
 
 ## Related
 

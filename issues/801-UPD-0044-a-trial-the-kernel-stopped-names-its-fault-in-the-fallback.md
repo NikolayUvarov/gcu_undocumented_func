@@ -1,6 +1,6 @@
 # 801-UPD-0044 — A trial the kernel stopped names its fault in the fallback's reason
 
-**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** [801-KRN-0265](801-KRN-0265-init-takes-the-kernels-fault-record.md) (`init` takes the record; on the same branch) · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
+**Type:** `updater`, `init` (`idl/init.wit`), the kernel's fault record · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-9.4, MC-9.9, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -31,9 +31,9 @@ The machine falls back, but nothing writes `refused`. The agent's answer is then
 
 ## Acceptance criteria
 
-- [ ] A trial the kernel stopped on a fault is reported to the server with the fault's line, in the answer and in each heartbeat until a trial is confirmed (QEMU, x86).
+- [x] A trial the kernel stopped on a fault is reported to the server with the fault's line, in the answer and in each heartbeat until a trial is confirmed (QEMU, x86).
 - [ ] A record of this slot's own run (a confirmed slot that panicked) is not reported as a fallback.
-- [ ] `init.wit`'s new version and the record's layout are in `docs/api`.
+- [x] `init.wit`'s new version and the record's layout are in `docs/api`.
 
 ## Progress (2026-11-20)
 
@@ -49,6 +49,32 @@ The machine falls back, but nothing writes `refused`. The agent's answer is then
 - **What it leaves.** No record, or one of this slot's own run, leaves everything as before.
 - **The check.** The x86 `rollback` suite gained release 7, which carries the `panic-test` kernel, sent through the agent with one try. Its trial panics at `init`'s first log line, and slot A comes back. The heartbeat must carry `version 7 in slot B, falling back to slot A: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler.rs:…`; the answer must be `fell back: slot A runs version 5, not 7; the updater: …`; `refused` must hold the same.
 - **Both slots must carry it.** A fallback slot whose release predates it deletes the record in its kernel and reports no step: the DEXP's slot A (release 14) is such a slot until a release with it is confirmed there.
+
+## Tests (2026-11-20)
+
+**The new check** passed in the x86 `rollback` suite on i9 (`c8a5d6c8ad`, 854 s), after two fixes to the check itself:
+- `0a84d597b0`: slot B's trial and slot A's boot now run in one QEMU. Without flash, OVMF keeps a variable written after the boot services only in memory, which a restart keeps and a new QEMU does not.
+- `c8a5d6c8ad`: the panic's report is read from the output, as the boot suite reads it, since `expect()` takes a panic for a failure.
+
+Its lines:
+- `[UPDATER] SLOT B'S TRIAL OF VERSION 7 FELL BACK TO THIS SLOT: THE KERNEL STOPPED THE TRIAL IN ITS PANIC: panic test at src/scheduler.rs:1496:141 CPU=0 PID=1 NAME=init; KEPT IN system/updater/refused`, 2.1 s into slot A's boot.
+- `PASS: rollback: release 7, whose kernel panics on its trial, taken through the agent: …; the heartbeat carried the panic's line and the update was answered fell-back with it (801-UPD-0044)`.
+
+**The check reads one heartbeat.** That every heartbeat carries the line until a trial is confirmed follows from `refused`, which each start of the updater reads again, as for `init`'s refusals (801-UPD-0042's runs).
+
+**The groups it touches**, with 801-KRN-0265's (QEMU only, MC-12.1):
+- `x86: the updater and an update through the link`: x32, PASS, 1377 s.
+  - On i9 it failed once (`u44d`): the shell stopped answering `dmesg` 63 s into a boot of a confirmed slot, every CPU idle. That boot does not take the new path; on x32 it passed.
+- `x86: services, storage, audio`: i9, PASS, 1202 s.
+- The x86 boot group and the aarch64 groups are in 801-KRN-0265.
+
+**Not shown by a run:** a record of this slot's own run alongside a fallback. The updater asks only when the records show the other slot's trial fell back, and keeps the record only when it is that slot's (`fell_back`); no test makes the two disagree.
+
+## Landed (2026-11-20)
+
+In round 157 (main `1025ac6bbd`), the gate green on both architectures; its x86 `rollback` group ran the new check (x32, 722 s).
+
+**Left:** the second criterion has no run yet, and the slot the DEXP falls back to needs a release that carries this. 801-UPD-0045 takes the trial the watchdog restarts.
 
 ## Related
 

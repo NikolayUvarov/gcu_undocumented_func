@@ -1,0 +1,71 @@
+# 801-KRN-0265 — init takes the kernel's fault record and answers it (`init.wit` 1.14) — done
+
+**Type:** kernel (`kernel/src/firmware.rs`, `trial.rs`), `init`, `idl/init.wit`, `common/abi.rs` · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [801](../issues/801-the-bench-stays-manageable.md) (S2) · **Constitution:** MC-6.8, MC-9.4, MC-9.9, MC-12.3, MC-12.4
+
+## Problem
+
+Since [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), the kernel keeps a record of each stop it chooses (a panic, an exception in the kernel, `init`'s exit, an interrupt with no handler) in the firmware variable `MindCoreFault`. The next boot's kernel names it on COM1 and the screen, then deletes it.
+
+**No task can read it.** So the slot a trial fell back to cannot say why the trial ended. [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md) needs the record in the updater of that slot.
+
+**A trial the kernel restarts at its deadline leaves no record at all.** That is a trial `init` never confirmed: a boot service that did not start, the boot volume not mounted, or `init` stuck.
+
+## Plan
+
+1. **The record's layout goes to `common/abi.rs`:**
+   - its name, `FAULT_RECORD_NAME`;
+   - its format's version, `FAULT_RECORD_VERSION` (1);
+   - the kinds `FAULT_*`;
+   - the line's bound, `FAULT_RECORD_TEXT` (160).
+
+   The kernel takes them from there.
+2. **The kernel names the record and leaves it.**
+3. **`init` reads the record as the boot starts, beside the run's mark, and deletes it.**
+   - It says so in the system log: `[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: …`.
+   - It keeps the record for `last-fault`.
+   - A record `init` could not delete is named again at the next boot, and the line says so.
+4. **`init.wit` 1.14, `last-fault`:** the record this boot took (slot, kind, line), or `not-found`. Any client may ask. Adding a function at the end is a minor version (docs/idl, Evolution).
+5. **A trial the kernel restarts at its deadline is recorded too,** as `FAULT_DEADLINE` (5) with the line `THE TRIAL BOOT WAS NOT CONFIRMED IN TIME`. It sets no `BOOT_LAST_RUN_FAULTED`: no service's start is suspected of it.
+
+## Acceptance criteria
+
+- [x] The `boot` suite's panic check (x86) and the panicked trial still pass. The second boot's panic, 20 s in, comes after `init` took the record.
+- [x] In the x86 `rollback` suite, slot A's `init` names the trial's panic and deletes the record (801-UPD-0044's check).
+- [x] aarch64 builds, and its suites pass.
+- [x] docs/api describes the record; docs/idl lists 1.14; docs/profile says who deletes it.
+
+**Not claimed:** a run of the deadline's record. No test restarts a trial at its deadline with the record checked.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/801-UPD-0044-kernel-fault-reported` (`21a8baac38`), with 801-UPD-0044. The kernel grew by 1 line (7977 of 8000).
+
+**Tested** through Effector (QEMU only, MC-12.1):
+
+| Group | Machine | Commit | Result |
+|---|---|---|---|
+| x86: boot, display, shell, memory, clock | i9 | `6d7ad40f25` | PASS, 1692 s |
+| x86: boot, display, shell, memory, clock | x32 | `1d0fb7c82c` (main merged) | PASS, 1521 s |
+| x86: a release that loses the server, rolled back | i9 | `c8a5d6c8ad` | PASS, 854 s |
+| aarch64: boot and fault containment | acc-1 | `1d0fb7c82c` | PASS, 165 s |
+| aarch64: the updater and the modes | acc-1 | `1d0fb7c82c` | PASS, 1167 s |
+| aarch64: a release that loses the server, rolled back | acc-1 | `1d0fb7c82c` | PASS, 717 s |
+| host: `idl_fuzz`, `updater` | this session | `6d7ad40f25` | PASS |
+
+Slot A's lines in the rollback check (i9):
+- `MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at src/scheduler.rs:1496:141 CPU=0 PID=1 NAME=init`
+- `[INIT] THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC; THE KERNEL'S RECORD DELETED: panic test at …`
+
+**Left:** aarch64's other suites, in the landing gate.
+
+## Resolution
+
+Landed in round 157 (main `1025ac6bbd`), the gate green on every group of both architectures (candidate `1025ac6bbd`, i9, acc-1, PCU, x32, x32-2). The record's layout is in `common/abi.rs` (`FAULT_RECORD_*`, `FAULT_*`). The kernel names the record and leaves it (`kernel/src/firmware.rs`), and records a trial it restarts at its deadline (`kernel/src/trial.rs`). `init` takes the record as the boot starts, deletes it and answers it as `init.wit` 1.14's `last-fault` (`init/src/main.rs` `take_fault`). The docs: `docs/api` (MIND Core's firmware variables), `docs/idl` (1.13 and 1.14), `docs/profile` (who deletes the record).
+
+**Shown in QEMU (x86):** slot A's kernel and `init` name slot B's panic, and `init` deletes the record (801-UPD-0044's check in the `rollback` suite). The `boot` suite's three-boot panic check passes with the record left for `init`.
+
+**Not shown by a run:** the deadline's record. No test restarts a trial at its deadline with the record checked.
+
+## Related
+
+[801](../issues/801-the-bench-stays-manageable.md) (S2), [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done), [801-UPD-0044](../issues/801-UPD-0044-a-trial-the-kernel-stopped-names-its-fault-in-the-fallback.md), [000-KRN-0217](../issues/000-KRN-0217-a-safe-start-that-leaves-out-only-what-it-suspects.md).
