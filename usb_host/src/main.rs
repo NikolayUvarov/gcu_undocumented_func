@@ -312,7 +312,10 @@ impl Controller {
                 self.xhci.acknowledge(port);
             }
             self.step = "PORT RESET"; self.xhci.last = 0;
-            let set_up = self.xhci.enable_port(port, self.root_tries[port - 1] > 0).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
+            let (again, before) = (self.root_tries[port - 1] > 0, self.xhci.port_status(port));
+            let enabled = self.xhci.enable_port(port, again);
+            if again { mind::println!("[USB] {}PORT {}: RESET FOR ANOTHER TRY (PORTSC {:08X}, THEN {:08X})", Tag(self.xhci.number), port, before, self.xhci.port_status(port)); }
+            let set_up = enabled.and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             if self.xhci.stuck { self.add_suspect(port as u8, 0, format_args!("{}", port)); return; }
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
             // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
