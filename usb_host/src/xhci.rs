@@ -22,9 +22,10 @@ const POOL_SCRATCH: usize = POOL_PAGES / 2;
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
 const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
-const TYPE_ISOCH: u32 = 17;
+// The Isoch transfer TRB is type 5 (xHCI 1.2, table 6-91); 17, which stood here, is the Reset Device command's.
+const TYPE_ISOCH: u32 = 5;
 // An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
-// IDs: the Ryzen's AMD xHCI stopped with a host controller error on TDs that asked to start as soon as possible (SIA).
+// IDs.
 const FRAME_ID_SHIFT: u32 = 20;
 // The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
 const FIRST_AHEAD: u32 = 8 * 8;

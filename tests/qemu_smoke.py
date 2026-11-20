@@ -10816,11 +10816,16 @@ def usbaudio_suite(args):
             require(log, "[AUDIO] LEVELS THE CODEC AGAIN")
         finally:
             vm.close()
-        # QEMU 8.2's xHCI ends each isochronous OUT TD with success and no byte taken: usb-audio gets nothing, and its
-        # wav backend keeps a bare header. What the device hears is checked on a real one (the STM-Speaker, the Ryzen).
-        print(f"NOTE: usb-audio's wav holds {wav.stat().st_size} bytes: QEMU's xHCI moves no isochronous OUT data", flush=True)
+        # What the device heard: usb-audio's wav holds beep's tone. With the Isoch TRB written as type 17, QEMU ended each
+        # TD with success and took no byte of it, and the wav kept a bare header (000-DRV-0073).
+        with wave.open(str(wav), "rb") as heard:
+            rate, channels, width, frames = heard.getframerate(), heard.getnchannels(), heard.getsampwidth(), heard.readframes(heard.getnframes())
+        assert width == 2, width
+        loud = sum(1 for (sample,) in struct.iter_unpack("<h", frames[: len(frames) & ~1]) if abs(sample) > 1000)
+        assert loud >= rate * channels // 4, f"usb-audio heard {loud} loud samples of {len(frames) // 2} at {rate} Hz: beep's tone did not reach it"
     print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
-          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played; unplugged, the codec again", flush=True)
+          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
+          f"{loud / channels / rate:.2f} s of tone; unplugged, the codec again", flush=True)
 
 
 def listen_suite(vm, starts):
