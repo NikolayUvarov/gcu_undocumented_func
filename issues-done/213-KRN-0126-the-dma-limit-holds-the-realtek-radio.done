@@ -1,6 +1,6 @@
-# 213-KRN-0126 — The kernel's DMA limit holds the Realtek radio's region: `rtw89_wifi` no longer fails with `NoMemory`
+# 213-KRN-0126 — The kernel's DMA limit holds the Realtek radio's region: `rtw89_wifi` no longer fails with `NoMemory` — done
 
-**Type:** kernel (`kernel/src/scheduler.rs`), profile · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's boot left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-1.7, MC-12.1
+**Type:** kernel (`kernel/src/scheduler.rs`), profile · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-1.7, MC-12.1
 
 ## Problem
 
@@ -10,7 +10,7 @@ The drivers track reported on 2026-10-20 (`internal-dev-messages`, `ALL/2026-10-
 
 **The cause.** `PLATFORM_DMA` hands out at most `DMA_LIMIT`, 8 MiB, in all, from the kernel arena.
 - The Ryzen's other drivers already hold 2.8 MiB: `free` shows `DMA=2961408/8388608`. That is xHCI, NVMe, AHCI, `audio_gw` and `rtl8168`'s 2 MiB.
-- `rtw89_wifi` asks for 8 MiB of its own ([213-KRN-0114](213-KRN-0114-realtek-driver-startup.md)).
+- `rtw89_wifi` asks for 8 MiB of its own ([213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md)).
 
 QEMU has no RTL8852BE, so no suite reached the limit.
 
@@ -24,7 +24,7 @@ QEMU has no RTL8852BE, so no suite reached the limit.
 ## Acceptance criteria
 
 - [x] The QEMU suites pass as before.
-- [ ] On the Ryzen:
+- [x] On the Ryzen:
   - `rtw89_wifi` starts;
   - `free` shows the DMA in use under 16 MiB;
   - no driver fails with `NoMemory`.
@@ -35,4 +35,13 @@ QEMU has no RTL8852BE, so no suite reached the limit.
 
 ## Related
 
-[213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), docs/profile/kernel-objects.md.
+[213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), docs/profile/kernel-objects.md.
+
+## Resolution
+
+Done (2026-11-20). DRV's runs on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `KRN/2026-11-19T2130Z-DRV-…` on `internal-dev-messages`):
+- `rtw89_wifi` started with `RETAINED DMA C1C40000, 8388608 BYTES`;
+- `free` gave `DMA=11874304/16777216`;
+- no driver logged `NoMemory`.
+
+For that machine and build only (MC-12.1).

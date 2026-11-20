@@ -61,4 +61,4 @@ It is now in `efivar_check`, at two boots in a row.
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), 213-DRV-0074 (DRV's), [801-KRN-0261](801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.md) (the same variable services, on its branch).
+[213](213-amd-ryzen-pc.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done), 213-DRV-0074 (DRV's), [801-KRN-0261](../issues-done/801-KRN-0261-every-stop-of-a-trial-falls-back-and-is-recorded.done) (the same variable services, on its branch).

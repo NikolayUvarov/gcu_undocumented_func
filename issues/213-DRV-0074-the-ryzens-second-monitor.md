@@ -28,4 +28,4 @@
 
 ## Related
 
-[213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) (the shell's screen on this machine), 211-PRT-0011 (the monitor's preferred mode from EDID).
+[213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done) (the shell's screen on this machine), 211-PRT-0011 (the monitor's preferred mode from EDID).

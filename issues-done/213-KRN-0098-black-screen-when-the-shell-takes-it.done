@@ -1,6 +1,6 @@
-# 213-KRN-0098 — The screen goes black when the shell takes it (Ryzen 9 5900HX, Radeon iGPU, 2560 × 1440)
+# 213-KRN-0098 — The screen goes black when the shell takes it (Ryzen 9 5900HX, Radeon iGPU, 2560 × 1440) — done
 
-**Type:** `compositor`, the kernel's screen, diagnostics · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — (the next run's evidence) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1
+**Type:** `compositor`, the kernel's screen, diagnostics · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-11-20) · **Blocked by:** — (the next run's evidence) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -38,7 +38,7 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done), 211-KRN-0017 (service logs on the boot screen), 211-KRN-0018 (the compositor's quota and the screen).
+[213](../issues/213-amd-ryzen-pc.md), [000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done), 211-KRN-0017 (service logs on the boot screen), 211-KRN-0018 (the compositor's quota and the screen).
 
 ## Progress (2026-10-13, a fifth boot)
 
@@ -84,3 +84,16 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 **Left for the acceptance criteria:** the shell's text on this machine's screen.
 
 **2026-10-14:** the compositor's lines and the fix for a PC without COM1 are in `main` (8ae66ed), gated on i9 (x86) and PCU (aarch64), and in `fast-test`. What is left is the maintainer's run on the Ryzen machine.
+
+## Resolution
+
+Done (2026-11-20). The fix is October's (the progress of 2026-10-13); DRV's runs on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2048Z-DRV-…` and `KRN/2026-11-19T2130Z-DRV-…` on `internal-dev-messages`):
+- **The log:**
+  - `SCREEN 2560X1600`: a different monitor from October's 2560 × 1440;
+  - `SCREEN IN FRONT #1` at 2.406 s, 0 pixels not black;
+  - the shell's `FIRST FRAME 2560X1600 AT 4.0 S`;
+  - `#3` at 4.522 s and `#5` at 6.567 s, all 4096000 pixels not black, and a frame each second after.
+- **The maintainer at the machine** (2026-11-19/20): the shell's screen is seen.
+- **The QEMU display suite** passes on its three adapters in every gate.
+
+For that machine and build only (MC-12.1). Of the two monitors connected, the second stays empty. That is DRV's [213-DRV-0074](../issues/213-DRV-0074-the-ryzens-second-monitor.md), and [213-KRN-0262](../issues/213-KRN-0262-the-loaders-lines-in-the-system-log.md)'s lines will say how many outputs the firmware gives.
