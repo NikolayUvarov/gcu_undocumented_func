@@ -18170,6 +18170,59 @@ def watchdog_suite(args, disk):
         boot_slots_check.hung_trial(restarting, temp, disk, disk / "kernel.elf", "x86")
 
 
+def own_fault_after_a_fallback(args, disk):
+    """801-UPD-0044: both slots hold the `panic-test` kernel. Slot B's trial panics at init's first log line, and slot A
+    boots with B's one try spent; its updater keeps B's panic. A's kernel then panics 20 s in, on a run of its own, and
+    stops. At A's next boot the records still name B's trial fallen back to A, but the kernel's record is A's own: the
+    updater takes it for no reason of B's, and B's panic stays the one kept."""
+    temp = Path(tempfile.mkdtemp(prefix="mind-own-fault-"))
+    volume = temp / "volume"
+    shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+    (volume / "kernel.elf").write_bytes(Path(args.panic_kernel).read_bytes())
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "own-fault.img", boot_slots.layout(volume, temp / "slots", both=True))
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, reboot=True)
+
+    def seen(lines, timeout):
+        # In this order in the output, whose panics expect() would take for failures.
+        deadline = time.monotonic() + timeout
+        while True:
+            vm.collect()
+            out, at = ANSI.sub("", vm.log).replace("\r", ""), 0
+            for line in lines:
+                if (at := out.find(line, at)) < 0:
+                    break
+            else:
+                return out
+            assert time.monotonic() < deadline and vm.process.poll() is None, (line, out[-3000:])
+            time.sleep(.05)
+    try:
+        seen(("BOOT: SLOT B LOADED ON TRIAL", "KERNEL PANIC: panic test at src/scheduler.rs:", "TRIAL: RESTARTING INTO THE FALLBACK",
+              "BOOT: SLOT A LOADED\n", "MIND CORE KERNEL: THE LAST RUN, OF SLOT B, ENDED IN THE KERNEL'S PANIC: panic test at ",
+              "KERNEL PANIC: panic test, 20 s past the boot at ", "THE FAULT IS RECORDED FOR THE NEXT BOOT"), 300)
+        # Not a trial: the run stops, and a person would restart it.
+        vm.output = ""
+        vm.hmp("system_reset")
+        vm.expect("MIND CORE KERNEL: THE LAST RUN OF THIS SLOT ENDED IN THE KERNEL'S PANIC: panic test, 20 s past the boot at ", timeout=90)
+        vm.expect("MIND> ", timeout=180)
+        log = vm.service_logs("updater", "FELL BACK TO THIS SLOT")
+        require(log, "[UPDATER] SLOT B'S TRIAL FELL BACK TO THIS SLOT; THE KERNEL'S RECORD IS OF ANOTHER SLOT'S RUN: NOT ITS REASON")
+        require(log, "[UPDATER] A TRIAL REFUSED BEFORE (system/updater/refused): refused version ")
+        status = vm.command("update status", raw=True)
+        assert "20 s past the boot" not in log + status, (log[-3000:], status)
+        require(status, "UPDATE: THE LAST FAILURE: ")
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-own-fault-{args.cpus}cpu.log").write_text(vm.log)
+    refused = (image.read("system/updater/refused") or b"").decode()
+    assert re.fullmatch(r"refused version (\d+|not known) in slot B, falling back to slot A\nwhy THE KERNEL STOPPED THE TRIAL IN ITS PANIC: "
+                        r"panic test at src/scheduler\.rs:[^\n]+\nlog not known\n", refused), refused
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: a panic of slot A's own run, after slot B's trial fell back to it, is no reason of B's: the next boot's "
+          "updater says the kernel's record is of another slot's run, and B's panic stays the refusal kept (801-UPD-0044)", flush=True)
+
+
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
     the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
@@ -19262,6 +19315,7 @@ def boot_suite(args, disk):
                 vm.close()
         with tempfile.TemporaryDirectory(prefix="mind-panicked-") as temp:
             boot_slots_check.panicked_trial(past_the_panic, temp, disk, args.panic_kernel, "x86")
+        own_fault_after_a_fallback(args, disk)
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
