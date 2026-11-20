@@ -225,9 +225,10 @@ impl Controller {
         if let Some(d) = self.devices[index].as_mut() { d.rings = rings; d.ring_count = ring_count; d.interfaces = interfaces; d.count = count; }
         if ring_count > 0 || hub.is_some() {
             self.xhci.input_reset(add);
-            // AMD's xHCI (the Ryzen's 1022:1639) is given no TT think time: Linux's hub slot there holds 0 and streams
-            // through the TT, and ours with the hub's 3 stopped the controller on its first isochronous TD (000-DRV-0073).
-            let hub_fields = hub.map(|(ports, think, _)| (ports, if device.speed == 3 && self.vendor != 0x1022 { think } else { 0 }));
+            // AMD's xHCI (the Ryzen's 1022:1639) is not told it is a hub: Linux's hub slot there holds no Hub flag, ports
+            // or think time, and streams through the TT; ours, with them, stopped the controller on its first
+            // isochronous TD, think time 0 or 3 alike (000-DRV-0073).
+            let hub_fields = hub.filter(|_| self.vendor != 0x1022).map(|(ports, think, _)| (ports, if device.speed == 3 { think } else { 0 }));
             self.xhci.slot_context(device.route, device.speed, entries, device.root, hub_fields, device.tt);
             for (&(target, kind, packet, interval), &(_, ring)) in planned[..ring_count].iter().zip(&rings[..ring_count]) {
                 self.xhci.endpoint_context(target, kind, packet, interval, ring);
