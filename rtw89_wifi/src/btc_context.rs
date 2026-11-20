@@ -44,6 +44,11 @@ impl ObservedBt{
     }
 }
 
+/// The WLAN scoreboard's high-LNA bit to write, or None to leave it: what is wanted (a linked station with BTG),
+/// only while Bluetooth's own bit 13 differs from it, as Linux's `_set_bt_rx_agc`. Clearing it whenever Bluetooth's
+/// was set made the two flip each other hundreds of times a second once the RTL8852B was patched (213-DRV-0076).
+pub(crate) fn hi_lna(wanted:bool,bluetooth:bool)->Option<bool>{(wanted!=bluetooth).then_some(wanted)}
+
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct RfkFailure{pub cause:Error,pub cleanup_attempted:bool,pub clear_scoreboard:Option<Fault>,pub restore_antenna:Option<Fault>}
 #[allow(dead_code)]
@@ -117,8 +122,9 @@ impl Context{
             let afh=self.station.map_or(self.profile.afh_no_link(),|channel|self.profile.afh_station(channel));
             self.send(s,afh,deadline)?;self.afh_profiles=Some(profiles);
         }
-        // High LNA (bit 13) for a linked station with BTG, unless Bluetooth's own is set (`_set_bt_rx_agc`).
-        if self.bt.raw&1<<13!=0{self.shadow.clear(1<<13);}else if self.station.is_some()&&btg{self.shadow.set(1<<13);}
+        // High LNA (bit 13) for a linked station with BTG (`_set_bt_rx_agc`), written only while Bluetooth's own bit
+        // differs from it (213-DRV-0076).
+        match hi_lna(self.station.is_some()&&btg,self.bt.raw&1<<13!=0){Some(true)=>self.shadow.set(1<<13),Some(false)=>self.shadow.clear(1<<13),None=>{}}
         let constrained=btg&&self.bt.profiles();
         if constrained!=self.rx_gain{s.registers(deadline,|b|receive_gain(b,constrained))?;self.rx_gain=constrained;}
         if self.ignore_pending{self.ignore_pending=false;self.send(s,self.profile.bt_ignore_wlan(),deadline)?;}

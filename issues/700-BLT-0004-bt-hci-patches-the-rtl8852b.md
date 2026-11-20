@@ -26,7 +26,7 @@ The Ryzen's Bluetooth controller, the RTL8852BE's `0BDA:B85B`, ran on its ROM. `
 
 - [x] Host tests (`tests/bt_hci_host.rs`): the "RTBTCore" choice, order and refusals; the indices at fragments 0xFE, 0xFF, 381, 382 and the last; the fetched file's two parts (67,133 and 60,101 bytes).
 - [x] On the Ryzen: `RTL8852B PATCHED`, a new LMP subversion, and devices heard in an LE scan and an inquiry.
-- [ ] On the Ryzen: the Wi-Fi keeps its network through the patched controller's inquiries, with `rtw89_wifi`'s coexistence hearing its BT_INFO. Otherwise the listening stays off by default (700-BLT-0003), and 213-DRV-0052 takes what is left.
+- [x] On the Ryzen: the Wi-Fi keeps its network through the patched controller's inquiries, with `rtw89_wifi`'s coexistence hearing its BT_INFO. That needed 213-DRV-0076, and was then shown with 24 inquiries 80 s apart and no data-mode stop. The listening still waits for `data/bt-listen.txt` (700-BLT-0003): turning it on by default is a decision of its own.
 - [ ] The DEXP's RTL8821C is still patched (`RTL8821C PATCHED`).
 
 ## Progress (2026-11-20): on the Ryzen
@@ -43,6 +43,13 @@ This was a test build of `bt_hci` on the ABI 34 tree, put in with `replace` over
 - **The first LE scan** heard 9 devices, and the inquiry 3 within its first 2 s.
 - **The BT_INFO lines** come from a diagnostic build of `rtw89_wifi`, not committed.
 - **The patched controller's scoreboard** flips bits 31 and 13 (BT_HILNA) hundreds of times a second.
+
+## Progress (2026-11-20): the hour of inquiries, and what it found in `rtw89_wifi`
+
+`bt_hci` here was a test build: a round every minute, 80 s apart with the round's own 20 s.
+- **Before 213-DRV-0076:** in about 70 minutes, 48 inquiries and LE scans gave three data-mode stops, each joined again within seconds. One was a coexistence reconcile's register fault. The patched controller's scoreboard flipped bits 31 and 13 hundreds of times a second, because the reconcile chased Bluetooth's high-LNA bit (213-DRV-0076).
+- **With that fix:** in 33 minutes, 24 inquiries gave one scoreboard change and no stop.
+- **Without the patch,** for comparison: 4 of 8 inquiries, five minutes apart, had stopped the data mode (700-BLT-0003).
 
 ## Related
 
