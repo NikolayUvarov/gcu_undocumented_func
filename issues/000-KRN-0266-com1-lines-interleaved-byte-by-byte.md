@@ -1,6 +1,6 @@
-# 000-KRN-0266 — The kernel's lines and a task's log interleave byte by byte on COM1
+# 000-KRN-0266 — The kernel's lines and the shell's bytes interleave on the console UART
 
-**Type:** kernel (`kernel/src/main.rs` `serial_print`, `scheduler.rs` `SYSCALL_LOG`'s mirror) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open (2026-11-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`), the console UART the kernel and the shell share · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -12,26 +12,43 @@ MEMORY MANAGER: MIND CORE KERNEL: THE TRIAL BOOT I6S CONFIR4MED MB HEAP.
 
 The trial was confirmed. The shell's `MEMORY MANAGER: 64 MB HEAP.` came in byte by byte between the kernel's bytes, so the line the test looks for never appeared whole.
 
-**Two writers share COM1 with nothing between them** (read in `main`, `934483c3bb`):
-- `serial_print` writes byte by byte, with no lock: the kernel's lines through `PanicSerial`, such as `trial::confirm`'s;
-- `SYSCALL_LOG` mirrors a task's log byte by byte, from the CPU the task runs on.
+**Two writers share the console UART, and no lock of the kernel's is between them** (read in `main`, `95dd5d5deb`).
+- The kernel writes its lines byte by byte (`serial_print`), the confirmation among them. It writes them under the scheduler lock, as it does `SYSCALL_LOG`'s mirror and the console channel's sends.
+- `init` lends the UART itself to the shell (`Minted::serial`):
+  - on x86, COM1's ports;
+  - on aarch64, the PL011's page where the console is a PL011 with a page of its own, as on QEMU's `virt`.
 
-On two CPUs their bytes mix.
+  The shell writes its bytes there from its own task, on its own CPU.
 
-The rerun of the group alone decides whether the gate stays green. The failure is this, not the candidate's code.
+So the kernel cannot order the two: a lock would bind only the kernel's side. Every byte of the kernel's line still goes out, in order. A line on the wire may carry the shell's bytes inside it.
+
+The rerun of the group alone was green, so the gate was too. The failure was this, not the candidate's code.
 
 ## Plan
 
-1. **One lock for COM1's lines, outside the fatal path.**
-   - `serial_print` takes it for its whole text, and the `SYSCALL_LOG` mirror for its whole chunk, with interrupts off while it is held, so that a tick on the same CPU cannot wait on it.
-   - A spin with a bound: past it the writer writes without the lock rather than wait, so that a CPU stopped while holding it costs a mixed line, not a stop.
-   - The fatal report (`Fatal`, `serial_only`) takes no lock, as now.
-2. **The test helpers that wait for a kernel line keep accepting it only whole.** The fix is in the kernel, not in the matcher.
+1. **The tests take a kernel line with another writer's bytes inside it for the line.**
+   - `interleaved(text, line)` in `tests/qemu_smoke.py` checks that the line's bytes come in order, with at most the line's length of other bytes among them.
+   - `trial_confirmed` uses it, once a second, beside the plain search.
+
+   The fact checked is the same: the kernel wrote that line. The UART is shared by design, so this is not a looser test of the kernel.
+2. **The kernel is left as it is.** Taking the UART back from the shell for each kernel line would stop every CPU or take the shell's console away. Neither is worth a clean line on a wire whose other writer is the user's shell.
+3. **Other waits for a kernel line after the shell's start** take the same helper when one fails this way. None other has so far.
 
 ## Acceptance criteria
 
-- [ ] A check that runs a task logging without pause on one CPU while the kernel prints lines on another finds every kernel line whole on COM1 (QEMU, x86 and aarch64, 4 CPUs).
-- [ ] The gate's groups pass on both architectures; the kernel stays within `kernel/size-budget.json`.
+- [x] `interleaved` finds round 156's line (`MEMORY MANAGER: MIND CORE KERNEL: THE TRIAL BOOT I6S CONFIR4MED MB HEAP.`), and does not take `THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING` for it.
+- [x] The groups that use `trial_confirmed` pass on both architectures: `aarch64: the updater and the modes` and `x86: the updater and an update through the link`.
+
+## Progress (2026-11-20)
+
+**Made** on `claude/000-KRN-0266-com1-interleave` (`fbe308b90a`, `main` merged at `e9a5657d8b`).
+
+**Checked:**
+- `interleaved` against round 156's line (found) and against `THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING` and `SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT` (not found), run here.
+- `aarch64: the updater and the modes`: acc-1, PASS, 1168 s.
+- `x86: the updater and an update through the link`: x32, PASS, 1405 s.
+
+Neither run had a mixed line, so they show that the helper keeps these suites green, not that it took a mixed line in a VM.
 
 ## Related
 
