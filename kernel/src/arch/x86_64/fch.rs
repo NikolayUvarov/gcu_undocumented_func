@@ -6,12 +6,12 @@ pub const SMBUS: u32 = 0x790B_1022; // 00:14.0's device << 16 | vendor
 pub const FIRST_REVISION: u8 = 0x51; // Zen's FCH, with its PM registers in MMIO
 pub const PM: u32 = 0xFED8_0300;
 pub const DECODEEN: u8 = 0x00;
-pub const WDT_TMREN: u8 = 1 << 7; // the timer decoded at TIMER_DECODED
+pub const WDT_TMREN: u8 = 1 << 7; // the timer decoded at TIMER_DECODED, and its operation started
 pub const DECODEEN3: u8 = 0x03;
 pub const WDT_DISABLE: u8 = 0b11 << 2;
 pub const WDT_SECONDS: u8 = 0b11; // the count in seconds
 pub const ISACONTROL: u8 = 0x04;
-pub const MMIOEN: u8 = 1 << 1; // the ACPI MMIO block decoded, the timer at TIMER_IN_ACPI_MMIO
+pub const MMIOEN: u8 = 1 << 1; // the ACPI MMIO block decoded, the timer also at TIMER_IN_ACPI_MMIO
 pub const TIMER_DECODED: u32 = 0xFEB0_0000;
 pub const TIMER_IN_ACPI_MMIO: u32 = 0xFED8_0B00;
 pub const CONTROL: u32 = 0x00;
@@ -38,25 +38,28 @@ pub struct Armed {
 }
 
 /// Finds the timer, sets it to reset the machine `seconds` after the last feed and starts it; else why not. Nothing is
-/// written to an FCH this code does not know, and a refusal after the PM registers changed puts them back.
+/// written to an FCH this code does not know, and a refusal after the PM registers changed puts them back. The order is
+/// Linux's sp5100_tco's for Zen's FCH: WDT_TMREN set when clear, the disable bits cleared, then the timer's own bit read.
 pub fn arm(r: &mut impl Registers, seconds: u32) -> Result<Armed, &'static str> {
     let (id, revision) = r.smbus();
     if id != SMBUS { return Err("NO AMD FCH AT 00:14.0"); }
     if revision < FIRST_REVISION { return Err("AMD FCH: A REVISION BEFORE ZEN'S, NOT KNOWN HERE"); }
     let (decode, isa) = (r.pm(DECODEEN), r.pm(ISACONTROL));
     if decode == 0xFF && isa == 0xFF { return Err("AMD FCH: ITS PM REGISTERS DO NOT ANSWER"); }
-    let base = if decode & WDT_TMREN != 0 { TIMER_DECODED } else if isa & MMIOEN != 0 { TIMER_IN_ACPI_MMIO } else {
-        return Err("AMD FCH: ITS TIMER IS NOT DECODED");
-    };
+    if decode & WDT_TMREN == 0 { r.set_pm(DECODEEN, decode | WDT_TMREN); }
+    if r.pm(DECODEEN) & WDT_TMREN == 0 { return Err("AMD FCH: ITS TIMER COULD NOT BE ENABLED (PM DECODEEN'S WDT_TMREN STAYS CLEAR)"); }
     let before = r.pm(DECODEEN3);
     let wanted = before & !WDT_DISABLE | WDT_SECONDS;
     if wanted != before { r.set_pm(DECODEEN3, wanted); }
-    let control = r.timer(base + CONTROL);
+    // The ACPI MMIO block's window to the same timer, where its own does not answer.
+    let (mut base, mut control) = (TIMER_DECODED, r.timer(TIMER_DECODED + CONTROL));
+    if control == u32::MAX && isa & MMIOEN != 0 { (base, control) = (TIMER_IN_ACPI_MMIO, r.timer(TIMER_IN_ACPI_MMIO + CONTROL)); }
     let failure = if control == u32::MAX { Some("AMD FCH: ITS TIMER DOES NOT ANSWER") }
         else if r.pm(DECODEEN3) & WDT_DISABLE != 0 { Some("AMD FCH: DISABLED BY THE FIRMWARE (PM DECODEEN3'S WATCHDOG DISABLE KEPT)") }
         else if control & DISABLED != 0 { Some("AMD FCH: DISABLED BY THE FIRMWARE (THE TIMER'S WATCHDOGDISABLE BIT)") } else { None };
     if let Some(why) = failure {
         if wanted != before { r.set_pm(DECODEEN3, before); }
+        if decode & WDT_TMREN == 0 { r.set_pm(DECODEEN, decode); }
         return Err(why);
     }
     let restarted = control & FIRED != 0;
