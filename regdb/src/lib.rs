@@ -36,6 +36,11 @@ impl Flags {
     pub const fn is_empty(self) -> bool { self.0 == 0 }
     /// These restrictions and `other`'s, for an owner's rule (550-DRV-0088).
     pub const fn with(self, other: Self) -> Self { Self(self.0 | other.0) }
+    /// The bits as this crate numbers them (NO_OFDM bit 0 … AUTO_BW bit 9), for an owner's rule carried between
+    /// services (550-DRV-0088); not Linux's nl80211 or regulatory.db numbering.
+    pub const fn bits(self) -> u16 { self.0 }
+    /// The same bits back; one outside them refuses the whole.
+    pub const fn from_bits(bits: u16) -> Option<Self> { if bits & !Self::ALL == 0 { Some(Self(bits)) } else { None } }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

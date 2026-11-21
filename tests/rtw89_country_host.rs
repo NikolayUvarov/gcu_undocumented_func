@@ -83,3 +83,44 @@ fn wmm_and_environment_rules_leave_5_ghz_channels_out() {
     assert_eq!(Limits::accept("RU", 1, [(36, 20, false), (36, 20, false)]).unwrap_err(), Refusal::Invalid);
     for channel in [14, 34, 38, 178, 182] { assert_eq!(Limits::accept("US", 1, [(channel, 20, false)]).unwrap_err(), Refusal::Invalid, "{channel}"); }
 }
+
+// 550-DRV-0088: the owner's rules beside the catalogue, as the radio applies them.
+fn every(eirp: u8) -> impl Iterator<Item = (u8, u8, bool)> { country::CHANNELS.into_iter().map(move |ch| (ch, eirp, false)) }
+
+#[test]
+fn with_no_owners_rule_the_radio_applies_what_it_did() {
+    for entry in regulatory::countries() {
+        let alpha2 = entry.alpha2(); let code = core::str::from_utf8(&alpha2).unwrap();
+        let (old, new) = (Limits::accept(code, 1, every(30)), Limits::accept_with(code, 1, every(30), &[]));
+        match (old, new) {
+            (Ok(old), Ok(new)) => for ch in country::CHANNELS {
+                assert_eq!(old.applied(ch), new.applied(ch), "{code} channel {ch}"); assert!(!new.by_owner(ch));
+            },
+            (old, new) => assert_eq!(old.err(), new.err(), "{code}"),
+        }
+    }
+}
+
+#[test]
+fn the_benchs_rule_lets_channel_100_listen_only_under_uz_and_names_it_the_owners() {
+    let rule = regulatory::OwnerRule::new(*b"UZ", 5_470_000, 5_725_000, 80_000, 2000, regulatory::Flags::DFS).unwrap();
+    let without = Limits::accept("UZ", 1, every(30)).unwrap();
+    let with = Limits::accept_with("UZ", 1, every(30), &[rule]).unwrap();
+    for ch in [100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140] {
+        assert_eq!(without.applied(ch), None, "channel {ch} barred under UZ alone");
+        assert_eq!(with.applied(ch), Some(Applied { channel: ch, eirp_half_dbm: 40, listen: true }), "channel {ch}");
+        assert!(with.by_owner(ch));
+    }
+    assert_eq!(with.applied(144), None, "5710-5730 MHz runs past the rule");
+    // The catalogue's channels as they were, and not named the owner's.
+    for ch in [1, 6, 13, 36, 48, 52, 64] {
+        assert_eq!(with.applied(ch), without.applied(ch), "channel {ch}"); assert!(!with.by_owner(ch));
+    }
+    // Another country's rule does nothing under UZ.
+    let ru = regulatory::OwnerRule::new(*b"RU", 5_470_000, 5_725_000, 80_000, 2000, regulatory::Flags::DFS).unwrap();
+    assert_eq!(Limits::accept_with("UZ", 1, every(30), &[ru]).unwrap().applied(100), None);
+    // An owner's rule with NO-OUTDOOR is left out as a catalogue rule with it would be (the environment unknown).
+    let indoor = regulatory::OwnerRule::new(*b"UZ", 5_470_000, 5_725_000, 80_000, 2000,
+        regulatory::Flags::DFS.with(regulatory::Flags::NO_OUTDOOR)).unwrap();
+    assert_eq!(Limits::accept_with("UZ", 1, every(30), &[indoor]).unwrap().applied(100), None);
+}

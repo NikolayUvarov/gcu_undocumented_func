@@ -68,6 +68,48 @@ country UZ: DFS-ETSI
   - **The catalogue untouched:** `db.txt`'s SHA-256 is still `SOURCE_SHA256`, and UZ's three rules are as before.
 - `db.txt`, `src/tables.rs` and `scripts/regdb.py` are unchanged; `python3 scripts/regdb.py --check` passes.
 
+**2026-11-21, the radio's side written** (host cases; nothing hands the radio owner's rules yet):
+- **`rtw89_wifi/src/country.rs`:**
+  - `Limits::accept_with(code, version, limits, owner)` plans each channel with `Country::plan(owner, centre, 20 MHz)` and applies the radio's own exclusions to the planned rule, whether it is the catalogue's or the owner's;
+  - `Limits::by_owner(channel)` says whether an applied channel's rule is the owner's, for the log and `info` to name it;
+  - `Limits::accept` is `accept_with` with no owner's rule.
+- **`regdb`:** `Flags::bits()` and `Flags::from_bits()` carry an owner's rule's flags between services, in this crate's numbering (DFS is bit 4, NO_IR bit 7). An unknown bit refuses the whole.
+- **Host cases:**
+  - `tests/rtw89_country_host.rs`:
+    - with no owner's rule, every country's limits on every channel are what `accept` gave before;
+    - the bench's rule `UZ (5470 - 5725 @ 80), (20), DFS` makes channels 100 to 140 applied listen-only at 20 dBm and named the owner's;
+    - 144 stays out;
+    - the catalogue's channels 1–64 are unchanged and not named the owner's;
+    - RU's rule does nothing under UZ;
+    - an owner's rule with NO-OUTDOOR is left out, as a catalogue rule with it is.
+  - `tests/regdb_host.rs`: the flags' bits.
+
+  The 40 `rtw89_*_host.rs` files and `regdb_host` pass.
+
+## What the station's side needs (to be asked of NET)
+
+1. **Keeping a rule:** on the machine, beside the chosen country in `keystore` or wherever NET keeps that. Each rule has:
+   - the country (two letters, not 00);
+   - `start_khz`, `end_khz` and `max_bandwidth_khz`;
+   - `max_eirp_mbm`;
+   - flags as regdb's `Flags::bits()`;
+   - who set it and when.
+
+   At most a few rules, 8 say. Each is checked with regdb's `OwnerRule::new`, which refuses what a `db.txt` line could not say.
+2. **Setting it:** at the machine's console, with a confirmation typed as a network policy line has, for example `wifi owner-rule add UZ 5470 5725 80 20 DFS`, then `wifi owner-rule list` and `wifi owner-rule remove n`. DRV's proposal is that it never comes over the network; NET's and the maintainer's to decide.
+3. **The station's plan:** `dot11`'s `catalogue::plan(country, radio)` plans each of the radio's channels with regdb's `Country::plan(owner, centre_khz, 20_000)`, so that channel 100 under UZ becomes "listen" (DFS) from the owner's rule. With no owner's rule the plan is what it is today; `regdb`'s host cases show that.
+4. **To the radio:** `wlanhw.wit` 2.1, one call before `set-country`:
+   - `set-owner-rules: func(rules: list<owner-rule>) -> result<_, error>`;
+   - `owner-rule` is a record of `country: u16` (the two letters), `start-khz: u32`, `end-khz: u32`, `max-bandwidth-khz: u32`, `max-eirp-mbm: s32` and `flags: u16`;
+   - an empty list clears them;
+   - a 2.0 radio answers `invalid` and keeps to the catalogue.
+
+   The radio then applies them with `Limits::accept_with` and names them in its `COUNTRY` line.
+5. **Naming it as the owner's wherever it acts:** at each start, `[WLAN] THE OWNER'S RULE UZ 5470-5725 MHZ @80, 20 DBM, DFS, SET BY … AT …`. In `wifi channels` and `wifi status`, a channel planned from it is marked, for example `CHANNEL 100 5 GHZ LISTEN (THE OWNER'S RULE)`.
+6. **Already asked** (`NET/2026-11-21T1946Z-…`): the first join on a listen-only channel waits for the access point's beacon after the tune. Channel 100 is DFS, so without that wait no join there can succeed, and the radio refuses the send as boot 57 showed.
+
+With those, and 213-DRV-0091 step 1 (the access point's beacons now reach the host in data mode, as the listen-only rule needs), a first join on channel 100 under UZ becomes possible on the Ryzen.
+
 ## Where the radio consults its own copy of the catalogue (the places an owner's rule must reach; not changed yet)
 
 - **`rtw89_wifi/src/country.rs`, `Limits::accept`,** is the only place the radio reads the catalogue:

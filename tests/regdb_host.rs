@@ -248,6 +248,10 @@ fn an_owners_rule_is_checked_as_a_catalogue_line_and_the_catalogue_is_untouched(
     assert_eq!(made.country(), *b"UZ");
     assert_eq!((made.rule().start_khz, made.rule().end_khz, made.rule().max_bandwidth_khz), (5_470_000, 5_725_000, 80_000));
     assert!(Flags::DFS.with(Flags::NO_IR).contains(Flags::DFS) && Flags::DFS.with(Flags::NO_IR).contains(Flags::NO_IR));
+    // The flags as carried between services: DFS is bit 4, NO_IR bit 7; a bit outside db.txt's flags is refused.
+    assert_eq!(Flags::DFS.with(Flags::NO_IR).bits(), 1 << 4 | 1 << 7);
+    assert_eq!(Flags::from_bits(1 << 4 | 1 << 7), Some(Flags::DFS.with(Flags::NO_IR)));
+    assert_eq!(Flags::from_bits(1 << 10), None);
     // The catalogue's file is the upstream snapshot it was: its hash, and UZ's three rules as before.
     let hex: String = sha256::digest(include_bytes!("../regdb/db.txt")).iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(hex, regulatory::SOURCE_SHA256);
