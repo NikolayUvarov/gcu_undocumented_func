@@ -158,7 +158,9 @@ fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool) -> mind::Result<
 // A stream's pumps and the longest time between two, for the log: usb_host's queue for it must outlast that. A Motion
 // JPEG stream's decodes too (158-DRV-0084).
 fn timing(live: &Live) -> String {
-    let decodes = if !live.mjpeg { String::new() } else {
+    let decodes = if !live.mjpeg {
+        if live.dropped == 0 { String::new() } else { format!("; {} FRAMES DROPPED (THE FIRST: {})", live.dropped, live.why.to_uppercase()) }
+    } else {
         format!("; MJPEG: {} DECODED IN {} MS EACH, THE LONGEST {} MS, {} DROPPED{}", live.decoded, live.decode_ns / live.decoded.max(1) as u64 / 1_000_000, live.longest_decode_ns / 1_000_000,
             live.dropped, if live.why.is_empty() { String::new() } else { format!(" (THE FIRST: {})", live.why.to_uppercase()) })
     };
@@ -324,7 +326,8 @@ fn camera_modes(camera: &uvc::Camera, speed: u8) -> Vec<(uvc::Mode, idl::Mode)> 
         let encoding = match m.encoding { uvc::Encoding::Yuy2 => idl::Encoding::Yuy2, uvc::Encoding::Mjpeg => idl::Encoding::Mjpeg, uvc::Encoding::Other(_) => idl::Encoding::Uncompressed };
         // YUY2's bytes are fixed by its size; a Motion JPEG frame's by its picture (158-DRV-0084).
         let (decoded, bytes) = match m.encoding { uvc::Encoding::Yuy2 => (true, m.bytes_per_second()), uvc::Encoding::Mjpeg => (true, 0), uvc::Encoding::Other(_) => (false, 0) };
-        let offered = choices::offered(decoded, m.width, m.height, m.rate(), bytes, capacity);
+        // A mode `open` cannot reach (MJPEG where YUY2 gives the same size and rate) is not offered: open streams the other.
+        let offered = choices::offered(decoded, m.width, m.height, m.rate(), bytes, capacity) && camera.opens_as(&m);
         (m, idl::Mode { encoding, width: m.width, height: m.height, rate: m.rate().min(255) as u8, interval: m.interval, offered })
     }).collect()
 }
@@ -393,7 +396,13 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
         (alternate.endpoint, alternate.setting, None)
     };
     let now = mind::time::monotonic_ns();
-    Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, exact), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
+    // Frame buffers that do not fit refuse the open, where an allocation's failure would end the gateway (158-DRV-0084).
+    let Some(assembler) = uvc::Assembler::try_new(bytes, exact) else {
+        mind::println!("[VIDEO] \"{}\": NO MEMORY FOR ITS FRAMES ({} BYTES, TWICE)", camera.name, if exact { bytes } else { bytes.min(uvc::GROWING) });
+        if streamed { let _ = host.bulk_stream(camera.streaming, info.endpoint, false); }
+        return Err(idl::Error::NoMemory);
+    };
+    Ok(Live { camera: camera.streaming, assembler, bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
         packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new(), probe_ms,
         mjpeg, decoded: 0, dropped: 0, decode_ns: 0, longest_decode_ns: 0, decoded_ns: 0, why: "", torn: false })
 }
@@ -560,7 +569,7 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
                 Err(why) => {
                     let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
                     (live.dropped, live.torn) = (live.dropped + 1, true);
-                    if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A MOTION JPEG FRAME DROPPED: {}", camera, why.to_uppercase()); }
+                    if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A FRAME DROPPED: {}", camera, why.to_uppercase()); }
                 }
             }
         }
@@ -590,8 +599,9 @@ fn convert(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<(), &'sta
     let Source::Camera(live) = &mut streams[at].source else { return Ok(()) };
     live.given = live.assembler.good;
     let (size, mjpeg, mut copy) = ((live.size.width as usize, live.size.height as usize), live.mjpeg, core::mem::take(&mut live.copy));
-    // A copy: a pump meanwhile may end the next frame.
+    // A copy: a pump meanwhile may end the next frame. One that finds no memory drops the frame.
     copy.clear();
+    if copy.try_reserve(live.assembler.ready().len()).is_err() { live.copy = copy; return Err("no memory for the frame's copy"); }
     copy.extend_from_slice(live.assembler.ready());
     let pixels = streams[at].frame.as_mut_slice().as_mut_ptr() as *mut u32;
     let result = if !mjpeg {

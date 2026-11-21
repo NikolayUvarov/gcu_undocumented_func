@@ -358,6 +358,9 @@ fn the_ryzens_visible_light_camera_has_its_thirteen_yuy2_modes() {
     assert_eq!(pick(1280, 720, 10), Some((1280, 720, Encoding::Yuy2, 10)));
     assert_eq!(pick(640, 480, 25), Some((640, 480, Encoding::Yuy2, 25)));
     assert_eq!(pick(800, 600, 25), Some((800, 600, Encoding::Mjpeg, 25)), "YUY2 800x600 gives 20");
+    let mode = |encoding, w, h| camera.modes().into_iter().find(|m| m.encoding == encoding && (m.width, m.height) == (w, h)).unwrap();
+    assert!(!camera.opens_as(&mode(Encoding::Mjpeg, 640, 480)), "MJPEG 640x480 at 25: YUY2 gives it");
+    assert!(camera.opens_as(&mode(Encoding::Yuy2, 640, 480)) && camera.opens_as(&mode(Encoding::Mjpeg, 1280, 720)));
     assert_eq!(camera.capacity(3), None, "bulk: not bounded by a setting");
 }
 
@@ -368,4 +371,24 @@ fn the_ryzens_infrared_camera_has_its_twelve_yuy2_modes() {
     assert_eq!(yuy2_modes(&camera), vec![(640, 480, 30), (1920, 1080, 5), (1280, 1024, 5), (1280, 960, 5), (1280, 720, 10), (1024, 768, 10), (960, 720, 15),
         (800, 600, 20), (640, 360, 30), (432, 240, 30), (352, 288, 30), (320, 240, 30)]);
     assert_eq!(camera.modes().len(), 24);
+}
+
+// 158-DRV-0084: a Motion JPEG frame's buffers start small and grow with its frames, up to the camera's maximum; frames
+// of a fixed size get theirs whole; a frame past the maximum is broken.
+#[test]
+fn frame_buffers_of_varying_frames_grow_as_their_frames_do() {
+    let max = 1280 * 720 * 2;
+    let mut a = Assembler::try_new(max, false).expect("memory");
+    assert_eq!(a.capacity(), max);
+    let mut payload = vec![2u8, EOF];
+    payload.extend((0..300_000).map(|i| i as u8));
+    assert_eq!(a.feed(&payload, false), Some(true), "a frame larger than the first buffer grows into it");
+    assert_eq!(a.ready().len(), 300_000);
+    let mut over = vec![2u8, EOF];
+    over.extend(std::iter::repeat_n(7u8, max + 1));
+    assert_eq!(a.feed(&over, false), Some(false), "past the maximum: broken");
+    assert_eq!(a.ready().len(), 300_000, "the last good one kept");
+    let exact = Assembler::try_new(640 * 480 * 2, true).expect("memory");
+    assert_eq!(exact.capacity(), 640 * 480 * 2);
+    assert!(Assembler::try_new(usize::MAX / 2, true).is_none(), "memory that is not there refuses, without a panic");
 }

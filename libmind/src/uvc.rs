@@ -206,6 +206,12 @@ impl Camera {
             .or_else(|| self.decoded().max_by_key(|f| (area(f), !jpeg(f))))
     }
 
+    /// Whether `open` at mode `mode`'s size and rate streams that mode's frame size (158-DRV-0084): a Motion JPEG mode
+    /// whose size YUY2 also gives at its rate is streamed as YUY2 instead, so it is not one `open` reaches.
+    pub fn opens_as(&self, mode: &Mode) -> bool {
+        self.choose(mode.width, mode.height, mode.rate()).is_some_and(|f| f.format == mode.format && f.frame == mode.frame)
+    }
+
     /// The largest YUY2 frame size no wider than `limit` (the smallest if all are wider): what the gateway offers. A
     /// camera without YUY2 offers its Motion JPEG sizes so.
     pub fn largest(&self, limit: u16) -> Option<&FrameSize> {
@@ -256,6 +262,9 @@ impl Probe {
     pub fn max_payload(&self) -> u32 { self.word(22) }
 }
 
+/// The bytes a frame buffer of frames that vary (Motion JPEG) starts at.
+pub const GROWING: usize = 128 * 1024;
+
 /// Payload header bits (UVC 1.5, 2.4.3.3): the frame ID, toggled every frame; the end of a frame; an error.
 pub const FID: u8 = 1;
 pub const EOF: u8 = 2;
@@ -274,6 +283,16 @@ impl Assembler {
     /// Frames of `bytes` bytes (`exact`) or of up to `bytes`.
     pub fn new(bytes: usize, exact: bool) -> Self {
         Self { filling: Vec::with_capacity(bytes), ready: Vec::with_capacity(bytes), capacity: bytes, exact, fid: None, bad: false, good: 0, broken: 0, last_bytes: 0 }
+    }
+    /// The same, None when the memory is not there (158-DRV-0084): frames of a fixed size get their two buffers whole;
+    /// frames of up to `bytes` (Motion JPEG) start at GROWING bytes and grow as their frames do, since a camera's
+    /// maximum is many times its frames (the Ryzen's: 1.8 MB for frames of 0.1 MB, and two streams' maxima did not fit).
+    pub fn try_new(bytes: usize, exact: bool) -> Option<Self> {
+        let first = if exact { bytes } else { bytes.min(GROWING) };
+        let (mut filling, mut ready) = (Vec::new(), Vec::new());
+        filling.try_reserve_exact(first).ok()?;
+        ready.try_reserve_exact(first).ok()?;
+        Some(Self { filling, ready, capacity: bytes, exact, fid: None, bad: false, good: 0, broken: 0, last_bytes: 0 })
     }
 
     /// One payload; `damaged` when the host controller reported an error for it. Some(good) when a frame ended with it;
@@ -296,9 +315,9 @@ impl Assembler {
         ended
     }
 
-    // A payload's bytes after its header.
+    // A payload's bytes after its header; a frame past its capacity, or that finds no memory to grow, is spoiled.
     fn data(&mut self, data: &[u8]) {
-        if self.filling.len() + data.len() > self.capacity { self.bad = true; } else { self.filling.extend_from_slice(data); }
+        if self.filling.len() + data.len() > self.capacity || self.filling.try_reserve(data.len()).is_err() { self.bad = true; } else { self.filling.extend_from_slice(data); }
     }
 
     // A payload's end: EOF in its header ends the frame.
