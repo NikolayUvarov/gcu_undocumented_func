@@ -78,7 +78,7 @@ A model and a serial number are asked of `DRV` for `block.wit` when the first re
 - the writer on disk images on the host (`tests/install_host.rs`): `fsck.fat` finds the volumes clean, mtools reads the files, and a write cut short at each step leaves no ESP's entry;
 - in QEMU, the disks offered on a live boot: the blank disk is offered, and the live medium is refused.
 
-**The shell's `install`** is APP's [352-APP-0157](352-APP-0157-the-shells-install.md), in round 167.
+**The shell's `install`** is APP's [352-APP-0157](352-APP-0157-the-shells-install-command.md), in round 167.
 
 **The install in QEMU** (`iso` suite, on `claude/352-UPD-0048-install-in-the-iso-suite`, over round 167's candidate). x86 passed in this session's container (QEMU 8.2.2, OVMF):
 - the ISO is booted as a CD-ROM, with the blank 512 MiB disk;
