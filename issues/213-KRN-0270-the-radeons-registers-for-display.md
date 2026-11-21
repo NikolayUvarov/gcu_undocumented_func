@@ -36,14 +36,14 @@ The maintainer asked the same day that the Ryzen's work go first, as the machine
 
 ## Acceptance criteria
 
-- [ ] Host: `tests/boot_abi_host.rs` (handoff 38, 53 images, `display` after `clipboard` and before the shell), `tests/runtime.rs`, `tests/safe_start_host.rs`.
-- [ ] QEMU, x86 and aarch64: `display` is not started (`NO DEVICE`), and every other boot is as before; the gate's groups pass.
+- [x] Host: `tests/boot_abi_host.rs` (handoff 38, 53 images, `display` after `clipboard` and before the shell), `tests/runtime.rs`, `tests/safe_start_host.rs`.
+- [x] QEMU, x86 and aarch64: `display` is not started (`NO DEVICE`), and every other boot is as before; the gate's groups pass.
 - [ ] **On the Ryzen** (DRV, MC-12.1):
   - `display` starts;
   - `init` logs the command register as the firmware left it, before and after the grant;
   - the stub logs `1002:1638` and BAR 5's size;
   - `DP-2` keeps MIND Core's screen.
-- [ ] docs/profile/bootstrap.md and docs/api (EN) say what `display` holds.
+- [x] docs/profile/bootstrap.md and docs/api (EN) say what `display` holds.
 
 **Not covered:** any register read or write, which are DRV's (213-DRV-0086); memory to scan out from; the compositor's part.
 
@@ -58,6 +58,13 @@ The maintainer asked the same day that the Ryzen's work go first, as the machine
 - **The MSI-X table is in the grant.** docs/profile/README.md's MC-1.5 row names `display` as the exception to "drivers are not granted the BAR with their MSI-X table". MSI-X is not enabled for the device, and `display` cannot write the configuration space.
 - **The TCB.** docs/profile/tcb.md lists `display` among the drivers in the TCB of memory isolation. It holds no DMA region, but its registers can aim the GPU's engines at any memory, on a device the firmware left mastering the bus.
 - **A read can hang the machine.** A read of about 3700 of its registers under Linux hung the Ryzen (13:28 UTC). The stub reads none: it reads the configuration space only.
+
+
+## Landed (2026-11-21)
+
+In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26df.md` on `internal-dev-messages`). The gate passed every group on both architectures, among them x86's and aarch64's network groups with `wlansim` and the host tests. So a stick written from main carries it, and no `fast-test` build is needed.
+
+**Left:** the Ryzen's run (DRV). Its grant is narrowed and its profile row corrected by 213-KRN-0271 (`claude/213-KRN-0271-displays-grant-for-first-light`, requested for the next round): the row said the grant kept the firmware's command register, but a memory BAR's grant turned I/O decoding on as well.
 
 ## Related
 
