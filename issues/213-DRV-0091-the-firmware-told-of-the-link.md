@@ -94,6 +94,22 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The 40 `rtw89_*_host.rs` files pass.
 
+**2026-11-21, 20:13–20:16 UTC, step 1's first look on the Ryzen** (b3db40619 by `replace` into release 202611211959, channel 8, country UZ; the boot image's driver back after):
+- **The link line:** `513.032 … THE FIRMWARE TOLD: CONNECTED TO A0:36:BC:11:F8:88 ON CHANNEL 8 AS AID 31`, 0.22 s after the admission and just before `wlan`'s `JOINED`.
+- **The BSS's beacons on the host:** 580 in the first minute and 1160 after two, which is its whole rate of about 9.7 a second. Every data-mode minute line before this showed 0 (213-DRV-0090, boots 55 to 59 and a bench run). Beacons of other networks: 0.
+- **Sends that outran their time:** 1 in the first minute, 4 after two, of 1493 answered. The boot image's driver in boot 55 had 131 of 7948, about 1.6%; these are 0.27%. One short run, so this is not yet a claim.
+- **One 6 MB download:** 255.5 KB/s by the sender, 233 KiB/s by the stack (`QUEUE FULL AT 0 OF 1738 READS`), within the 241–265 KB/s of the evening's earlier runs. No gain in rate is shown.
+- **No hole and no stall in the two minutes.**
+- **The registers just before and after the two H2Cs** (`LINK BEFORE`/`LINK AFTER`):
+  - the type filters read 55555555 both times (every subtype to the host);
+  - PORT_CFG reads C004 both times (FUNC_EN, BCN_DROP_ALLOW, TBTT_UPD_SHIFT_SEL; the port is untouched in step 1).
+
+  So no host-side filter register held the beacons back. What changed is the firmware's and the MAC's view of the link: the join info and the CAM's NET_TYPE.
+- **The frames the station's filter refuses** are other networks' group data, not beacons:
+  - STP (01:80:C2:00:00:00) from ZATV, A0:36:BC:11:F8:89;
+  - IP multicast (01:00:5E…) from EC:43:F6:D9:D7:A8.
+- **Next:** the back-to-back measurement against the boot image's driver (three downloads each way, 15 minutes of traffic), then step 2.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
