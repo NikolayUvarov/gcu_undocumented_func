@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the DEXP's Intel xHCI plays with the fix; the Ryzen's run waits for the speakerphone) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the DEXP's Intel xHCI plays clean notes through its own USB audio; the Ryzen's run waits for the speakerphone) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -29,7 +29,7 @@
 
 ## Acceptance criteria
 
-- [x] Host tests (`tests/uac_host.rs`, 5 passed): the STM-Speaker's own descriptor bytes; formats it cannot use left out; feedback read in 10.14 and 16.16; the pacer; one channel to and from two.
+- [x] Host tests (`tests/uac_host.rs`, 6 passed): the STM-Speaker's own descriptor bytes; formats it cannot use left out; an endpoint that takes its rate by request marked; feedback read in 10.14 and 16.16; the pacer; one channel to and from two.
 - [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, the device hears the tone (its wav holds at least a quarter of a second of loud samples), and unplugged, the codec comes back.
 - [ ] On the Ryzen, with the maintainer: the speakerphone plays `say` and a tone, and `listen` hears its microphones. The STM-Speaker's own counters (underruns, overruns, clock faults) stay at zero for 5 minutes.
 
@@ -87,7 +87,25 @@
 63.079 usb_host: [USB] SLOT 5 ENDPOINT 2: STREAM ENDED: 3972 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
 63.080 audio_gw: [AUDIO] USB PLAYBACK STOPPED: INTERFACE 2; 3999 PACKETS SENT, 999 OF THEM SILENCE, THE LAST RATE 48.000 FRAMES A MS
 ```
-That shows the stream on an Intel xHCI. Whether the tone was heard is the maintainer's to say.
+That shows the stream on an Intel xHCI. What was heard then was a rasp: the next section.
+
+## A device with several rates is told which one comes (2026-11-21)
+
+**The DEXP's own USB audio rasped.** With the stream running, the maintainer heard a rasp and crackle from 0573:1573 in place of the tone. In QEMU the same build's tone was clean: 439.7 Hz, 99.8 % of the power at 440 Hz.
+
+**Its descriptors** (read on the DEXP): playback and capture each offer 8, 16 and 48 kHz, and both endpoints' class descriptors have the sampling frequency control (`07 25 01 01 …`). The gateway chose the setting because 48 kHz is among its rates, and never said which rate would come. The STM-Speaker and QEMU's `usb-audio` have one rate each, so nothing showed there.
+
+**The change:**
+- `uac::Setting` has `rated`: the data endpoint's class descriptor says it takes its sampling frequency by request.
+- `audio_gw` sends SET_CUR of the sampling frequency (48000) to such an endpoint once its setting is selected, for playback and capture, as Linux's `init_sample_rate_v1`. It then asks the rate back and logs it.
+- `usb_host` lets a client send a request to an endpoint of its interface's selected setting while that stream runs.
+
+**On the DEXP** (release 202611210533, the ABI 34 tree with this change):
+```
+307.620 audio_gw: [AUDIO] USB ENDPOINT 01: 48000 HZ ASKED, THE DEVICE SAYS 48000 HZ
+307.620 audio_gw: [AUDIO] USB PLAYBACK STARTED: INTERFACE 2 SETTING 1
+```
+A minute of notes (440, 660 and 880 Hz, 5 s each): the maintainer heard them clean. Two shorter runs just before it he did not hear at all; why is not known, and the log of all three is the same.
 
 **Still open:**
 - **The Ryzen.** Release 202611201957 is on it since 2026-11-20 20:04 UTC: the same fix, with the AMD gate (`no_isochronous` for 1022) taken off in that build only. Its run waits for the speakerphone and the cable, which are at the DEXP. The gate comes out of `main` after that run shows a stream there.

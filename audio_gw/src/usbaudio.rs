@@ -210,12 +210,28 @@ impl Usb {
     /// Flushes the playback queue; the stream stops.
     pub fn reset(&mut self) { self.queued = 0; self.stop_playback(); }
 
+    // An endpoint that takes its sampling frequency by request is told 48 kHz once its setting is selected: SET_CUR of
+    // the sampling frequency control (UAC1 5.2.3.2.3.1), as Linux's init_sample_rate_v1. Without it the DEXP's 0573:1573
+    // rasped at the rate it had. What the device then says it runs at goes to the log; one that refuses plays on.
+    fn rate(&mut self, handle: u32, endpoint: u8) {
+        self.host.buffer_mut()[..3].copy_from_slice(&uac::RATE.to_le_bytes()[..3]);
+        let set = self.host.control(handle, 0x22, 0x01, 0x0100, endpoint as u16, 3);
+        let got = self.host.control(handle, 0xA2, 0x81, 0x0100, endpoint as u16, 3).ok().filter(|&n| n >= 3)
+            .map(|_| { let b = self.host.buffer(); u32::from_le_bytes([b[0], b[1], b[2], 0]) });
+        match (set, got) {
+            (Ok(_), Some(hz)) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: {} HZ ASKED, THE DEVICE SAYS {} HZ", endpoint, uac::RATE, hz),
+            (Ok(_), None) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: {} HZ ASKED, THE DEVICE DOES NOT SAY ITS RATE", endpoint, uac::RATE),
+            (Err(e), _) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: THE DEVICE REFUSED {} HZ ({:?}), IT SAYS {:?} HZ", endpoint, uac::RATE, e, got),
+        }
+    }
+
     // The playback setting selected, so its stream runs.
     fn start(&mut self) {
         if self.playing { return; }
         let Some((handle, s)) = self.attached.as_ref().and_then(|a| a.playback) else { return };
         match self.host.select(handle, s.alternate) {
             Ok(_) => {
+                if s.rated { self.rate(handle, s.endpoint); }
                 self.playing = true;
                 self.pacer = Pacer::new(s.packet as usize / s.frame());
                 self.fed_ms = mind::time::uptime_ms() as u64;
@@ -351,7 +367,7 @@ impl Usb {
         let Some((handle, s)) = self.attached.as_ref().and_then(|a| a.capture) else { return false };
         if self.capturing { return true; }
         match self.host.select(handle, s.alternate) {
-            Ok(_) => { (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
+            Ok(_) => { if s.rated { self.rate(handle, s.endpoint); } (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
             Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } false }
         }
     }
