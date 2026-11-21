@@ -12,6 +12,8 @@
 extern crate alloc;
 mod disk;
 mod fat;
+mod install;
+mod installer;
 mod cadence;
 mod journal;
 mod zone;
@@ -24,9 +26,10 @@ use fat::{Node, Volume};
 use journal::Journal;
 use zone::{Zone, PRIVATE, RECORD};
 use mind::abi::*;
-use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_OWNERS, BADGE_TIMED, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_INSTALL, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_OWNERS, BADGE_TIMED, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
+use mind::idl::install as inst;
 use mind::idl::wire::Call;
 use mind::idl::{rtc, wire};
 use mind::ipc::{self, Endpoint};
@@ -45,7 +48,8 @@ struct Mounted { name: &'static str, volume: Volume<Shared> }
 struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize, maker: u64 }
 
 // `inactive`: the slot the updater may fill, None on a system booted from its volume's root.
-struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)>, inactive: Option<&'static str> }
+// `live`: on a live boot, the installer's disks (352-KRN-0269).
+struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)>, inactive: Option<&'static str>, live: Option<installer::Live> }
 
 const SCOPES: usize = 64; // the loader's programs' own directories (000-KRN-0170) beside the launchers' scopes
 const FILL_WINDOW: usize = 64 << 20; // `fill` maps the lent object this much at a time, within the shared-mapping limit
@@ -172,6 +176,24 @@ impl Server {
         if !self.volumes[volume].volume.writable() { return Err(Error::ReadOnly); }
         if zone != Zone::Writable { return Err(Error::Denied); }
         Ok(())
+    }
+
+    // The installer's calls (idl/install.wit), from the shell's client badged BADGE_INSTALL; nothing else is served meanwhile.
+    fn serve_install(&mut self, request: inst::Request, call: Call, info: &BootInfo) -> mind::Result<()> {
+        let volumes = &self.volumes;
+        let mounted = |disk: &Shared| volumes.iter().any(|m| m.volume.disk.same(disk));
+        match request {
+            inst::Request::Disks => {
+                let result = self.live.as_ref().map(|live| live.disks(&mounted)).ok_or(inst::Error::NotLive);
+                inst::reply_disks(call, result.as_deref().map_err(|e| *e))
+            }
+            inst::Request::Install { number, typed, erase } => {
+                let seed = (mind::time::uptime_ms() as u64) << 32 ^ now() as u64;
+                let check = |volume: &mut Volume<Shared>, signature: [u8; 4]| installer::holds_manifest(volume, signature, info);
+                let result = match self.live.as_mut() { Some(live) => live.install(number, typed.as_str(), erase, now(), seed, &mounted, &check), None => Err(inst::Error::NotLive) };
+                inst::reply_install(call, result.as_ref().map_err(|e| *e))
+            }
+        }
     }
 
     fn serve(&mut self, request: Request, call: Call, sender: u64, badge: u16) -> mind::Result<()> {
@@ -620,6 +642,15 @@ fn main(info: &'static BootInfo) {
         volumes.push(Mounted { name: "models", volume });
         break;
     }
+    // On a live boot the installer keeps every whole disk but the boot volume's, the RAM disks left out (352-KRN-0269).
+    let live = (info.boot_volume.kind == VOLUME_ELTORITO).then(|| volumes.iter().find(|m| m.name.is_empty()).map(|m| m.volume.disk.clone())).flatten().map(|source| {
+        let held = disks.iter().enumerate().filter(|&(index, found)| Some(index) != boot_disk && found.whole && found.disk.kind() != mind::block::KIND_RAM).map(|(_, found)| found.disk.clone()).collect();
+        let live = installer::Live::new(held, source);
+        let mounted = |disk: &Shared| volumes.iter().any(|m| m.volume.disk.same(disk));
+        mind::println!("[VFS] INSTALLER: A LIVE BOOT, {} DISKS HELD FOR THE SHELL'S INSTALL", live.count());
+        for d in live.disks(&mounted) { mind::println!("[VFS] INSTALLER: DISK {}: {}, {:?}", d.number, d.words.as_str(), d.refusal); }
+        live
+    });
     drop(disks); // a disk no volume holds lets its driver client go
     // The RAM disk: formatted when blank (its contents never outlive the boot).
     if mind::dev::cap_info(SLOT_RAMDISK).0 == CAP_KIND_ENDPOINT {
@@ -635,12 +666,14 @@ fn main(info: &'static BootInfo) {
     }
     let journal = start_journal(&mut volumes);
     // The update zone (351-UPD-0008): the slot that did not boot, on a volume booted from a slot.
-    let inactive = match info.boot_slot.slot { BOOT_SLOT_A => Some("B"), BOOT_SLOT_B => Some("A"), _ => None };
+    // None on a live boot: its volume is read-only in memory (352-KRN-0269).
+    let inactive = match info.boot_slot.slot { _ if live.is_some() => None, BOOT_SLOT_A => Some("B"), BOOT_SLOT_B => Some("A"), _ => None };
     match inactive {
+        _ if live.is_some() => mind::println!("[VFS] NO UPDATE ZONE: A LIVE BOOT, ITS VOLUME READ-ONLY IN MEMORY"),
         Some(slot) if !volumes.is_empty() => mind::println!("[VFS] UPDATE ZONE: MIND/{} AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE", slot),
         _ => mind::println!("[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT"),
     }
-    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST, journal, inactive };
+    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST, journal, inactive, live };
     // The private copy of each request (MC-2.11); the data of a write is decoded in place from it.
     let mut scratch: Box<[u8; vfs::REQUEST_MAX]> = alloc::vec![0u8; vfs::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
@@ -651,9 +684,16 @@ fn main(info: &'static BootInfo) {
         };
         server.save_journal(false);
         let Ok(request) = request else { continue };
-        let _ = match vfs::decode(&request, RECEIVED, &mut scratch) {
-            Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),
-            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
+        let _ = if request.badge == BADGE_INSTALL {
+            match inst::decode(&request, RECEIVED) {
+                Ok((decoded, call)) => server.serve_install(decoded, call, info),
+                Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
+            }
+        } else {
+            match vfs::decode(&request, RECEIVED, &mut scratch) {
+                Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),
+                Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
+            }
         };
     }
 }

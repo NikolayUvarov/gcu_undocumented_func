@@ -351,6 +351,12 @@ impl Init {
     fn store_copy(&mut self) -> Option<&'static str> { self.store_disks().1 }
     fn store_disks(&mut self) -> (Option<&'static str>, Option<&'static str>) {
         if let Some(found) = self.store { return found; }
+        // A live boot writes nothing of its own: the store runs on ramdisk#1, every disk left to the installer (352-KRN-0269).
+        if self.live() {
+            mind::println!("[INIT] A LIVE BOOT: NO DISK OR PARTITION FOR THE BLOCK STORE, WHICH RUNS ON RAMDISK#1");
+            self.store = Some((None, None));
+            return (None, None);
+        }
         let mut found = (None, None);
         for name in ["virtio_blk", "virtio_blk#1", "virtio_blk#2"] {
             if !self.running(service_index(name)) { continue; }
@@ -383,6 +389,7 @@ impl Init {
         found
     }
     fn look_for_store_partition(&mut self) -> Option<StorePart> {
+        if self.live() { return None; }
         let mut text = [0u8; 256];
         let length = self.read_boot_file(STORE_TXT, &mut text);
         let named = partition::named(&text[..length]).unwrap_or_else(|why| { mind::println!("[INIT] {}", why); None });
@@ -494,6 +501,8 @@ impl Init {
     // booted from), from window VFS_WINDOW_FIRST up; none over the store's partition. None for a disk without a table, or
     // one that did not answer: vfs_server then holds it whole, and the store takes no partition there.
     fn vfs_windows(&mut self, driver: &'static str) -> Option<usize> {
+        // On a live boot vfs_server holds every disk whole, for the installer to write its table (352-KRN-0269).
+        if self.live() { return None; }
         let table = self.table_of(driver).filter(|table| table.scheme != Scheme::None)?;
         let (boot, store) = (self.boot_volume, self.store_part.flatten().filter(|store| store.driver == driver));
         let (mut window, mut set) = (VFS_WINDOW_FIRST, 0);
@@ -540,6 +549,8 @@ impl Init {
             }
         }
     }
+    // A live boot: the loader read the boot volume into memory from an El Torito entry (352-KRN-0268).
+    fn live(&self) -> bool { self.boot_volume.kind == VOLUME_ELTORITO }
     // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
     fn boot_volume_mounted(&mut self) -> bool {
         let Ok(keeper) = self.keeper("vfs_server") else { return false };
@@ -1442,6 +1453,11 @@ impl Init {
                 if self.present("clipboard") { grants.copy(SLOT_CLIPBOARD, self.shell_clipboard()?, CLIENT | CAP_BADGE); }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
+                // The installer's client, for the shell's `install` command and no program, on a live boot alone (352-KRN-0269).
+                if self.live() && self.running(service_index("vfs_server")) {
+                    grants.add(SLOT_INSTALL, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_INSTALL)?, CLIENT);
+                    mind::println!("[INIT] A LIVE BOOT: THE SHELL GETS THE INSTALLER'S CLIENT");
+                }
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148); with the
                 // right to badge, for the BADGE_SHELL_SECRET copy it lends for REQUEST_SECRET_LINE (000-KRN-0224).
                 grants.add(SLOT_COMMANDS, self.server(&mut minted, "shell")?, ALL | CAP_BADGE);
