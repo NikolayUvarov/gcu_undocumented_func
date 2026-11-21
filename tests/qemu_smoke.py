@@ -10533,8 +10533,12 @@ def hub_check(args, disk):
         assert out.returncode == 0, (method, path, out.stdout, out.stderr)
         return out.stdout
 
-    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6).
+    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6); two files to attach, in the user's files.
     (disk / "netpolicy.txt").write_text(f"# improve reaches the test's hub on the host\nimprove 10.0.2.2 tcp {port} 600 {1 << 20}\n")
+    fan_log = "[ 0.000] fan0: 4200 rpm at idle\n" * 8
+    sensors = "fan1: 4200 RPM\nfan2: 0 RPM\n"
+    (disk / "fan.log").write_text(fan_log)
+    (disk / "sensors.txt").write_text(sensors)
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
@@ -10551,15 +10555,25 @@ def hub_check(args, disk):
         call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 2","decision":"approve","text":"Welcome to the hub"}')
         out = vm.command("improve status", timeout=60)
         require_all(out, "device qemu (", "): approved", "user QEMU tester #1, trust 0 (band 0), access open", "admin maintainer, welcome: Welcome to the hub")
-        require(vm.command("improve new fault 'Fan noise' 'It is loud at idle' --yes", timeout=60), "request 1: new")
+        out = vm.command("improve new fault 'Fan noise' 'It is loud at idle' --attach log:fan.log --yes", timeout=60)
+        require_all(out, f"attachment: log fan.log ({len(fan_log)} bytes, sha256 {hashlib.sha256(fan_log.encode()).hexdigest()}) from fan.log", "request 1: new, 1 attachments sent")
         assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        assert call("admin", "GET", "/hub/admin/v1/requests/1/attachments/0") == f"200\n{fan_log}\n", "the attachment's bytes as the machine read them"
         call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
         require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
         out = vm.command("improve show 1", timeout=60)
         require_all(out, "#1 Fan noise", "needs-info", "One fan or two?", "waits for your answer")
         question = re.search(r"#(\d+) question", out)[1]
-        require(vm.command(f"improve reply 1 'Two, one stopped' --answer {question}", timeout=60), "the request is new")
+        out = vm.command(f"improve reply 1 'Two, one stopped' --answer {question} --attach text:sensors.txt --yes", timeout=60)
+        require_all(out, "attachment: text sensors.txt", "the request is new")
+        answer = re.search(r"message #(\d+) on request 1", out)[1]
         assert "Two, one stopped" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        assert call("intake", "GET", f"/hub/agent/v1/requests/1/messages/{answer}/attachments/0") == f"200\n{sensors}\n", "the answer's attachment for intake"
+        # News since the last look, then none; the export, written whole into a user's file.
+        require(vm.command("improve watch --once", timeout=60), "request 1: new")
+        require(vm.command("improve watch --once", timeout=60), "no news")
+        require(vm.command("improve export ram:hub.json", timeout=60), "exported to ram:hub.json (")
+        require_all(vm.command("cat ram:hub.json", timeout=30), '"display_name":"QEMU tester"', '"title":"Fan noise"')
         # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
         call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
         require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
@@ -10574,7 +10588,8 @@ def hub_check(args, disk):
         hub.wait(timeout=10)
         shutil.rmtree(work, ignore_errors=True)
     print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
-          "approved by the admin, a request filed, the agents' question answered; a wrong pin refused; a text past 512 bytes named as unread "
+          "approved by the admin, a request filed with a log attached, the agents' question answered with a file, news watched, the export "
+          "written into ram:; a wrong pin refused; a text past 512 bytes named as unread "
           "until NET's change to parse (100003-APP-0151)", flush=True)
 
 
