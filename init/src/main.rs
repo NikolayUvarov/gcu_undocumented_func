@@ -47,6 +47,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "the flow of program httpd (its listening grant); a TLS client with the right to the device certificate; the parser; RTC; a read-only scope of data/releases/",
     "the flow of program sshd (its listening grant); keystore's client for its key exchanges' signatures; a writable scope of data/; the shell's client for a remote session",
     "nothing but its endpoint",
+    "the Radeon's registers (BAR 5) as the firmware left the device; never stopped by init",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -1188,6 +1189,19 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); self.lend(&mut grants, SLOT_DEV0, "compositor")?;
                 if self.running(service_index("usb_host")) { grants.add(SLOT_DEV1, self.badged(&mut minted, "usb_host", mind::usb::BADGE_VIDEO)?, CLIENT); }
+            }
+            "display" => {
+                // The Ryzen's Radeon (1002:1638) for its display engine (213-DRV-0086, 213-KRN-0270): BAR 5, its registers
+                // as amdgpu takes them, and the device's index. The firmware's decoding and mastering stay, as the GOP's
+                // output needs them; the device is not recorded, so init never stops it: DP-2 keeps its picture.
+                let device = platform::find_device_id(0x03_00_00, 0xFF_00_00, 0x1638_1002, 0)?;
+                let command = || mind::dev::device_config_at(SLOT_DEV0, device, 4).map(|v| v & 0xFFFF).unwrap_or(u32::MAX);
+                let before = command();
+                let registers = Self::bar(&mut minted, device, 5, CAP_KIND_MMIO)?;
+                let (_, _, len) = cap_info(registers);
+                mind::println!("[INIT] display: RADEON 1002:1638 (DEVICE {}), BAR 5 {} KIB; COMMAND {:04X} BEFORE THE GRANT, {:04X} AFTER", device, len >> 10, before, command());
+                grants.add(SLOT_DEV0, registers, 0);
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => {
@@ -2546,7 +2560,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 // What a safe start may leave out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
 // run was most likely in; only those a run of this slot was starting when it ended (000-KRN-0217). Their plans are
 // prepared and their devices stopped, so `svc start` starts them (000-KRN-0131), and so do they by themselves later.
-const SAFE_LEFT_OUT: [&str; 7] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci"];
+const SAFE_LEFT_OUT: [&str; 8] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci", "display"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
 
