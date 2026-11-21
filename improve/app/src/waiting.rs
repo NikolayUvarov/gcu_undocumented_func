@@ -1,6 +1,7 @@
 //! The requests that wait for the user on MIND Hub, as `improve` last saw them (100003-APP-0153): `data/improve/waiting`,
 //! which `improve` writes and the shell and `wm` read (both include this file). A line of request numbers apart by
-//! spaces; `#` starts a comment. A request waits for its user while a question of the agents is open or its check waits.
+//! spaces; `#` starts a comment. A request waits for its user while a question or a proposal of the agents is open, or
+//! while its check waits.
 
 use alloc::format;
 use alloc::string::String;

@@ -82,6 +82,7 @@ words!(AttachmentKind { Log => "log", Hardware => "hardware", Screenshot => "scr
 words!(DeviceKind { Mind => "mind", Host => "host" });
 words!(MessageKind { Comment => "comment", Question => "question", Answer => "answer", Proposal => "proposal", Result => "result", Verdict => "verdict", Status => "status" });
 words!(Verdict { Works => "works", Partly => "partly", DoesNotWork => "does-not-work" });
+words!(Consent { Accept => "accept", Correct => "correct", Decline => "decline" });
 
 /// How a new device joins: as a new user with a name, or as another device of a user, by a pairing code.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,8 +186,11 @@ pub fn client_id(id: &str) -> Result<(), Error> {
 pub struct Message {
     pub kind: MessageKind,
     pub text: String,
-    /// The question an answer answers, by its number in the thread.
+    /// The question or the proposal an answer answers, by its number in the thread.
     pub answers: Option<u32>,
+    /// An answer to a proposal: it accepts the proposal, corrects it with its text, or declines it (hub-api 3,
+    /// 100003-APP-0155). An answer to a question has none; which one `answers` names, the hub knows.
+    pub consent: Option<Consent>,
     /// A verdict's word, and the release it was checked on.
     pub verdict: Option<Verdict>,
     pub release: Option<String>,
@@ -197,7 +201,9 @@ pub struct Message {
 impl Message {
     /// Within the form's bounds; attachments within the largest band's, which the hub narrows to the user's.
     pub fn check(&self) -> Result<(), Error> {
-        body("text", &self.text, TEXT_MAX)?;
+        // A proposal accepted may come without a word; every other message has a text.
+        if !(self.consent == Some(Consent::Accept) && self.text.is_empty()) { body("text", &self.text, TEXT_MAX)?; }
+        if self.consent.is_some() && self.kind != MessageKind::Answer { return Err(Error::Value("consent")); }
         match (self.kind, self.answers.is_some(), self.verdict.is_some()) {
             (MessageKind::Answer, true, false) => {}
             (MessageKind::Verdict, false, true) => {}

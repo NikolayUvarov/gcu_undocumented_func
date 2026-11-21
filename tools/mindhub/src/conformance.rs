@@ -1,4 +1,4 @@
-//! The conformance suite (docs/hub/README.md, 10.3): drives a hub over `hub-api 2` and its pages, as devices, a
+//! The conformance suite (docs/hub/README.md, 10.3): drives a hub over `hub-api 3` and its pages, as devices, a
 //! browser, the agents and the admin do, and checks each answer. It needs the hub's admin key and three agent keys
 //! (intake, a track's, the integrator's), and a network that registered no key there within a day, as it registers
 //! three and checks that a rejection holds the fourth back. `mindhub conformance` runs it against any hub; the host
@@ -7,7 +7,7 @@
 use crate::client::{Client, Reply};
 use crate::util::{self, hex, sha256};
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Consent, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::json::{Value, Writer};
 use improve_proto::{sign, wire, API};
 
@@ -65,7 +65,7 @@ fn request(title: &str, visibility: Visibility, attachments: Vec<Attachment>) ->
     Request { client_id: hex(&util::random::<8>()), kind: Kind::Fault, title: title.into(), text: format!("Conformance: {title}"), visibility, security: false, named: false, attachments }
 }
 
-fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() } }
+fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn send_message(c: &mut Client, base: &str, id: i64, m: &Message) -> std::io::Result<Reply> {
     c.call("POST", &format!("{base}/requests/{id}/messages"), wire::encode_message(m).as_bytes())
@@ -240,6 +240,26 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     if board.iter().any(|e| e.id == held_id as u64) { return Err("the board shows a request that is not a task".into()); }
     s.ok("an acceptance names the task, raises the trust, and the board shows it alone, with the name its user allowed");
     expect("deleting an accepted request", &b.call("DELETE", &format!("/hub/v1/requests/{bid}"), b"").map_err(io)?, 409, Some("accepted"))?;
+    // The track's proposal before it starts, and B's answer to it (hub-api 3, 100003-APP-0155).
+    let v = expect("the track's proposal", &send_message(&mut track, "/hub/agent/v1", bid, &message(MessageKind::Proposal, "A key n in camera that steps to the next camera")).map_err(io)?, 201, None)?;
+    let pn = int(&v, &["n"]).ok_or("the proposal's number")? as u32;
+    let open = |c: &mut Client| -> Result<bool, String> {
+        let r = c.call("GET", &format!("/hub/v1/requests/{bid}"), b"").map_err(io)?;
+        Ok(expect("B's request", &r, 200, None)?.get("request").and_then(|r| r.get("open_proposal")).and_then(Value::as_bool) == Some(true))
+    };
+    if !open(&mut b)? { return Err("the proposal does not wait for its user".into()); }
+    let bare = Message { answers: Some(pn), ..message(MessageKind::Answer, "Yes") };
+    expect("an answer to a proposal with no consent", &send_message(&mut b, "/hub/v1", bid, &bare).map_err(io)?, 400, Some("consent"))?;
+    let corrected = Message { answers: Some(pn), consent: Some(Consent::Correct), ..message(MessageKind::Answer, "And Shift+n to the one before") };
+    expect("B's correction", &send_message(&mut b, "/hub/v1", bid, &corrected).map_err(io)?, 201, None)?;
+    if open(&mut b)? { return Err("an answered proposal still waits".into()); }
+    expect("a second answer to the proposal", &send_message(&mut b, "/hub/v1", bid, &corrected).map_err(io)?, 400, Some("answers"))?;
+    let r = track.call("GET", &format!("/hub/agent/v1/requests/{bid}"), b"").map_err(io)?;
+    let thread = expect("the track's read of the thread", &r, 200, None)?;
+    let consent = thread.get("request").and_then(|r| r.get("thread")).and_then(Value::as_array)
+        .and_then(|t| t.iter().find(|p| int(p, &["answers"]) == Some(pn as i64)).and_then(|p| text(p, &["consent"])).map(String::from));
+    if consent.as_deref() != Some("correct") { return Err(format!("the track reads the answer's consent as {consent:?}")); }
+    s.ok("a proposal waits for its user, is refused an answer with no consent, and its correction reaches the track");
     expect("the track's move", &move_to(&mut track, "/hub/agent/v1", bid, "in-progress", &[]).map_err(io)?, 200, None)?;
     let result = Message { release: Some("202611210000".into()), ..message(MessageKind::Result, "Press n; the title names the camera") };
     expect("the track's result", &send_message(&mut track, "/hub/agent/v1", bid, &result).map_err(io)?, 201, None)?;

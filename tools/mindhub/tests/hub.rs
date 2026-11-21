@@ -3,7 +3,7 @@
 //! board, the user's check, and a restart rebuilding the same state (100003-APP-0146).
 
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{self, Attachment, AttachmentKind, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{self, Attachment, AttachmentKind, Consent, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::state::{Role, State};
 use improve_proto::{sign, work};
 use mindhub::event::{Decision, Event, Owner};
@@ -142,7 +142,7 @@ fn request(title: &str, visibility: Visibility) -> Request {
 
 fn hex8(text: &str) -> String { improve_proto::hex(&sha256(text.as_bytes())[..8]) }
 
-fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() } }
+fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn limit(r: Result<impl std::fmt::Debug, Refusal>) -> (u16, String) {
     let e = r.expect_err("a refusal");
@@ -755,16 +755,57 @@ fn a_request_for_a_credential_waits_for_the_admin() {
 }
 
 #[test]
-fn a_journal_of_hub_api_1_is_refused_by_its_name() {
-    let w = World::new();
-    let reg = Registration { ..registration(1, Joining::NewUser { display_name: "old".into() }) };
-    let hub = w.hub.clone();
-    let (events, _) = hub.register(w.now, &reg, &pk(1), &[0; 32], "10.0.0.1").unwrap();
-    let mut lines: Vec<String> = events.iter().map(|e| e.encode()).collect();
-    let filed = Event::Filed { at: w.now, id: 1, user: 1, device: id(1), form: request("Old", Visibility::Public), held: true }.encode();
-    lines.push(filed.replace("hub-api 2", "hub-api 1"));
-    std::fs::write(w.dir.join("old.jsonl"), lines.join("\n") + "\n").unwrap();
-    let err = Journal::open(&w.dir.join("old.jsonl"), &mut Hub::new(keys(), Settings::default())).err().unwrap();
-    assert!(err.contains("line 2") && err.contains("hub-api 1"), "{err}");
+fn a_journal_of_a_retired_api_is_refused_by_its_name() {
+    // hub-api 1 and 2 (100003-APP-0148, 0155): a journal line of either is refused, named, never read as the new one.
+    for retired in improve_proto::RETIRED {
+        let w = World::new();
+        let reg = Registration { ..registration(1, Joining::NewUser { display_name: "old".into() }) };
+        let hub = w.hub.clone();
+        let (events, _) = hub.register(w.now, &reg, &pk(1), &[0; 32], "10.0.0.1").unwrap();
+        let mut lines: Vec<String> = events.iter().map(|e| e.encode()).collect();
+        let filed = Event::Filed { at: w.now, id: 1, user: 1, device: id(1), form: request("Old", Visibility::Public), held: true }.encode();
+        assert!(filed.contains(improve_proto::API));
+        lines.push(filed.replace(improve_proto::API, retired));
+        std::fs::write(w.dir.join("old.jsonl"), lines.join("\n") + "\n").unwrap();
+        let err = Journal::open(&w.dir.join("old.jsonl"), &mut Hub::new(keys(), Settings::default())).err().unwrap();
+        assert!(err.contains("line 2") && err.contains(retired), "{retired}: {err}");
+    }
 }
 
+
+#[test]
+fn a_proposal_is_accepted_corrected_or_declined_by_its_user() {
+    // hub-api 3 (100003-APP-0155): the owning track proposes; the user's answer names it with a consent, once; it moves
+    // no state, and an answer to a question still has none.
+    let mut w = World::new();
+    w.approved(1, "10.0.0.1");
+    let r = w.file(1, "The camera does not switch").unwrap();
+    let intake = Actor::Agent(pk(INTAKE));
+    w.mv(intake.clone(), r, State::Accepted, Extra { track: Some("APP".into()), task: Some("158-APP-0150".into()), ..Extra::default() }).unwrap();
+    let posted = |w: &World, kind| w.hub.request(r).unwrap().thread.iter().rev().find(|p| p.message.kind == kind).unwrap().n;
+    w.post(Actor::Agent(pk(APP)), r, message(MessageKind::Proposal, "A key n that steps to the next camera")).unwrap();
+    let p = posted(&w, MessageKind::Proposal);
+    assert_eq!((w.state(r), w.hub.request(r).unwrap().waits_for_user()), (State::Accepted, (false, true)));
+    let user = Actor::Device(id(1));
+    let bare = Message { answers: Some(p), ..message(MessageKind::Answer, "Yes") };
+    assert_eq!(limit(w.post(user.clone(), r, bare)), (400, "consent".into()));
+    // A question while the proposal waits: its answer takes no consent, and the proposal's does not end needs-info.
+    w.post(Actor::Agent(pk(APP)), r, message(MessageKind::Question, "One camera or two?")).unwrap();
+    let q = posted(&w, MessageKind::Question);
+    assert_eq!(w.state(r), State::NeedsInfo);
+    assert_eq!(limit(w.post(user.clone(), r, Message { answers: Some(q), consent: Some(Consent::Accept), ..message(MessageKind::Answer, "Two") })), (400, "consent".into()));
+    w.post(user.clone(), r, Message { answers: Some(p), consent: Some(Consent::Accept), ..message(MessageKind::Answer, "") }).unwrap();
+    assert_eq!(w.state(r), State::NeedsInfo, "a proposal's answer is not the question's");
+    assert_eq!(w.hub.request(r).unwrap().consent_to(p), Some(Consent::Accept));
+    assert_eq!(limit(w.post(user.clone(), r, Message { answers: Some(p), consent: Some(Consent::Decline), ..message(MessageKind::Answer, "No") })), (400, "answers".into()));
+    w.post(user.clone(), r, Message { answers: Some(q), ..message(MessageKind::Answer, "Two") }).unwrap();
+    assert_eq!((w.state(r), w.hub.request(r).unwrap().waits_for_user()), (State::Accepted, (false, false)));
+    // A second proposal, declined with the user's reason; a correction says what.
+    w.post(Actor::Agent(pk(APP)), r, message(MessageKind::Proposal, "Switch cameras by their names")).unwrap();
+    let p2 = posted(&w, MessageKind::Proposal);
+    assert_eq!(limit(w.post(user.clone(), r, Message { answers: Some(p2), consent: Some(Consent::Correct), ..message(MessageKind::Answer, "") })), (400, "text".into()));
+    w.post(user.clone(), r, Message { answers: Some(p2), consent: Some(Consent::Decline), ..message(MessageKind::Answer, "The names are the same") }).unwrap();
+    assert_eq!(w.hub.request(r).unwrap().consent_to(p2), Some(Consent::Decline));
+    // A user and the admin propose nothing.
+    assert_eq!(limit(w.post(user, r, message(MessageKind::Proposal, "mine"))), (403, "kind".into()));
+}

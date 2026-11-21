@@ -17,7 +17,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{Attachment, AttachmentKind, Consent, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::json::{self, Flat, FlatKind, Value};
 use improve_proto::{sign, wire, work};
 use mind::abi::{BootInfo, SLOT_NETWORK, SLOT_PARSE, SLOT_SECRETS, SLOT_TLS};
@@ -48,6 +48,7 @@ const USAGE: &str = "usage: improve COMMAND
   new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--attach KIND:FILE]... [--yes]
   list | show N | watch [--once]
   reply N \"TEXT\" [--answer Q [--attach KIND:FILE]...]
+  reply N [\"TEXT\"] --answer P --accept | reply N \"TEXT\" --answer P --correct|--decline   a proposal's answer
   check N works|partly|does-not-work \"TEXT\" [--release RELEASE] [--attach KIND:FILE]...   on the release this machine runs
   version RELEASE                         the release this machine runs (update status), told to the hub
   devices | pair | revoke DEVICE | delete N | export FILE
@@ -440,7 +441,7 @@ fn run(args: &[String]) -> Result<(), String> {
             keep_waiting(all);
             if all.is_empty() { mind::println!("no requests"); }
             for r in all {
-                let mark = if flag(r, "open_question") { "  [a question for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" }
+                let mark = if flag(r, "open_question") { "  [a question for you]" } else if flag(r, "open_proposal") { "  [a proposal for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" }
                            else if s(r, "state") == "awaiting-check" { "  [waits for your check]" } else { "" };
                 mind::println!("{:>5}  {:<16} {}{mark}", n(r, "id"), s(r, "state"), s(r, "title"));
             }
@@ -456,9 +457,11 @@ fn run(args: &[String]) -> Result<(), String> {
             if let Some(note) = check_note(&mut hub, r)? { mind::println!("{note}\n"); }
             for p in list(r, "thread") {
                 let extra = match s(p, "kind") {
-                    "answer" => format!(" to #{}", n(p, "answers")),
+                    "answer" => format!(" to #{}{}", n(p, "answers"), match s(p, "consent") { "accept" => ", accepting it", "correct" => ", correcting it", "decline" => ", declining it", _ => "" }),
                     "verdict" => format!(": {} on {}", s(p, "verdict"), s(p, "release")),
                     "question" if p.get("answered").and_then(Value::as_bool) == Some(false) => String::from(" (waits for your answer: improve reply N \"TEXT\" --answer #)"),
+                    "proposal" if p.get("answered").and_then(Value::as_bool) == Some(false) =>
+                        format!(" (waits for your answer: improve reply {id} --answer {n} --accept, or improve reply {id} \"TEXT\" --answer {n} --correct|--decline)", id = n(r, "id"), n = n(p, "n")),
                     _ => String::new(),
                 };
                 mind::println!("#{} {}{extra}, {}\n  {}", n(p, "n"), s(p, "kind"), s(p, "author"), s(p, "text"));
@@ -467,10 +470,15 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("reply") => {
             let id = number(word(1, "the request's number")?)?;
-            let text = String::from(word(2, "the text")?);
+            // A proposal's answer accepts, corrects or declines it (hub-api 3, 100003-APP-0155); an acceptance may say nothing.
+            let given: Vec<Consent> = [("--accept", Consent::Accept), ("--correct", Consent::Correct), ("--decline", Consent::Decline)].iter().filter(|(f, _)| has(f)).map(|(_, c)| *c).collect();
+            if given.len() > 1 { return Err("one of --accept, --correct and --decline".into()); }
+            let consent = given.first().copied();
+            if consent.is_some() && value("--answer").is_none() { return Err("--accept, --correct and --decline answer a proposal: name it with --answer".into()); }
+            let text = match word(2, "the text") { Ok(t) => String::from(t), Err(_) if consent == Some(Consent::Accept) => String::new(), Err(e) => return Err(e) };
             let message = match value("--answer") {
-                Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's number")?), verdict: None, release: None, attachments: Vec::new() },
-                None => Message { kind: MessageKind::Comment, text, answers: None, verdict: None, release: None, attachments: Vec::new() },
+                Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's or the proposal's number")?), consent, verdict: None, release: None, attachments: Vec::new() },
+                None => Message { kind: MessageKind::Comment, text, answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() },
             };
             post(id, message, args)
         }
@@ -487,7 +495,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     version
                 }
             };
-            post(id, Message { kind: MessageKind::Verdict, text, answers: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() }, args)
+            post(id, Message { kind: MessageKind::Verdict, text, answers: None, consent: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() }, args)
         }
         Some("watch") => watch(has("--once")),
         Some("export") => {
@@ -562,10 +570,10 @@ fn post(id: u64, message: Message, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The requests that wait for the user (an open question, a check), kept for the shell and wm in the user's files when
+/// The requests that wait for the user (an open question or proposal, a check), kept for the shell and wm in the user's files when
 /// they changed (100003-APP-0153). Without the user's files lent, nothing is kept.
 fn keep_waiting(all: &[Value]) {
-    let mut ids: Vec<u64> = all.iter().filter(|r| flag(r, "open_question") || s(r, "state") == "awaiting-check").filter_map(|r| u64::try_from(n(r, "id")).ok()).collect();
+    let mut ids: Vec<u64> = all.iter().filter(|r| flag(r, "open_question") || flag(r, "open_proposal") || s(r, "state") == "awaiting-check").filter_map(|r| u64::try_from(n(r, "id")).ok()).collect();
     ids.sort_unstable();
     let mut old = [0u8; waiting::BYTES];
     let before = mind::fs::File::open(waiting::FILE).ok().and_then(|f| f.read_at(0, &mut old).ok()).and_then(|n| core::str::from_utf8(&old[..n]).ok()).and_then(waiting::read);
@@ -607,7 +615,7 @@ fn watch(once: bool) -> Result<(), String> {
         let v = hub.expect(Method::Get, &format!("/hub/v1/requests?since={}", since + 1), b"", &[200])?;
         let changed = list(&v, "requests");
         for r in changed {
-            let question = if flag(r, "open_question") { String::from(", a question waits for you") } else {
+            let question = if flag(r, "open_question") { String::from(", a question waits for you") } else if flag(r, "open_proposal") { String::from(", a proposal waits for you") } else {
                 match s(r, "state") { "delivered" => format!(" in release {}", s(r, "release")), "awaiting-check" => String::from(", it waits for your check"), _ => String::new() }
             };
             mind::println!("request {}: {}{question} (improve show {})", n(r, "id"), s(r, "state"), n(r, "id"));

@@ -1,0 +1,64 @@
+# 100003-APP-0155 — `hub-api 3`: the user's answer to an agent's proposal — done
+
+**Type:** protocol, server and clients (MIND Hub) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's word, 2026-11-21: «делай hub-api 3 с ответом на предложение») · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), stage 2++ · **Roadmap:** track G · **Constitution:** MC-10.2, MC-10.3, MC-11.5, MC-12.4
+
+## Problem
+
+- **The design** ([docs/hub/README.md](../docs/hub/README.md), 6.2): an agent's `proposal` says "this is what I understood and will do", and the user accepts it, corrects it, or declines it.
+- **`hub-api 2` had no such answer.**
+  - `answers` named an open question alone.
+  - A user could only comment in words, which no agent could tell from a remark.
+  - Nothing said that a proposal waited for its user.
+
+## Plan
+
+- **`hub-api 3`** (`improve/proto`):
+  - a message's new `consent`, `accept`, `correct` or `decline`, on an answer alone;
+  - an acceptance may come with no words; a correction and a refusal have them;
+  - `hub-api 1` and `hub-api 2` refused by their names, a journal that holds either too (MC-12.4: no code reads both).
+- **The hub** (`tools/mindhub`):
+  - An answer names an open question with no consent, or an open proposal with one; any other answer is refused, naming why. Each is answered once.
+  - A proposal's answer moves no state. An answer to a question ends `needs-info` only when it is the question's.
+  - A request's summary says `open_proposal`, and the thread shows a proposal's `answered` and an answer's `consent`.
+  - The user's page shows a waiting proposal with Accept, Correct and Decline; the list says "a proposal for you".
+- **The clients:**
+  - `improve reply N [TEXT] --answer P --accept`, and `--correct` or `--decline` with a text, on a host and on MIND Core;
+  - `list` marks a waiting proposal, `watch` names it, and `show` names the command;
+  - on MIND Core the request is among those that wait for the user (100003-APP-0153).
+
+## Acceptance criteria
+
+- **Host tests:**
+  - the form's rules and the wire, the vector `answer.json`, both retired versions refused (`improve/proto`);
+  - the hub's rules (`tests/hub.rs`);
+  - the conformance suite's check of a proposal corrected and read by the track;
+  - a browser's answer from its page (`tests/pages.rs`);
+  - the host `improve`'s commands (`improve/host`).
+- **The QEMU suite `hub`** on x86: the track's proposal waits, the shell says so, an answer with no consent is refused, and the machine's correction reaches the track.
+- **Docs:** the design's 6.2 and 10, [server.md](../docs/hub/server.md), [improve.md](../docs/hub/improve.md), the vectors' README.
+
+## Resolution
+
+- **The protocol:**
+  - `form::Consent` and `Message::consent` (`improve/proto/src/form.rs`), in the wire (`wire.rs`);
+  - `API = "hub-api 3"`, `RETIRED = ["hub-api 1", "hub-api 2"]` (`lib.rs`);
+  - the vector `vectors/answer.json`; `request.json` and `message.json` written anew.
+- **The hub:**
+  - `Item::open_proposal`, `waits_for_user` and `consent_to`, and the answer's rules in `Hub::post` (`tools/mindhub/src/hub.rs`);
+  - `open_proposal`, `consent` and a proposal's `answered` in the API (`api.rs`);
+  - the proposal's form and words on the pages (`pages.rs`);
+  - a conformance check, which makes 20 (`conformance.rs`).
+- **The clients:**
+  - `improve/host/src/lib.rs` and `improve/app/src/main.rs`: `--accept`, `--correct`, `--decline`, the marks, `show`'s command;
+  - `keep_waiting` counts an open proposal.
+- **Tested** in this container, x86_64:
+  - `improve/proto` (14 tests);
+  - `tools/mindhub` (26 + 6 + 2 + the new `pages.rs`);
+  - `improve/host` (3);
+  - the QEMU suite `hub` with the proposal's steps.
+- **Docs:**
+  - [docs/hub/README.md](../docs/hub/README.md) 0.6;
+  - [server.md](../docs/hub/server.md) 3;
+  - [improve.md](../docs/hub/improve.md) 5;
+  - the root README's `improve` line.
+- **Not in it:** the phone's screen of a proposal, stage 6 with MOB; no hub ran in use, so no journal needed carrying over.
