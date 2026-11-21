@@ -8165,7 +8165,24 @@ def camera_check(vm):
     require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
     assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    # 158-APP-0147: a camera the gateway does not list is refused with what it lists; n switches, and with one camera
+    # says so; Esc ends it.
+    require(vm.command("camera -c 1 -s data/cam1.bmp", timeout=30), "camera: camera 1: the video gateway lists one camera, number 0")
+    vm.send("camera -c 0\n")
+    vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S", timeout=30)
+    since = len(vm.log)
+    vm.hmp("sendkey n")
+    vm.serial(enter=False)
+    vm.logged("[CAMERA] ONE CAMERA ONLY: test pattern", since)
+    # Read from the log: camera may end, and the shell resume, within the 100 ms serial() drops (round 162's gate).
+    since = len(vm.log)
+    vm.hmp("sendkey esc")
+    vm.serial(enter=False)
+    vm.logged("[CAMERA] SHOWN ", since)
+    vm.logged("SHELL RESUMED.", since)
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
+          "-c beyond the list refused, n with one camera named (158-APP-0147)", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 
@@ -10508,17 +10525,124 @@ def slot_applications_check(args):
           "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
-def tone_power(samples, rate, start, hz):
-    """How much of `hz` the 40 ms of `samples` from `start` hold."""
-    window = samples[start:start + int(rate * 0.04)]
+def hub_check(args, disk):
+    """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
+    (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
+    question answered in its thread; a wrong pin refused; a thread with a text past 512 bytes named as unread until
+    NET's change to `parse` (requests-NET.md)."""
+    work = Path(tempfile.mkdtemp(prefix="mind-hub-"))
+    target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
+    subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
+    mindhub = str(target / "release" / "mindhub")
+    _certificates(work)
+    pin = _spki_pin(work / "server.pem")
+    keys = {name: work / f"{name}.key" for name in ("admin", "intake")}
+    public = {name: subprocess.run([mindhub, "key", str(path)], check=True, capture_output=True, text=True).stdout.strip() for name, path in keys.items()}
+    data = work / "data"
+    data.mkdir()
+    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\n")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    hub = subprocess.Popen([mindhub, "serve", str(data), "--listen", f"127.0.0.1:{port}", "--cert", str(work / "server.pem"), "--key", str(work / "server.key")],
+                           stderr=subprocess.PIPE, text=True)
+    started = ""
+    while "MINDHUB: SERVING" not in started:
+        line = hub.stderr.readline()
+        assert line, f"mindhub did not start: {started}"
+        started += line
+    assert pin in started, (pin, started)
+
+    def call(key, method, path, body=None):
+        out = subprocess.run([mindhub, "call", "--key", str(keys[key]), "--hub", f"https://127.0.0.1:{port}", "--pin", pin, method, path, *([body] if body else [])],
+                             capture_output=True, text=True, timeout=60)
+        assert out.returncode == 0, (method, path, out.stdout, out.stderr)
+        return out.stdout
+
+    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6).
+    (disk / "netpolicy.txt").write_text(f"# improve reaches the test's hub on the host\nimprove 10.0.2.2 tcp {port} 600 {1 << 20}\n")
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.command("improve", timeout=30), "usage: improve COMMAND")
+        require(vm.command("improve status", timeout=30), "no hub yet: improve setup")
+        out = vm.command(f"improve setup mind.test 10.0.2.2 {port} {pin}", timeout=60)
+        require_all(out, f"hub mind.test:{port}", "this device's key ")
+        device_key = re.search(r"this device's key ([0-9a-f]{64})", out)[1]
+        require(vm.command('improve register "QEMU tester" --name qemu', timeout=120), ": pending (the admin decides")
+        devices = call("admin", "GET", "/hub/admin/v1/devices")
+        assert "QEMU tester" in devices and '"state":"pending"' in devices, devices
+        device = hashlib.sha256(bytes.fromhex(device_key)).hexdigest()
+        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 2","decision":"approve","text":"Welcome to the hub"}')
+        out = vm.command("improve status", timeout=60)
+        require_all(out, "device qemu (", "): approved", "user QEMU tester #1, trust 0 (band 0), access open", "admin maintainer, welcome: Welcome to the hub")
+        require(vm.command("improve new fault 'Fan noise' 'It is loud at idle' --yes", timeout=60), "request 1: new")
+        assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
+        require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
+        out = vm.command("improve show 1", timeout=60)
+        require_all(out, "#1 Fan noise", "needs-info", "One fan or two?", "waits for your answer")
+        question = re.search(r"#(\d+) question", out)[1]
+        require(vm.command(f"improve reply 1 'Two, one stopped' --answer {question}", timeout=60), "the request is new")
+        assert "Two, one stopped" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
+        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        # Another key than the pinned one: refused, whoever signed it.
+        vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
+        require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / "mind-core-hub.log").write_text(vm.log)
+        hub.terminate()
+        hub.wait(timeout=10)
+        shutil.rmtree(work, ignore_errors=True)
+    print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
+          "approved by the admin, a request filed, the agents' question answered; a wrong pin refused; a text past 512 bytes named as unread "
+          "until NET's change to parse (100003-APP-0151)", flush=True)
+
+
+def tone_power(samples, rate, start, hz, seconds=0.04):
+    """How much of `hz` the `seconds` (40 ms) of `samples` from `start` hold."""
+    window = samples[start:start + int(rate * seconds)]
     return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
 
 
+# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra" as beep's own samples: C, G and C, E
+# falling to E flat, then the timpani's C and G (beep/src/notes.rs).
+BEEP_OPENING = ((262, 0.4), (392, 0.4), (523, 0.6), (659, 0.15), (622, 0.6))
+
+
 def beep_demo_tones(left, rate, first):
-    """beep's demo from sample `first`: 523, 659 and 784 Hz, 150 ms each, each stronger than the other two."""
-    for index, hz in enumerate((523, 659, 784)):
-        start = first + int(rate * (0.05 + 0.15 * index))
-        assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
+    """beep's default from sample `first`: the opening's notes in their order, each the strongest of them in 40 ms
+    windows every 50 ms, then the timpani's C and G. The order, not the times: a stream through QEMU's HD Audio stalls a
+    moment now and then, by some 50 ms in all, which shifts what follows."""
+    notes = [hz for hz, _ in BEEP_OPENING] + [131, 98]
+    runs = []
+    for at in range(first, first + int(rate * 3.5), int(rate * 0.05)):
+        window = left[at:at + int(rate * 0.04)]
+        if not window or max(abs(x) for x in window) < 1000:
+            continue
+        best = max(notes, key=lambda hz: tone_power(left, rate, at, hz))
+        if runs and runs[-1][0] == best:
+            runs[-1][1] += 1
+        else:
+            runs.append([best, 1])
+    # A single window between two of the same note is a stall's edge, not a note.
+    steady = []
+    for index, (hz, count) in enumerate(runs):
+        if count == 1 and 0 < index < len(runs) - 1 and runs[index - 1][0] == runs[index + 1][0]:
+            continue
+        if steady and steady[-1][0] == hz:
+            steady[-1][1] += count
+        else:
+            steady.append([hz, count])
+    heard = [hz for hz, _ in steady]
+    assert heard[:5] == [hz for hz, _ in BEEP_OPENING], runs
+    assert all(count >= 2 for _, count in steady[:5]), runs
+    assert {131, 98} <= set(heard[5:]), ("the timpani", runs)
 
 
 def sound_kept_check(args, disk):
@@ -10609,8 +10733,8 @@ def audio_suite(vm, wav):
             break
         time.sleep(.2)
     require(output, "[BEEP] DEVICE=true RATE=48000")
-    require(output, "[BEEP] PCM QUEUED 24000 FRAMES")
-    time.sleep(1.5)
+    require(output, "[BEEP] PLAYED THE OPENING, 2710 MS")
+    time.sleep(2.5)  # DONE comes once the last of it is queued; the rest plays, then a second of silence
     # beep with notes (issue u005): a console program, no screen; frequency and duration pairs, 0 Hz a pause.
     require(vm.command("beep 10"), "BEEP: 10 HZ: A FREQUENCY IS 20-20000 HZ, OR 0 FOR A PAUSE")
     played = vm.command("beep 440 200 0 100 880 300")
@@ -10709,7 +10833,7 @@ def audio_suite(vm, wav):
         middle = part[0] + int(rate * 0.1)
         assert tone_power(sounds, rate, middle, hz) > 5 * tone_power(sounds, rate, middle, 880), hz
     seconds = (demo[-1] - demo[0]) / rate
-    assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
+    assert 2.6 < seconds < 2.9, seconds  # the opening, 2710 ms (551-APP-0149)
 
     def power(start, hz):
         return tone_power(left, rate, start, hz)
@@ -10727,7 +10851,7 @@ def audio_suite(vm, wav):
     assert power(middle, 880) > 5 * power(middle, 440)
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra as client PCM in captured audio; "
           f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
@@ -12066,6 +12190,9 @@ def download_runs(vm, release, port, big, small, cut, rules):
                  "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
+    # Each connection past 1 MiB says, as it closes, how fast and how often its client found the queue full (801-NET-0092).
+    summaries = re.findall(r"\[NETSTACK\] TCP SOCKET \d+ CLOSED: (\d+) KIB IN \d+ MS, \d+ KIB/S; ITS QUEUE FULL AT (\d+) OF (\d+) READS", vm.command("dmesg -s netstack", raw=True))
+    assert sum(int(k) for k, _, _ in summaries) >= (size >> 10) - 64 and all(int(f) <= int(r) for _, f, r in summaries), summaries
     first = out
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
     require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
@@ -12264,14 +12391,14 @@ def parser_restart_check(vm, stall, body):
 
 def stalled_stream_check(vm, pause, body):
     """801-NET-0088: a stream that stops while its client keeps reading is named once in netstack's log after 5 s with
-    nothing, with the socket's peer, state and queue (a 64 KiB window, empty: nothing arrived), and again when its
+    nothing, with the socket's peer, state and queue (a 128 KiB window since 801-NET-0092, empty: nothing arrived), and again when its
     bytes come on the same connection; the file is whole."""
     url = f"http://10.0.2.2:{pause.server_address[1]}"
     started = time.monotonic()
     require(vm.command(f"run download ram:p.bin {url}/p.bin &"), "NAME=download BACKGROUND")
     assert pause.sent.wait(30), pause.ranges
     stalled = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:(\d+): NOTHING RECEIVED FOR (\d+) MS WHILE ITS CLIENT READS "
-                         r"\(ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT\)")
+                         r"\(ESTABLISHED, QUEUE 0 OF 131072, 0 BYTES UNSENT\)")
     # Only this server's connection: an earlier check's held stream may have been named too.
     ours = lambda log: [m for m in stalled.finditer(log) if int(m[2]) == pause.server_address[1]]
     log = ""  # `logs` gives the lines since its last call: they are kept here
@@ -12476,11 +12603,13 @@ def wifi_join_check(vm):
                 break
             time.sleep(1)
         require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
-        # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
-        for _ in range(3):
+        # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU); more while
+        # the stack has the link back only on its next check, its lease held through the link down (801-NET-0089).
+        for _ in range(6):
             pinged = vm.command("wifiping ping:10.0.4.1")
             if "NETCHECK ping:10.0.4.1 OK" in pinged:
                 break
+            time.sleep(1)
         require(pinged, "NETCHECK ping:10.0.4.1 OK")
         return shown
 
@@ -12786,6 +12915,78 @@ def dhcp_sent(pcap):
     return sent
 
 
+class _Sink:
+    """A TCP server on the host's loopback that counts the bytes each connection sent, in the order they came."""
+    def __init__(self):
+        self.server = socket.socket()
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(4)
+        self.port = self.server.getsockname()[1]
+        self.counts = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            self.counts.append(0)
+            threading.Thread(target=self._read, args=(connection, len(self.counts) - 1), daemon=True).start()
+
+    def _read(self, connection, index):
+        with connection:
+            try:
+                while data := connection.recv(4096):
+                    self.counts[index] += len(data)
+            except OSError:
+                pass
+
+
+def held_link_check(vm, sink):
+    """801-NET-0089: a card whose link is down for a few seconds keeps its lease and its connections: a connection
+    netcheck holds goes on, and what it sent while the link was down reaches the host. Down past 30 s, the address
+    goes and the connection is aborted, as before."""
+    try:
+        def holder(seconds):
+            pid = int(re.search(r"PID=(\d+) NAME=netcheck", vm.command(f"run netcheck hold:10.0.2.2:{sink.port}:{seconds} &"))[1])
+            vm.program_logs(pid, "NETCHECK HOLDING", 40)
+            return pid
+        pid = holder(20)
+        vm.hmp("set_link n0 off")
+        held = r"\[NETSTACK\] CARD 0 LINK DOWN: ADDRESS AND [1-9]\d* CONNECTIONS HELD FOR 30 S"  # netcheck's, and any service's
+        assert re.search(held, log := vm.service_logs("netstack", "HELD FOR")), log[-2000:]
+        time.sleep(3)
+        vm.hmp("set_link n0 on")
+        back = vm.service_logs("netstack", "BACK ON ITS NETWORK")
+        kept = re.search(r"\[NETSTACK\] CARD 0 BACK ON ITS NETWORK AFTER (\d+) MS: ADDRESS AND [1-9]\d* CONNECTIONS KEPT", back)
+        assert kept, back[-2000:]
+        require(vm.program_logs(pid, f"NETCHECK hold:10.0.2.2:{sink.port}:20 ", 160), f"NETCHECK hold:10.0.2.2:{sink.port}:20 OK")
+        deadline = time.monotonic() + 30
+        while sink.counts[-1:] != [20]:  # one byte a second, those sent while the link was down sent again after
+            assert time.monotonic() < deadline and len(sink.counts) == 1, sink.counts
+            time.sleep(.5)
+        # Down past the hold: the address goes, and the connection is aborted.
+        pid = holder(90)
+        vm.hmp("set_link n0 off")
+        assert re.search(held, log := vm.service_logs("netstack", "HELD FOR")), log[-2000:]
+        time.sleep(31)
+        log = vm.service_logs("netstack", "LINK STILL DOWN")
+        assert re.search(r"\[NETSTACK\] CARD 0 LINK STILL DOWN AFTER 30 S: ADDRESS DROPPED, [1-9]\d* CONNECTIONS ABORTED", log), log[-2000:]
+        ended = vm.program_logs(pid, f"NETCHECK hold:10.0.2.2:{sink.port}:90 ", 80)
+        assert re.search(fr"NETCHECK hold:10\.0\.2\.2:{sink.port}:90 (?!OK)\w+", ended), ended
+        vm.hmp("set_link n0 on")
+        log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
+        require_all(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP", "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+        if "DEFAULT ROUTE: CARD 0" not in log:
+            require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
+    finally:
+        sink.server.close()
+    print(f"PASS: a link down 3 s kept card 0's lease and the connection netcheck held, every byte reaching the host, its lease "
+          f"confirmed {kept[1]} ms after the link went down (801-NET-0089); down past 30 s, the address dropped and the "
+          "connection aborted", flush=True)
+
+
 def dhcp_name_check(vm, pcap):
     """000-NET-0050: netstack sends the machine's name as option 12 in each DISCOVER and REQUEST, read from
     data/machine/name through init's read-only scope; a name changed later goes out with the next lease."""
@@ -12796,9 +12997,9 @@ def dhcp_name_check(vm, pcap):
     require(vm.command("write data/machine/name lab-2"), "WROTE 6 BYTES")
     before = len(sent)
     vm.hmp("set_link n0 off")
-    require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+    require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS AND ")
     vm.hmp("set_link n0 on")
-    log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
+    log = vm.service_logs("netstack", "BACK ON ITS NETWORK")  # the held lease asked for again (801-NET-0089)
     require(log, "[NETSTACK] NAME FOR DHCP: lab-2 (data/machine/name)")
     deadline = time.monotonic() + 30
     while {kind for kind, _ in dhcp_sent(pcap)[before:]} < {1, 3}:
@@ -13039,8 +13240,9 @@ def net_suite(args, disk):
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
     # and one driver's restart leaves the other card working and gives the new instance its own card back. netcheck
     # sends datagrams to a TEST-NET address, on neither card's network, to show which card is the default (550-NET-0025).
+    sink = _Sink()  # held_link_check's connections
     with open(disk / "netpolicy.txt", "a") as policy:
-        policy.write("netcheck 192.0.2.1 udp 9\n")
+        policy.write(f"netcheck 192.0.2.1 udp 9\nnetcheck 10.0.2.2 tcp {sink.port}\n")
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
     web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
@@ -13066,16 +13268,18 @@ def net_suite(args, disk):
         assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
         require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
         assert frames()[0][0] - after[0][0] >= 3, (after, frames())
-        # A card's link down and up again (550-NET-0023): its address and its connections go, the default route moves
-        # to the other card; back up, it gets a lease again and the default route returns.
+        # A card's link down and up again (550-NET-0023): the default route moves to the other card; back up, its lease
+        # is asked for again and the default route returns. A lease held through it (801-NET-0089): the same address.
         vm.hmp("set_link n0 off")
         log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
-        require(log, "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+        assert re.search(r"\[NETSTACK\] CARD 0 LINK DOWN: ADDRESS AND \d+ CONNECTIONS HELD FOR 30 S", log), log[-2000:]
         require(vm.command(f"fetch 10.0.3.2:{web_port} /while-down"), "hello from the host: /while-down")
         vm.hmp("set_link n0 on")
-        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
-        require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
+        log = vm.service_logs("netstack", "BACK ON ITS NETWORK")
+        require_all(log, "[NETSTACK] CARD 0 LINK UP, ASKING DHCP WHETHER 10.0.2.15 IS STILL ITS ADDRESS", "DEFAULT ROUTE: CARD 0",
+                    "[NETSTACK] CARD 0 BACK ON ITS NETWORK AFTER ")
         require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
+        held_link_check(vm, sink)
         # The default card (550-NET-0025): wired cards before the station, the first with a gateway; the policy's
         # `default card 1` makes card 1 the default while its link is up, and the rule takes over while it is down.
         def default_sends(card):
@@ -19687,7 +19891,7 @@ def main():
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),hub (100003-APP-0151, in the network group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -19968,6 +20172,9 @@ def main():
                 continue
             if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
                 download_check(args, disk)
+                continue
+            if suite == "hub":  # improve on MIND Core against tools/mindhub on the host (100003-APP-0151)
+                hub_check(args, disk)
                 continue
             if suite == "sshd":
                 # The SSH server's check alone (112-NET-0072), which the tls suite runs at its end.

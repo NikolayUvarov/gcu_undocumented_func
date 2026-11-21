@@ -1,10 +1,10 @@
-# 352-KRN-0268 — The live system's boot volume in memory: the loader reads the El Torito volume, `ramdisk#2` serves it
+# 352-KRN-0268 — The live system's boot volume in memory: the loader reads the El Torito volume, `ramdisk#2` serves it — done
 
-**Type:** kernel, loader, `init`, `ramdisk`, `vfs_server` (ABI 36, handoff 36) · **Owner:** `KRN` (the kernel session), for `UPD`'s 352-UPD-0047 · **Priority:** P2 · **Status:** in progress (2026-11-21) · **Blocked by:** — · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-12.3, MC-12.4
+**Type:** kernel, loader, `init`, `ramdisk`, `vfs_server` (ABI 36, handoff 36) · **Owner:** `KRN` (the kernel session), for `UPD`'s 352-UPD-0047 · **Priority:** P2 · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [352](../issues/352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-12.3, MC-12.4
 
 ## Problem
 
-[352-UPD-0047](352-UPD-0047-an-installer-iso.md) step 1 made a hybrid installer ISO. In QEMU, booted from a disc, the loader reads the kernel and the services from the El Torito entry's FAT volume and checks them against the manifest. Then the running system has no boot volume:
+[352-UPD-0047](../issues/352-UPD-0047-an-installer-iso.md) step 1 made a hybrid installer ISO. In QEMU, booted from a disc, the loader reads the kernel and the services from the El Torito entry's FAT volume and checks them against the manifest. Then the running system has no boot volume:
 - no driver of the running system reads a CD drive;
 - so programs such as `ls` are not found.
 
@@ -49,6 +49,10 @@ The ABI changes only in `KRN` tasks (AGENTS.md section 1), so this is the kernel
 
 The gate's groups on both architectures are left: the branch is in the landing queue.
 
+## Resolution
+
+Landed in round 165 (`main` 64605784cc, gate GREEN on c9a0bab0f3 over both architectures). The loader reads an El Torito boot volume into memory (`BOOT: THE VOLUME READ INTO MEMORY`), `PLATFORM_BOOT_VOLUME` lends it (ABI 36, handoff 36), `ramdisk#2` serves it read-only and `vfs_server` mounts it as the boot volume; the `iso` suite checks it from a CD-ROM and a USB disk on x86 and aarch64, and every other boot leaves `ramdisk#2` unstarted. Round 164 had returned it once: the gateway stub's boot plan outran logd's 64 records a second, now paced (1b99bacd9a). Not covered: a real machine; the updater's live mode (352-UPD-0047 step 3).
+
 ## Related
 
-[352-UPD-0047](352-UPD-0047-an-installer-iso.md), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume's identity), [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (`ramdisk#1`).
+[352-UPD-0047](../issues/352-UPD-0047-an-installer-iso.md), [211-KRN-0012](211-KRN-0012-boot-volume-identity.done) (the boot volume's identity), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) (`ramdisk#1`).

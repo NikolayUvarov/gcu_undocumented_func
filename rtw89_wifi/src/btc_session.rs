@@ -129,10 +129,13 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     pub(crate) fn poll_before(&mut self,deadline:u64)->Result<[bool;2],Error>{
         self.poll_before_with(deadline,&mut RetainAll)
     }
-    fn poll_before_with(&mut self,deadline:u64,handler:&mut impl PacketHandler)->Result<[bool;2],Error>{
+    fn poll_before_with(&mut self,deadline:u64,handler:&mut impl PacketHandler)->Result<[bool;2],Error>{self.poll_some(deadline,handler,true,true)}
+    /// One poll with the rings' registers validated first (`live`) or taken as a poll just before left them, and with the
+    /// receive queue read or left alone (`rxq`: a caller that can hold no more leaves its packets in the ring).
+    fn poll_some(&mut self,deadline:u64,handler:&mut impl PacketHandler,live:bool,rxq:bool)->Result<[bool;2],Error>{
         if let Some(e)=self.failed{return Err(e)}
-        let result=(||{let left=self.left(deadline)?;self.live(left.min(10_000))?;
-            let received=[self.receive_one_with(rx::Channel::Rxq,deadline,handler)?,self.receive_one_with(rx::Channel::Rpq,deadline,handler)?];
+        let result=(||{let left=self.left(deadline)?;if live{self.live(left.min(10_000))?;}
+            let received=[rxq&&self.receive_one_with(rx::Channel::Rxq,deadline,handler)?,self.receive_one_with(rx::Channel::Rpq,deadline,handler)?];
             let now=self.now()?;self.engine.poll(now).map_err(Error::Command)?;self.left(deadline)?;Ok(received)})();
         match result{Ok(v)=>Ok(v),Err(e)=>self.fail(e)}
     }

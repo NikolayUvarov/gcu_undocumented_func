@@ -119,9 +119,14 @@ fn descriptor_preserves_raw_sequence_and_selects_exact_legacy_rate_and_selected_
         let f=frame(0,None,false);let meta=txdesc::frame(&f,rate,15).unwrap();let wd=txdesc::descriptor(meta,7,0x1234,0x300000,true).unwrap();
         assert_eq!(Device::word(&wd,0),1<<22|8<<16|12<<11|1<<7);assert_eq!(Device::word(&wd,8),7<<24|0x12<<17|64);
         assert_eq!(Device::word(&wd,12),0x125);assert_eq!(Device::word(&wd,24),1<<30|(rate_index as u32)<<16|1<<10);
-        assert_eq!(Device::word(&wd,28),1<<31|1<<25|(rate_index as u32)<<16);assert_eq!(Device::word(&wd,32),0);assert_eq!(Device::word(&wd,36),1<<10);assert_eq!(Device::word(&wd,40),4);assert_eq!(Device::word(&wd,44),0);
+        assert_eq!(Device::word(&wd,28),1<<31|1<<25|(rate_index as u32)<<16);assert_eq!(Device::word(&wd,32),0);assert_eq!(Device::word(&wd,36),1<<10);assert_eq!(Device::word(&wd,40),1<<31|1<<27|4,"RTS for a frame to one station");assert_eq!(Device::word(&wd,44),0);
         assert_eq!(&wd[48..56],&[0x34,0x92,0,0,0,0,0,0]);assert_eq!(&wd[56..64],&[64,0,1,128,0,0,48,0]);
     }
+}
+#[test]
+fn a_frame_to_a_group_asks_for_no_rts(){
+    let f=frame(0,None,true);let meta=txdesc::frame(&f,2,1).unwrap();assert!(meta.group);
+    let wd=txdesc::descriptor(meta,7,0x1234,0x300000,true).unwrap();assert_eq!(Device::word(&wd,40),1<<31|4);
 }
 #[test]
 fn frame_metadata_checks_lengths_qos_and_actual_tid_mapping(){

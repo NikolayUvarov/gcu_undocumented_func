@@ -280,8 +280,10 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] FIRMWARE RECOVERY {} {} (SER_DBG_INFO {:08X}, CMAC_ERR_ISR {:08X}): BB BACK AFTER {} US, THE SCHEDULER {} AFTER {} US; DEBUG MODE GOES ON",
                 count, if after_reconcile { "AFTER A COEXISTENCE RECONCILE" } else { "BETWEEN OPERATIONS" }, ser, cmac, bb_us,
                 if restored { "RESTORED BY THE DRIVER" } else { "BACK FROM THE FIRMWARE" }, waited_us),
+        receive_service::Event::LateRelease { ms, attempts, acked } =>
+            mind::println!("[RTW89] THE LATE FRAME WAS RELEASED {} MS AFTER ITS SUBMISSION ({} TRIES, {})", ms, attempts, if acked { "ACKNOWLEDGED" } else { "NOT ACKNOWLEDGED" }),
         receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
-            mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 1 S MORE (DEBUG)",
+            mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 5 S MORE (DEBUG)",
                 count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
         receive_service::Event::DataCountry { code: [b'0', b'0'], channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY 00 IN DATA MODE: CHANNEL {} KEPT AT THE POWER IT WAS ADMITTED AT (AN UNKNOWN COUNTRY'S 75 % CAP IS SET AT ADMISSION)", channel),
