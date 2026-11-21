@@ -122,13 +122,14 @@ its parameters logged before it runs and each of its writes as it is made, withi
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
 stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
 
-`tests/display_light_host.rs`, 17 cases on a register model: the pipe chosen from step 1's values, and refused when they
+`tests/display_light_host.rs`, 18 cases on a register model: the pipe chosen from step 1's values, and refused when they
 cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
 route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
 one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
 the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; its status
 fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build that undoes
-what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; the HUBP that follows step 3's OTG refused
+what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; the undo leaving PHY A's control register bus
+as it is (no stale write into the PHY); the HUBP that follows step 3's OTG refused
 unless blanked, read after stages 5 to 8, its statuses free to move, its leaving blank failing the stage; a build of 0
 that only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
@@ -445,6 +446,24 @@ So OTG1's and ODM1's clocks came on within microseconds of being asked for, and 
 - HDMI-A-1 was not driven: no PHY, DIG or VBIOS table was touched.
 - This is evidence for this machine, this boot and this build (MC-12.1). Every boot of this release runs stage 1 and its
   undo again.
+
+**Not met tonight: a person watching DP-2.** The rule above says that DP-2 keeping its screen is watched at every
+stage, and that a flicker, blank or loss of signal is that stage's failure. Nobody was at the monitors on the night
+of 2026-11-21. So:
+- the dark stages (1 to 7) were let go only with `UNDO_AFTER_STAGES`, one more stage per release;
+- "DP-2 kept its picture" is said from the firmware's registers only, each time in those words;
+- stage 8, where HDMI-A-1's monitor wakes, was not let go.
+
+The watched run (all stages, no undo, a person at both monitors) is the maintainer's.
+
+**PHY A's control register bus and the undo (found before stage 2 ran).** Table 12 makes 17 data writes into PHY A
+through `RDPCS_TX_CR_DATA` (and 20 to `RDPCS_TX_CR_ADDR`). A write to the data register is the write into the PHY.
+The undo used to put both registers back, last first. That would have made 17 more writes of stale data into PHY A.
+- Since 6ab7fd7a1 the undo leaves the two registers as they are and logs `U2 PHY A'S CONTROL REGISTER BUS LEFT AS IT
+  IS: 20 ADDRESS AND 17 DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS`.
+- So stage 2's undo cannot return PHY A's insides to their state before step 3. They keep the PLL setup table 12 gave
+  them, while PHY A's outer registers go back and its power-down runs.
+- Stage 8 (table 76) also writes through that bus.
 
 ## Related
 

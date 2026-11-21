@@ -397,5 +397,8 @@ What the model showed about the undo, with the Ryzen's tables:
 - Table 12's power-down call writes **nothing** when the stage stopped early (at the SRAM wait: 41 instructions, 0
   writes), and **14 writes** after a table 12 that ran to its end. So the restore of the stage's own writes, not the
   call, is what returns the registers to their state before step 3.
-- A completed table 12 makes 37 of its writes through PHY A's control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`). What
-  they set inside the PHY is not reached by restoring those two registers; the undo says so in the log.
+- A completed table 12 makes 37 of its writes through PHY A's control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`: 20
+  address and 17 data writes). The two registers are bare 16-bit fields (`dpcs_2_1_0_sh_mask.h`), and a write to the
+  data register is itself the write into the PHY. So a restore cannot undo them: putting the data register back would
+  write a stale value into the PHY. The undo leaves the bus as it is and says so in the log. What table 12 set inside
+  PHY A stays until something rewrites it.
