@@ -85,8 +85,9 @@ firmware's 0006; ABI 37, handoff 38) with the survey branch merged in. `display/
   2560x1600 in 2720x1646, OTGs 2 and 3 off); batch 4 only for the HUBPs batch 3 shows powered; an unmapped register not
   read; every line within a log record; every register of the map at the header's offset.
 
-Tested on LEG9 only (the build and the host cases). It has not run on the Ryzen: it needs the stick rewritten with an
-ABI 37 release that holds KRN's image; the owner session says when. What to look for in the first run's log: KRN's
+Tested on LEG9 (the build and the host cases), then on the Ryzen as run 0 (below). A release reaches the Ryzen through
+the Effector server's `update_agent`: a slot carries its own loader (351-UPD-0010), so an ABI or handoff change needs no
+stick. What to look for in the first run's log: KRN's
 `[INIT] display: RADEON 1002:1638 (DEVICE n); COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND
 0x58000+0x1000` and its VBIOS line; then `[DISPLAY] PCI 1002:1638 ... 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU
 MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT ... AN IMAGE FOR 1002:1638 ...
@@ -150,8 +151,31 @@ HDMI-A-1 stays dark. A stage that stops at the build's count leaves its writes i
 firmware clears them is not known. Step 3 starts from what step 1 reads either way: should a stopped run leave its OTG
 running, the next boot refuses with `2 TIMING GENERATORS RUN, NOT ONE` (safe, but the next stage then needs a cold start).
 
-**Open:** the carve-out's place in the memory map and the frame pool (for step 4's framebuffer, not step 3): the
-hardware report that lists the map could not be had yet; it comes with the first boot after the stick is rewritten.
+**The carve-out and the frame pool** (for step 4's framebuffer, not step 3), from run 0's hardware report (hw0054):
+the firmware's memory map ends with a **reserved** region 0x8_0E30_0000 to 0x8_2FFF_FFFF (541 MiB) below `TOP_MEM2`
+0x8_3000_0000, the top of RAM, where a UMA carve-out sits: room for the 512 MiB carve-out from 0x8_1000_0000 with
+29 MiB more below it. The frame pool, 31,982 MiB, is the conventional memory (31,987 MiB) less the kernel's own, so the
+carve-out is not handed out. Confidence high that it is reserved; its exact start is batch 6's `DCN_VM_FB_OFFSET`
+(expected 0x810, in 16 MiB units).
+
+## Run 0 on the Ryzen (2026-11-21 18:26 UTC)
+
+Release 202611211819, slot A confirmed (the owner session's bench build `claude/DRV-ryzen-bench-37` 609487f34: round
+167's candidate, CAM's branch and this one at 6050f0169; `BATCHES_ALLOWED` 0, `STAGES_ALLOWED` 0), put on the machine
+through the Effector server. Every line expected came, none dropped (228 `[DISPLAY]` lines):
+- `[INIT] display: RADEON 1002:1638 (DEVICE 24); COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND
+  0x58000+0x1000` and `VBIOS: THE VFCT TABLE, 55428 BYTES, READ-ONLY`;
+- `PCI 1002:1638 (DEVICE 24), COMMAND 0006, BAR 5 AT FCB00000: 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU MAILBOX:
+  4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT 55428 BYTES, AN IMAGE FOR 1002:1638
+  OF 55296 BYTES, ROM SIGNATURE 55AA` (the image's length is the 55,296 bytes Linux read);
+- `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven batches `NOT READ` with their 147 registers (156 lines),
+  `STEP 1 DONE: 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`;
+- `STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: STEP 1'S BATCH 1 WAS NOT READ (STEP 3 NEEDS ALL SEVEN)` and its 64 lines,
+  `STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN`;
+- `NO REGISTER READ OR WRITTEN`, `COMMAND 0006 AFTER STEP 1`.
+
+So KRN's grant is as asked (the command register stays 0006 through the grant and after), the VFCT copy holds the same
+image Linux read, and this build reads and writes nothing. Run 0 is evidence for that machine and that build (MC-12.1).
 
 ## Related
 

@@ -297,9 +297,10 @@ needs from those (the PHY's state, the PLLs' lock) come from the VBIOS tables' o
   window set up in the memory hub that the graphics engine shares: the reason to prefer the carve-out.
 - Confidence: medium. The facts are from Linux's source and boot lines and the GOP's own framebuffer at BAR 0's base;
   the firmware's `DCN_VM_FB_LOCATION_*` and its HUBP address are not read yet (batch 6, batch 4).
-- **Open:** whether the Ryzen's memory map keeps the carve-out out of MIND Core's frame pool, which takes only the
-  firmware's conventional memory (213-KRN-0271). The hardware report that lists the map has not been read; it comes
-  with the first boot after the stick is rewritten. A 512 MiB region of a type other than conventional is what to see.
+- **The frame pool keeps out of it:** MIND Core's hardware report (hw0054, release 202611211819) lists the firmware's
+  memory map ending with a reserved region 0x8_0E30_0000 to 0x8_2FFF_FFFF (541 MiB) below `TOP_MEM2` 0x8_3000_0000,
+  room for the 512 MiB carve-out from 0x8_1000_0000; the frame pool (31,982 MiB) takes only conventional memory.
+  Its exact start is batch 6's `DCN_VM_FB_OFFSET`, not read yet.
 
 ## What first light's VBIOS tables write (213-DRV-0086, on LEG9 against a model)
 
