@@ -59,7 +59,8 @@ impl Live {
     pub fn disks(&self, mounted: &dyn Fn(&Shared) -> bool) -> Vec<Disk> {
         self.targets.iter().enumerate().map(|(index, target)| {
             let (bus, _) = bus(target.disk.kind());
-            Disk { number: index as u8 + 1, bus, mib: (target.disk.sectors() >> 11).min(u32::MAX as u64) as u32, signature: Text::new(&signature_text(target)).unwrap_or_default(),
+            // The model stays empty until block.wit gives the drive's own name (requests-DRV.md, 352-KRN-0269).
+            Disk { number: index as u8 + 1, bus, model: Text::default(), mib: (target.disk.sectors() >> 11).min(u32::MAX as u64) as u32, signature: Text::new(&signature_text(target)).unwrap_or_default(),
                    partitions: target.partitions, words: Text::new(&words(target)).unwrap_or_default(), refusal: self.refusal(target, mounted) }
         }).collect()
     }

@@ -66,15 +66,16 @@ impl Wire for Error {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// A disk vfs_server holds: its number for `install`, its bus, its size in MiB, its MBR signature as 8 hex digits or
-/// `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus, MiB, the signature's first four
-/// digits or `EMPTY`), and why it is not offered.
+/// A disk vfs_server holds: its number for `install`, its bus, its model as the drive names itself (empty where the
+/// driver reads none: `block.wit` 2.0 carries none yet, so empty for every disk today), its size in MiB, its MBR
+/// signature as 8 hex digits or `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus,
+/// MiB, the signature's first four digits or `EMPTY`; never the model), and why it is not offered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Disk { pub number: u8, pub bus: Bus, pub mib: u32, pub signature: Text<8>, pub partitions: u8, pub words: Text<32>, pub refusal: Refusal }
+pub struct Disk { pub number: u8, pub bus: Bus, pub model: Text<40>, pub mib: u32, pub signature: Text<8>, pub partitions: u8, pub words: Text<32>, pub refusal: Refusal }
 impl Wire for Disk {
-    const MAX: usize = <u8 as Wire>::MAX + <Bus as Wire>::MAX + <u32 as Wire>::MAX + <Text<8> as Wire>::MAX + <u8 as Wire>::MAX + <Text<32> as Wire>::MAX + <Refusal as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.number.encode(w)?; self.bus.encode(w)?; self.mib.encode(w)?; self.signature.encode(w)?; self.partitions.encode(w)?; self.words.encode(w)?; self.refusal.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { number: Wire::decode(r)?, bus: Wire::decode(r)?, mib: Wire::decode(r)?, signature: Wire::decode(r)?, partitions: Wire::decode(r)?, words: Wire::decode(r)?, refusal: Wire::decode(r)? }) }
+    const MAX: usize = <u8 as Wire>::MAX + <Bus as Wire>::MAX + <Text<40> as Wire>::MAX + <u32 as Wire>::MAX + <Text<8> as Wire>::MAX + <u8 as Wire>::MAX + <Text<32> as Wire>::MAX + <Refusal as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.number.encode(w)?; self.bus.encode(w)?; self.model.encode(w)?; self.mib.encode(w)?; self.signature.encode(w)?; self.partitions.encode(w)?; self.words.encode(w)?; self.refusal.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { number: Wire::decode(r)?, bus: Wire::decode(r)?, model: Wire::decode(r)?, mib: Wire::decode(r)?, signature: Wire::decode(r)?, partitions: Wire::decode(r)?, words: Wire::decode(r)?, refusal: Wire::decode(r)? }) }
 }
 
 /// What was written: the new disk's MBR signature, and each partition's first sector and size in sectors.
@@ -95,7 +96,7 @@ pub fn disks(endpoint: Endpoint) -> Result<core::result::Result<List<Disk, 8>, E
     };
     let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 418, false, false)?;
+    let length = wire::buffer_reply(&reply, 754, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Disk, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -134,7 +135,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
     match words[0] & 0xFF {
         1 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 418, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 754, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Disks, call))

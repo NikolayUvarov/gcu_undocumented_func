@@ -20,10 +20,11 @@ interface install {
     /// the store's partition; `named`, `store.txt`; `table`, the ESP's entry; `read-back`, the table read back; `manifest`,
     /// the new ESP does not hold the manifest the loader verified.
     enum error { not-live, no-disk, refused, mismatch, partitions, source, clear, copy, verify, log, store, named, table, read-back, manifest }
-    /// A disk vfs_server holds: its number for `install`, its bus, its size in MiB, its MBR signature as 8 hex digits or
-    /// `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus, MiB, the signature's first four
-    /// digits or `EMPTY`), and why it is not offered.
-    record disk { number: u8, bus: bus, mib: u32, signature: string<8>, partitions: u8, words: string<32>, refusal: refusal }
+    /// A disk vfs_server holds: its number for `install`, its bus, its model as the drive names itself (empty where the
+    /// driver reads none: `block.wit` 2.0 carries none yet, so empty for every disk today), its size in MiB, its MBR
+    /// signature as 8 hex digits or `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus,
+    /// MiB, the signature's first four digits or `EMPTY`; never the model), and why it is not offered.
+    record disk { number: u8, bus: bus, model: string<40>, mib: u32, signature: string<8>, partitions: u8, words: string<32>, refusal: refusal }
     /// What was written: the new disk's MBR signature, and each partition's first sector and size in sectors.
     record layout { signature: u32, esp-first: u32, esp-sectors: u32, log-first: u32, log-sectors: u32, store-first: u32, store-sectors: u32 }
 
