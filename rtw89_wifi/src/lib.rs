@@ -78,6 +78,9 @@ pub(crate) mod station;
 pub(crate) mod frames;
 
 #[allow(dead_code)]
+pub(crate) mod ppdu;
+
+#[allow(dead_code)]
 pub(crate) mod service;
 
 pub mod receive_service;
