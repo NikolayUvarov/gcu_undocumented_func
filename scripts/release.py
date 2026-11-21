@@ -34,6 +34,12 @@ Usage:
     release.py sums DIR [--keys FILE]       SHA256SUMS of every file in DIR (sha256sum's form), with SHA256SUMS.sig, the
                                                  release keys' signature lines over it, and KEYS, the key file that names them
                                                  (352-UPD-0050): a release's downloads
+    release.py artifacts VERSION OUT [--arch x86_64] [--arch aarch64] [--channel stable] [--date EPOCH]
+                                                 every download of this tree's build as release VERSION (352-UPD-0050):
+                                                 for each architecture its ISO and USB image, in slots with the channel,
+                                                 and its update bundle; RELEASE.json; then `sums`. The tree's manifests
+                                                 must name VERSION (sign_manifest.py --version). Publishing stays a
+                                                 person's act: OUT is only written
     release.py verify-sums DIR [--now ISO-8601]   KEYS against the root set, SHA256SUMS.sig against KEYS' release role,
                                                  and every file of DIR as SHA256SUMS lists it, none more
     release.py --public                     the public test release key
@@ -881,6 +887,52 @@ def verify_sums(directory, root=None, now=None):
     return None
 
 
+def build_date():
+    """The build's date: $SOURCE_DATE_EPOCH, else the commit's, so the same commit gives the same downloads."""
+    if os.environ.get("SOURCE_DATE_EPOCH"):
+        return int(os.environ["SOURCE_DATE_EPOCH"])
+    out = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=sm.ROOT, capture_output=True, text=True)
+    if out.returncode or not out.stdout.strip():
+        raise ReleaseError("no build date: pass --date or SOURCE_DATE_EPOCH, or run in the git tree")
+    return int(out.stdout.strip())
+
+
+def artifacts(version, out, arches, channel="stable", when=None, volumes=None, payloads=None, qemu_img=None):
+    """Every download of release `version` into `out`, which must not exist (352-UPD-0050): for each of `arches`, the
+    installer ISO and the USB image, both in slots with the release's channel and key file in slot A, and the update
+    bundle; RELEASE.json, what they were made of; then SHA256SUMS, its signature and KEYS. The channel is published to a
+    server of its own in a temporary directory, never to a real one. `volumes` and `payloads` (an arch's files by name)
+    stand in for the built tree in tests. Returns the names written."""
+    import make_iso, make_usb_image
+    out, when = Path(out), when if when is not None else build_date()
+    now = datetime.datetime.fromtimestamp(when, datetime.timezone.utc)
+    volumes = volumes or {arch: sm.ROOT / ARCHES[arch] for arch in arches}
+    payloads = payloads or (lambda arch: make_usb_image.read_payloads(volumes[arch], arch))
+    out.mkdir(parents=True, exist_ok=False)
+    with tempfile.TemporaryDirectory(prefix=".mind-artifacts-", dir=out.parent) as work:
+        work = Path(work)
+        staged = stage(version, work / "staged", volumes)
+        server = work / "server"
+        server.mkdir()
+        publish(staged, server, channel, now=now)
+        keys, channel_file = (server / "keys/current").read_bytes(), (server / f"channels/{channel}").read_bytes()
+        for arch in arches:
+            files = make_usb_image.slots(payloads(arch), arch, channel_file, keys)
+            volume = work / f"{arch}.fat"
+            make_iso.boot_volume(files, volume, when)
+            make_iso.write_iso(volume, out / f"mind-core-{version}-{arch}.iso", when, arch)
+            volume.unlink()
+            if qemu_img is not False:
+                make_usb_image.pack(files, out / f"mind-core-{version}-{arch}.img", qemu_img or make_usb_image.find_qemu_img(None), arch)
+            bundle(server, out / f"mind-core-{version}-{arch}-update.zip", channel, [arch], now=now)
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=sm.ROOT, capture_output=True, text=True).stdout.strip()
+    record = {"version": version, "channel": channel, "commit": commit, "date": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "arches": list(arches), "boards": "none yet (352-UPD-0049)", "test_keys": release_seeds() == [TEST_RELEASE_SEED]}
+    (out / "RELEASE.json").write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
+    write_sums(out, keys)
+    return sorted(p.name for p in out.iterdir())
+
+
 def main(argv):
     def option(name, default=None, many=False):
         values = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == name]
@@ -920,6 +972,11 @@ def main(argv):
             keys = option("--keys")
             body = write_sums(argv[1], Path(keys).read_bytes() if keys else None)
             print(f"LISTED {len(body.splitlines())} FILES IN {Path(argv[1]) / SUMS}" + (" (THE TEST RELEASE KEY)" if release_seed() == TEST_RELEASE_SEED else ""))
+        elif argv[:1] == ["artifacts"] and len(argv) >= 3:
+            date = option("--date")
+            names = artifacts(int(argv[1]), argv[2], option("--arch", many=True) or [a for a, v in ARCHES.items() if (sm.ROOT / v / "MANIFEST").exists()],
+                              option("--channel", "stable"), int(date) if date else None)
+            print(f"MADE {len(names)} FILES IN {argv[2]}: {', '.join(names)}" + (" (THE TEST RELEASE KEY)" if release_seed() == TEST_RELEASE_SEED else ""))
         elif argv[:1] == ["verify-sums"] and len(argv) >= 2:
             now = option("--now")
             reason = verify_sums(argv[1], now=datetime.datetime.fromisoformat(now) if now else None)

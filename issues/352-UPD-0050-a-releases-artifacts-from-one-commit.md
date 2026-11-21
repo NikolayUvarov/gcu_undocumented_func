@@ -1,6 +1,6 @@
 # 352-UPD-0050 — A release's artifacts from one commit, with one signed list of their sums
 
-**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (the signed list made, 2026-11-21) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
+**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (the signed list and the one command made, 2026-11-21) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -59,7 +59,26 @@ The files' provenance in each line, plan step 3's last point, is left: `SHA256SU
 
 `sha256sum -c` reads the list.
 
-**Left:** steps 1, 2, 4 to 6.
+**Plan step 1, in part:** `release.py artifacts VERSION OUT [--arch …] [--channel stable] [--date EPOCH]`, from the built tree whose manifests name VERSION.
+- **For each architecture,** in OUT:
+  - `mind-core-<V>-<arch>.iso` (`make_iso.py`);
+  - `mind-core-<V>-<arch>.img` (`make_usb_image.py`'s writer);
+  - `mind-core-<V>-<arch>-update.zip` (`bundle`).
+- **The ISO and the USB image** are made in slots, with the release's channel and key file in slot A, as a device that is updated needs.
+- **The channel** is published to a server in a temporary directory, never to a real one, with the build's date as its `now`.
+- **`RELEASE.json`** names the version, the channel, the commit, the date, the architectures, the test keys if used, and that no board image is made yet.
+- **Then `sums`.**
+
+**Tested:**
+- `tests/release_test.py` 18 of 18. The new test makes an ISO and a bundle from a stand-in volume (the USB image left out): slot A holds the channel, the key file, the manifest and the kernel; the list verifies; the same date gives the same list; an existing OUT is refused.
+- **A real run** in this session's container, on a copy of the x86 build signed as version 5: the ISO, the USB image, the bundle, `RELEASE.json` and the list, in 3 s; `verify-sums` VERIFIED.
+- **Twice on the same commit:** the ISO, the bundle and `RELEASE.json` gave the same SHA-256. The USB image did not: QEMU's `vvfat` builds its FAT from the files' times, and the log volume carries the time of the run. That is step 4's to fix or name.
+
+**Left:**
+- the board images (352-UPD-0049);
+- step 2: the boot volume shared, one FAT image for the ISO, the USB image and the cards;
+- step 4: the USB image reproducible;
+- steps 5 and 6.
 
 ## Related
 
