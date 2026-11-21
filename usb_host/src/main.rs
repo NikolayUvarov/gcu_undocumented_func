@@ -587,8 +587,13 @@ impl Host {
         let (device, iface) = self.interface(handle, badge)?;
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_control(b, badge, device, iface, request_type, request, value, index, length); }
         let c = xhci_device(handle).0;
-        let info = self.root(c)?.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
-        if !Self::allowed(&info, request_type, request, index) { return Err(Error::Rights); }
+        let root = self.root(c)?;
+        let found = root.devices[device].ok_or(Error::NotFound)?;
+        let info = found.interfaces[iface].info;
+        // An endpoint of the interface's selected setting is the interface's too while its stream runs: a USB audio
+        // endpoint is told its sampling frequency there (000-DRV-0073).
+        let streams = request_type & 0x1F == 2 && index <= 0xFF && root.xhci.streams_of(found.slot, Some(info.number)) & 1 << dci(index as u8) != 0;
+        if !Self::allowed(&info, request_type, request, index) && !streams { return Err(Error::Rights); }
         if length as usize > CONTROL_MAX { return Err(Error::Invalid); }
         let input = request_type & 0x80 != 0;
         if !input { let data: [u8; CONTROL_MAX] = { let mut d = [0; CONTROL_MAX]; d[..length as usize].copy_from_slice(&self.buffer(badge)?[..length as usize]); d }; self.root(c)?.small(length as usize).copy_from_slice(&data[..length as usize]); }

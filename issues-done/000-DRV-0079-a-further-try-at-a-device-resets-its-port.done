@@ -1,0 +1,54 @@
+# 000-DRV-0079 — `usb_host`: a further try at a root port's device resets the port, and its report names the step's own completion code — done
+
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-20) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-12.1
+
+## Problem
+
+**On the DEXP** (Intel xHCI, release 202611201739, 2026-11-20), the STM-Speaker speakerphone straight in root port 2 was not set up:
+```
+320.992 usb_host: [USB] PORT 2: CONNECTED (PORTSC 000006E1)
+321.192 usb_host: [USB] SLOT 14 REQUEST 80 06 0200: COMPLETION 4
+321.192 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT CONFIGURATION DESCRIPTOR (COMPLETION 1, PORTSC 00000603, TRY 1 OF 3)
+321.243 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000603, TRY 2 OF 3)
+321.493 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000603, TRY 3 OF 3)
+```
+The device's own fault is the transaction error (completion 4) on a control transfer. Two faults of `usb_host` hid it and wasted the tries:
+
+1. **A further try did not reset the port.** `Xhci::enable_port` reset only a port that was not enabled. After a try that failed, the port stays enabled (`PORTSC 00000603`), and the device keeps the address the first try gave it. Tries 2 and 3 then sent SET_ADDRESS to address 0, where nothing answers. Three tries were one.
+2. **The report named the wrong completion code.** The slot of a failed try is given back with Disable Slot, and the report printed that command's code (1, success) in place of the failed step's.
+
+## Plan
+
+- **`enable_port(port, again)`.** A further try (`root_tries > 0`) resets the port even when it is enabled, and waits 50 ms after the reset before the device is addressed, as Linux's `hub_port_reset` does (10 ms of USB 2.0's recovery and 40 more). The first try keeps its 20 ms.
+- **`discard`** keeps the completion code of the step that failed across its Disable Slot. **`Xhci::control`** keeps a failed transfer's own code across the commands that put endpoint 0 right after it.
+- **The reset before a further try is logged** with the port's status before and after it.
+
+## Acceptance criteria
+
+- [x] Builds. The QEMU suites with USB devices pass on LEG9: the group `x86: keys, shell, tools` (`usb`, `ehci`) and the suite `usbaudio`.
+- [x] On the DEXP, with the speakerphone in a root port: a failed try is reported with its step's own completion code, and the tries after it start from a port reset. Release 202611202012 (the DEXP's ABI 34 tree with this change), 2026-11-20:
+  ```
+  0.614 usb_host: [USB] PORT 2: CONNECTED (PORTSC 000006E1)
+  0.809 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 1 OF 3)
+  2.302 usb_host: [USB] PORT 2: RESET FOR ANOTHER TRY (PORTSC 00000603, THEN 00000603)
+  2.307 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 2 OF 3)
+  2.560 usb_host: [USB] PORT 2: RESET FOR ANOTHER TRY (PORTSC 00000603, THEN 00000603)
+  2.565 usb_host: [USB] PORT 2: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 4, PORTSC 00000603, TRY 3 OF 3)
+  ```
+  Completion 4 is a USB transaction error: the device gave no handshake to SET_ADDRESS.
+
+## Tried on the DEXP and not kept
+
+**The order Linux and Windows use first** (release 202611202000): on a further try, Address Device with BSR (the slot and endpoint 0 set up, no SET_ADDRESS), the device descriptor asked at address 0, the port reset once more, then SET_ADDRESS. The speakerphone failed the descriptor request at address 0 as it had failed SET_ADDRESS. So the order of the set-up is not what stops this device on a root port, and no device here is known to need it. The code was taken out again.
+
+**What this says of the speakerphone:** in the DEXP's root port 2 it answers neither request after a port reset, with 20 ms or 50 ms of recovery. Through the Genesys hub it is set up, and on 2026-11-21, when the maintainer changed the sockets, so it was in root port 3 and then in port 2 itself. That is recorded for its own project as its task `19-usb-root-port-02-intel-set-address-transaction-error`.
+
+## Resolution
+
+Done on 2026-11-20 in `usb_host/src/xhci.rs` (`enable_port(port, again)`, the two recovery times, `control` keeping a failed transfer's code) and `usb_host/src/main.rs` (`discard` keeping the code, the reset's line in `scan`).
+
+It holds for the DEXP's Intel xHCI and this device (MC-12.1). It did not make the speakerphone work in that root port, port 2, that evening: every try still failed, now for a reason the log shows. A day later the same device was set up at its first try in root port 3, and then in port 2 as well (000-DRV-0073): the failure is not of that socket, and its cause is not known. No device here is known that a further try with a reset sets up.
+
+## Related
+
+[000-DRV-0077](../issues/000-DRV-0077-a-new-connection-debounced-before-its-reset.md) (the attach debounce), [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone), [000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering).
