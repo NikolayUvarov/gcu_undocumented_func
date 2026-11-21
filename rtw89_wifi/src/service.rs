@@ -96,6 +96,9 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // The same for every Wi-Fi frame, the holes' measure while no beacon of the BSS reaches the host.
     beacons:(u64,u64,Marks),heard_bss:bool,frames_seen:(u64,u64,Marks),hole:Option<Hole>,holes:(u32,u64),sent:(u64,u64),minutes:u32,
     later:Option<Event>,
+    // 213-DRV-0091: the link the firmware was told of: None, or the AID it was told; and a change still to tell it (the
+    // AID of an association response, or None after a deauthentication), done when no send is pending.
+    linked:Option<u16>,link_change:Option<Option<u16>>,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -138,7 +141,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
-            beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None})
+            beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
+            linked:None,link_change:None})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -202,6 +206,16 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let m=frame.mpdu();
                 if m.len()>=24&&matches!(m[0],0x80|0x50)&&m[16..22]==*bssid{*heard=time::monotonic_ns()/1_000_000;}
             }
+            // 213-DRV-0091: the access point's (re)association response to this station with status 0 carries the AID the
+            // firmware is told of; its deauthentication or disassociation of this station ends the link.
+            let(m,f)=(frame.mpdu(),data.current_filter());
+            if m.len()>=24&&f.bssid()!=[0;6]&&m[4..10]==f.own()&&m[16..22]==f.bssid(){
+                match m[0]{
+                    0x10|0x30 if m.len()>=30&&m[26..28]==[0,0]=>{self.link_change=Some(Some(u16::from_le_bytes([m[28],m[29]])&0x3fff));}
+                    0xa0|0xc0 if self.linked.is_some()=>{self.link_change=Some(None);}
+                    _=>{}
+                }
+            }
             let at=(self.frames.head+self.frames.count)%FRAMES;let signal=record.signal();
             let length=frame.write(data.channel(),data.current_filter().all_beacons(),&mut self.frames.bytes[at]).map_err(Fatal::Frame)?;
             self.frames.bytes[at][frames::SIGNAL]=signal;self.kept=self.kept.saturating_add(1);
@@ -241,6 +255,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
+        self.tell_link()?;
         self.listened(now)?;self.holes(now);self.signals(now);
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
@@ -259,6 +274,23 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));self.ended(pending.unicast,done.acked,now);}
             else if self.event.is_none(){self.event=Some(Event::LateRelease{ms:now.saturating_sub(pending.began),attempts,acked:done.acked})}
         }Ok(())
+    }
+    // 213-DRV-0091: a link change told to the firmware once no send is pending; a busy queue waits a step, a failure that
+    // shut the data mode down ends the service.
+    fn tell_link(&mut self)->Result<(),Fatal>{
+        let Some(change)=self.link_change else{return Ok(())};
+        if self.pending.is_some(){return Ok(())}
+        if change==self.linked{self.link_change=None;return Ok(())}
+        match self.data().connect(change,COMMAND_US){
+            Ok(())=>{
+                self.link_change=None;let was=self.linked;self.linked=change;
+                let(channel,bssid)=(self.data().channel(),self.data().current_filter().bssid());
+                let event=Event::Linked{channel,bssid,aid:change,was};
+                if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
+            }
+            Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),
+            Err(_)=>Ok(()),
+        }
     }
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
     fn ended(&mut self,unicast:bool,acked:bool,now:u64){
@@ -381,6 +413,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let _=wlanhw::reply_set_channel(call,result);
             },
             wlanhw::Request::SetFilter{filter}=>{
+                // 213-DRV-0091: another filter ends the link the firmware was told of, before its CAM entry is replaced.
+                if self.linked.is_some()&&self.pending.is_none(){
+                    match self.data().connect(None,COMMAND_US){
+                        Ok(())=>{self.linked=None;self.link_change=None;}
+                        Err(failure) if failure.shutdown.is_some()=>{let _=wlanhw::reply_set_filter(call,Err(error(&failure)));self.fail(Fatal::Radio(failure));return}
+                        Err(_)=>{}
+                    }
+                }
                 let result=self.data().set_filter(filter.all_beacons,address(filter.bssid),address(filter.own),COMMAND_US);
                 // 213-DRV-0090: another BSS's beacons are counted from none, and no hole is open.
                 if result.is_ok(){self.frames.clear();self.beacons.1=now;self.heard_bss=false;self.hole=None;}
