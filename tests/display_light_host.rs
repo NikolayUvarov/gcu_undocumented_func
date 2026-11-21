@@ -40,7 +40,8 @@ fn found() -> Store {
         s.set(R::DigBeCntl, p, if p == 4 { (1 << 4) << 8 } else { 0 });
         s.set(R::DigBeEnCntl, p, if p == 4 { 0x101 } else { 0 });
     }
-    s.set_batches(7);
+    s.set(R::DmcubCntl, 0, 1 << 17); // the DMCUB held in reset
+    s.set_batches(8);
     s
 }
 
@@ -67,6 +68,7 @@ fn the_pipe_is_chosen_from_what_step_1_found() {
 #[test]
 fn step_3_refuses_what_it_cannot_tell() {
     let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found(); change(&mut s); assess(&s).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(7)), Refusal::NotRead { batch: 8 });
     assert_eq!(refuse(&|s| s.set_batches(6)), Refusal::NotRead { batch: 7 });
     assert_eq!(refuse(&|s| s.set_batches(4)), Refusal::NotRead { batch: 5 });
     assert_eq!(refuse(&|s| s.set_batches(0)), Refusal::NotRead { batch: 1 });
@@ -78,6 +80,10 @@ fn step_3_refuses_what_it_cannot_tell() {
     assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 0, 0)), Refusal::NoMonitor);
     assert_eq!(refuse(&|s| { s.set(R::DigBeCntl, 4, 0); s.set(R::DigFeCntl, 4, 0); }), Refusal::FirmwareFrontEnd);
     assert_eq!(refuse(&|s| for d in 0..4 { s.set(R::DigFeCntl, d, 1 << 24); }), Refusal::NoFreeFrontEnd);
+    // The DMCUB enabled and out of reset: it may own the PHY and the pixel clocks; enabled but held in reset is no bar.
+    assert_eq!(refuse(&|s| s.set(R::DmcubCntl, 0, 1 << 16)), Refusal::DmcubRuns);
+    let mut held = found(); held.set(R::DmcubCntl, 0, 1 << 16 | 1 << 17);
+    assert_eq!(assess(&held), Ok(EXPECTED));
     // HUBP 1 on OTG 1, step 3's, not blanked: it would fetch once OTG 1 runs.
     assert_eq!(refuse(&|s| s.set(R::HubpCntl, 1, 1 << 4)), Refusal::AttachedHubp(1));
 }

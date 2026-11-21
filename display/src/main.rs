@@ -14,11 +14,11 @@ use alloc::boxed::Box;
 use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ, SLOT_MEM};
 use mind::dev::{cap_info, device_config, Mmio};
 
-/// How many of step 1's seven batches this build may read. 0 maps no register and reads none: it logs each batch and the
+/// How many of step 1's eight batches this build may read. 0 maps no register and reads none: it logs each batch and the
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
 /// How many of step 3's eight stages this build may run. 0 makes no writer: it logs each stage with every write it would
-/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED at 7.
+/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED at 8 (all of step 1).
 const STAGES_ALLOWED: u8 = 0;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.

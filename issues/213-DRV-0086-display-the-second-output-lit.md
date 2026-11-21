@@ -465,6 +465,30 @@ The undo used to put both registers back, last first. That would have made 17 mo
   them, while PHY A's outer registers go back and its power-down runs.
 - Stage 8 (table 76) also writes through that bus.
 
+**Does Linux run table 12 on this engine? Not on this machine: the DMCUB does.** The owner session let stage 2 go on
+one condition: that Linux itself runs this table for an HDMI pixel clock on DCN 2.1, so that what it leaves inside PHY
+A is a state this PHY is routinely in. The Linux v7.0 files at hand show the path, then a turn away from it:
+- `dcn21_resource.c` makes each clock source with `dcn21_clock_source_create` → `dcn20_clk_src_construct`.
+- `dcn20_hwseq.c` `dcn20_enable_stream_timing` calls `program_pix_clk` = `dce_clock_source.c` `dcn20_program_pix_clk`,
+  then `dce112_program_pix_clk`, then the BIOS parser's `set_pixel_clock` = `command_table2.c` `set_pixel_clock_v7`
+  (SetPixelClock revision 7, the Ryzen's 1.7).
+- But `dcn21_resource.c` sets `debug.dmub_command_table = true`. With a DMUB service present, `set_pixel_clock_v7`
+  calls `set_pixel_clock_dmcub`, which sends `DMUB_CMD__VBIOS` / `DMUB_CMD__VBIOS_SET_PIXEL_CLOCK` with the same
+  `set_pixel_clock_parameter_v1_7`, and returns before `EXEC_BIOS_CMD_TABLE`. The encoder control (v1.5), transmitter
+  control (v1.6, v1.7) and display power gating tables take the same turn.
+- On this Ryzen, Linux loaded and started the DMCUB: `Loading DMUB firmware via PSP: version=0x0101002B` and `DMUB
+  hardware initialized` (dmesg at 6.50 s and 6.61 s).
+
+So under Linux here, the host never ran table 12's bytecode. The DMCUB's firmware programmed the pixel clock, and what
+it writes into PHY A is not visible from these files. The condition does not hold. Stage 2 was not run, and the night
+release (`STAGES_ALLOWED` 0) followed.
+- What this means for the route: step 3 runs the VBIOS's own tables 12, 4 and 76 on the host. On DCN 2.1 that is the
+  path Linux takes only when no DMUB service is present.
+- Whether the bytecode is sound to run from the host on this engine is not shown by Linux's practice here. Neither is
+  what the DMCUB does in its place.
+- The GOP is another runner of these tables. It lights DP-2 before any OS, with its own code; whether that code is the
+  same bytecode is not known.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).

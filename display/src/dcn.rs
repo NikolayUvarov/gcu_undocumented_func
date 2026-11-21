@@ -84,10 +84,14 @@ pub enum R {
     OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
     HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
+    // Read by step 1's batch 8 only: whether the display microcontroller (DMCUB) runs, as Linux's dmub code tells it.
+    CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
+    DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
+    DmcubGpintDataout, DmcubTimerCurrent,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 56] = {
+pub const ALL: [R; 71] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -99,7 +103,10 @@ pub const ALL: [R; 56] = {
      OtgVTotalControl, OtgVerticalInterrupt1Position, OtgVerticalInterrupt1Control, OtgVerticalInterrupt2Position,
      OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
      HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
-     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase]
+     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
+     CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
+     DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
+     DmcubGpintDataout, DmcubTimerCurrent]
 };
 
 impl R {
@@ -111,6 +118,10 @@ impl R {
             DomainPgStatus => 2 * PIPES, // HUBP n is domain 2n, DPP n is 2n + 1 (dcn20_hubp_pg_control)
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => 1,
+            DmcubScratch => 16,
+            CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress | DmcubInbox1Size
+                | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1 | DmcubGpintDataout
+                | DmcubTimerCurrent => 1,
             _ => PIPES,
         }
     }
@@ -147,6 +158,11 @@ impl R {
             DigBeEnCntl => (2, 0x20B0 + 0x100 * i),
             DcnVmFbLocationBase => (2, 0x493), DcnVmFbLocationTop => (2, 0x494), DcnVmFbOffset => (2, 0x495),
             DcnVmAgpBot => (2, 0x496), DcnVmAgpTop => (2, 0x497), DcnVmAgpBase => (2, 0x498),
+            CcDcPipeDis => (2, 0xCA), DmcubSecCntl => (2, 0x3278), DmcubInbox0Wptr => (2, 0x327C), DmcubInbox0Rptr => (2, 0x327D),
+            DmcubInbox1BaseAddress => (2, 0x327E), DmcubInbox1Size => (2, 0x327F), DmcubInbox1Wptr => (2, 0x3280),
+            DmcubInbox1Rptr => (2, 0x3281), DmcubOutbox1Wptr => (2, 0x3288), DmcubOutbox1Rptr => (2, 0x3289),
+            DmcubScratch => (2, 0x328D + i), DmcubCntl => (2, 0x32A0), DmcubGpintDatain1 => (2, 0x32A2),
+            DmcubGpintDataout => (2, 0x32A3), DmcubTimerCurrent => (2, 0x32A7),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -181,7 +197,13 @@ impl R {
             HubpreqPrimarySurfaceAddressHigh => "DCSURF_PRIMARY_SURFACE_ADDRESS_HIGH", DigBeEnCntl => "DIG_BE_EN_CNTL",
             DcnVmFbLocationBase => "DCN_VM_FB_LOCATION_BASE", DcnVmFbLocationTop => "DCN_VM_FB_LOCATION_TOP",
             DcnVmFbOffset => "DCN_VM_FB_OFFSET", DcnVmAgpBot => "DCN_VM_AGP_BOT", DcnVmAgpTop => "DCN_VM_AGP_TOP",
-            DcnVmAgpBase => "DCN_VM_AGP_BASE",
+            DcnVmAgpBase => "DCN_VM_AGP_BASE", CcDcPipeDis => "CC_DC_PIPE_DIS", DmcubCntl => "DMCUB_CNTL",
+            DmcubSecCntl => "DMCUB_SEC_CNTL", DmcubScratch => "DMCUB_SCRATCH", DmcubInbox0Wptr => "DMCUB_INBOX0_WPTR",
+            DmcubInbox0Rptr => "DMCUB_INBOX0_RPTR", DmcubInbox1BaseAddress => "DMCUB_INBOX1_BASE_ADDRESS",
+            DmcubInbox1Size => "DMCUB_INBOX1_SIZE", DmcubInbox1Wptr => "DMCUB_INBOX1_WPTR", DmcubInbox1Rptr => "DMCUB_INBOX1_RPTR",
+            DmcubOutbox1Wptr => "DMCUB_OUTBOX1_WPTR", DmcubOutbox1Rptr => "DMCUB_OUTBOX1_RPTR",
+            DmcubGpintDatain1 => "DMCUB_GPINT_DATAIN1", DmcubGpintDataout => "DMCUB_GPINT_DATAOUT",
+            DmcubTimerCurrent => "DMCUB_TIMER_CURRENT",
         }
     }
 
@@ -197,6 +219,9 @@ impl R {
             HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => "",
+            CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
+                | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
+                | DmcubGpintDataout | DmcubTimerCurrent => "",
             _ => "OTG",
         }
     }
@@ -282,6 +307,13 @@ pub mod field {
     pub const OTG_PIXEL_RATE_PLL_SOURCE: Field = f(4, 1);
     pub const PHYPLL_PIXCLK_ENABLE: Field = f(8, 1);
     pub const DENTIST_DISPCLK_RDIVIDER: Field = f(8, 7);
+    // The DMCUB (dcn_2_1_0_sh_mask.h): whether the board has it, whether it is enabled or held in reset.
+    pub const DC_DMCUB_ENABLE: Field = f(16, 1); // CC_DC_PIPE_DIS
+    pub const DMCUB_ENABLE: Field = f(16, 1); // DMCUB_CNTL
+    pub const DMCUB_SOFT_RESET: Field = f(17, 1);
+    pub const DMCUB_PWAIT_MODE_STATUS: Field = f(20, 1);
+    pub const DMCUB_SEC_RESET: Field = f(16, 1); // DMCUB_SEC_CNTL
+    pub const DMCUB_SEC_RESET_STATUS: Field = f(21, 1);
     pub const PGFSM_POWER_ON: u32 = 0;
 }
 

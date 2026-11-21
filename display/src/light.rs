@@ -63,7 +63,7 @@ pub const EXPECTED: (Firmware, Choice) = (
 /// Why step 3 does not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// All seven of step 1's batches must have been read; this is the first that was not.
+    /// All of step 1's batches must have been read; this is the first that was not.
     NotRead { batch: u8 },
     /// Not exactly one timing generator running.
     RunningOtgs(u8),
@@ -81,13 +81,16 @@ pub enum Refusal {
     Overlap,
     /// A powered HUBP follows step 3's timing generator and is not blanked: it would fetch once the generator runs.
     AttachedHubp(u8),
+    /// The display microcontroller is enabled and not held in reset: it may own the PHYs and pixel clocks the VBIOS
+    /// tables would program, and Linux asks it rather than run them (`dmub_command_table`).
+    DmcubRuns,
     Plan(PlanError),
 }
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL SEVEN)", batch),
+            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL {})", batch, crate::batches::BATCHES),
             Refusal::RunningOtgs(n) => write!(f, "{} TIMING GENERATORS RUN, NOT ONE", n),
             Refusal::BackEnds(n) => write!(f, "{} DIG BACK ENDS ARE ENABLED, NOT ONE", n),
             Refusal::HdmiDriven => f.write_str("PHY A (HDMI-A-1) IS ALREADY DRIVEN"),
@@ -97,6 +100,7 @@ impl fmt::Display for Refusal {
             Refusal::NoFreeFrontEnd => f.write_str("NO FREE DIG FRONT END"),
             Refusal::Overlap => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE FIRMWARE'S"),
             Refusal::AttachedHubp(n) => write!(f, "HUBP{} FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED", n),
+            Refusal::DmcubRuns => f.write_str("THE DMCUB IS ENABLED AND NOT IN RESET: IT MAY OWN WHAT THE VBIOS TABLES PROGRAM"),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
         }
     }
@@ -104,10 +108,12 @@ impl fmt::Display for Refusal {
 
 const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 
-/// The firmware's pipe and the pipe step 3 takes, from step 1's values; nothing assumed. All seven batches: step 3
-/// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync).
+/// The firmware's pipe and the pipe step 3 takes, from step 1's values; nothing assumed. All eight batches: step 3
+/// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync),
+/// and it does not run while batch 8 shows the DMCUB enabled and out of reset.
 pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     if s.batches() < crate::batches::BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
+    if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
     let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
     let runs = (0..4).filter(|&t| running(t)).count() as u8;
     let Some(otg) = (0..4).find(|&t| running(t)).filter(|_| runs == 1) else { return Err(Refusal::RunningOtgs(runs)) };
@@ -290,7 +296,7 @@ impl fmt::Display for Name {
         for r in dcn::ALL {
             for i in 0..r.instances() {
                 if r.at(i) == Some(self.0) {
-                    return match r.block() { "" => write!(f, "{} AT {:05X}", r.name(), self.0.offset()), b => write!(f, "{}{}_{} AT {:05X}", b, i, r.name(), self.0.offset()) };
+                    return match r.block() { "" if r.instances() > 1 => write!(f, "{}{} AT {:05X}", r.name(), i, self.0.offset()), "" => write!(f, "{} AT {:05X}", r.name(), self.0.offset()), b => write!(f, "{}{}_{} AT {:05X}", b, i, r.name(), self.0.offset()) };
                 }
             }
         }
