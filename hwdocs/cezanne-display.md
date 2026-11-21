@@ -338,7 +338,7 @@ instructions, 5 writes to 3 registers. Table 76 (dig1transmittercontrol 1.6): 28
 | 4 | `DIG0_DIG_FE_CNTL` (three writes, last 0), `DIG0_DIG_CLOCK_PATTERN` = 0x1F, `DIG0_TMDS_CTL_BITS` = 0 |
 | 76 | `DIG0_DIG_BE_CNTL` = 0x00020100 (mode 2, DVI; front end A), `DIG0_DIG_BE_EN_CNTL` = 1, `DIG0_DIG_LANE_ENABLE` = 0x10F, `UNIPHYA_LINK_CNTL`, `UNIPHYA_CHANNEL_XBAR_CNTL`, `RDPCSTX0`'s `PHY_CNTL3` (7), `PHY_CNTL6`, `PHY_FUSE0` to `3`, `RDPCSTX_CNTL`, `DPCSTX0_DPCSTX_TX_CNTL` |
 
-The case asserts that every write lies on PHY A's path (DPCSTX0/RDPCSTX0, DIG0, UNIPHYA, PHYPLLA, OTG 1's pixel rate,
+All of them lie in the engine's window KRN grants (BAR 5 [0, 0x1B000), 213-KRN-0271); none needs the mailbox's page. The case asserts that every write lies on PHY A's path (DPCSTX0/RDPCSTX0, DIG0, UNIPHYA, PHYPLLA, OTG 1's pixel rate,
 SYMCLKA) and none on the firmware's pipe 0, DIG E or PHY E. No table touches the SMU mailbox, DISPCLK or any OTG
 timing. The register names are from `dcn_2_1_0_offset.h` and `dpcs_2_1_0_offset.h`.
 

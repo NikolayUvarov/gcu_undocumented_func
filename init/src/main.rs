@@ -113,6 +113,13 @@ const POLICY_PAGES_MAX: usize = 64;
 const POLICY_LOOK_MS: u32 = 1000;
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
+// display's windows of the Radeon's BARs (213-KRN-0271, from DRV's hwdocs/cezanne-display.md), as (offset, bytes): the
+// display engine's registers in BAR 5 (DCN 2.1, bytes 0x48 to 0x1B000), the page of the SMU mailbox the display clocks go
+// through (0x58A0C, 0x58A4C, 0x58A6C), and BAR 0 past the GOP's screen ([0, 0xFA0000)), 20 MiB for 3440x1440 at 4 bytes.
+const DISPLAY_ENGINE: (usize, usize) = (0, 0x1B000);
+const DISPLAY_MAILBOX: (usize, usize) = (0x58000, 0x1000);
+const DISPLAY_SECOND_SCREEN: (usize, usize) = (0x100_0000, 0x140_0000);
+
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
 impl Minted {
     fn new() -> Self { Self { slots: [0; SPAWN_GRANTS_MAX], count: 0 } }
@@ -128,6 +135,13 @@ impl Minted {
         Ok(slot)
     }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
+    // A page-aligned window (offset, length) of a register range init holds (213-KRN-0271).
+    fn window(&mut self, of: usize, (offset, length): (usize, usize)) -> Result<usize> {
+        let slot = ipc::mint(of, 0xFF, offset, length)?;
+        self.keep(slot);
+        Ok(slot)
+    }
+    fn keep(&mut self, slot: usize) { self.slots[self.count] = slot; self.count += 1; }
     // The real-time clock: CMOS ports (LEGACY) on x86, a PL031's node on aarch64 (100000-KRN-0171).
     fn clock(&mut self, node: Option<usize>) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, node.ok_or(Error::NotFound)?, 0) } else { self.ports(0x70, 2) } }
     // The platform's serial line: COM1 (LEGACY) on x86; on aarch64 the console's node when it is a PL011 lent by its page,
@@ -1191,16 +1205,28 @@ impl Init {
                 if self.running(service_index("usb_host")) { grants.add(SLOT_DEV1, self.badged(&mut minted, "usb_host", mind::usb::BADGE_VIDEO)?, CLIENT); }
             }
             "display" => {
-                // The Ryzen's Radeon (1002:1638) for its display engine (213-DRV-0086, 213-KRN-0270): BAR 5, its registers
-                // as amdgpu takes them, and the device's index. The firmware's decoding and mastering stay, as the GOP's
-                // output needs them; the device is not recorded, so init never stops it: DP-2 keeps its picture.
+                // The Ryzen's Radeon (1002:1638) for its display engine (213-DRV-0086; 213-KRN-0270, 0271), as DRV's survey
+                // asks: BAR 5's two windows the engine uses (not its MSI-X table), the VBIOS image (the ACPI VFCT table,
+                // read-only), BAR 0 past the GOP's screen for a second one, and the device's index. The command register
+                // stays as the firmware left it; the device is not recorded, so init never stops it: DP-2 keeps its picture.
                 let device = platform::find_device_id(0x03_00_00, 0xFF_00_00, 0x1638_1002, 0)?;
                 let command = || mind::dev::device_config_at(SLOT_DEV0, device, 4).map(|v| v & 0xFFFF).unwrap_or(u32::MAX);
                 let before = command();
                 let registers = Self::bar(&mut minted, device, 5, CAP_KIND_MMIO)?;
-                let (_, _, len) = cap_info(registers);
-                mind::println!("[INIT] display: RADEON 1002:1638 (DEVICE {}), BAR 5 {} KIB; COMMAND {:04X} BEFORE THE GRANT, {:04X} AFTER", device, len >> 10, before, command());
-                grants.add(SLOT_DEV0, registers, 0);
+                let engine = minted.window(registers, DISPLAY_ENGINE)?;
+                let mailbox = minted.window(registers, DISPLAY_MAILBOX)?;
+                mind::println!("[INIT] display: RADEON 1002:1638 (DEVICE {}); COMMAND {:04X} BEFORE THE GRANT, {:04X} AFTER; BAR 5 {:#X}+{:#X} AND {:#X}+{:#X}",
+                               device, before, command(), DISPLAY_ENGINE.0, DISPLAY_ENGINE.1, DISPLAY_MAILBOX.0, DISPLAY_MAILBOX.1);
+                grants.add(SLOT_DEV0, engine, 0); grants.add(SLOT_DEV1, mailbox, 0);
+                // Without either, display still reads the engine's state (213-DRV-0086 step 1): each is said.
+                match Self::bar(&mut minted, device, 0, CAP_KIND_MMIO).and_then(|frames| minted.window(frames, DISPLAY_SECOND_SCREEN)) {
+                    Ok(second) => grants.add(SLOT_MEM, second, 0),
+                    Err(error) => mind::println!("[INIT] display: BAR 0 {:#X}+{:#X} NOT GRANTED: {:?}", DISPLAY_SECOND_SCREEN.0, DISPLAY_SECOND_SCREEN.1, error),
+                }
+                match hardware::acpi_table(b"VFCT") {
+                    Some((slot, bytes)) => { minted.keep(slot); grants.add(SLOT_IRQ, slot, 0); mind::println!("[INIT] display: VBIOS: THE VFCT TABLE, {} BYTES, READ-ONLY", bytes); }
+                    None => mind::println!("[INIT] display: NO VFCT TABLE: NO VBIOS IMAGE GRANTED"),
+                }
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.

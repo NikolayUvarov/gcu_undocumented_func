@@ -60,12 +60,16 @@ writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's o
 ## Progress: step 1, ready to run (2026-11-21)
 
 On `claude/213-DRV-0086-display-reads-the-engine`, built on KRN's
-[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md) (the `display` boot image and `init`'s grant of BAR 5
-in `SLOT_DEV0`, the command register as the firmware left it; ABI 37, handoff 38) with the survey branch merged in.
-`display/src/main.rs` replaces KRN's stub:
+[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md) and
+[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md) (the `display` boot image; `init`'s grant of two windows
+of BAR 5, the engine's registers [0, 0x1B000) in slot 2 and the SMU mailbox's page [0x58000, 0x59000) in slot 3, BAR 0
+[0x1000000, 0x2400000) in slot 5 and a read-only copy of the ACPI VFCT table in slot 4; the command register left at the
+firmware's 0006; ABI 37, handoff 38) with the survey branch merged in. `display/src/main.rs` replaces KRN's stub:
 
-- It logs the grant as the stub did (`[DISPLAY] PCI 1002:1638 (DEVICE n), COMMAND xxxx, BAR 5 AT xxxxxxxx, k KIB
-  GRANTED; ...`) and runs step 1 only on the Radeon `1002:1638` with a grant of at least 512 KiB.
+- It logs each slot and the VBIOS image's identity as the stub did (KRN's task closes on those lines), then runs step 1
+  only on the Radeon `1002:1638` with an engine window of at least 0x1B000 bytes, and ends with `NO REGISTER READ OR
+  WRITTEN` when it read none (`n REGISTERS READ, NONE WRITTEN` otherwise) and the command register after. Step 1 reads
+  neither the mailbox nor BAR 0 nor the VBIOS copy beyond its header.
 - **`BATCHES_ALLOWED`, set to 0:** how many of the seven batches this build may read. At 0 it maps nothing and reads
   nothing; it logs each batch and every register it would read (156 lines of step 1, paced 20 ms: about 3 s). It is raised one run at a time,
   on the owner session's word.
@@ -83,9 +87,13 @@ in `SLOT_DEV0`, the command register as the firmware left it; ABI 37, handoff 38
 
 Tested on LEG9 only (the build and the host cases). It has not run on the Ryzen: it needs the stick rewritten with an
 ABI 37 release that holds KRN's image; the owner session says when. What to look for in the first run's log: KRN's
-`[INIT] display: ... COMMAND xxxx BEFORE THE GRANT, xxxx AFTER`, then `[DISPLAY] PCI 1002:1638 ...`, the seven `NOT
-READ` batches with their registers, `STEP 1 DONE: 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN` and the command
-register after; DP-2 keeps its picture.
+`[INIT] display: RADEON 1002:1638 (DEVICE n); COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND
+0x58000+0x1000` and its VBIOS line; then `[DISPLAY] PCI 1002:1638 ... 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU
+MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT ... AN IMAGE FOR 1002:1638 ...
+ROM SIGNATURE 55AA`, `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven `NOT READ` batches with their registers, `STEP 1 DONE:
+0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`, `NO REGISTER READ OR WRITTEN` and `COMMAND 0006 AFTER STEP 1`;
+DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
+below 0x1B000 (the highest, PHY E's DPCS, ends at 0x1A880), so the engine's window needs no widening for them.
 
 ## Progress: the ATOM interpreter, host-only (2026-11-21)
 
