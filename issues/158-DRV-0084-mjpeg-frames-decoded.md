@@ -1,6 +1,6 @@
 # 158-DRV-0084 — MJPEG frames decoded, so a camera's larger modes are offered
 
-**Type:** driver (`video_gw`, a decoder in `libmind`) · **Owner:** `DRV` · **Priority:** P3 · **Status:** in progress (2026-11-21: the decoder hardened, given the standard tables and a faster IDCT, and fuzzed; `video_gw`'s side next) · **Blocked by:** [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md) · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-10.1, MC-12.1
+**Type:** driver (`video_gw`, a decoder in `libmind`) · **Owner:** `DRV` · **Priority:** P3 · **Status:** in progress (2026-11-21: the decoder hardened, given the standard tables and a faster IDCT, and fuzzed; `video_gw` streams and decodes MJPEG modes, `video.wit` 1.2; the Ryzen's frames and figures wait for its stick) · **Blocked by:** [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md) · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-10.1, MC-12.1
 
 ## Problem
 
@@ -49,10 +49,30 @@ On USB 2 a camera sends its larger sizes and higher rates as MJPEG alone: uncomp
   | 1280×1024 | 23.2 ms | 12.5 ms |
 
   This is not the Ryzen's figure, nor MIND Core's: criterion 3 asks for that one.
-- **Not done yet:**
-  - frames recorded from the Ryzen's cameras: the machine runs ABI 35 and `main` 37 until its stick is rewritten;
-  - the decoder in ASR's list in `docs/assurance/README.md`, which is ASR's to write (a request to its owner);
-  - `video_gw`'s side.
+
+**3. `video_gw` with Motion JPEG.**
+- **The frame size streamed** (`uvc::Camera::choose`, now given the rate as well): of the YUY2 and MJPEG sizes, the smallest that holds the picture and reaches the rate asked. YUY2 comes first at one size, since it needs no decoding. Else the one of the highest rate that holds it, else the largest.
+  - The Ryzen's camera 0 (host case, from its descriptors): 1280×720 at 25 a second as MJPEG, at 10 as YUY2; 800×600 at 25 as MJPEG, where YUY2 gives 20.
+- **An MJPEG frame is assembled** at any length up to the committed `dwMaxVideoFrameSize`, but at most three bytes a pixel and at least 1 KiB (`FrameSize::buffer`): a camera's claim is not trusted further.
+- **On a read**, its picture is decoded and each row scaled into the size asked (`video::scale_row`, YUY2's nearest-pixel mapping). Every camera's stream is pumped every 64 rows (`convert`), as YUY2's bands are.
+- **A frame that does not decode is dropped:** its header names another size, it is cut short, or it is malformed. It is counted, the first reason is logged (`A MOTION JPEG FRAME DROPPED: …`), and the read waits for the next frame. The picture is not shown again meanwhile, since it may hold some of the dropped frame's rows. Five seconds with no frame shown answer not-found, as five seconds with no good frame do.
+- **A stream's close line** adds `MJPEG: n DECODED IN a MS EACH, THE LONGEST b MS, d DROPPED (THE FIRST: …)`: the decode time criterion 3 asks for.
+- **`modes` offers the MJPEG modes** within the sizes and rates `open` takes (1280×1024 at most). A compressed mode's bytes are not checked against an isochronous setting: the probe's answer chooses the setting.
+  - The Ryzen's camera 0 now offers 20 modes (10 MJPEG), and camera 1 offers 22 (11 MJPEG), by host case.
+  - The 1920×1080, 1600×1200 and 2048×1536 ones are past what `open` takes.
+- **`video.wit` 1.2** says so: MJPEG modes offered and decoded, nothing new on the wire, so a 1.1 program works with a 1.2 gateway.
+- **Host cases:**
+  - the choice (`tests/uvc_host.rs`), the buffer, and the offered lists of the two cameras (`tests/video_gw_host.rs`);
+  - `scale_row` against YUY2's sampling, up and down;
+  - the test pattern encoded by `jpeg.rs` and decoded into the picture as the gateway does (`tests/video_host.rs`): at its own size its frame counter reads back and the mean error is under 6; scaled, each pixel is near the one it samples.
+- **Not in the gate:**
+  - no QEMU device sends MJPEG, so the gateway's MJPEG path is evidence on the Ryzen alone, and not yet that;
+  - the `cameras` suite runs the patterns.
+
+**Not done yet:**
+- frames recorded from the Ryzen's cameras and compared with Linux's decoding (criterion 1): the machine runs ABI 35 and `main` 37 until its stick is rewritten;
+- an MJPEG mode of each camera opened there, with its rate and decode time (criterion 3), and a mode the machine cannot decode at its rate offered at the rate it reaches (plan item 4);
+- the decoder in the fuzzing list of `docs/assurance/README.md` (criterion 2): that file is ASR's, and the request to its owner is in the report.
 
 ## Related
 

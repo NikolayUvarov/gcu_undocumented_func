@@ -18,6 +18,7 @@ use mind::idl::{display, video as idl, wire};
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
 use mind::usb::{Host, Interface, BULK_MAX, BULK_STREAM_BYTES, CONTROL_MAX};
+use mind::jpegdec;
 use mind::{uvc, video};
 use choices::Key;
 
@@ -58,6 +59,9 @@ struct Live {
     copy: Vec<u8>,
     // The time its probe and commit took, which a camera reset a moment before answers late (158-DRV-0082).
     probe_ms: u32,
+    // A Motion JPEG stream (158-DRV-0084): frames decoded and dropped, the decodes' time in all and at most, when one last
+    // decoded, why the first was dropped, and whether the picture holds a dropped frame's rows.
+    mjpeg: bool, decoded: u32, dropped: u32, decode_ns: u64, longest_decode_ns: u64, decoded_ns: u64, why: &'static str, torn: bool,
 }
 
 // The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
@@ -143,16 +147,21 @@ fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool) -> mind::Result<
     Ok(taken)
 }
 
-// A stream's pumps and the longest time between two, for the log: usb_host's queue for it must outlast that.
+// A stream's pumps and the longest time between two, for the log: usb_host's queue for it must outlast that. A Motion
+// JPEG stream's decodes too (158-DRV-0084).
 fn timing(live: &Live) -> String {
-    format!("[VIDEO]   {} PUMPS IN {} MS, THE LONGEST GAP {} MS{}", live.pumps, (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_gap_ns / 1_000_000,
-        if live.bulk.is_none() { "" } else if live.streamed { ", BULK KEPT POLLED BY USB_HOST" } else { ", BULK READ BY WAITING TRANSFERS" })
+    let decodes = if !live.mjpeg { String::new() } else {
+        format!("; MJPEG: {} DECODED IN {} MS EACH, THE LONGEST {} MS, {} DROPPED{}", live.decoded, live.decode_ns / live.decoded.max(1) as u64 / 1_000_000, live.longest_decode_ns / 1_000_000,
+            live.dropped, if live.why.is_empty() { String::new() } else { format!(" (THE FIRST: {})", live.why.to_uppercase()) })
+    };
+    format!("[VIDEO]   {} PUMPS IN {} MS, THE LONGEST GAP {} MS{}{}", live.pumps, (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_gap_ns / 1_000_000,
+        if live.bulk.is_none() { "" } else if live.streamed { ", BULK KEPT POLLED BY USB_HOST" } else { ", BULK READ BY WAITING TRANSFERS" }, decodes)
 }
 
 // What a camera stream got, for the log.
 fn report(live: &Live) -> String {
     format!("{} GOOD FRAMES, {} BROKEN (THE LAST {} BYTES OF {}), {} PACKETS OF {} BYTES, {} DAMAGED, FIRST HEADER {:02X?}",
-        live.assembler.good, live.assembler.broken, live.assembler.last_bytes, live.size.exact_bytes().unwrap_or(0), live.packets, live.bytes, live.damaged, &live.header[..live.header_len])
+        live.assembler.good, live.assembler.broken, live.assembler.last_bytes, live.size.exact_bytes().unwrap_or(live.assembler.capacity()), live.packets, live.bytes, live.damaged, &live.header[..live.header_len])
 }
 
 impl Usb {
@@ -302,7 +311,9 @@ fn camera_modes(camera: &uvc::Camera, speed: u8) -> Vec<(uvc::Mode, idl::Mode)> 
     let capacity = camera.capacity(speed);
     camera.modes().into_iter().take(LISTED_MODES).map(|m| {
         let encoding = match m.encoding { uvc::Encoding::Yuy2 => idl::Encoding::Yuy2, uvc::Encoding::Mjpeg => idl::Encoding::Mjpeg, uvc::Encoding::Other(_) => idl::Encoding::Uncompressed };
-        let offered = choices::offered(m.encoding == uvc::Encoding::Yuy2, m.width, m.height, m.rate(), m.bytes_per_second(), capacity);
+        // YUY2's bytes are fixed by its size; a Motion JPEG frame's by its picture (158-DRV-0084).
+        let (decoded, bytes) = match m.encoding { uvc::Encoding::Yuy2 => (true, m.bytes_per_second()), uvc::Encoding::Mjpeg => (true, 0), uvc::Encoding::Other(_) => (false, 0) };
+        let offered = choices::offered(decoded, m.width, m.height, m.rate(), bytes, capacity);
         (m, idl::Mode { encoding, width: m.width, height: m.height, rate: m.rate().min(255) as u8, interval: m.interval, offered })
     }).collect()
 }
@@ -310,10 +321,10 @@ fn camera_modes(camera: &uvc::Camera, speed: u8) -> Vec<(uvc::Mode, idl::Mode)> 
 // How many modes a camera has and offers, and why the others are not: a line for the log.
 fn log_modes(modes: &[(uvc::Mode, idl::Mode)]) {
     let count = |f: &dyn Fn(&idl::Mode) -> bool| modes.iter().filter(|(_, m)| f(m)).count();
-    let yuy2 = |m: &idl::Mode| m.encoding == idl::Encoding::Yuy2;
-    mind::println!("[VIDEO]   MODES: {}, {} OFFERED; NOT: {} YUY2 BEYOND {}X{} AT {}/S OR THE SETTINGS, {} MJPEG (NOT DECODED YET), {} OTHER", modes.len(),
-        count(&|m| m.offered), count(&|m| yuy2(m) && !m.offered), choices::WIDTHS.end(), choices::HEIGHTS.end(), choices::RATES.end(),
-        count(&|m| m.encoding == idl::Encoding::Mjpeg), count(&|m| m.encoding == idl::Encoding::Uncompressed));
+    let decoded = |m: &idl::Mode| matches!(m.encoding, idl::Encoding::Yuy2 | idl::Encoding::Mjpeg);
+    mind::println!("[VIDEO]   MODES: {}, {} OFFERED ({} MJPEG); NOT: {} BEYOND {}X{} AT {}/S OR THE SETTINGS, {} OF ANOTHER ENCODING (NOT DECODED)", modes.len(),
+        count(&|m| m.offered), count(&|m| m.offered && m.encoding == idl::Encoding::Mjpeg), count(&|m| decoded(m) && !m.offered),
+        choices::WIDTHS.end(), choices::HEIGHTS.end(), choices::RATES.end(), count(&|m| m.encoding == idl::Encoding::Uncompressed));
 }
 
 // The modes a test pattern lists (video.wit 1.1): drawn by the gateway, each offered.
@@ -341,7 +352,7 @@ fn pattern_opened(number: u8, width: u16, height: u16, rate: u8) -> idl::Opened 
 // Probes and commits the frame size nearest `width` × `height` at `rate`, and selects the setting that carries it.
 fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) -> Result<Live, idl::Error> {
     let info = &camera.info;
-    let Some(size) = info.choose(width, height).cloned() else { mind::println!("[VIDEO] \"{}\" HAS NO YUY2 FORMAT (MJPEG IS NOT DECODED YET)", camera.name); return Err(idl::Error::Invalid) };
+    let Some(size) = info.choose(width, height, rate as u32).cloned() else { mind::println!("[VIDEO] \"{}\" HAS NO FORMAT THE GATEWAY DECODES (YUY2 OR MJPEG)", camera.name); return Err(idl::Error::Invalid) };
     let interval = size.interval(10_000_000 / rate as u32);
     let probe = uvc::Probe::new(info.version, size.format, size.frame, interval);
     let (number, length) = (info.streaming as u16, probe.length as u16);
@@ -356,8 +367,9 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     mind::println!("[VIDEO] \"{}\": ASKED FORMAT {} FRAME {} ({}X{}) INTERVAL {}; COMMITTED FORMAT {} FRAME {} INTERVAL {}, FRAMES UP TO {} BYTES, PAYLOADS UP TO {}",
         camera.name, size.format, size.frame, size.width, size.height, interval, answer.format(), answer.frame(), answer.interval(), answer.max_frame(), answer.max_payload());
     // The camera may have chosen another frame size of the format: its answer counts.
-    let size = info.frames.iter().find(|f| f.format == answer.format() && f.frame == answer.frame() && f.encoding == uvc::Encoding::Yuy2).cloned().unwrap_or(size);
-    let bytes = size.exact_bytes().unwrap_or(size.max_bytes as usize);
+    let size = info.frames.iter().find(|f| f.format == answer.format() && f.frame == answer.frame() && matches!(f.encoding, uvc::Encoding::Yuy2 | uvc::Encoding::Mjpeg)).cloned().unwrap_or(size);
+    let (bytes, exact) = size.buffer(answer.max_frame());
+    let mjpeg = size.encoding == uvc::Encoding::Mjpeg;
     // A bulk camera has no setting to choose: it streams from the commit on, in payloads of up to its committed size,
     // and usb_host keeps its endpoint polled where it can (usb.wit 1.6), so other cameras' streams do not starve it.
     let streamed = info.bulk && match host.bulk_stream(camera.streaming, info.endpoint, true) {
@@ -370,8 +382,9 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
         (alternate.endpoint, alternate.setting, None)
     };
     let now = mind::time::monotonic_ns();
-    Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, true), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
-        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new(), probe_ms })
+    Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, exact), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
+        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new(), probe_ms,
+        mjpeg, decoded: 0, dropped: 0, decode_ns: 0, longest_decode_ns: 0, decoded_ns: 0, why: "", torn: false })
 }
 
 // The camera's stream stopped, with what it got: an isochronous camera back to setting 0. A bulk one's stream in
@@ -455,8 +468,9 @@ fn next_pattern(streams: &mut [Stream], at: usize, usb: &mut Usb) -> idl::Frame 
 }
 
 // The next frame of camera stream `at` into its pixels: when it is due and a newer picture came, or half a camera
-// frame later than the camera's next one was expected; the other cameras' streams are pumped meanwhile. Err(NotFound)
-// without a good frame for FIRST_MS, or when the camera is gone.
+// frame later than the camera's next one was expected; the other cameras' streams are pumped meanwhile. A Motion JPEG
+// frame that does not decode is dropped and the next one waited for (158-DRV-0084). Err(NotFound) without a frame
+// shown for FIRST_MS, or when the camera is gone.
 fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::Frame, idl::Error> {
     let (sequence, due) = streams[at].due();
     let Source::Camera(live) = &streams[at].source else { return Err(idl::Error::NotOpen) };
@@ -476,35 +490,76 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
         };
         let now = mind::time::monotonic_ns();
         let fresh = live.assembler.good > live.given;
-        if now >= due && live.assembler.good > 0 && (fresh || now >= due.max(live.good_ns) + live.interval_ns * 3 / 2) { break; }
-        if now - live.good_ns.max(live.opened_ns) > FIRST_MS * 1_000_000 {
+        // The last picture again when no newer came, unless it holds a dropped frame's rows.
+        let again = !live.torn && now >= due.max(live.good_ns) + live.interval_ns * 3 / 2;
+        if now >= due && live.assembler.good > 0 && (fresh || again) {
+            if !fresh && live.mjpeg && live.decoded > 0 { break; } // already in the pixels
+            match convert(streams, at, usb) {
+                Ok(()) => break,
+                Err(why) => {
+                    let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
+                    (live.dropped, live.torn) = (live.dropped + 1, true);
+                    if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A MOTION JPEG FRAME DROPPED: {}", camera, why.to_uppercase()); }
+                    continue;
+                }
+            }
+        }
+        let shown = if live.mjpeg { live.decoded_ns } else { live.good_ns };
+        if now - shown.max(live.opened_ns) > FIRST_MS * 1_000_000 {
             mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
             mind::println!("{}", timing(live));
-            live.good_ns = now; // the next read waits as long again
+            (live.good_ns, live.decoded_ns) = (now, now); // the next read waits as long again
             return Err(idl::Error::NotFound);
         }
         pump_all(streams, Some(at), usb);
         if streams[at].source.gone() { return Err(idl::Error::NotFound); }
         if taken == 0 { let _ = mind::time::sleep(1); }
     }
-    // The frame converted in bands of BAND_ROWS, every camera's stream pumped between two, so a large frame's
-    // conversion does not outlast usb_host's queue for them (158-DRV-0083).
     let (width, height) = (streams[at].width, streams[at].height);
-    let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
+    streams[at].sequence = sequence;
+    Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })
+}
+
+// Camera stream `at`'s last good frame into its pixels, in bands of BAND_ROWS rows with every camera's stream pumped
+// between two, so a large frame does not outlast usb_host's queue for them (158-DRV-0083): YUY2 converted, Motion JPEG
+// decoded (158-DRV-0084). Err: why a Motion JPEG frame was not shown.
+fn convert(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<(), &'static str> {
+    let (width, height) = (streams[at].width, streams[at].height);
+    let Source::Camera(live) = &mut streams[at].source else { return Ok(()) };
     live.given = live.assembler.good;
-    let (size, mut copy) = ((live.size.width as usize, live.size.height as usize), core::mem::take(&mut live.copy));
+    let (size, mjpeg, mut copy) = ((live.size.width as usize, live.size.height as usize), live.mjpeg, core::mem::take(&mut live.copy));
+    // A copy: a pump meanwhile may end the next frame.
     copy.clear();
     copy.extend_from_slice(live.assembler.ready());
-    for band in (0..height).step_by(BAND_ROWS) {
-        let frame = &mut streams[at].frame;
-        let pixels = unsafe { core::slice::from_raw_parts_mut(frame.as_mut_slice().as_mut_ptr() as *mut u32, width * height) };
-        video::yuy2_scaled_rows(&copy, size.0, size.1, pixels, width, height, band..(band + BAND_ROWS).min(height));
-        pump_all(streams, None, usb);
-    }
-    let stream = &mut streams[at];
-    if let Source::Camera(live) = &mut stream.source { live.copy = copy; }
-    stream.sequence = sequence;
-    Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })
+    let pixels = streams[at].frame.as_mut_slice().as_mut_ptr() as *mut u32;
+    let result = if !mjpeg {
+        for band in (0..height).step_by(BAND_ROWS) {
+            let out = unsafe { core::slice::from_raw_parts_mut(pixels, width * height) };
+            video::yuy2_scaled_rows(&copy, size.0, size.1, out, width, height, band..(band + BAND_ROWS).min(height));
+            pump_all(streams, None, usb);
+        }
+        Ok(())
+    } else if jpegdec::size(&copy) != Some(size) {
+        Err("a frame of another size, or no frame header")
+    } else {
+        let started = mind::time::monotonic_ns();
+        let mut rows = 0usize;
+        let decoded = jpegdec::decode(&copy, size.0.max(size.1), &mut |y, row| {
+            let out = unsafe { core::slice::from_raw_parts_mut(pixels, width * height) };
+            video::scale_row(y, row, size.1, out, width, height);
+            rows += 1;
+            if rows % BAND_ROWS == 0 { pump_all(streams, None, usb); }
+        });
+        let took = mind::time::monotonic_ns() - started;
+        if let Source::Camera(live) = &mut streams[at].source {
+            if decoded.is_ok() {
+                (live.decoded, live.decode_ns, live.longest_decode_ns, live.decoded_ns, live.torn) = (live.decoded + 1, live.decode_ns + took, live.longest_decode_ns.max(took), mind::time::monotonic_ns(), false);
+            }
+        }
+        decoded.map(drop)
+    };
+    if let Source::Camera(live) = &mut streams[at].source { live.copy = copy; }
+    result
 }
 
 // How many test patterns `video/synthetic` on the boot disk asks for: one, or two when its text begins with "2".
@@ -607,7 +662,8 @@ fn main(_info: &'static BootInfo) {
                                 let what = match &source {
                                     Source::Pattern(0) => String::from("test pattern"),
                                     Source::Pattern(_) => String::from("test pattern 2"),
-                                    Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} YUY2, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
+                                    Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} {}, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height,
+                                        if l.mjpeg { "MJPEG" } else { "YUY2" }, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
                                 };
                                 let opened = match &source {
                                     Source::Pattern(_) => pattern_opened(camera, width, height, rate),

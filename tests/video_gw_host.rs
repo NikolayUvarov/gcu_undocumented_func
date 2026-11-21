@@ -104,7 +104,7 @@ fn a_test_pattern_has_three_modes_the_pattern_draws() {
 // The Ryzen's two cameras (tests/data/uvc-0471-*.hex, logged by video_gw on 2026-11-21): the YUY2 modes open takes are
 // offered, those wider than 1280 or taller than 1024 are not, and MJPEG is not yet.
 #[test]
-fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
+fn the_ryzens_cameras_offer_their_yuy2_and_mjpeg_modes_up_to_1280_by_1024() {
     for (name, offered_sizes) in [
         ("0471-a6ca", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (800, 600), (640, 360), (352, 288), (320, 240), (160, 120)]),
         ("0471-a6cd", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (960, 720), (800, 600), (640, 360), (432, 240), (352, 288), (320, 240)]),
@@ -114,8 +114,14 @@ fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
         let camera = uvc::parse(&bytes).unwrap();
         let capacity = camera.capacity(3);
         let offered_now: Vec<(u16, u16)> = camera.modes().iter()
-            .filter(|m| offered(m.encoding == uvc::Encoding::Yuy2, m.width, m.height, m.rate(), m.bytes_per_second(), capacity)).map(|m| (m.width, m.height)).collect();
+            .filter(|m| m.encoding == uvc::Encoding::Yuy2 && offered(true, m.width, m.height, m.rate(), m.bytes_per_second(), capacity)).map(|m| (m.width, m.height)).collect();
         assert_eq!(offered_now, offered_sizes, "{name}");
+        // 158-DRV-0084: their MJPEG modes as well, as video_gw lists them (a compressed mode's bytes are 0), up to 1280x1024.
+        let mjpeg: Vec<(u16, u16)> = camera.modes().iter()
+            .filter(|m| m.encoding == uvc::Encoding::Mjpeg && offered(true, m.width, m.height, m.rate(), 0, capacity)).map(|m| (m.width, m.height)).collect();
+        let all: Vec<(u16, u16)> = camera.modes().iter().filter(|m| m.encoding == uvc::Encoding::Mjpeg).map(|m| (m.width, m.height)).collect();
+        assert_eq!(mjpeg, all.iter().copied().filter(|&(w, h)| w <= 1280 && h <= 1024).collect::<Vec<_>>(), "{name}");
+        assert_eq!(mjpeg.len(), if name == "0471-a6ca" { 10 } else { 11 }, "{name}");
     }
 }
 

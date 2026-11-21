@@ -48,11 +48,12 @@ pub const RATES: core::ops::RangeInclusive<u32> = 1..=60;
 /// Whether `open` takes a USB camera at `width` × `height` and `rate`.
 pub fn opens(width: u16, height: u16, rate: u32) -> bool { WIDTHS.contains(&width) && HEIGHTS.contains(&height) && RATES.contains(&rate) }
 
-/// Whether the gateway offers a camera's mode: YUY2 (it decodes no other encoding yet, 158-DRV-0084), within what
+/// Whether the gateway offers a camera's mode: one it decodes (YUY2, or Motion JPEG since 158-DRV-0084), within what
 /// `open` takes, and carried by the camera's streaming settings, which move `capacity` bytes a second at most (None:
-/// a bulk camera, whose payloads take the bus as it comes).
-pub fn offered(yuy2: bool, width: u16, height: u16, rate: u32, bytes_per_second: u64, capacity: Option<u64>) -> bool {
-    yuy2 && opens(width, height, rate) && capacity.is_none_or(|c| bytes_per_second <= c)
+/// a bulk camera, whose payloads take the bus as it comes). A compressed mode's `bytes_per_second` is 0: its frames
+/// are as large as the picture makes them, and the probe's answer chooses its setting.
+pub fn offered(decoded: bool, width: u16, height: u16, rate: u32, bytes_per_second: u64, capacity: Option<u64>) -> bool {
+    decoded && opens(width, height, rate) && capacity.is_none_or(|c| bytes_per_second <= c)
 }
 
 /// The modes a test pattern lists (any width a multiple of 32 up to 640 is drawn; these are for the tests).

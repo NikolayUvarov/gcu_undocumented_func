@@ -55,6 +55,18 @@ impl FrameSize {
     }
     /// The bytes of one frame when the encoding fixes them (YUY2: two a pixel).
     pub fn exact_bytes(&self) -> Option<usize> { (self.encoding == Encoding::Yuy2).then_some(self.width as usize * self.height as usize * 2) }
+    /// The buffer one of its frames is assembled in, and whether a frame must fill it exactly (158-DRV-0084): YUY2's two
+    /// bytes a pixel; a Motion JPEG frame up to the committed dwMaxVideoFrameSize (`committed`, 0: the descriptor's), but
+    /// three bytes a pixel at most and 1 KiB at least, so a camera's claim is not trusted further; another encoding up
+    /// to its descriptor's size.
+    pub fn buffer(&self, committed: u32) -> (usize, bool) {
+        let pixels = self.width as usize * self.height as usize;
+        match self.encoding {
+            Encoding::Yuy2 => (pixels * 2, true),
+            Encoding::Mjpeg => ((if committed == 0 { self.max_bytes } else { committed } as usize).min(pixels * 3).max(1024), false),
+            Encoding::Other(_) => (self.max_bytes as usize, false),
+        }
+    }
     /// Its intervals as a camera's modes list them (158-DRV-0083): a list as given; a continuous range, its shortest and
     /// its longest (one when they are the same).
     pub fn listed(&self) -> Vec<u32> {
@@ -160,6 +172,8 @@ pub fn parse(config: &[u8]) -> Option<Camera> {
 
 impl Camera {
     fn yuy2(&self) -> impl Iterator<Item = &FrameSize> + Clone { self.frames.iter().filter(|f| f.encoding == Encoding::Yuy2) }
+    // The frame sizes the gateway turns into pictures: YUY2, and Motion JPEG (158-DRV-0084).
+    fn decoded(&self) -> impl Iterator<Item = &FrameSize> + Clone { self.frames.iter().filter(|f| matches!(f.encoding, Encoding::Yuy2 | Encoding::Mjpeg)) }
 
     /// Every mode (158-DRV-0083), in the order of the descriptors: each frame size of each format at each interval it
     /// lists. The same descriptors give the same list.
@@ -179,17 +193,26 @@ impl Camera {
         Some(self.alternates.iter().map(|a| a.bytes().saturating_sub(12) as u64 * (a_second >> (a.interval.clamp(1, 16) - 1))).max().unwrap_or(0))
     }
 
-    /// The frame size to stream for a picture of `width` × `height`: of the YUY2 ones (what the gateway converts), the
-    /// smallest that holds it, else the largest.
-    pub fn choose(&self, width: u16, height: u16) -> Option<&FrameSize> {
-        let area = |f: &&FrameSize| f.width as u32 * f.height as u32;
-        self.yuy2().filter(|f| f.width >= width && f.height >= height).min_by_key(area).or_else(|| self.yuy2().max_by_key(area))
+    /// The frame size to stream for a picture of `width` × `height` at `rate` a second, of those the gateway decodes
+    /// (YUY2 and MJPEG, 158-DRV-0084): the smallest that holds the picture and reaches the rate, YUY2 before MJPEG at one
+    /// size since it needs no decoding; else of those that hold it, the one of the highest rate, the smaller and YUY2
+    /// first; else the largest.
+    pub fn choose(&self, width: u16, height: u16, rate: u32) -> Option<&FrameSize> {
+        let area = |f: &FrameSize| f.width as u32 * f.height as u32;
+        let jpeg = |f: &FrameSize| f.encoding == Encoding::Mjpeg;
+        let holding = self.decoded().filter(|f| f.width >= width && f.height >= height);
+        holding.clone().filter(|f| f.max_rate() >= rate).min_by_key(|f| (area(f), jpeg(f)))
+            .or_else(|| holding.max_by_key(|f| (f.max_rate(), core::cmp::Reverse(area(f)), !jpeg(f))))
+            .or_else(|| self.decoded().max_by_key(|f| (area(f), !jpeg(f))))
     }
 
-    /// The largest YUY2 frame size no wider than `limit` (the smallest if all are wider): what the gateway offers.
+    /// The largest YUY2 frame size no wider than `limit` (the smallest if all are wider): what the gateway offers. A
+    /// camera without YUY2 offers its Motion JPEG sizes so.
     pub fn largest(&self, limit: u16) -> Option<&FrameSize> {
         let area = |f: &&FrameSize| f.width as u32 * f.height as u32;
-        self.yuy2().filter(|f| f.width <= limit).max_by_key(area).or_else(|| self.yuy2().min_by_key(area))
+        let yuy2 = self.yuy2().next().is_some();
+        let all = || self.decoded().filter(move |f| !yuy2 || f.encoding == Encoding::Yuy2);
+        all().filter(|f| f.width <= limit).max_by_key(area).or_else(|| all().min_by_key(area))
     }
 
     /// The alternate setting to stream with: the one moving the fewest bytes an interval that still carries `bytes`
@@ -298,6 +321,8 @@ impl Assembler {
 
     /// The last good frame.
     pub fn ready(&self) -> &[u8] { &self.ready }
+    /// The most bytes a frame may have.
+    pub fn capacity(&self) -> usize { self.capacity }
 }
 
 /// Payloads from a bulk endpoint (158-DRV-0072): a payload of up to `max` bytes (the committed dwMaxPayloadTransferSize)

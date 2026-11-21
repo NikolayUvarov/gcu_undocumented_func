@@ -82,6 +82,22 @@ pub fn yuy2_scaled_rows(source: &[u8], width: usize, height: usize, out: &mut [u
     }
 }
 
+/// Row `y` of a picture `row.len()` wide and `height` tall (a decoded Motion JPEG frame's, 158-DRV-0084) into the rows of
+/// `out_width` × `out_height` pixels that take it, each pixel the nearest one, as `yuy2_scaled` samples: given every row
+/// in turn, the picture scaled.
+pub fn scale_row(y: usize, row: &[u32], height: usize, out: &mut [u32], out_width: usize, out_height: usize) {
+    let width = row.len();
+    if width == 0 || height == 0 || y >= height { return; }
+    // The output rows whose source row is y: from the first with oy · height / out_height ≥ y.
+    let mut oy = (y * out_height).div_ceil(height);
+    while oy < out_height && oy * height / out_height == y {
+        if let Some(line) = out.get_mut(oy * out_width..(oy + 1) * out_width) {
+            for (x, p) in line.iter_mut().enumerate() { *p = row[x * width / out_width]; }
+        }
+        oy += 1;
+    }
+}
+
 // One pixel from its luma and its pair's chroma (BT.601 limited range).
 fn yuv(luma: u8, u: u8, v: u8) -> u32 {
     let (c, u, v) = (298 * (luma as i32 - 16), u as i32 - 128, v as i32 - 128);
