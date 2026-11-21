@@ -97,7 +97,8 @@ impl Usb {
             if let Some(before) = self.attached.replace(found) { self.wait(before); }
             changed = true;
         }
-        if changed { (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head) = (0, 0, false, false, 0, 0); }
+        // The counts of packets played are the last stream's: they are not another device's.
+        if changed { (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head, self.sent, self.silent) = (0, 0, false, false, 0, 0, 0, 0); }
         changed
     }
 
@@ -142,7 +143,7 @@ impl Usb {
             if self.host.control(a.handles[0], 0x80, 6, 0x0100, 0, 18).is_ok() {
                 mind::println!("[AUDIO] USB {:04X}:{:04X} AGAIN: THE DEVICE SET UP AFTER IT WENT", a.name[0], a.name[1]);
                 self.attached = Some(a);
-                (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head) = (0, 0, false, false, 0, 0);
+                (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head, self.sent, self.silent) = (0, 0, false, false, 0, 0, 0, 0);
                 self.looked = mind::time::uptime_ms() as u64;
                 return true;
             }
