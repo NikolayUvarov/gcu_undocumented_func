@@ -24,10 +24,12 @@ impl<B:DeviceIo> FilterChange<'_,'_,'_,'_,'_,B>{
         let remaining=self.session.left(self.deadline)?;self.session.live(remaining.min(10_000))?;
         self.session.left(self.deadline)?;Ok(())
     }
-    pub(crate) fn command_cam(&mut self,body:&[u8;60])->Result<(),Cause>{
+    pub(crate) fn command_cam(&mut self,body:&[u8;60])->Result<(),Cause>{self.command(6,0,body)}
+    /// One MAC H2C (category 1) of `class` and `function`, awaited to its done acknowledgement.
+    pub(crate) fn command(&mut self,class:u8,function:u8,body:&[u8])->Result<(),Cause>{
         self.live()?;
         let mut handler=Dispatcher{queue:self.queue,filter:None,counts:self.counts,error:None};
-        self.session.command_deadline_with(h2c::Command{category:1,class:6,function:0},body,
+        self.session.command_deadline_with(h2c::Command{category:1,class,function},body,
             h2c::Acks{received:false,done:true},self.deadline,&mut handler)
             .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
         self.session.left(self.deadline)?;Ok(())
@@ -49,6 +51,24 @@ impl<B:DeviceIo> FilterChange<'_,'_,'_,'_,'_,B>{
 }
 
 impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
+    /// The firmware told of the station's link (213-DRV-0091): with `aid`, connected to the filter's BSS with that
+    /// association ID, as Linux's rtw89_core_sta_link_assoc sends its join info and address CAM; None, no link again.
+    /// The port's registers stay as the station stage set them.
+    pub(crate) fn connect(&mut self,aid:Option<u16>,timeout_us:u32)->Result<(),Failure>{
+        Self::request(timeout_us)?;
+        if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
+        let deadline=match self.deadline(timeout_us).and_then(|d|{let d=self.live(d)?;self.reconcile(d)?;Ok(d)}){
+            Ok(deadline)=>deadline,Err(cause)=>return Err(self.runtime_failure(cause)),
+        };
+        let mut update=FilterChange{session:&mut self.session,queue:self.queue,counts:&mut self.counts,
+            attempt:self.prepared.tuned.attempt,command:self.prepared.command,channel:self.prepared.tuned.channel,
+            policy:self.prepared.tuned.policy_version,board_mac:self.prepared.board.identity.mac,deadline};
+        match self.prepared.station.connect(&mut update,aid){
+            Ok(())=>self.reconcile(deadline).map(|_|()).map_err(|cause|self.runtime_failure(cause)),Err(station::FilterFailure{stage,cause,..})=>{
+                let mut failure=self.runtime_failure(cause);failure.stage=Stage::Filter(stage);Err(failure)
+            },
+        }
+    }
     /// The existing raw-six-byte wlanhw policy is retained; publication follows actual CAM completion and epoch drain.
     pub(crate) fn set_filter(&mut self,all_beacons:bool,bssid:[u8;6],own:[u8;6],timeout_us:u32)->Result<(),Failure>{
         Self::request(timeout_us)?;
