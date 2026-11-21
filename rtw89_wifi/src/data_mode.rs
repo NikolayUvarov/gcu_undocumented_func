@@ -29,6 +29,44 @@ const SER_DBG_INFO:usize=0x8424;
 const UNREADABLE:u32=0xdead_beef;
 const UNREADABLE_TRIES:u32=8;
 const UNREADABLE_GAP_US:u32=2_000;
+// 213-DRV-0091: the firmware's error status, taken as Linux's rtw89_mac_get_err_status takes it (mac.c): HALT_C2H_CTRL
+// nonzero, then HALT_C2H read and HALT_C2H_CTRL cleared. Read at each data-mode check; nothing is answered to the firmware.
+const HALT_C2H_CTRL:usize=0x164;
+const HALT_C2H:usize=0x16c;
+const FIRMWARE_ERRORS_KEPT:usize=4;
+/// A firmware error code's level, as ser.c's rtw89_ser_notify reads it (213-DRV-0091).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub enum Level{L0,L1,L2,#[default]Unknown}
+/// HALT_C2H's code after mac.c's scenario mapping, by mac.h's mac_ax_err_info name, with its level and ser.c's event.
+pub fn firmware_error(raw:u32)->(u32,&'static str,Level,&'static str){
+    let code=match raw>>28{1=>0x5000,2=>0x3000,3=>0x4000,_=>raw};
+    let(name,level,event)=match code{
+        0x0001=>("L0_ERR_CMAC0",Level::L0,"SER_EV_L0_RESET"),
+        0x0002=>("L0_ERR_CMAC1",Level::L0,"SER_EV_L0_RESET"),
+        0x0003=>("L0_RESET_DONE",Level::L0,"SER_EV_L0_RESET"),
+        0x0010=>("L0_PROMOTE_TO_L1",Level::L1,"SER_EV_L1_RESET (M1)"),
+        0x0999=>("L1_PREERR_DMAC",Level::L1,"SER_EV_L1_RESET_PREPARE (PRE-M0)"),
+        0x1000=>("L1_ERR_DMAC",Level::L1,"SER_EV_L1_RESET (M1)"),
+        0x1001=>("L1_RESET_DISABLE_DMAC_DONE",Level::L1,"SER_EV_DO_RECOVERY (M3)"),
+        0x1002=>("L1_RESET_RECOVERY_DONE",Level::L1,"SER_EV_MAC_RESET_DONE (M5)"),
+        0x1010=>("L1_PROMOTE_TO_L2",Level::L2,"SER_EV_L2_RESET"),
+        0x1011=>("L1_RCVY_STOP_DONE",Level::L1,"NONE"),
+        0x2400=>("L2_RESET_DONE",Level::L2,"SER_EV_L2_RESET"),
+        0x2599=>("L2_ERR_WDT_TIMEOUT_INT",Level::L2,"SER_EV_L2_RESET"),
+        0x3000=>("CPU_EXCEPTION",Level::L2,"SER_EV_L2_RESET"),
+        0x4000=>("ASSERTION",Level::L2,"SER_EV_L2_RESET"),
+        0x5000=>("RXI300",Level::L2,"SER_EV_L2_RESET"),
+        0x2000..=0x5001=>("L2_ERR",Level::L2,"SER_EV_L2_RESET"),
+        _=>("UNKNOWN",Level::Unknown,"NONE"),
+    };(code,name,level,event)
+}
+/// The firmware's n-th error code, as read (213-DRV-0091): HALT_C2H_CTRL and HALT_C2H, SER_DBG_INFO then, and the code by
+/// mac.h's name with its level and ser.c's event.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct FirmwareError{pub count:u32,pub ctrl:u32,pub raw:u32,pub ser:u32,pub code:u32,pub name:&'static str,pub level:Level,pub event:&'static str}
+/// The firmware's error codes by level since the data mode began (213-DRV-0091).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Errors{pub l0:u32,pub l1:u32,pub l2:u32,pub unknown:u32}
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
 pub(crate) const SCHEDULER:u16=0x010f;
@@ -142,6 +180,8 @@ pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,grace_us:u64,
     // 213-DRV-0091: the station checks that met an unreadable CMAC domain and went on, and the last, for the service's line.
     unreadables:u32,unreadable:Option<Unreadable>,
+    // 213-DRV-0091: the firmware's error codes read and not yet taken, oldest first.
+    firmware_errors:[FirmwareError;FIRMWARE_ERRORS_KEPT],firmware_pending:usize,
 }
 /// A station register check that met an unreadable CMAC domain and went on (213-DRV-0091): the n-th, the register and
 /// the value it read first, the reads until it answered and over how long, SER_DBG_INFO before and after, and whether a
@@ -155,7 +195,7 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
@@ -198,7 +238,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn activate(session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>)
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
-            ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None};
+            ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None,
+            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
         own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
     }
@@ -309,6 +350,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     fn live(&mut self,deadline:u64)->Result<u64,Cause>{
         if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
+        self.firmware_status(deadline)?;
         let mut deadline=self.outlast_ser(deadline,false)?;
         let mut result=self.checks(deadline).and_then(|()|self.permits(deadline));
         // 213-DRV-0091: a station check that met an unreadable CMAC domain, and what it was then.
@@ -351,6 +393,26 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
                 Err(cause)=>return Err(cause),
             }
         }
+    }
+    // 213-DRV-0091: the firmware's error status, as mac.c's rtw89_mac_get_err_status takes it, counted and kept for the line.
+    fn firmware_status(&mut self,deadline:u64)->Result<(),Cause>{
+        let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+        let read=(||->io::Result<Option<(u32,u32,u32)>>{
+            // All ones is a device that does not answer, which the checks report.
+            let ctrl=io::read32(&mut window,HALT_C2H_CTRL)?;if ctrl==0||ctrl==u32::MAX{return Ok(None)}
+            let raw=io::read32(&mut window,HALT_C2H)?;window.write32(HALT_C2H_CTRL,0)?;
+            Ok(Some((ctrl,raw,io::read32(&mut window,SER_DBG_INFO)?)))
+        })();
+        self.session.last=window.last;
+        let Some((ctrl,raw,ser))=read.map_err(Cause::Register)? else{return Ok(())};
+        let(code,name,level,event)=firmware_error(raw);let e=&mut self.counts.errors;
+        match level{Level::L0=>e.l0=e.l0.saturating_add(1),Level::L1=>e.l1=e.l1.saturating_add(1),Level::L2=>e.l2=e.l2.saturating_add(1),
+            Level::Unknown=>e.unknown=e.unknown.saturating_add(1)}
+        let count=e.l0.saturating_add(e.l1).saturating_add(e.l2).saturating_add(e.unknown);
+        // Kept until taken; beyond FIRMWARE_ERRORS_KEPT only counted, the line's n showing the gap.
+        if self.firmware_pending<FIRMWARE_ERRORS_KEPT{
+            self.firmware_errors[self.firmware_pending]=FirmwareError{count,ctrl,raw,ser,code,name,level,event};self.firmware_pending+=1;}
+        Ok(())
     }
     fn permits(&mut self,deadline:u64)->Result<(),Cause>{let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;Ok(())}
     fn checks(&mut self,deadline:u64)->Result<(),Cause>{
@@ -452,6 +514,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn take_recovery(&mut self)->Option<Recovery>{self.recovery.take()}
     /// The last station check that met an unreadable CMAC domain and went on (213-DRV-0091), once.
     pub(crate) fn take_unreadable(&mut self)->Option<Unreadable>{self.unreadable.take()}
+    /// The oldest firmware error code read and not yet taken (213-DRV-0091).
+    pub(crate) fn take_firmware_error(&mut self)->Option<FirmwareError>{
+        if self.firmware_pending==0{return None}
+        let first=self.firmware_errors[0];self.firmware_errors.copy_within(1..,0);self.firmware_pending-=1;Some(first)
+    }
     /// The SNAPSHOT registers now, read only.
     pub(crate) fn registers(&mut self)->Snapshot{
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))

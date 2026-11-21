@@ -177,6 +177,39 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - The measurement: one night. It says whether L1 requests come and go unanswered, which would need the handshake, or the recoveries are L0 only.
   - The masks match Linux, so changing them would only move away from the reference without a reason.
 
+**2026-11-22, the firmware's error codes read** (branch `claude/213-DRV-0091-the-firmwares-error-codes`, on the mended check; host cases, not yet run on the Ryzen):
+- **`data_mode.rs`, `firmware_status()`,** runs at the start of each data-mode check (`live()`). It reads HALT_C2H_CTRL (0x164). When that is nonzero and not all ones, it:
+  - reads HALT_C2H (0x16C) and SER_DBG_INFO;
+  - clears HALT_C2H_CTRL, as `rtw89_mac_get_err_status` does (mac.c);
+  - counts the code by its level and keeps up to 4 for the service's lines.
+
+  Nothing is answered to the firmware: no M2 or M4 is sent, and HALT_H2C and its control are not written.
+- **`firmware_error()`** names the code as mac.h's `mac_ax_err_info` does, after mac.c's scenario mapping (bits 31:28 of 1, 2 and 3 become RXI300, CPU_EXCEPTION and ASSERTION). It gives the level and the event ser.c's `rtw89_ser_notify` makes of it:
+  - L0: ERR_CMAC0/1 and L0_RESET_DONE, which become SER_EV_L0_RESET;
+  - L1: L0_PROMOTE_TO_L1, L1_PREERR_DMAC, L1_ERR_DMAC, L1_RESET_DISABLE_DMAC_DONE and L1_RESET_RECOVERY_DONE, the steps pre-M0, M1, M3 and M5;
+  - L2: L1_PROMOTE_TO_L2 and 0x2000 to MAC_AX_GET_ERR_MAX;
+  - L1_RCVY_STOP_DONE is in mac.h's L1 group, but ser.c makes no event of it;
+  - anything else is UNKNOWN.
+- **The lines:**
+
+  ```
+  [RTW89] THE FIRMWARE'S ERROR CODE n: HALT_C2H <raw> (CTRL <ctrl>) = MAC_AX_ERR_<name> <code>, <level> (<ser.c event>); SER_DBG_INFO <v>; NOT ANSWERED (213-DRV-0091)
+  ```
+
+  Each minute also has `[RTW89] TRAFFIC ON c: THE FIRMWARE'S ERROR CODES a L0, b L1, c L2, d UNKNOWN (213-DRV-0091)`, counted since the data mode began.
+- **What this cannot see:**
+  - Linux takes each code on the halt C2H interrupt (pci.c), and this driver only at its checks. If the firmware writes a new code over an unread one, only the last is seen.
+  - Codes posted outside the data mode are not read.
+- **Host case:** `service_reads_the_firmwares_error_codes_names_their_level_and_answers_nothing` (tests/rtw89_service_cases.rs). The model posts each code in HALT_C2H with the CTRL set once the CTRL reads clear. It posts:
+  - an L0 recovery's two codes;
+  - an L1_ERR_DMAC;
+  - an assertion by its scenario bits;
+  - an unknown code.
+
+  Each is read once, in order, with its name and level. Nothing is written to HALT_H2C or its control. The minute's line counts 2 L0, 1 L1, 1 L2 and 1 unknown, and traffic goes on.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

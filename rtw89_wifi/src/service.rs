@@ -154,6 +154,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn take_recovery(&mut self)->Option<data_mode::Recovery>{self.data().take_recovery()}
     #[cfg(test)]
     pub(crate) fn take_unreadable(&mut self)->Option<data_mode::Unreadable>{self.data().take_unreadable()}
+    #[cfg(test)]
+    pub(crate) fn take_firmware_error(&mut self)->Option<data_mode::FirmwareError>{self.data().take_firmware_error()}
     /// Whether a country that refuses the channel stops sending (wlanhw 1.2), or is only logged (KEEP_SENDING).
     #[cfg(test)]
     pub(crate) fn strict(mut self,on:bool)->Self{self.strict=on;self}
@@ -332,7 +334,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let bssid=self.data().filter().map_or([0;6],|f|f.bssid());
         let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
             ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,
-            refused:(self.minutes==1&&c.refused.count!=0).then_some(c.refused),sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
+            refused:(self.minutes==1&&c.refused.count!=0).then_some(c.refused),sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe,
+            errors:c.errors};
         if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
     }
     // The counts now, for a hole's lines.
@@ -495,6 +498,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
                 events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,
                     ser_before:u.ser_before,ser_after:u.ser_after,recovered:u.recovered})}
+            while let Some(e)=self.owner.as_deref_mut().and_then(|data|data.take_firmware_error()){
+                events(Event::FirmwareError{count:e.count,ctrl:e.ctrl,raw:e.raw,ser:e.ser,code:e.code,name:e.name,level:e.level,event:e.event})}
             if !more{break}
         }self.stop()
     }
