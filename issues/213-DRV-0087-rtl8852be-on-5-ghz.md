@@ -102,7 +102,12 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 - The signal the driver reports for a frame is 0 (not measured) on both bands: the 8-byte header's byte 2 was never filled by this driver. So NET's "strongest wins" picks by the scan's order here, not by signal.
 - **Not done there:** nothing was sent on 5 GHz. Under RU the station does not go there, and channel 100 is outside RU's and UZ's rules (see above).
 
-**Not done yet:** the coexistence on 5 GHz (role, policy, antenna); a transmission, a calibration and a join on 5 GHz on the Ryzen, which wait for a lawful channel and country (above).
+**2026-11-21, the coexistence on 5 GHz and the admission end to end:**
+- **The station connected on 5 GHz** is told as Linux's `_action_wl_5g`: the role (`rtw89_fw_h2c_cxdrv_role_v2` with link mode `BTC_WLINK_5G` and the role's band 1), the antenna W5G (WLAN's grant forced high, Bluetooth's left to hardware, no pollution table: grants `33003300`, 0xC67C = `100`, control by WLAN), the policy OFF_EQ0 (OFF slot `FFFFFFFF`, TDMA off), AFH off; no S1 standby (`_set_rf_trx_para` keeps it off for a 5G link). The coexistence's BTG rule leaves BTG off while the band calibrated or connected on is 5 GHz (`_set_btg_ctrl`), and its AFH never names a 5 GHz channel. The Linux reference shows the same link mode, policy, antenna and AFH there.
+- **Two 2.4 GHz assumptions the end-to-end case found:** the calibration's TSSI power check read the 2.4 GHz MCS limit (it takes the band's now), and the data mode's register check wanted the channel number in 0x734 and RF18 without its band fields (it wants `rtw89_encode_chan_idx` and the band fields now). Either would have stopped a 5 GHz admission on the machine.
+- **Host cases:** the 5 GHz role and OFF_EQ0 against Linux's layouts; the whole admission on channel 100 in the models (channel stage, IQK, TSSI, DPK, station, data mode) and the first reconcile's role, policy and AFH; the TSSI power check on 5 GHz. All 39 `rtw89_*_host.rs` files pass; the 2.4 GHz cases unchanged.
+
+**Not done yet:** a transmission, a calibration and a join on 5 GHz on the Ryzen, which wait for a lawful channel and country (above); the coexistence's TDMA policies for a busy Wi-Fi beside a busy Bluetooth (not ported on 2.4 GHz either, 213-DRV-0052).
 
 ## Related
 
