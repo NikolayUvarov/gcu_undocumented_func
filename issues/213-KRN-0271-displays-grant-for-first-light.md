@@ -43,6 +43,15 @@ DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeon
 
 **Made** on `claude/213-KRN-0271-displays-grant-for-first-light`, on 0270's branch.
 
+**Runs in this session's container** (QEMU 8.2.2, OVMF):
+- `tests/pci_control_host.rs`: 9 of 9;
+- the x86 build, and the aarch64 build of `kernel`, `init` and `display`;
+- x86's `boot`, `services`, `ahci`, `usb` and `display` suites on 4 CPUs: 34 PASS, no failure. One SKIP: no updater stand-in was built for the update zone's check. Every PCI grant of those boots goes through the changed transition; `display` is `NOT STARTED: NO DEVICE`.
+
+**Left:**
+- the gate's groups;
+- DRV's run on the Ryzen, with the lines the acceptance criteria name.
+
 ## Related
 
 [213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
