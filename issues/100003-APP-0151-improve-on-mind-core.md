@@ -1,6 +1,6 @@
 # 100003-APP-0151 — `improve` on MIND Core: the console
 
-**Type:** program (MIND Core) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (done in QEMU on x86, 2026-11-21; long texts wait for NET) · **Blocked by:** `NET`, for a thread's long texts alone: `parse.json`'s strings longer than 512 bytes ([requests-NET.md](requests-NET.md#parsejson-strings-longer-than-512-bytes-for-100003-app-0151)). The rest does not wait · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 4 · **Roadmap:** track G · **Constitution:** MC-10.2, MC-10.7, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1
+**Type:** program (MIND Core) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (done in QEMU on x86, 2026-11-21; long texts wait for NET, the running release for UPD and KRN) · **Blocked by:** `NET`, for a thread's long texts alone: `parse.json`'s strings longer than 512 bytes ([requests-NET.md](requests-NET.md#parsejson-strings-longer-than-512-bytes-for-100003-app-0151)); `UPD` and `KRN`, for the running release read by itself: a reading client of the updater ([requests-UPD.md](requests-UPD.md#a-client-of-the-updater-that-may-only-read-its-state-for-100003-app-0151), [requests-KRN.md](requests-KRN.md#a-reading-client-of-the-updater-lent-to-a-program-for-100003-app-0151)). The rest does not wait · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 4 · **Roadmap:** track G · **Constitution:** MC-10.2, MC-10.7, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1
 
 ## Problem
 
@@ -54,9 +54,17 @@ A MIND machine has no client of MIND Hub. The separate hub answers `hub-api 2`, 
   - **`watch [--once]`.**
   - **`export FILE`,** written as it came into a user's file. On the way: libmind's file calls go through the lent client only after `use_endpoint(SLOT_FILE)`, as `get` does.
   - The `hub` suite checks each, and passes on x86.
+- **Then the user's check of the result** (design 6.3):
+  - `show N` of a delivered request says whether the release that carries it is on this machine, as the hub knows its version. If not: `your machine does not have release R yet (it runs V): update apply, or wait for the update`.
+  - Once it is, the check waits: `list` marks it, `watch` names it, `show N` names the command.
+  - `check N VERDICT "TEXT"` checks on the release the machine runs; `--release R` names another.
+  - `improve_proto::runs_release` is the hub's rule, and `tools/mindhub` uses it from there.
+  - The `hub` suite goes on to the verdict: the request accepted, worked, landed and delivered by the agents and the admin; the machine at an unknown version, then an older one, then the release; `works` verifies it.
+  - It passes on x86. `improve/proto`'s tests (13), `mindhub`'s (33) and `improve/host`'s (2) pass.
+- **The running release by itself:** `improve` may not get the shell's client of the updater, which may update the machine. A client that may only read the updater's state is asked of UPD and KRN ([requests-UPD.md](requests-UPD.md), [requests-KRN.md](requests-KRN.md)). Until then the user tells the hub with `improve version`, reading `update status`.
 - **Left:**
   - long texts and answers past 16 KiB, once NET's change to `parse` is in `main` (its record in [requests-NET.md](requests-NET.md));
-  - the running release taken from the updater by itself.
+  - the running release taken from the updater by itself, once that client is in `main`.
 
 ## Related
 

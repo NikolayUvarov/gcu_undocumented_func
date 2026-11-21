@@ -227,7 +227,7 @@ Every request has a thread. Its messages:
 ### 6.3 The user's check of the result
 
 1. **When the request is `delivered`,** `improve` on the user's device compares the version the device runs with the release that carries it:
-   - older: `YOUR MACHINE DOES NOT HAVE RELEASE 202611201200 YET: update apply OR WAIT FOR THE UPDATE`;
+   - older: `your machine does not have release 202611201200 yet (it runs 202611191200): update apply, or wait for the update`;
    - the same or later: the request is `awaiting-check`, and the `result` message's steps are shown.
 2. **`improve check N`** asks the verdict:
    - `works` → `verified`, and the request is closed;

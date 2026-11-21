@@ -372,3 +372,14 @@ fn the_parse_services_flat_values_make_the_same_tree() {
     assert_eq!(tree(&deep), Err(json::Error::TooDeep));
 }
 
+
+#[test]
+fn a_machine_runs_a_release_at_or_past_it() {
+    use improve_proto::runs_release;
+    assert!(runs_release("202611211200", "202611211200"));
+    assert!(runs_release("202611211300", "202611211200"));
+    assert!(!runs_release("202611201200", "202611211200"));
+    assert!(!runs_release("unknown", "202611211200"));
+    assert!(!runs_release("2026112112000", "202611211200"), "another length compares only as the same");
+    assert!(runs_release("beta-2", "beta-2") && !runs_release("beta-3", "beta-2"));
+}

@@ -45,8 +45,9 @@ const USAGE: &str = "usage: improve COMMAND
   status | answer \"TEXT\"
   new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--attach KIND:FILE]... [--yes]
   list | show N | watch [--once]
-  reply N \"TEXT\" [--answer Q [--attach KIND:FILE]...] | check N works|partly|does-not-work RELEASE \"TEXT\" [--attach KIND:FILE]...
-  version RELEASE                         the release this machine runs, told to the hub
+  reply N \"TEXT\" [--answer Q [--attach KIND:FILE]...]
+  check N works|partly|does-not-work \"TEXT\" [--release RELEASE] [--attach KIND:FILE]...   on the release this machine runs
+  version RELEASE                         the release this machine runs (update status), told to the hub
   devices | pair | revoke DEVICE | delete N | export FILE
   (an attachment's KIND: log, hardware, screenshot or text)";
 
@@ -436,7 +437,8 @@ fn run(args: &[String]) -> Result<(), String> {
             let all = list(&v, "requests");
             if all.is_empty() { mind::println!("no requests"); }
             for r in all {
-                let mark = if flag(r, "open_question") { "  [a question for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" } else { "" };
+                let mark = if flag(r, "open_question") { "  [a question for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" }
+                           else if s(r, "state") == "awaiting-check" { "  [waits for your check]" } else { "" };
                 mind::println!("{:>5}  {:<16} {}{mark}", n(r, "id"), s(r, "state"), s(r, "title"));
             }
             Ok(())
@@ -448,6 +450,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let r = v.get("request").unwrap_or(&Value::Null);
             let task = match (r.get("track").and_then(Value::as_str), r.get("task").and_then(Value::as_str)) { (Some(t), Some(k)) => format!(", {t} {k}"), _ => String::new() };
             mind::println!("#{} {}\n{} {}, {}{task}\n\n{}\n", n(r, "id"), s(r, "title"), s(r, "kind"), s(r, "visibility"), s(r, "state"), s(r, "text"));
+            if let Some(note) = check_note(&mut hub, r)? { mind::println!("{note}\n"); }
             for p in list(r, "thread") {
                 let extra = match s(p, "kind") {
                     "answer" => format!(" to #{}", n(p, "answers")),
@@ -471,8 +474,17 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("check") => {
             let id = number(word(1, "the request's number")?)?;
             let verdict = Verdict::from_name(word(2, "the verdict")?).ok_or("a verdict is works, partly or does-not-work")?;
-            post(id, Message { kind: MessageKind::Verdict, text: String::from(word(4, "what you saw")?), answers: None, verdict: Some(verdict),
-                               release: Some(String::from(word(3, "the release you checked on")?)), attachments: Vec::new() }, args)
+            let text = String::from(word(3, "what you saw")?);
+            // The release checked on: the one this machine runs, as the hub knows it, unless named.
+            let release = match value("--release") {
+                Some(release) => String::from(release),
+                None => {
+                    let version = String::from(s(&Hub::open()?.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?, "version"));
+                    if version.is_empty() || version == "unknown" { return Err("the hub does not know the release this machine runs: improve version RELEASE, or --release RELEASE".into()); }
+                    version
+                }
+            };
+            post(id, Message { kind: MessageKind::Verdict, text, answers: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() }, args)
         }
         Some("watch") => watch(has("--once")),
         Some("export") => {
@@ -544,6 +556,24 @@ fn post(id: u64, message: Message, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// What a delivered request asks of the user (6.3): the release that carries it is not on this machine yet, or it is,
+/// and the user's check waits.
+fn check_note(hub: &mut Hub, r: &Value) -> Result<Option<String>, String> {
+    let (id, release) = (n(r, "id"), s(r, "release"));
+    Ok(match s(r, "state") {
+        "delivered" => {
+            let version = String::from(s(&hub.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?, "version"));
+            if version.is_empty() || version == "unknown" {
+                Some(format!("release {release} carries it; the hub does not know the release this machine runs: improve version RELEASE (update status names it)"))
+            } else if improve_proto::runs_release(&version, release) { None } else {
+                Some(format!("your machine does not have release {release} yet (it runs {version}): update apply, or wait for the update"))
+            }
+        }
+        "awaiting-check" => Some(format!("release {release} is on this machine: check it, improve check {id} works|partly|does-not-work \"WHAT YOU SAW\"")),
+        _ => None,
+    })
+}
+
 /// News since the last look, kept in its own directory as `seen`: a request that changed, a question that waits.
 /// `--once` looks once; otherwise it looks at the hub's interval until Esc.
 fn watch(once: bool) -> Result<(), String> {
@@ -554,7 +584,9 @@ fn watch(once: bool) -> Result<(), String> {
         let v = hub.expect(Method::Get, &format!("/hub/v1/requests?since={}", since + 1), b"", &[200])?;
         let changed = list(&v, "requests");
         for r in changed {
-            let question = if flag(r, "open_question") { ", a question waits for you" } else { "" };
+            let question = if flag(r, "open_question") { String::from(", a question waits for you") } else {
+                match s(r, "state") { "delivered" => format!(" in release {}", s(r, "release")), "awaiting-check" => String::from(", it waits for your check"), _ => String::new() }
+            };
             mind::println!("request {}: {}{question} (improve show {})", n(r, "id"), s(r, "state"), n(r, "id"));
             since = since.max(n(r, "since_ms"));
         }
