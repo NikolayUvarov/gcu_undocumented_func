@@ -200,6 +200,30 @@ dropped:
 The machine kept answering after the reads. These values are evidence for that machine, that boot and that build
 (MC-12.1).
 
+**Run 3** (`BATCHES_ALLOWED` 3): release 202611211911, slot A confirmed 19:17 UTC; 237 `[DISPLAY]` lines, none
+dropped.
+- B1 the same ten values as run 1.
+- B2, 76 registers: `B2 OTG0: RUNNING 1, CLOCK_ON 1, FROM OPP 0; 2560x1600 TOTAL 2720x1646 H+ V-`, which is DP-2's
+  preferred timing (the survey's EDID table) and the loader's GOP mode. `OTG0_OTG_CONTROL` reads 80011301 and
+  `OTG0_OTG_CLOCK_CONTROL` 00010101. `B2 OTG1`, `OTG2` and `OTG3`: `RUNNING 0, CLOCK_ON 0, FROM OPP n; NO TIMING IN ITS
+  REGISTERS`; each `OTG_CONTROL` reads 80000300 and every timing register reads 0. So the firmware runs one OTG, OTG0
+  from OPP0, as the survey expected.
+- B3, 8 registers: every `DOMAINn_PG_STATUS` reads 10000000, so `PGFSM_PWR_STATUS` (bits 31:30) is 0, on, in all
+  eight domains: `B3 PIPE n: HUBPn ON, DPPn ON` for n 0 to 3.
+- `STEP 1 DONE: 3 OF 7 BATCHES READ, 94 REGISTERS, NOTHING WRITTEN`, `94 REGISTERS READ, NONE WRITTEN`,
+  `COMMAND 0006 AFTER STEP 1`.
+
+Two findings; neither stops the next run:
+1. **The firmware leaves all four pipes powered**, not only the one it drives. So batch 4 reads the HUBP registers of
+   all four pipes (20), each in a domain batch 3 shows on. Step 3 counts a HUBP as the firmware's when it is powered
+   and its `HUBP_VTG_SEL` names OTG0. A powered HUBP that still names OTG0 is then refused for writes too: more is
+   refused, nothing more is written. Step 3 writes no HUBP, so its plan does not change. Batch 4 will show the HUBPs'
+   `HUBP_VTG_SEL`.
+2. **`OPTC_INPUT_GLOBAL_CONTROL` reads 80000000 in ODM1 to ODM3 and 00000000 in ODM0** (bit 31 set in the three
+   unused ODMs). The field at bit 31 is not decoded here: the Linux files in hand read only `OPTC_UNDERFLOW_CLEAR` of
+   this register. Step 3 writes `OPTC_INPUT_CLOCK_CONTROL`, not this register, and reads ODM0's copy after every stage
+   (it reads 0).
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
