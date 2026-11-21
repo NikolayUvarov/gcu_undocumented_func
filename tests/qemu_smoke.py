@@ -19968,12 +19968,22 @@ def main():
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
             # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
-            vm = VM(args, disk.relative_to(ROOT).as_posix(),
+            # The ahci suite's disk is a raw image (000-KRN-0267): vvfat's bytes past a file's end change between reads,
+            # and the restarted driver's medium comparison (000-KRN-0085) took that for another medium.
+            image = None
+            if suite == "ahci":
+                if not raw_tools():
+                    print("SKIP: ahci suite needs mkfs.fat and mtools", flush=True)
+                    continue
+                image = Path(tempfile.mkdtemp(prefix="smoke-ahci-", dir=ROOT / IMAGE))
+            vm = VM(args, (raw_fat_image(image)[0] if image else disk).relative_to(ROOT).as_posix(), raw=image is not None,
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
                     extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults"
                     else ["-drive", f"if=none,id=models,format=raw,readonly=on,file={models}", "-device", "virtio-blk-pci,drive=models"] if models else (),
                     tablet=suite == "tablet", usb_input=suite == "usb",
                     reboot=suite == "store")
+            if image:
+                vm.temporary.append(image)
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
