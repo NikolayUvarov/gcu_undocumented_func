@@ -210,6 +210,37 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
+**2026-11-22, two questions on the recoveries** (reading only: Linux 05f7e89's ser.c, mac.c, mac.h and pci.c, and the boot logs already fetched):
+- **When the firmware raises L1 and the host never answers, what does Linux's code say happens?**
+  - **The host's side only.** Each step of the handshake sets a 1000 ms alarm:
+    - after pre-M0, `ser_l1_reset_pre_st_hdl` answers with L1_RESET_START_DMAC and waits for M1;
+    - after M1, `ser_reset_trx_st_hdl` stops TX, DMA and RX, resets the rings, answers M2 (L1_DISABLE_EN) and waits for M3;
+    - after M3, `ser_do_hci_st_hdl` answers M4 (L1_RCVY_EN) and waits for M5.
+  - **Any alarm that runs out goes to SER_L2_RESET_ST.** Linux dumps the firmware's memory and backtrace, stops the core and calls `ieee80211_restart_hw`, a full restart of the device by the host. L2_RECFG_TIMEOUT (1000 ms) only logs.
+  - **What the firmware does by itself when the host stays silent, Linux's code does not say:** Linux always answers. mac.h has codes by which the firmware reports giving up:
+    - L1_PROMOTE_TO_L2 (0x1010), which ser.c turns into L2;
+    - L1_RCVY_STOP_DONE (0x1011), of which ser.c makes no event.
+
+    Whether the firmware posts them after a timeout of its own, and how long that is, is not in the code read.
+  - **So the night's codes decide.** If an L1 code (0x0999, 0x1000 or 0x0010) is followed by traffic coming back with no further code, the firmware resumed by itself, and the 3–6 s silences would be that. If it is followed by L1_PROMOTE_TO_L2, or by nothing until the stall detector restarts the driver after 10 s, the firmware stays halted. That restart is this driver's L2, about 9 s later than Linux's.
+- **What SER_DBG_INFO shows already:**
+  - Before any recovery it reads 0. After the n-th it reads F000000n: bits 31:28 are 15 and the low bits count.
+  - Bits 31:28 are B_AX_L0_TO_L1_EVENT_MASK (reg.h). mac.c's `rtw89_mac_dump_l0_to_l1` reads them as the cause of an L0 promoted to L1. 15 is mac.h's MAC_AX_L0_TO_L1_EVENT_MAX, not one of the six named causes (0 to 6).
+  - What 15 means to the firmware is not in Linux's code.
+- **Do the join info and the CAM change what the firmware does on a receive error, or is boot 62's count only its length?**
+  - The logs fetched so far: boots 55 to 62, with boot 59 only to 186 s and boot 60 to 902 s.
+  - A data mode's time runs from its first minute line less 60 s to its last line. A recovery is a step of SER_DBG_INFO's count, from the probe and stop lines, or a `FIRMWARE RECOVERY` line.
+
+  | Driver | Runs (boot: pid) | Data-mode time | Recoveries | Per hour |
+  |---|---|---|---|---|
+  | Before step 1 (no join info) | 55: 21, 56: 46, 58: 21, 59: 21, 60: 21 and 51, 61: 52 | 0.66 h | 1 (boot 59, at 157 s) | 1.5 |
+  | Step 1 (join info, CAM) | 60: 49, 61: 21 and 57, 62: 21, 49 and 50 | 1.87 h | 4 (all in boot 62) | 2.1 |
+
+  - **A recovery needs no association:** the old driver's boot 59 has one, with the firmware never told of a link.
+  - **The rates do not differ by more than the counts can show.** Five recoveries in 2.5 hours are too few to tell apart anything but a large difference. If both drivers had the same rate, the old driver's share of the time would give it about 1.3 of the 5; it has 1.
+  - **The traffic also differed.** Boot 62 carried the night's Effector traffic, and most of the old driver's time was in short daytime runs.
+  - **Still to read:** the rest of boot 59, boots 63 and 64, and the night's boots. They add old-driver time only from boot 59, so a fair comparison needs a night with the old driver too. No such night is planned.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
