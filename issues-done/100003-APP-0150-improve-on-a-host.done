@@ -1,0 +1,36 @@
+# 100003-APP-0150 — `improve` on any computer: MIND Hub's client for a host — done
+
+**Type:** host program (Linux, macOS) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), stage 5 · **Roadmap:** track G · **Constitution:** MC-10.2, MC-10.7, MC-11.5, MC-12.1
+
+## Problem
+
+The separate hub ([100003-APP-0146](100003-APP-0146-the-separate-hub.done), [0148](100003-APP-0148-the-hubs-remaining-parts.done)) answers `hub-api 2`. A person with a computer that is not a MIND machine reaches it through the hub's pages alone. The design gives every computer the same commands as MIND Core's `improve` ([docs/hub/README.md](../docs/hub/README.md), section 2).
+
+## Plan
+
+- **`improve/host`,** the program `improve`: its own Ed25519 key and the hub's address and pins in a directory of its own, each call signed over the hub's challenge by `tools/mindhub`'s client, TLS 1.3 to a pinned key.
+- **The design's commands:** `setup`, `register`, `status`, `answer`, `new`, `list`, `show`, `reply`, `check`, `watch`, `devices`, `pair`, `revoke`, `export`, `delete`, `delete-account`.
+- **What leaves the computer** is shown first and sent on a yes.
+- **The hub:** `GET /hub/v1/devices`, the user's devices, for `devices` and `revoke`.
+
+## Acceptance criteria
+
+- Host tests of every command against a hub on loopback, with what the hub then holds.
+- A run by hand against a hub over TLS, by its pin.
+
+## Resolution
+
+At the maintainer's word of 2026-11-21 («продолжай, что ещё в треке APP?»). [docs/hub/improve.md](../docs/hub/improve.md) says how to use it and what is tested.
+
+- **`improve/host`** (`src/lib.rs`, `src/main.rs`): the commands above.
+  - `--dir`, or `$XDG_CONFIG_HOME/mind-improve`, holds `hub.conf`, `device.key` (0600) and `seen`.
+  - A hub off loopback is reached by `https://` alone, with a pin.
+  - The proof of work is solved when the hub asks one.
+  - `new` and a reply with attachments show the request and each attachment's kind, name, size, SHA-256 and file, then ask `send it? [y/N]`.
+  - A refusal names the hub's limit and when it ends.
+- **`tools/mindhub`:** `GET /hub/v1/devices`, each with `this` for the asking device. The conformance suite checks it.
+- **Tests:**
+  - `improve/host/tests/improve.rs`, 2 tests: every command against a hub on loopback in the same process. Among them the admin's question answered, attachments read back by the admin and the agent, a phone paired and revoked, and the deleted words gone from the hub's journal.
+  - `tools/mindhub`: its 33 tests pass with the new route.
+  - By hand: `improve` against `mindhub serve` over TLS 1.3 with an Ed25519 certificate. The right pin registered, and a wrong one was refused, naming the hub key's hash.
+- **Not done:** Windows, where the key file's mode is not a Unix one; a log filtered by the kinds of its lines (design 9).

@@ -33,7 +33,7 @@ if ! {
         [[ "$X86_ONLY" == *" $crate "* || -n "${SEEN[$crate]:-}" ]] && continue
         SEEN[$crate]=1
         features=""; [[ "$crate" == virtio_net ]] && features=" --no-default-features"
-        printf '%s\t%s\t%s\n' "$crate" "$ROOT/$crate" "cargo build --release --target $TARGET$features"
+        printf '%s\t%s\t%s\n' "${crate//\//-}" "$ROOT/$crate" "cargo build --release --target $TARGET$features"
     done
 } | run_jobs "$LOGS" "$JOBS"; then
     echo "!!! aarch64 build failed: the failed builds are named above" >&2; exit 1

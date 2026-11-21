@@ -1,0 +1,15 @@
+[package]
+name = "improve"
+version = "0.1.0"
+edition = "2021"
+description = "MIND Hub's client for any computer: requests, their conversation, the user's check and their devices (100003-APP-0150)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The protocol's forms, signatures and JSON, and the hub's signing client with its pinned TLS 1.3.
+improve-proto = { path = "../proto" }
+mindhub = { path = "../../tools/mindhub" }
+httpd = { path = "../../tools/httpd" }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false }

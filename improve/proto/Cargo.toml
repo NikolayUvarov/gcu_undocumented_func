@@ -1,0 +1,17 @@
+[package]
+name = "improve-proto"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# MIND Hub's protocol, hub-api 1 (100003-APP-0145, docs/hub/README.md): its forms and bounds, the states, trust and its
+# buckets, the signatures, the proof of work and a strict JSON reader and writer. No libmind and no I/O, so `cargo test`
+# runs it on the host, and MIND Core's `improve`, the native hub and tools/mindhub link the same code.
+[dependencies]
+ed25519-dalek = { version = "2", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # no SHA-NI: the targets have no SSE in their ABI
+
+[profile.release]
+panic = "abort"
+opt-level = 3

@@ -1,0 +1,7 @@
+# The crate built alone for a target, to check it stays no_std: the targets have no SSE in their ABI, so curve25519-dalek
+# takes its portable backend, as the programs that link it set too.
+[target.x86_64-unknown-none]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\""]
+
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\""]
