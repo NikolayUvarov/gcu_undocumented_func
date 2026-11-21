@@ -67,8 +67,9 @@ A computer is given MIND Core today only as a raw disk image (`dist/mind-core-us
 - **OVMF takes the El Torito entry on a USB disk too,** ahead of the MBR. So the loader is given no partition (`BOOT: VOLUME UNKNOWN PARTITION 0 AT LBA 0`). vfs_server then mounts the volume that holds the manifest the loader verified, at the MBR partition's start, as 211-KRN-0012 does for a volume the firmware did not name. Naming the El Torito volume in `BootInfo` is a later step of this task.
 - **From a disc, the running system has no volume:** `ls` is not found, as no driver serves the CD drive. This is step 2.
 
+**Step 2, the volume in memory,** is [352-KRN-0268](352-KRN-0268-the-live-volume-in-memory.md) (the kernel track's part, an ABI change): from a disc and from a USB disk, the loader reads the El Torito volume into memory, `ramdisk#2` serves it read-only and `vfs_server` mounts it. Programs then run from a disc too.
+
 **Left:**
-- step 2, the volume in memory (KRN);
 - steps 3 to 5;
 - aarch64;
 - a real machine.

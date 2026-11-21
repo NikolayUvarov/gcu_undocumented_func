@@ -12,7 +12,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod keychain; mod mark; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_ELTORITO, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod edid; mod elf_reloc; mod keychain; mod mark; mod slots; mod verify;
 // The key file's format, the updater's and the parser's own (351-UPD-0029).
 #[path = "../../libmind/src/release.rs"]
 #[allow(dead_code)]
@@ -425,6 +425,13 @@ fn boot_volume(services: &BootServices, image: Handle) -> BootVolume {
     let device = unsafe { services.open_protocol::<LoadedImage>(params(image), OpenProtocolAttributes::GetProtocol) }.ok().and_then(|loaded| loaded.device());
     let Some(device) = device else { return BootVolume::default() };
     let Ok(path) = (unsafe { services.open_protocol::<DevicePath>(params(device), OpenProtocolAttributes::GetProtocol) }) else { return BootVolume::default() };
+    // An El Torito entry (352-KRN-0268): its number, its start and its size in the medium's blocks.
+    if let Some(node) = path.node_iter().find(|n| n.full_type() == (DeviceType::MEDIA, DeviceSubType::MEDIA_CD_ROM)) {
+        let d = node.data();
+        if d.len() < 20 { return BootVolume::default(); }
+        let word = |at: usize| u64::from_le_bytes(d[at..at + 8].try_into().unwrap());
+        return BootVolume { kind: VOLUME_ELTORITO, partition: u32::from_le_bytes(d[0..4].try_into().unwrap()), start: word(4), sectors: word(12), signature: [0; 16] };
+    }
     let Some(node) = path.node_iter().find(|n| n.full_type() == (DeviceType::MEDIA, DeviceSubType::MEDIA_HARD_DRIVE)) else { return BootVolume::default() };
     let d = node.data();
     if d.len() < 38 { return BootVolume::default(); }
@@ -433,6 +440,45 @@ fn boot_volume(services: &BootServices, image: Handle) -> BootVolume {
     signature.copy_from_slice(&d[20..36]);
     let kind = match (d[36], d[37]) { (1, 1) => VOLUME_MBR, (2, 2) => VOLUME_GPT, _ => VOLUME_UNKNOWN };
     BootVolume { kind, partition: u32::from_le_bytes(d[0..4].try_into().unwrap()), start: word(4), sectors: word(12), signature }
+}
+
+// The largest boot volume read into memory (352-KRN-0268).
+const LIVE_MAX: u64 = 512 << 20;
+
+// The volume the firmware started this program from, read whole into memory (352-KRN-0268): a live system's boot volume,
+// which no driver of the running system reads from a disc. As many bytes as its FAT boot sector says it has; its files
+// were checked against the manifest as they were read, and vfs_server checks the manifest on this copy again.
+fn live_volume(services: &BootServices, image: Handle) -> Result<(u64, u64), &'static str> {
+    use uefi::proto::loaded_image::LoadedImage;
+    use uefi::proto::media::block::BlockIO;
+    let params = |handle| OpenProtocolParams { handle, agent: image, controller: None };
+    let device = unsafe { services.open_protocol::<LoadedImage>(params(image), OpenProtocolAttributes::GetProtocol) }.ok().and_then(|loaded| loaded.device()).ok_or("NO DEVICE")?;
+    let block = unsafe { services.open_protocol::<BlockIO>(params(device), OpenProtocolAttributes::GetProtocol) }.map_err(|_| "NO BLOCK I/O")?;
+    let media = block.media();
+    let (size, id) = (media.block_size() as u64, media.media_id());
+    if size == 0 || size % 512 != 0 || size > 4096 { return Err("A BLOCK SIZE OTHER THAN 512 TO 4096"); }
+    let first = services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 1).map_err(|_| "OUT OF MEMORY")?;
+    let boot = unsafe { core::slice::from_raw_parts_mut(first as *mut u8, size as usize) };
+    let read = block.read_blocks(id, 0, boot).map_err(|_| "ITS FIRST BLOCK UNREAD");
+    let bpb = read.map(|_| (u16::from_le_bytes([boot[11], boot[12]]), u16::from_le_bytes([boot[19], boot[20]]), u32::from_le_bytes(boot[32..36].try_into().unwrap()), boot[510] == 0x55 && boot[511] == 0xAA));
+    let _ = unsafe { services.free_pages(first, 1) };
+    let (per, small, large, signed) = bpb?;
+    let total = if small != 0 { small as u64 } else { large as u64 };
+    if !signed || per != 512 || total == 0 { return Err("NO FAT BOOT SECTOR"); }
+    let bytes = (total * 512).next_multiple_of(size);
+    if bytes > (media.last_block() + 1) * size { return Err("LARGER THAN ITS MEDIUM"); }
+    if bytes > LIVE_MAX { return Err("LARGER THAN 512 MIB"); }
+    let pages = (bytes as usize).div_ceil(4096);
+    let address = services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, pages).map_err(|_| "OUT OF MEMORY")?;
+    let chunk = (4 << 20) / size * size;
+    let mut at = 0;
+    while at < bytes {
+        let n = chunk.min(bytes - at);
+        let into = unsafe { core::slice::from_raw_parts_mut((address + at) as *mut u8, n as usize) };
+        if block.read_blocks(id, at / size, into).is_err() { let _ = unsafe { services.free_pages(address, pages) }; return Err("A READ FAILED"); }
+        at += n;
+    }
+    Ok((address, bytes))
 }
 
 // `dir` and `name` as one UEFI path: "" for the volume's root, or a directory ending in a backslash.
@@ -823,7 +869,14 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let boot_volume = boot_volume(system_table.boot_services(), image);
     let boot_slot = BootSlot { slot: match slot { Some((b'A', _)) => BOOT_SLOT_A, Some(_) => BOOT_SLOT_B, None => BOOT_SLOT_ROOT },
                                trial: slot.is_some_and(|(_, trial)| trial) as u32, deadline_s: TRIAL_DEADLINE_S, manifest: digest };
-    let _ = writeln!(Serial, "BOOT: VOLUME {} PARTITION {} AT LBA {}\r", match boot_volume.kind { VOLUME_MBR => "MBR", VOLUME_GPT => "GPT", _ => "UNKNOWN" }, boot_volume.partition, boot_volume.start);
+    let _ = writeln!(Serial, "BOOT: VOLUME {} PARTITION {} AT LBA {}\r", match boot_volume.kind { VOLUME_MBR => "MBR", VOLUME_GPT => "GPT", VOLUME_ELTORITO => "EL TORITO", _ => "UNKNOWN" }, boot_volume.partition, boot_volume.start);
+    // A live boot (352-KRN-0268): from an El Torito entry, the volume is read into memory for the running system.
+    let (live_volume, live_volume_len) = if boot_volume.kind != VOLUME_ELTORITO { (0, 0) } else {
+        match live_volume(system_table.boot_services(), image) {
+            Ok((address, bytes)) => { let _ = writeln!(Serial, "BOOT: THE VOLUME READ INTO MEMORY: {} KB\r", bytes / 1024); (address, bytes) }
+            Err(why) => { let _ = writeln!(Serial, "BOOT: THE VOLUME NOT READ INTO MEMORY: {}\r", why); (0, 0) }
+        }
+    };
     if let Some((slot, trial)) = slot {
         let _ = writeln!(Serial, "BOOT: SLOT {} LOADED{}\r", slot as char, if trial { " ON TRIAL" } else { "" });
         say(&system_table, format_args!("SLOT {}{}", slot as char, if trial { ", ON TRIAL" } else { "" }));
@@ -864,7 +917,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width, height, stride, programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, boot_flags: if safe { BOOT_SAFE } else { 0 }, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width, height, stride, programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, boot_flags: if safe { BOOT_SAFE } else { 0 }, live_volume, live_volume_len, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
     if pause_s > 0 {
