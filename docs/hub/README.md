@@ -1,6 +1,6 @@
 # MIND Hub: requests from users done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Version:** 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** a plan. Nothing here is built, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Version:** 0.3 (2026-11-21): the separate hub built, its routes in section 10 and its page [server.md](server.md); 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** stages 1 and 2 are built and tested on the host: the protocol crate `improve/proto` and the separate hub `tools/mindhub` ([server.md](server.md) says what is tested and what is not). The rest is a plan, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 ## 1. What it is
 
@@ -323,7 +323,9 @@ The same as `httpd` ([server.md](../update/server.md)):
 | Route | Purpose |
 |---|---|
 | `POST devices` | register: the key, the name, the kind, the platform, a display name or a pairing code, optionally a contact, optionally the proof of work |
+| `GET challenge` | a challenge, unsigned, to sign the first call with |
 | `GET devices/me` | the state, the admin's messages, the user, the trust, the quotas left, the next challenge |
+| `POST devices/me/version` | the release the device runs, which moves its user's delivered requests to `awaiting-check` (6.3) |
 | `POST devices/me/messages` | an answer to the admin's question during registration |
 | `POST devices/pair`, `DELETE devices/{id}` | a pairing code; revoking a device |
 | `POST requests` | a request: a client ID for idempotency, the kind, title, text, visibility, whether it is about security, the attachments' names, sizes and SHA-256 |
@@ -339,7 +341,10 @@ The same as `httpd` ([server.md](../update/server.md)):
   - the pending devices, and approve, ask or reject;
   - trust and its history;
   - moderation, and the settings;
-  - the journal.
+  - the journal;
+  - a one-time code for the admin pages (`POST sign-in-code`);
+  - the admin's word that a release carries landed requests (`POST delivered`), until stage 3 takes it from the release itself.
+- **The pages** (`/hub/`, `/hub/admin/`, `/hub/board`): HTML without scripts. A user signs in with a pairing code, the admin with a code from `sign-in-code`. The separate hub's are described in [server.md](server.md).
 
 ### 10.3 Its rules
 
@@ -349,7 +354,7 @@ The same as `httpd` ([server.md](../update/server.md)):
   - `409` for a repeat, with the earlier number;
   - `413` over a bound;
   - `429` with `Retry-After` and the limit's name.
-  Every answer carries the next challenge.
+  Every answer carries the next challenge, in the `Hub-Challenge` header.
 - **The test vectors** of the signatures, the buckets and the state machine are files of the crate. A hub in another language passes them, and one conformance suite drives a hub over its API.
 
 ## 11. Stages
@@ -358,7 +363,8 @@ The same as `httpd` ([server.md](../update/server.md)):
 |---|---|---|
 | 0 | this document, and 100003 rewritten | the design |
 | 1 | 100003-APP-0145 | `improve/proto`: the forms, bounds, state machine, trust bands and buckets, signatures, vectors; host tests |
-| 2 | 100003-APP-0146 | the separate hub, `tools/mindhub`: intake, registration and its conversation, trust, anti-flood, threads, the board, the admin pages, the agents' API; the conformance suite on the host |
+| 2 | 100003-APP-0146 (done) | the separate hub, `tools/mindhub`: intake, registration and its conversation, trust, anti-flood, threads, the board, the admin pages, the agents' API; the conformance suite on the host ([server.md](server.md)) |
+| 2+ | 100003-APP-0148 | what stage 2 left: a user's export and deletion, a verdict's attachments, a name on the board by the user's leave, the proof of work raised by itself, the flag on a request for a credential |
 | 3 | numbered when it starts | the hub's updates: the release tree through `httpd`'s library, the packages, the channels by band, the delivery link |
 | 4 | numbered when it starts | `improve` on MIND Core, the console; QEMU against the separate hub |
 | 5 | numbered when it starts | `improve` on a host, and the web pages for browsers |

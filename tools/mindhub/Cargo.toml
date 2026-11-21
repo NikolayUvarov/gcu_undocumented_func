@@ -1,0 +1,20 @@
+[package]
+name = "mindhub"
+version = "0.1.0"
+edition = "2021"
+description = "MIND Hub, the separate server: requests, their conversation, trust, the board and the agents' API over hub-api 1 (100003-APP-0146)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The protocol: its forms, bounds, states, trust, buckets, signatures and JSON, the same code MIND Core's programs link.
+improve-proto = { path = "../../improve/proto" }
+# TLS 1.3 as the release server serves it: its provider over RustCrypto, the key's loading and reloading, the pin print.
+httpd = { path = "../httpd" }
+rustls = { version = "0.23.45", default-features = false, features = ["std"] }
+pki-types = { package = "rustls-pki-types", version = "1", features = ["std"] }
+sha2 = { version = "0.10", default-features = false }
+# The client's side: the hub's certificate read for its pin and its handshake signature, Ed25519 or P-256.
+webpki = { package = "rustls-webpki", version = "0.103.13", default-features = false, features = ["std"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
