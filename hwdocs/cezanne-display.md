@@ -297,3 +297,57 @@ needs from those (the PHY's state, the PLLs' lock) come from the VBIOS tables' o
   window set up in the memory hub that the graphics engine shares: the reason to prefer the carve-out.
 - Confidence: medium. The facts are from Linux's source and boot lines and the GOP's own framebuffer at BAR 0's base;
   the firmware's `DCN_VM_FB_LOCATION_*` and its HUBP address are not read yet (batch 6, batch 4).
+
+## What first light's VBIOS tables write (213-DRV-0086, on LEG9 against a model)
+
+`display/src/atom.rs` interprets ATOM command tables (the bytecode as Linux v7.0's `amdgpu/atom.c` describes it; the
+code is this project's). `tests/display_atom_host.rs` runs tables 12, 4 and 76 of the Ryzen's image (given by
+`MIND_AMD_VBIOS`; the case says it skips without it) with the parameters `dcn::first_light` builds for 1080p60 in DVI on
+PHY A through OTG 1 and DIG front end A, against registers kept as memory. Nothing ran on the machine. Sources added to the list above (Linux v7.0, first 16 hex digits of SHA-256): `amdgpu/atom.h` 6157ba431d5fd2ce, `include/asic_reg/dpcs/dpcs_2_1_0_offset.h` b3d7d93daa72e809, `include/asic_reg/dpcs/dpcs_2_1_0_sh_mask.h` 50c813a5c9290309.
+
+**The interpreter's bounds.** Before a table runs: its index within the master command table, its entry non-empty, its
+header and length within the image. While it runs: every opcode and operand fetched from inside that table, every jump
+and SWITCH target inside it, every data read (`ID`) inside the image, the work space within the table's own size, the
+parameter space within 64 dwords, the scratch within 20 KiB; a register only in direct (MM) mode and only through
+`Reg::new` (the engine's bytes and the SMU mailbox, never the MSI-X bytes), with the register block added before the
+check; no PCI, system or indirect I/O and no PLL or MC argument; unknown opcodes, REPEAT, SAVEREG and RESTOREREG
+refused; at most 1,000,000 instructions, 8 nested calls and 5 s of delays a run. Where Linux carries on silently (an
+unknown opcode ends the table, an index out of range reads 0xCDCDCDCD), this one stops with an error naming the table
+and the offset. 11 host cases cover the opcodes on synthetic images and each bound.
+
+**Four statuses the model answers for the hardware** (assumptions, each where a table waits on it):
+
+| Register (PHY A) | Bit | Awaited | Bound in the table |
+|---|---|---|---|
+| `RDPCSTX0_RDPCSTX_PHY_CNTL0` | 28 `RDPCS_SRAM_INIT_DONE` | set (table 77 at 0xB864) | **none** |
+| `RDPCSTX0_RDPCSTX_PHY_CNTL3` | 5, 13, 21, 29 `TX_ACK` of each lane | equal to the lane's `TX_REQ` (0xBAFB, 0xBE94) | none, but leaves if `DMCU_DPALT_DIS_BLOCK_REG` bit 0 is set |
+| `RDPCSTX0_RDPCSTX_PHY_CNTL12` | 7 `RDPCS_PHY_DP_MPLLB_STATE` | set (0xBB9A) | 100,000 x 2 us |
+| `DPCSTX0_DPCSTX_TX_CLOCK_CNTL`, `RDPCSTX0_RDPCSTX_CLOCK_CNTL` | 2 `SYMCLK_CLOCK_ON`; 10 `SYMCLK_DIV2_CLOCK_ON` | set after their enables (0xBBE4) | **none** |
+
+`RDPCSTX_CLOCK_CNTL`'s `SRAMCLK_CLOCK_ON` (bit 14) is awaited **clear** after `SRAMCLK_EN` is set (0xB84A); the model
+leaves it as written.
+
+**Result:** all three end. Table 12 (setpixelclock 1.7): 530 instructions, 4 tables called (it calls the internal
+table 77, the PHY's own sequence), 10 us of delays, 111 writes to 28 registers. Table 4 (digxencodercontrol 1.5): 31
+instructions, 5 writes to 3 registers. Table 76 (dig1transmittercontrol 1.6): 286 instructions, 9 calls, 420 us,
+23 writes to 13 registers.
+
+| Table | What it writes |
+|---|---|
+| 12 | PHY A's `RDPCSTX0`: `PHY_CNTL0` to `PHY_CNTL14`, `PHY_FUSE0` to `3`, `CLOCK_CNTL`, `CNTL`, `SCRATCH`, `PLL_UPDATE_DATA`, and its control-register bus `RDPCS_TX_CR_ADDR`/`CR_DATA` (20 and 17 writes); `DPCSTX0_DPCSTX_TX_CLOCK_CNTL`; in DCCG `SYMCLKA_CLOCK_ENABLE` = 1, `PHYPLLA_PIXCLK_RESYNC_CNTL` = 0x101, `OTG1_PIXEL_RATE_CNTL` = 0 and `OTG1_PHYPLL_PIXEL_RATE_CNTL` = 0 |
+| 4 | `DIG0_DIG_FE_CNTL` (three writes, last 0), `DIG0_DIG_CLOCK_PATTERN` = 0x1F, `DIG0_TMDS_CTL_BITS` = 0 |
+| 76 | `DIG0_DIG_BE_CNTL` = 0x00020100 (mode 2, DVI; front end A), `DIG0_DIG_BE_EN_CNTL` = 1, `DIG0_DIG_LANE_ENABLE` = 0x10F, `UNIPHYA_LINK_CNTL`, `UNIPHYA_CHANNEL_XBAR_CNTL`, `RDPCSTX0`'s `PHY_CNTL3` (7), `PHY_CNTL6`, `PHY_FUSE0` to `3`, `RDPCSTX_CNTL`, `DPCSTX0_DPCSTX_TX_CNTL` |
+
+The case asserts that every write lies on PHY A's path (DPCSTX0/RDPCSTX0, DIG0, UNIPHYA, PHYPLLA, OTG 1's pixel rate,
+SYMCLKA) and none on the firmware's pipe 0, DIG E or PHY E. No table touches the SMU mailbox, DISPCLK or any OTG
+timing. The register names are from `dcn_2_1_0_offset.h` and `dpcs_2_1_0_offset.h`.
+
+What follows for the route (plans, not guarantees):
+- **The tables reach PHY A's RDPCS and DPCS**, the PHY interface this survey left out of the proposed read as a likely
+  hang. Under Linux the same path is driven for HDMI-A-1 (by the DMUB's own copy of these tables) without a hang, and
+  the tables enable each clock before they use the block. Still, step 3's first run should log each table's name before
+  it runs, as step 1 does for its batches.
+- **Two waits have no bound of their own** (SRAM init done, the symbol clock on): on the machine a PHY that never answers
+  would hold the CPU there. The interpreter's step limit bounds it (a run stops with `StepLimit` naming the offset).
+- Table 4 leaves `DIG0_DIG_FE_CNTL` at 0, so the plan's own write of the front end's source afterwards is needed; table
+  76 writes `DIG0_DIG_BE_CNTL` itself (the plan's earlier write of it is redundant, not wrong).

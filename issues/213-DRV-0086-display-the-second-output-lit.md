@@ -87,6 +87,20 @@ ABI 37 release that holds KRN's image; the owner session says when. What to look
 READ` batches with their registers, `STEP 1 DONE: 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN` and the command
 register after; DP-2 keeps its picture.
 
+## Progress: the ATOM interpreter, host-only (2026-11-21)
+
+`display/src/atom.rs` runs ATOM command tables, bounded (each table's index, offset and length checked before it
+runs; every fetch and jump inside the table; data reads inside the image; work, parameter and scratch indices inside
+their spaces; registers only through `Reg::new` in direct mode; no PCI, system, indirect, PLL or MC access; at most
+1,000,000 instructions, 8 nested calls, 5 s of delays). `tests/display_atom_host.rs`: 10 cases on synthetic images
+(the opcodes, each bound) and one on the Ryzen's VBIOS, which skips with a line unless `MIND_AMD_VBIOS` names it.
+
+With the image, on LEG9, tables 12, 4 and 76 run with first light's parameters to their end against a register model
+that answers four statuses the tables wait for (PHY A's SRAM init done, the lanes' acknowledges, MPLLB on, the symbol
+clocks on). 111, 5 and 23 writes, all on PHY A's path and OTG 1's pixel clock, none on the firmware's pipe 0 or PHY E,
+none to the SMU or DISPCLK (hwdocs/cezanne-display.md, "What first light's VBIOS tables write"). Not run on the
+machine; the answers are assumptions about the hardware.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
