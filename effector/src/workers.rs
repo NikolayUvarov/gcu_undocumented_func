@@ -22,6 +22,7 @@ const MARK_SLOT: usize = 10; // the notice worker's slot for the page it marks t
 const NOTICE_TAG: usize = 0x4E4F_5449; // a stop notice's first word ("NOTI"); the second is the reason
 const REFUSED_TAG: usize = 0x5245_4655; // init's refusal of the notice's call ("REFU"); the second word is its error
 const MAX: usize = 32; // workers, at most: init's task quota for `effector`
+const WORKER_STACK: usize = 64 * 1024; // a worker's stack: the session's own 256 KiB (linker.ld) is not needed there
 const GO: usize = 0; // the page's words: the start, the deadline in monotonic ns, then a count and a state each
 const DEADLINE: usize = 1;
 
@@ -118,7 +119,7 @@ impl Pool {
         let object = mark.as_ref().and_then(|p| p.share().ok());
         let mut grants = Vec::from([mind::process::grant(SLOT_LIFECYCLE, SLOT_LIFECYCLE, u8::MAX), mind::process::grant(BACK_SLOT, endpoint.0, u8::MAX)]);
         if let Some(object) = object { grants.push(mind::process::grant(MARK_SLOT, object, u8::MAX)); }
-        let started = mind::process::start_worker(NOTICE, 0, &grants);
+        let started = mind::process::start_worker(NOTICE, WORKER_STACK, &grants);
         if let Some(object) = object { let _ = mind::ipc::drop_cap(object); }
         match started {
             Ok(pid) => {
@@ -166,7 +167,7 @@ impl bench::Parallel for Pool {
         // One live worker a CPU (ABI 18), the notice's among them; the session's own thread is the last.
         let cpus = self.cpus.max(1) as usize;
         for place in 1..=cpus.saturating_sub(1 + self.notice.is_some() as usize).min(MAX) {
-            match mind::process::start_worker(BENCH | (place as u64) << 8, 0, &[mind::process::grant(PAGE_SLOT, object, u8::MAX)]) {
+            match mind::process::start_worker(BENCH | (place as u64) << 8, WORKER_STACK, &[mind::process::grant(PAGE_SLOT, object, u8::MAX)]) {
                 Ok(pid) => { let _ = mind::process::watch(pid, endpoint); self.bench.push(pid); }
                 Err(_) => break,
             }

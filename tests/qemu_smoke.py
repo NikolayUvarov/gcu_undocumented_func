@@ -14283,7 +14283,7 @@ def effector_update_suite(args):
         while "BOOT: SLOT B LOADED ON TRIAL" not in vm.log[since:]:
             answered = server.operation(on)
             if answered or time.monotonic() > deadline:
-                raise AssertionError((answered, *(vm.command(f"dmesg -s {name}", raw=True)[-2500:] for name in ("effector", "effector_gw", "updater"))))
+                raise AssertionError((answered, *(vm.command(f"dmesg -s {name}", raw=True)[-2500:] for name in ("effector", "effector_gw", "updater", "init"))))
             time.sleep(1)
             vm.collect()
         print(f"TIME: {len(bundle)} bytes downloaded, streamed to the updater, staged and applied in {time.monotonic() - started:.0f} s", flush=True)

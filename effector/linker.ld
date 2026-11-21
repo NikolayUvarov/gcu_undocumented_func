@@ -4,6 +4,7 @@ PHDRS {
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
+    stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
     . = 0;
@@ -21,5 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
+    /* The agent's stack, PT_GNU_STACK's size (262-KRN-0164): 256 KiB, as a heartbeat sent beside a download nests a
+       second request inside the first (801-EFF-0038), past the 64 KiB a task has without it. Its workers ask 64 KiB. */
+    .stack (NOLOAD) : { . = . + 0x40000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }
