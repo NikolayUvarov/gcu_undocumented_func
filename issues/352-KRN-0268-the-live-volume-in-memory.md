@@ -26,7 +26,7 @@ The ABI changes only in `KRN` tasks (AGENTS.md section 1), so this is the kernel
 
 ## Acceptance criteria
 
-- [ ] **QEMU, x86 (the `iso` suite),** with the ISO as an IDE CD-ROM and as a USB disk:
+- [ ] **QEMU, x86 and aarch64 (the `iso` suite),** with the ISO as a CD-ROM (IDE on x86, SCSI on aarch64) and as a USB disk:
   - the loader reads the volume into memory;
   - `ramdisk#2` serves it read-only, and `vfs_server` mounts it as the boot volume;
   - programs run from it, and a write is refused;
@@ -35,9 +35,18 @@ The ABI changes only in `KRN` tasks (AGENTS.md section 1), so this is the kernel
 - [ ] docs/api, docs/profile/bootstrap.md and docs/write-disk.md (EN and RU) say what changed.
 
 **Not covered:**
-- aarch64's ISO (352-UPD-0047);
 - a real machine (MC-12.1);
 - the updater's live mode (0047 step 3). The ISO is built without slots, so the updater finds no zone.
+
+## Progress (2026-11-21)
+
+**Made** on `claude/352-KRN-0268-live-volume-in-memory`, on 352-UPD-0047's branch, as the plan says. The `iso` suite runs in `x86: keys, shell, tools` and `aarch64: tools`.
+
+**Runs in this session's container** (QEMU 8.2.2; OVMF and AAVMF; `main` 03c88c5144 built for both):
+- the `iso` suite, x86 (4 CPUs) and aarch64, each PASS: from a CD-ROM and from a USB disk, `BOOT: THE VOLUME READ INTO MEMORY: 65536 KB`, then `[RAMDISK] THE BOOT VOLUME IN MEMORY: 65536 KB, READ-ONLY` and `[VFS] MOUNTED FAT16 FROM RAM AT LBA 0 (READ-ONLY DEVICE)`;
+- x86's `services`, `shell`, `vfs` and `tools` suites, each PASS, `ramdisk#2` not started there.
+
+The gate's groups on both architectures are left.
 
 ## Related
 
