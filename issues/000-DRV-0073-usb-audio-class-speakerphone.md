@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; on the DEXP's Intel xHCI the speakerphone plays and hears through a hub; the Ryzen's run is next) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the speakerphone plays and hears on the DEXP's Intel xHCI and on the Ryzen's AMD xHCI; the board's own counters over 5 minutes are still to be read) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -32,6 +32,8 @@
 - [x] Host tests (`tests/uac_host.rs`, 6 passed): the STM-Speaker's own descriptor bytes; formats it cannot use left out; an endpoint that takes its rate by request marked; feedback read in 10.14 and 16.16; the pacer; one channel to and from two.
 - [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, the device hears the tone (its wav holds at least a quarter of a second of loud samples), and unplugged, the codec comes back.
 - [ ] On the Ryzen, with the maintainer: the speakerphone plays `say` and a tone, and `listen` hears its microphones. The STM-Speaker's own counters (underruns, overruns, clock faults) stay at zero for 5 minutes.
+  - **Met, 2026-11-21:** a tone, `say` and `listen`, each heard by the maintainer, on the second AMD xHCI.
+  - **Not yet:** the board's own counters. The host's side of the 5 minutes is clean (301043 packets, none missed).
 
 ## Progress (2026-11-20): the path, and the Ryzen's AMD xHCI
 
@@ -70,7 +72,7 @@
 
 **`usb_host/src/xhci.rs` had `TYPE_ISOCH = 17`.** In xHCI 1.2's table 6-91 the Isoch transfer TRB is type 5. Type 17 is the Reset Device command, which has no place on a transfer ring.
 
-**What each controller did with it** (QEMU's and the DEXP's are shown by the fix; the Ryzen's stop is put down to it until its run with the fix):
+**What each controller did with it** (each is shown by its run with the fix: QEMU's wav, the DEXP's tone, the Ryzen's streams below):
 - **QEMU 8.2** takes a TD by its endpoint's type and looks at a TRB's type only to gather its buffer. It ended each TD with success and moved no byte. That is the "no byte taken" this issue put down to QEMU.
 - **The Ryzen's AMD xHCI** stopped with a host controller error at the first TD.
 - **On the DEXP's Intel xHCI** (release 202611201739, the first isochronous stream there, to its own USB audio 0573:1573) everything on the controller stopped at `beep`, twice. Its keyboard, the cable, the Wi-Fi adapter and the boot stick are all on that controller, so the machine looked hung and no log of it was kept. Whether the controller set an error bit is not known.
@@ -138,12 +140,39 @@ Release 202611210533, the STM-Speaker's CN13 in the Genesys hub on the DEXP's ro
 
 This holds for the DEXP's Intel xHCI, through that hub and in its root ports 2 and 3 (MC-12.1). The acceptance criterion names the Ryzen and the speakerphone's own counters over 5 minutes; neither is covered by these runs.
 
+## On the Ryzen's AMD xHCI (2026-11-21)
+
+Release 202611201957: the stick's ABI 34 tree with the Isoch TRB's type fixed and the AMD gate taken off. The STM-Speaker straight in root port 1 of the second AMD xHCI (1022:1639, `XHCI 1`), after its board was reset and its CN13 cable changed (below). This is the controller that stopped with a host controller error at the first isochronous TD.
+
+- **Six rising notes, 30 s:**
+  ```
+  41132.580 usb_host: [USB] XHCI 1: CAFE:4014 ON PORT 1 (FULL SPEED)
+  41222.961 usb_host: [USB] XHCI 1: SLOT 2 INTERFACE 1 SETTING 1: ENDPOINT 01 STREAMS OUT (196 BYTES EVERY 1000 US); STATE 1, USBSTS 00000010
+  41222.971 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 2: FIRST ISOCHRONOUS SEND DONE (196 BYTES)
+  41253.967 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 2: STREAM ENDED: 30998 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  41253.967 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 5: STREAM ENDED: 92994 BYTES, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  ```
+- **`say`:** an English sentence, 4.6 s (`5587 PACKETS SENT, 0 MISSED`).
+- **`listen 8`** after three falling tones as the cue to speak: `RECORDED 384000 FRAMES (8000 MS), PEAK 7103, RMS 744, OVERFLOWS 0`. The maintainer heard the tones and his own voice played back. Three recordings before it held silence (peaks 7, 7 and 78): he had not spoken in time.
+- **Five minutes of notes:**
+  ```
+  42094.150 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 2: STREAM ENDED: 301043 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  42094.150 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 5: STREAM ENDED: 903129 BYTES, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  ```
+  The maintainer heard the notes. The board's own counters for that run are not read yet.
+
+**The AMD gate is out of the code** with this: a controller of vendor 1022 takes streams as any other. One that stops with an error while it streams is still set up again and takes none afterwards (000-DRV-0075).
+
+This holds for the Ryzen's second AMD xHCI with the device straight in its root port (MC-12.1). Through the hub there, and on the first AMD xHCI, the fixed build was not run.
+
+**Before these runs, on the same port:** the speakerphone did not answer SET_ADDRESS in three tries, twice. After the board's reset button, while the board was starting, one try ended with a transaction error and the next left ADDRESS DEVICE unanswered for 5 s: the controller was set up again and the device left alone (000-DRV-0075), and camera 2 on that controller came back. With the cable changed and plugged in again, it was set up at the first try.
+
 **Still open:**
-- **The Ryzen.** Release 202611201957 is on it since 2026-11-20 20:04 UTC: the same fix, with the AMD gate (`no_isochronous` for 1022) taken off in that build only. Its run waits for the speakerphone and the cable, which are at the DEXP. The gate comes out of `main` after that run shows a stream there.
 - **The speakerphone stops answering, and why is not known.**
   - On the evening of 2026-11-20 it was not set up in the DEXP's root port 2 at all: SET_ADDRESS ended with a transaction error on every try (000-DRV-0079 has the log).
   - The next morning it was set up at the first try in that socket and played for 31 s without an error. At the request that closes the stream it stopped answering everything, all at once, with no disconnection: every request after it ended with completion 4.
   - Minutes later, straight in the Ryzen's second AMD xHCI, it did not answer SET_ADDRESS in three tries, twice.
+  - After the board's reset and another CN13 cable it was set up there at the first try and ran every stream above. Both were changed at once, so which of them it was is not known.
   - Two explanations stand, neither tested: the board's firmware stopped serving USB (its project's reading), or a contact of a data line. Its project has it as task `19-usb-root-port-02`.
 
 ## Related

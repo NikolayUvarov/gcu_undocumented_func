@@ -1,6 +1,6 @@
-# 000-DRV-0077 — `usb_host`: a new connection held for 100 ms before its port is reset
+# 000-DRV-0077 — `usb_host`: a new connection held for 100 ms before its port is reset — done
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
@@ -21,10 +21,27 @@ A debounce does not cure a device that is short of power. It keeps a connection 
 ## Acceptance criteria
 
 - [x] Builds. The QEMU suites with USB devices pass on LEG9: `x86: keys, shell, tools` (`usb`, `ehci`), `x86: files and block writes`, `x86: the updater and an update through the link`, and the suites `usbaudio` and `link`. Their devices come up 100 ms later each.
-- [ ] On the Ryzen: the devices at boot and a device plugged in are set up as before.
+- [x] On the Ryzen: the devices at boot and a device plugged in are set up as before.
   - **At boot: met.** Release 202611201516 (the stick's ABI 34 tree with this commit) set up all nine, 2026-11-20, 15:22 UTC: camera 1, the Bluetooth and the boot stick on the first xHCI; the hub, camera 2, the link's converter, the keyboard's receiver and the speakerphone on the second.
-  - **A device plugged in under it:** not yet seen.
+  - **A device plugged in under it: met.** Release 202611201957, 2026-11-21, as the maintainer moved devices between sockets:
+    ```
+    38194.391 usb_host: [USB] PORT 1: CONNECTED (PORTSC 000006E1)
+    38194.609 usb_host: [USB] 0471:A6CA ON PORT 1 (HIGH SPEED)
+    38679.917 usb_host: [USB] PORT 1: CONNECTED (PORTSC 000006E1)
+    38680.103 usb_host: [USB] 05E3:0608 ON PORT 1 (HIGH SPEED) HUB
+    38680.384 usb_host: [USB] 1A86:7523 ON PORT 1.1 (FULL SPEED)
+    38680.583 usb_host: [USB] 046D:C534 ON PORT 1.3 (FULL SPEED)
+    41132.360 usb_host: [USB] XHCI 1: PORT 1: CONNECTED (PORTSC 000006E1)
+    41132.580 usb_host: [USB] XHCI 1: CAFE:4014 ON PORT 1 (FULL SPEED)
+    ```
+    A camera, the hub with the two devices behind it, and the speakerphone, on both controllers.
+
+## Resolution
+
+Done in `usb_host/src/xhci.rs` (`Xhci::debounced`) and `usb_host/src/main.rs` (`scan`, `hub_debounced`); in `main` since round 161. The Ryzen's part was shown on 2026-11-21.
+
+It keeps a connection that is still settling from being addressed. It did not by itself make the speakerphone answer in a root port (000-DRV-0079, 000-DRV-0073).
 
 ## Related
 
-[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone).
+[000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering), [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone).

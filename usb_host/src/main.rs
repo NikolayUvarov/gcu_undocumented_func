@@ -743,7 +743,7 @@ impl Host {
         let (endpoints, count) = setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?;
         let streams = &endpoints[..count as usize];
         if root.no_isochronous && streams.iter().any(EndpointInfo::is_isochronous) {
-            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED, OR IS AN AMD ONE)", Tag(root.xhci.number), device.slot, info.number, alternate);
+            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED)", Tag(root.xhci.number), device.slot, info.number, alternate);
             return Err(Error::Invalid);
         }
         if root.xhci.streams_of(device.slot, Some(info.number)) != 0 || streams.iter().any(EndpointInfo::is_isochronous) {
@@ -898,11 +898,7 @@ fn main(_info: &'static BootInfo) {
         }
         // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
         for port in 1..=xhci.ports() { mind::println!("[USB] {}PORT {} PORTSC {:08X}", tag, port, xhci.port_status(port)); }
-        // AMD's xHCI (the Ryzen's 1022:1639) stops with a host controller error on the first isochronous TD, where Linux
-        // streams: it takes no stream until that is understood (000-DRV-0073), and a USB audio device falls to the codec.
-        let amd = config(0) & 0xFFFF == 0x1022;
-        if amd { mind::println!("[USB] {}AMD CONTROLLER: NO ISOCHRONOUS STREAM ON IT YET (000-DRV-0073)", tag); }
-        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: amd, suspects: [None; 4], restarts: 0, since: mind::time::uptime_ms() as u64 });
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: false, suspects: [None; 4], restarts: 0, since: mind::time::uptime_ms() as u64 });
     }
     if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
