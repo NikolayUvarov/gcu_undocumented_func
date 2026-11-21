@@ -337,8 +337,11 @@ fn nothing_is_sent_on_a_radar_channel_before_its_access_points_beacon() { serve(
     assert_eq!(service.heard().count(), 0);
     let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Failed);
     assert!(service.take_ask().is_none());
-    // The access point heard on 5 GHz is logged once a run (Event::Heard5), the refusal once a tune.
-    assert_eq!(events.as_slice(), &[Event::Heard5 { channel: 100, bssid: BSSID }, Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }]);
+    // The access point heard on 5 GHz is logged once a run (Event::Heard5), the refusal once a tune; the refused receiver's
+    // beacon, when it came, with its times after the tune and after the refused send.
+    let [Event::Heard5 { channel: 100, bssid: BSSID }, Event::ListenHeard { channel: 100, bssid: BSSID, tune_ms, send_ms },
+        Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }] = events.as_slice() else { panic!("{events:?}") };
+    assert!(tune_ms >= send_ms, "{tune_ms} {send_ms}");
 });}
 
 // 213-DRV-0087: a PPDU status report gives the frame kept just before it its signal while the station has not taken it;
