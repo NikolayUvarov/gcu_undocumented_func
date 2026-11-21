@@ -466,8 +466,8 @@ impl Wlan {
         if let Some((len, rate)) = out.send {
             let unicast_data = self.tx[0] & 0x0C == 0x08 && self.tx[4] & 1 == 0;
             match radio_call(self.deadline, || wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
-                Ok(Ok(sent)) => { if unicast_data { self.station.sent(sent.acked); } }
-                _ => if unicast_data { self.station.sent(false) },
+                Ok(Ok(sent)) => { if unicast_data { self.station.sent(sent.acked, sent.attempts); } }
+                _ => if unicast_data { self.station.sent(false, ATTEMPTS) },
             }
         }
         if let Some(len) = out.deliver {
