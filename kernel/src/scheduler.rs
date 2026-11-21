@@ -930,6 +930,12 @@ impl Scheduler {
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
             PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
+            // The boot volume the loader read into memory from an El Torito entry, over its own pages, read-only (352-KRN-0268).
+            PLATFORM_BOOT_VOLUME => match (self.boot.live_volume as usize, self.boot.live_volume_len as usize) {
+                (0, _) | (_, 0) => Err(ERR_NOT_FOUND),
+                (base, _) if base % 4096 != 0 => Err(ERR_INVALID),
+                (base, bytes) => Ok(Capability::Memory(base, bytes.next_multiple_of(4096), CAP_READ)),
+            },
             // The hardware report and the ACPI tables, as read-only copies in frames of their own (174-KRN-0038).
             PLATFORM_REPORT => Self::copy_out(&crate::report::build(&self.boot, &self.devices)),
             PLATFORM_ACPI_TABLE => Self::copy_out(crate::report::acpi_table(a).ok_or(ERR_NOT_FOUND)?),
@@ -971,7 +977,7 @@ impl Scheduler {
         let text = if flags & SPAWN_TEXT != 0 { Some(alloc::boxed::Box::try_new_in(Text::new(), Frames).map_err(|_| "OUT OF MEMORY: TEXT")?) } else { None };
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
         // A task learns how many CPUs were online at its start, as a program with workers needs (262-KRN-0178), and no CPU's address.
-        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.extra_programs = self.boot.extra_programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).count(); info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.extra_programs = self.boot.extra_programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).count(); info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; info.live_volume = 0; info.live_volume_len = 0; // which images exist, not where; no CPU or firmware addresses
         // Whether the watchdog restarted the last run, a freeze's evidence for init's safe start (ABI 34, 000-KRN-0217).
         if crate::watchdog::restarted() { info.boot_flags |= BOOT_WATCHDOG_RESTARTED; }
         // Whether the last run of this slot ended in a fault the kernel recorded, the same evidence (ABI 35, 801-KRN-0261).

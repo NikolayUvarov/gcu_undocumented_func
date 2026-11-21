@@ -1038,8 +1038,12 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, NVME_DMA_BYTES)?, 0);
             }
-            // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001).
-            "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
+            // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001), and
+            // ramdisk#2 the boot volume the loader read into memory, read-only, on a live boot alone (352-KRN-0268).
+            "ramdisk" => {
+                if name == "ramdisk#2" { grants.add(SLOT_MEM, minted.mint(PLATFORM_BOOT_VOLUME, 0, 0)?, 0); }
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+            }
             "blockstore" => {
                 // It badges its memory domains' clients from 0x100 up, below them init's (308-STO-0023, 308-KRN-0184).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL | CAP_BADGE);
@@ -1088,7 +1092,8 @@ impl Init {
                 let mut parts = mind::util::FixedBuf::<ARGS_KEPT>::new();
                 let _ = core::fmt::Write::write_str(&mut parts, "parts");
                 (self.vfs_parts, self.vfs_whole) = ([None; VFS_PARTS], [false; UNITS]);
-                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
+                // The live system's volume in memory first: on a disc no other driver shows it (352-KRN-0268).
+                for driver in ["ramdisk#2", "ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
                     if Some(driver) == store.0 || Some(driver) == store.1 || !self.running(service_index(driver)) { continue; }
                     let before = self.vfs_parts.iter().flatten().count();
                     if self.vfs_windows(driver).is_none() {
@@ -2457,7 +2462,8 @@ fn read_policy_file(files: Endpoint, text: &mut [u8]) -> Option<Option<usize>> {
 }
 
 fn not_found(name: &str) -> &'static str {
-    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT", _ => "NO DEVICE" }
+    match name { "timed" => "THE POLICY GIVES IT NO TIME SERVER", "httpd" | "sshd" => "THE POLICY GIVES IT NO LISTENING GRANT",
+                 "ramdisk#2" => "NO BOOT VOLUME IN MEMORY: NOT A LIVE BOOT", _ => "NO DEVICE" }
 }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
