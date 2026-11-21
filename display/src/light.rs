@@ -152,7 +152,9 @@ const fn seg2(d: u32) -> u32 { (dcn::SEGMENT[2] + d) * 4 }
 
 /// The register blocks of one pipe and output, as byte ranges [start, end) of BAR 5 (dcn_2_1_0_offset.h and
 /// dpcs_2_1_0_offset.h, instance strides): OTG, ODM, VTG, OPP_PIPE and DPG, the DIG blocks of the front end and of the
-/// PHY's back end, UNIPHY, the PHY's DPCS/RDPCS, and in DCCG the PHY's PLL resync, the OTG's pixel rate and SYMCLK.
+/// PHY's back end and that DIG's `DPn_DP_LINK_CNTL` and `DPn_DP_DPHY_TRAINING_PATTERN_SEL` (table 76's DISABLE zeroes
+/// both, for a TMDS output too: the off call of stage 8's undo), UNIPHY, the PHY's DPCS/RDPCS, and in DCCG the PHY's PLL
+/// resync, the OTG's pixel rate and SYMCLK.
 fn blocks(otg: u8, opp: u8, fe: u8, phy: u8, add: &mut impl FnMut(u32, u32)) {
     let (t, o, d, p) = (otg as u32, opp as u32, fe as u32, phy as u32);
     let mut span2 = |first: u32, n: u32| add(seg2(first), seg2(first + n));
@@ -163,6 +165,8 @@ fn blocks(otg: u8, opp: u8, fe: u8, phy: u8, add: &mut impl FnMut(u32, u32)) {
     span2(0x1854 + 0x5A * o, 8);
     span2(0x2068 + 0x100 * d, 0x90);
     span2(0x2068 + 0x100 * p, 0x90);
+    span2(0x2108 + 0x100 * p, 1);
+    span2(0x2118 + 0x100 * p, 1);
     span2(0x286D + 2 * p, 2);
     span2(0x2928 + 0xD8 * p, 0xD8);
     let resync = if p < 4 { 0x40 + p } else { 0x4C };
@@ -444,14 +448,14 @@ pub enum Outcome {
 /// the log takes is not counted against the table.
 struct Adapter<'a, E: Engine> {
     engine: &'a mut E, guard: &'a Guard, journal: &'a mut Journal, out: &'a mut dyn Out,
-    tag: (char, u8, u8), record: bool, writes: u32, refused: Option<Refused>, full: bool, log_us: u64,
+    tag: (char, u8, u8), record: bool, writes: u32, refused: Option<Refused>, unreadable: Option<u32>, full: bool, log_us: u64,
 }
 
 impl<E: Engine> atom::Machine for Adapter<'_, E> {
     fn read(&mut self, reg: Reg) -> Option<u32> { self.engine.read(reg) }
     fn write(&mut self, reg: Reg, value: u32) -> bool {
         let w = match self.guard.check(reg) { Ok(w) => w, Err(r) => { self.refused = Some(r); return false; } };
-        let Some(old) = self.engine.read(reg) else { return false };
+        let Some(old) = self.engine.read(reg) else { self.unreadable = Some(reg.offset()); return false };
         if self.record && !self.journal.push(w, old, self.tag.1) { self.full = true; return false; }
         self.engine.write(w, value);
         self.writes += 1;
@@ -468,14 +472,15 @@ impl<E: Engine> atom::Machine for Adapter<'_, E> {
 fn call<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, t: Table, prefix: char, n: u8, record: bool, out: &mut dyn Out) -> Result<(), Failure> {
     let (p, len) = t.parameters();
     out.line(format_args!("{}{} RUNNING TABLE {} ({}) NOW", prefix, n, t.index(), table_name(t.index())));
-    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, full: false, log_us: 0 };
+    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, unreadable: None, full: false, log_us: 0 };
     interp.set_time_limit(TABLE_TIME_LIMIT_US);
     let result = interp.run(t.index(), &p[..len], &mut a);
-    let (writes, refused, full) = (a.writes, a.refused, a.full);
+    let (writes, refused, unreadable, full) = (a.writes, a.refused, a.unreadable, a.full);
     match result {
         Ok(o) => { out.line(format_args!("{}{} TABLE {} DONE: {} STEPS, {} CALLS, {} US OF DELAYS, {} WRITES", prefix, n, t.index(), o.steps, o.calls, o.delay_us, writes)); Ok(()) }
         Err(_) if refused.is_some() => Err(Failure::Refused(refused.unwrap_or(Refused::OffRoute(0)))),
         Err(_) if full => Err(Failure::JournalFull),
+        Err(_) if unreadable.is_some() => Err(Failure::Unreadable(unreadable.unwrap_or(0))),
         Err(atom::Error::Unreadable { offset, .. }) => Err(Failure::Unreadable(offset)),
         Err(err) => Err(Failure::Table(err)),
     }
@@ -521,20 +526,22 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
     Ok(())
 }
 
-/// Undoes stage `n`: its off call, if it has one, then every register it wrote put back, last first, so the second
-/// pipe's and PHY A's registers are as before step 3 (PHY A was off). The PHY's own control register bus
-/// (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a write to its data register is a write into the PHY, so putting it
-/// back would write stale values into the PHY. What the stage set inside the PHY stays; the undo says how much.
+/// Undoes stage `n`: its off call, if it has one, brings the output down in the VBIOS's own order; then every register
+/// the stage wrote is put back, last first, and then every register only the off call wrote, so that all are as before
+/// the stage (PHY A was off). The PHY's own control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a
+/// write to its data register is a write into the PHY, so putting it back would write stale values into the PHY. What
+/// the stage set inside the PHY stays; the undo says how much.
 fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, out: &mut dyn Out) {
+    let mut off = Journal::default();
     if let Some(t) = light.off_call(n) {
-        let mut scratch = Journal::default();
-        if let Err(why) = call(light, e, interp, &mut scratch, t, 'U', n, false, out) {
+        if let Err(why) = call(light, e, interp, &mut off, t, 'U', n, true, out) {
             out.line(format_args!("U{} TABLE {} STOPPED ({}); RESTORING STAGE {}'S WRITES ANYWAY", n, t.index(), why, n));
         }
     }
     let p = light.choice.output.phy as u32;
     let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
     let (mut restored, mut addresses, mut data) = (0, 0, 0);
+    let staged = |o: u32| journal.items[..journal.len].iter().flatten().any(|(w, _, s)| *s == n && w.reg().offset() == o);
     let mut i = journal.len;
     while i > 0 {
         i -= 1;
@@ -546,6 +553,16 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
         e.write(w, old);
         restored += 1;
         out.line(format_args!("U{} RESTORED {} = {:08X}", n, Name(w.reg()), old));
+    }
+    let mut j = off.len;
+    while j > 0 {
+        j -= 1;
+        let Some((w, old, _)) = off.items[j] else { continue };
+        let o = w.reg().offset();
+        if o == cr_addr || o == cr_data || staged(o) { continue; }
+        e.write(w, old);
+        restored += 1;
+        out.line(format_args!("U{} RESTORED {} = {:08X} (WRITTEN BY THE OFF CALL ONLY)", n, Name(w.reg()), old));
     }
     if addresses + data > 0 {
         out.line(format_args!("U{} PHY {}'S CONTROL REGISTER BUS LEFT AS IT IS: {} ADDRESS AND {} DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS",
