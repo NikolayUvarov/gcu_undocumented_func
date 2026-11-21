@@ -61,6 +61,8 @@ mod tests {
             link_present: 0,
             link_words: [0; crate::abi::LINK_WORDS_MAX],
             boot_flags: 0,
+            live_volume: 0,
+            live_volume_len: 0,
             extra_programs: [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
         }
     }

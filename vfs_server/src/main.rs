@@ -525,6 +525,8 @@ fn describe(identity: &BootVolume) -> String {
     match identity.kind {
         VOLUME_MBR => alloc::format!("MBR DISK {:02X}{:02X}{:02X}{:02X}, PARTITION {} AT LBA {}", s[3], s[2], s[1], s[0], identity.partition, identity.start),
         VOLUME_GPT => alloc::format!("GPT PARTITION {} AT LBA {}", identity.partition, identity.start),
+        // A live boot (352-KRN-0268): the volume the loader read into memory, served by ramdisk#2.
+        VOLUME_ELTORITO => alloc::format!("EL TORITO ENTRY {} AT BLOCK {} OF ITS MEDIUM, READ INTO MEMORY", identity.partition, identity.start),
         _ => String::from("A VOLUME THE FIRMWARE DID NOT NAME"),
     }
 }
