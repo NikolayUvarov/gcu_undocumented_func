@@ -191,13 +191,15 @@ impl Guard {
 
 // --- the firmware's registers, watched ---
 
-/// Bits of a watched register that move by themselves: OTG_BUSY; the DIG front end's metadata-missed flag; DCHUBP_CNTL's
-/// outstanding-request, in-blank, timeout and underflow statuses (dcn_2_1_0_sh_mask.h).
+/// Bits of a watched register that move by themselves, whole fields by dcn_2_1_0_sh_mask.h's masks: OTG_BUSY;
+/// OPTC_DOUBLE_BUFFER_PENDING; the DIG front end's metadata-missed flag; DCHUBP_CNTL's outstanding-request (0x2, the
+/// XRQ's 0xF0000), in-blank, timeout (0xF00000) and underflow (0x70000000) statuses.
 fn steady(r: R) -> u32 {
     match r {
         R::OtgClockControl => !(1 << 16),
+        R::OptcInputGlobalControl => !(1 << 31),
         R::DigFeCntl => !(1 << 19),
-        R::HubpCntl => !(1 << 1 | 1 << 3 | 1 << 16 | 1 << 20 | 1 << 28),
+        R::HubpCntl => !(0x2 | 0x8 | 0x000F_0000 | 0x00F0_0000 | 0x7000_0000),
         _ => !0,
     }
 }
@@ -403,6 +405,8 @@ pub enum Outcome {
     Stopped { done: u8 },
     /// Stage `stage` failed; it and every stage before it were undone.
     Failed { stage: u8, why: Failure },
+    /// Stages 1 to `done` ran, then were undone, last first, as the build asks.
+    Undone { done: u8 },
 }
 
 /// The interpreter's machine for step 3: reads, writes through the guard into the journal, each write logged; the time
@@ -517,8 +521,19 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
 /// Step 3: stages 1 to `allowed`, each logged with its writes before any is made, the firmware's pipe read before and
 /// after; a failure undoes the stage and every one before it.
 pub fn run<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, out: &mut dyn Out) -> Outcome {
+    run_with(light, e, interp, journal, allowed, false, out)
+}
+
+/// Step 3 as `run`, then, when no stage failed, the stages that ran undone, last first: the undo is seen on the hardware,
+/// and nothing is left for the next boot.
+pub fn run_then_undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, out: &mut dyn Out) -> Outcome {
+    run_with(light, e, interp, journal, allowed, true, out)
+}
+
+fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, then_undo: bool, out: &mut dyn Out) -> Outcome {
     let allowed = allowed.min(STAGES);
     light.intro(allowed, false, out);
+    if then_undo { out.line(format_args!("S0 THIS BUILD UNDOES THE STAGES IT RAN, LAST FIRST, BEFORE IT STOPS")); }
     let baseline = match light.watch.read(e) {
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return Outcome::Failed { stage: 0, why }; }
@@ -550,6 +565,14 @@ pub fn run<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journa
             }
         }
         out.pause(PAUSE_AFTER_STAGE_MS);
+    }
+    if then_undo && allowed > 0 {
+        out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", allowed, STAGES, journal.len, allowed));
+        for m in (1..=allowed).rev() { undo(light, e, interp, journal, m, out); }
+        let same = light.watch.read(e).ok().map(|a| light.watch.changed(&baseline, &a).is_none());
+        out.line(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", allowed, STAGES,
+            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+        return Outcome::Undone { done: allowed };
     }
     out.line(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
     Outcome::Stopped { done: allowed }

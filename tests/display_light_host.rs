@@ -362,6 +362,61 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
 }
 
 #[test]
+fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
+    let run_undo = |e: &mut Engine, allowed: u8| {
+        let (f, c) = EXPECTED;
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let img = good();
+        let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+        let mut journal = light::Journal::default();
+        let mut log = Log(vec![]);
+        let outcome = light::run_then_undo(&l, e, &mut interp, &mut journal, allowed, &mut log);
+        (outcome, log.0)
+    };
+    for allowed in [1, 2, 8] {
+        let mut e = engine();
+        let before = e.regs.clone();
+        let (outcome, log) = run_undo(&mut e, allowed);
+        assert_eq!(outcome, Outcome::Undone { done: allowed }, "{:#?}", log);
+        assert!(!writes(&e).is_empty());
+        restored_but(&e, &before, &[]);
+        let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
+        assert_eq!(undone, (1..=allowed).rev().collect::<Vec<u8>>());
+        assert!(log[..4].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
+        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed)));
+        assert!(!log.iter().any(|x| x.contains("LEFT IN PLACE")));
+    }
+    // A build of 0 writes nothing and has nothing to undo; a stage that fails is undone as in `run`.
+    let mut e = engine();
+    assert_eq!(run_undo(&mut e, 0).0, Outcome::Stopped { done: 0 });
+    assert!(writes(&e).is_empty());
+    let mut e = engine();
+    e.frames_move = false;
+    assert_eq!(run_undo(&mut e, STAGES).0, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
+}
+
+#[test]
+fn the_firmwares_status_bits_moving_fail_no_stage_but_a_setting_beside_them_does() {
+    // Statuses that move by themselves, whole fields (the Ryzen's HUBP0 reads its XRQ field as F): DCHUBP_CNTL's
+    // outstanding-request, in-blank, XRQ, timeout and underflow; OPTC_DOUBLE_BUFFER_PENDING.
+    let hubp = reg(R::HubpCntl, 0);
+    let odm = reg(R::OptcInputGlobalControl, 0);
+    for (target, bits) in [(hubp, 0x2 | 0x8 | 0x000E_0000 | 0x00E0_0000 | 0x6000_0000), (odm, 0x8000_0000)] {
+        let mut e = engine();
+        let was = e.regs[&target];
+        e.hook = Some((reg(R::OtgHTotal, 1), target, was ^ bits));
+        let (outcome, log) = run(&good(), &mut e, STAGES);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:05X} {:#?}", target, log);
+    }
+    // HUBP_VTG_SEL (bits 4 to 7) is a setting: its change fails the stage.
+    let mut e = engine();
+    let was = e.regs[&hubp];
+    e.hook = Some((reg(R::OtgHTotal, 1), hubp, was ^ 1 << 4));
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    match outcome { Outcome::Failed { stage: 3, why: Failure::FirmwareChanged { offset, .. } } if offset == hubp => {}, o => panic!("{:?} {:#?}", o, log) }
+}
+
+#[test]
 fn a_build_that_may_run_nothing_only_describes_and_has_no_device() {
     // describe takes the plan and the log, nothing that reads or writes.
     let (f, c) = EXPECTED;
