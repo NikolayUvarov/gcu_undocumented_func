@@ -113,6 +113,16 @@ pub fn describe(frame: &[u8], h: &Header, channel: u8, weakness: u8, now: u64) -
     Some(bss)
 }
 
+/// A 5 GHz access point at least this strong (minus dBm) is joined before a 2.4 GHz one of the same network (550-NET-0090):
+/// 5 GHz is less crowded and shares no antenna with Bluetooth. A floor to be set from the Ryzen's runs (213-DRV-0087).
+pub const FIVE_GHZ_FLOOR: u8 = 70;
+
+// The order access points of one network are joined in: 5 GHz ones above FIVE_GHZ_FLOOR first, then by signal.
+fn preference(b: &&Bss) -> (bool, u8) {
+    let weakness = if b.weakness == 0 { u8::MAX } else { b.weakness };
+    (!(b.channel > 14 && weakness <= FIVE_GHZ_FLOOR), weakness)
+}
+
 /// The networks heard, one entry per BSSID; when full, the weakest gives way to a stronger one.
 pub struct List { entries: [Option<Bss>; LIST] }
 
@@ -147,14 +157,13 @@ impl List {
         if most == 0 || counts.iter().filter(|&&(_, n)| n == most).count() > 1 { return None; }
         counts.iter().find(|&&(_, n)| n == most).map(|&(code, n)| (code, n, named))
     }
-    /// The strongest access point of the network named `ssid` that the station can join.
+    /// The access point of the network named `ssid` that the station can join and joins first: a 5 GHz one above
+    /// FIVE_GHZ_FLOOR, else the strongest.
     pub fn best(&self, ssid: &[u8]) -> Option<&Bss> {
-        let rank = |b: &&Bss| if b.weakness == 0 { u8::MAX } else { b.weakness };
-        self.iter().filter(|b| b.ssid() == ssid && matches!(b.security, Security::Open | Security::Wpa2)).min_by_key(rank)
+        self.iter().filter(|b| b.ssid() == ssid && matches!(b.security, Security::Open | Security::Wpa2)).min_by_key(preference)
     }
-    /// The strongest access point of the network named `ssid` with `security` (801-NET-0084).
+    /// The same among the network's access points with `security` (801-NET-0084).
     pub fn best_of(&self, ssid: &[u8], security: Security) -> Option<&Bss> {
-        let rank = |b: &&Bss| if b.weakness == 0 { u8::MAX } else { b.weakness };
-        self.iter().filter(|b| b.ssid() == ssid && b.security == security).min_by_key(rank)
+        self.iter().filter(|b| b.ssid() == ssid && b.security == security).min_by_key(preference)
     }
 }

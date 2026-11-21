@@ -129,6 +129,7 @@ USER_CRATES=(
     "httpd:httpd:httpd.elf"
     "sshd:sshd:sshd.elf"
     "clipboard:clipboard:clipboard.elf"
+    "display:display:display.elf"
     "ssh_service:ssh:ssh.elf"
     "updater:updater:updater.elf"
     "sysmon:sysmon:sysmon.elf"

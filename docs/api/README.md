@@ -210,6 +210,7 @@ takes that version alone (000-KRN-0175). A change of system calls alone needs no
 `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES m`. Programs keep checking `ABI_VERSION`.
 Handoff 25 adds two images, `bt_hci` after `rtw88_wifi` (700-KRN-0176) and `nnd` after `sysmon` (262-KRN-0178): they renumber
 the images after them and move every field after `extra_programs`, so a loader of handoff 24 or older is refused, as no compatibility with older versions is kept before the first release.
+Handoff 38 adds `display`, the Radeon's display engine, after `clipboard` and last before the shell (213-KRN-0270): 53 images, `BootInfo` 1224 bytes.
 
 `boot_flags` (173-KRN-0036) holds `BOOT_SAFE` when Esc or S was pressed at the loader, before or within the second it waits
 after `ESC OR S WITHIN 1 S`. init then ignores `data/services.txt`.
