@@ -33,16 +33,16 @@ const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and lat
 const LISTED: usize = 4; // video.wit's list of cameras, the test pattern among them
 const LISTED_MODES: usize = 256; // video.wit 1.1's list of a camera's modes
 const DESCRIBED: usize = 72; // a configuration descriptor's bytes a log line
-const NO_MODE: u16 = 0xFFFF;
+const NO_MODE: u16 = 0xFFFF; // `opened`'s index for a pattern drawn at a size none of its modes has
 const BAND_ROWS: usize = 64; // a frame's rows converted between two pumps
-const STOPPED_MS: usize = 250; // a bulk camera's time to stop after its interface is reset // `opened`'s index for a pattern drawn at a size none of its modes has
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
-// `stopped_ns`: when its last stream stopped (0: none yet); a bulk camera is opened again STOPPED_MS after it at the soonest.
-struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, stopped_ns: u64 }
+// `settle`: a bulk camera's stop after its stream closed, and its settling (158-DRV-0082); `halt_ms`: its last clear-halt's
+// time, for the log.
+struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, settle: choices::Settle, halt_ms: u32 }
 
 // A camera's open stream: the camera (its streaming handle), the frame size it sends, the frames assembled from its
 // packets (or bulk transfers), and counts for the log.
@@ -56,6 +56,8 @@ struct Live {
     streamed: bool, pumps: u64, pumped_ns: u64, longest_gap_ns: u64,
     // The frame being converted for its reader: a copy, since a pump meanwhile may end the next one (158-DRV-0083).
     copy: Vec<u8>,
+    // The time its probe and commit took, which a camera reset a moment before answers late (158-DRV-0082).
+    probe_ms: u32,
 }
 
 // The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
@@ -180,7 +182,7 @@ impl Usb {
             log_formats(&described);
             let modes = camera_modes(&described, info.speed);
             log_modes(&modes);
-            self.cameras.push(Camera { streaming, info: described, name, offered, modes, stopped_ns: 0 });
+            self.cameras.push(Camera { streaming, info: described, name, offered, modes, settle: Default::default(), halt_ms: 0 });
             self.cameras.sort_by_key(|c| c.streaming);
             let order: Vec<String> = self.cameras.iter().enumerate().map(|(n, c)| format!("{} \"{}\"", n, c.name)).collect();
             mind::println!("[VIDEO] CAMERAS: {}", order.join(", "));
@@ -188,6 +190,39 @@ impl Usb {
     }
 
     fn camera(&self, streaming: u32) -> Option<&Camera> { self.cameras.iter().find(|c| c.streaming == streaming) }
+
+    // The next stop step of camera `at` (158-DRV-0082): its bulk endpoint's halt cleared, as Linux stops a bulk camera, or
+    // its one setting selected again, without which a camera kept its old frame size (158-DRV-0083). A failed step is
+    // said and the next one tried; Err when usb_host is gone.
+    fn step(&mut self, at: usize) -> Result<(), (mind::Error, u32)> {
+        let Some(host) = self.host.as_mut() else { self.cameras.iter_mut().for_each(|c| c.settle.next = None); return Ok(()) };
+        let c = &mut self.cameras[at];
+        let Some(step) = c.settle.next else { return Ok(()) };
+        let started = mind::time::monotonic_ns();
+        let result = match step {
+            choices::Step::Halt => host.control(c.streaming, 0x02, 1, 0, c.info.endpoint as u16, 0).map(drop),
+            choices::Step::Reset => host.select(c.streaming, 0).map(drop),
+        };
+        let now = mind::time::monotonic_ns();
+        let took = ((now - started) / 1_000_000) as u32;
+        c.settle.done(step, now);
+        match (step, result) {
+            (_, Err(e)) if host_gone(e) => return Err((e, c.streaming)),
+            (choices::Step::Halt, Err(e)) => mind::println!("[VIDEO] \"{}\": THE BULK ENDPOINT'S CLEAR-HALT FAILED ({:?})", c.name, e),
+            (choices::Step::Reset, Err(e)) => mind::println!("[VIDEO] \"{}\": SETTING 0 OF THE BULK CAMERA FAILED ({:?})", c.name, e),
+            (choices::Step::Halt, Ok(())) => c.halt_ms = took,
+            (choices::Step::Reset, Ok(())) => mind::println!("[VIDEO] \"{}\": STOPPED {} MS AFTER ITS CLOSE: CLEAR-HALT {} MS, SETTING 0 {} MS, A STEP A TURN",
+                c.name, (now - c.settle.closed_ns) / 1_000_000, c.halt_ms, took),
+        }
+        Ok(())
+    }
+
+    // One stop step of the first camera that has one; Ok(true) while steps remain.
+    fn stop_step(&mut self) -> Result<bool, (mind::Error, u32)> {
+        let Some(at) = self.cameras.iter().position(|c| c.settle.next.is_some()) else { return Ok(false) };
+        self.step(at)?;
+        Ok(self.cameras.iter().any(|c| c.settle.next.is_some()))
+    }
 
     // A camera is gone (unplugged), or with None every one (usb_host restarted): they are looked for again.
     fn lost(&mut self, streaming: Option<u32>) {
@@ -306,20 +341,18 @@ fn pattern_opened(number: u8, width: u16, height: u16, rate: u8) -> idl::Opened 
 // Probes and commits the frame size nearest `width` × `height` at `rate`, and selects the setting that carries it.
 fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) -> Result<Live, idl::Error> {
     let info = &camera.info;
-    // A bulk camera stopped a moment ago is given STOPPED_MS to stop: the infrared one kept its old frame size once when
-    // committed 20 ms after (the Ryzen's, 158-DRV-0083). Only a change of mode waits; a close does not.
-    let since = mind::time::monotonic_ns().saturating_sub(camera.stopped_ns) / 1_000_000;
-    if info.bulk && camera.stopped_ns != 0 && since < STOPPED_MS as u64 { let _ = mind::time::sleep(STOPPED_MS - since as usize); }
     let Some(size) = info.choose(width, height).cloned() else { mind::println!("[VIDEO] \"{}\" HAS NO YUY2 FORMAT (MJPEG IS NOT DECODED YET)", camera.name); return Err(idl::Error::Invalid) };
     let interval = size.interval(10_000_000 / rate as u32);
     let probe = uvc::Probe::new(info.version, size.format, size.frame, interval);
     let (number, length) = (info.streaming as u16, probe.length as u16);
     let failed = |what: &str, e: mind::Error| { mind::println!("[VIDEO] \"{}\": {} FAILED ({:?})", camera.name, what, e); idl::Error::NotFound };
     host.buffer_mut()[..probe.length].copy_from_slice(probe.as_bytes());
+    let probed = mind::time::monotonic_ns();
     host.control(camera.streaming, 0x21, uvc::SET_CUR, (uvc::PROBE as u16) << 8, number, length).map_err(|e| failed("PROBE", e))?;
     let got = host.control(camera.streaming, 0xA1, uvc::GET_CUR, (uvc::PROBE as u16) << 8, number, length).map_err(|e| failed("PROBE'S ANSWER", e))?;
     let answer = uvc::Probe::from_bytes(&host.buffer()[..got]);
     host.control(camera.streaming, 0x21, uvc::SET_CUR, (uvc::COMMIT as u16) << 8, number, answer.length as u16).map_err(|e| failed("COMMIT", e))?;
+    let probe_ms = ((mind::time::monotonic_ns() - probed) / 1_000_000) as u32;
     mind::println!("[VIDEO] \"{}\": ASKED FORMAT {} FRAME {} ({}X{}) INTERVAL {}; COMMITTED FORMAT {} FRAME {} INTERVAL {}, FRAMES UP TO {} BYTES, PAYLOADS UP TO {}",
         camera.name, size.format, size.frame, size.width, size.height, interval, answer.format(), answer.frame(), answer.interval(), answer.max_frame(), answer.max_payload());
     // The camera may have chosen another frame size of the format: its answer counts.
@@ -338,20 +371,17 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     };
     let now = mind::time::monotonic_ns();
     Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, true), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
-        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new() })
+        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new(), probe_ms })
 }
 
-// The camera's stream stopped, with what it got: an isochronous camera back to setting 0; a bulk one's endpoint
-// cleared of its halt, as Linux stops a camera of one setting. A camera gone is not asked.
+// The camera's stream stopped, with what it got: an isochronous camera back to setting 0. A bulk one's stream in
+// usb_host ends here; its clear-halt and its reset come after the closing program's answer, a step a turn of the loop
+// (Usb::step, 158-DRV-0082). A camera gone is not asked.
 fn stop(usb: &mut Usb, live: &Live) -> String {
     if let Some(host) = usb.host.as_mut().filter(|_| !live.gone) {
         if live.bulk.is_some() {
             if live.streamed { if let Err(e) = host.bulk_stream(live.camera, live.endpoint, false) { mind::println!("[VIDEO] THE BULK STREAM DID NOT STOP ({:?})", e); } }
-            if let Err(e) = host.control(live.camera, 0x02, 1, 0, live.endpoint as u16, 0) { mind::println!("[VIDEO] THE BULK ENDPOINT'S CLEAR-HALT FAILED ({:?})", e); }
-            // Its one setting selected again resets the interface: a camera kept its stream's frame size after the
-            // clear-halt alone, and the next commit's size never came (the Ryzen's, 158-DRV-0083).
-            if let Err(e) = host.select(live.camera, 0) { mind::println!("[VIDEO] SETTING 0 OF THE BULK CAMERA FAILED ({:?})", e); }
-            if let Some(c) = usb.cameras.iter_mut().find(|c| c.streaming == live.camera) { c.stopped_ns = mind::time::monotonic_ns(); }
+            if let Some(c) = usb.cameras.iter_mut().find(|c| c.streaming == live.camera) { c.settle.closed(mind::time::monotonic_ns()); }
         } else if let Err(e) = host.select(live.camera, 0) { usb.lost(if host_gone(e) { None } else { Some(live.camera) }); }
     }
     mind::println!("{}", timing(live));
@@ -372,6 +402,28 @@ fn pump_all(streams: &mut [Stream], except: Option<usize>, usb: &mut Usb) -> boo
     }
     if let Some((e, handle)) = failed { lost(streams, usb, e, handle); }
     any
+}
+
+// Camera `handle`'s stop steps finished and its settling waited out before it is probed again, every other stream
+// pumped meanwhile instead of held (158-DRV-0082). The time it waited.
+fn settle(streams: &mut [Stream], usb: &mut Usb, handle: u32) -> u64 {
+    let started = mind::time::monotonic_ns();
+    loop {
+        let Some(at) = usb.cameras.iter().position(|c| c.streaming == handle) else { break };
+        let now = mind::time::monotonic_ns();
+        if usb.cameras[at].settle.next.is_some() {
+            if let Err((e, h)) = usb.step(at) { lost(streams, usb, e, h); break; }
+        } else if usb.cameras[at].settle.ready(now) {
+            break;
+        } else if !pump_all(streams, None, usb) {
+            // No stream to pump: the rest of the settling in one sleep.
+            let left = (usb.cameras[at].settle.reset_ns + usb.cameras[at].settle.ms as u64 * 1_000_000).saturating_sub(now) / 1_000_000 + 1;
+            let _ = mind::time::sleep(left as usize);
+            continue;
+        }
+        let _ = mind::time::sleep(1);
+    }
+    mind::time::monotonic_ns() - started
 }
 
 // A camera stream's packets could not be taken: its camera went, or with usb_host restarted every one. Their streams
@@ -486,8 +538,10 @@ fn main(_info: &'static BootInfo) {
             let _ = display::camera(DISPLAY);
             marked = mind::time::uptime_ms();
         }
+        // A closed bulk camera's next stop step, after its program's answer (158-DRV-0082).
+        let stopping = match usb.stop_step() { Ok(more) => more, Err((e, handle)) => { lost(&mut streams, &mut usb, e, handle); false } };
         let live = pump_all(&mut streams, None, &mut usb);
-        let wait = if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
+        let wait = if stopping { 1 } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) {
             Ok(request) => request,
             Err(mind::Error::Other(ERR_TIMEOUT)) => continue,
@@ -525,10 +579,24 @@ fn main(_info: &'static BootInfo) {
                         // The camera's place may have changed if one was lost while the earlier stream stopped.
                         let source = match key {
                             Some(Key::Pattern(n)) => Ok(Source::Pattern(n)),
-                            Some(Key::Camera(handle)) => match (usb.host.as_mut(), usb.cameras.iter().find(|c| c.streaming == handle)) {
-                                (Some(host), Some(c)) => start(host, c, width, height, rate).map(Source::Camera),
-                                _ => Err(idl::Error::NotFound),
-                            },
+                            Some(Key::Camera(handle)) => {
+                                // A bulk camera closed a moment ago finishes its stop and settles first, the other
+                                // streams pumped meanwhile (158-DRV-0082).
+                                let waited = settle(&mut streams, &mut usb, handle) / 1_000_000;
+                                let started = match (usb.host.as_mut(), usb.cameras.iter().find(|c| c.streaming == handle)) {
+                                    (Some(host), Some(c)) => start(host, c, width, height, rate).map(Source::Camera),
+                                    _ => Err(idl::Error::NotFound),
+                                };
+                                if let (Ok(Source::Camera(l)), Some(c)) = (&started, usb.cameras.iter_mut().find(|c| c.streaming == handle)) {
+                                    let reset = c.settle.reset_ns;
+                                    c.settle.opened(l.probe_ms);
+                                    if reset != 0 {
+                                        mind::println!("[VIDEO] \"{}\": OPENED AGAIN {} MS AFTER ITS RESET, {} MS WAITED (THE OTHER STREAMS PUMPED); ITS PROBE AND COMMIT {} MS; IT SETTLES {} MS NEXT",
+                                            c.name, (mind::time::monotonic_ns() - reset) / 1_000_000, waited, l.probe_ms, c.settle.ms);
+                                    }
+                                }
+                                started
+                            }
                             None => Err(idl::Error::NotFound),
                         };
                         match (source, Pages::new(width as usize * height as usize * 4)) {

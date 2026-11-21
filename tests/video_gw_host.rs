@@ -118,3 +118,62 @@ fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
         assert_eq!(offered_now, offered_sizes, "{name}");
     }
 }
+
+// 158-DRV-0082: a bulk camera's stop runs a step at a time after its close: the clear-halt, then the reset; none after.
+#[test]
+fn a_bulk_cameras_stop_is_its_clear_halt_then_its_reset() {
+    assert_eq!(after(Step::Halt), Some(Step::Reset));
+    assert_eq!(after(Step::Reset), None);
+    let mut s = Settle::default();
+    assert!(s.ready(0) && s.next.is_none(), "a camera never closed is ready");
+    s.closed(1_000);
+    assert_eq!((s.next, s.closed_ns), (Some(Step::Halt), 1_000));
+    assert!(!s.ready(u64::MAX), "not before its steps are done");
+    s.done(Step::Halt, 2_000);
+    assert_eq!((s.next, s.reset_ns), (Some(Step::Reset), 0), "the clear-halt is no reset");
+    assert!(!s.ready(u64::MAX));
+    s.done(Step::Reset, 3_000_000);
+    assert_eq!((s.next, s.reset_ns), (None, 3_000_000));
+}
+
+// 158-DRV-0082: after its reset a camera is probed again SETTLE_MS later at the soonest, at once when it was not reset.
+#[test]
+fn a_reset_camera_is_probed_again_once_settled() {
+    let ms = 1_000_000u64;
+    let mut s = Settle::default();
+    assert_eq!(s.ms, SETTLE_MS);
+    s.closed(0);
+    s.done(Step::Halt, 5 * ms);
+    s.done(Step::Reset, 10 * ms);
+    assert!(!s.ready(10 * ms) && !s.ready((10 + SETTLE_MS as u64) * ms - 1));
+    assert!(s.ready((10 + SETTLE_MS as u64) * ms));
+    // A failed step counts as done: the next one is tried, and the camera does not wait for ever.
+    let mut f = Settle::default();
+    f.closed(0);
+    f.done(Step::Halt, ms);
+    f.done(Step::Reset, 2 * ms);
+    assert!(f.ready((2 + SETTLE_MS as u64) * ms));
+}
+
+// 158-DRV-0082: a probe answered late after the settling lengthens the next settling by its lateness, up to a second;
+// a prompt one, or an open with no reset before it, keeps it.
+#[test]
+fn the_settling_learns_from_a_late_probe() {
+    assert_eq!(learned(250, PROMPT_MS), 250);
+    assert_eq!(learned(250, 150), 400);
+    assert_eq!(learned(900, 400), SETTLE_MAX_MS);
+    assert_eq!(learned(SETTLE_MAX_MS, 999), SETTLE_MAX_MS);
+    let mut s = Settle::default();
+    assert!(!s.opened(500), "no reset before it: nothing learned");
+    s.closed(0);
+    s.done(Step::Halt, 1);
+    s.done(Step::Reset, 2);
+    assert!(s.opened(150));
+    assert_eq!((s.ms, s.reset_ns), (400, 0), "the Ryzen's camera 0: 250 ms and a probe 150 ms late");
+    assert!(s.ready(0), "opened: no longer settling");
+    s.closed(10);
+    s.done(Step::Halt, 11);
+    s.done(Step::Reset, 12);
+    assert!(!s.opened(3), "a prompt probe keeps it");
+    assert_eq!(s.ms, 400);
+}

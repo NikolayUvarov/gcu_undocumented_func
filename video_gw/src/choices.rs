@@ -57,3 +57,46 @@ pub fn offered(yuy2: bool, width: u16, height: u16, rate: u32, bytes_per_second:
 
 /// The modes a test pattern lists (any width a multiple of 32 up to 640 is drawn; these are for the tests).
 pub const PATTERN_MODES: [(u16, u16, u8); 3] = [(640, 480, 30), (320, 240, 10), (160, 120, 5)];
+
+/// A bulk camera's stop after its stream closed (158-DRV-0082): its endpoint's halt cleared, as Linux stops one, then
+/// its one setting selected again, without which a camera kept its old frame size (158-DRV-0083).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step { Halt, Reset }
+
+/// The step after `step`: none after the reset.
+pub fn after(step: Step) -> Option<Step> { match step { Step::Halt => Some(Step::Reset), Step::Reset => None } }
+
+/// The time a bulk camera is given after its reset before it is probed again: the Ryzen's answered a probe sent sooner
+/// 0.15 to 0.4 s late, and the gateway waited with it.
+pub const SETTLE_MS: u32 = 250;
+pub const SETTLE_MAX_MS: u32 = 1000;
+/// A probe and commit that take longer than this were answered late.
+pub const PROMPT_MS: u32 = 20;
+
+/// The settling to give next, after a probe and commit of `probe_ms` that followed `settle_ms` of it: lengthened by
+/// the lateness of a late one, up to SETTLE_MAX_MS; a prompt one keeps it.
+pub fn learned(settle_ms: u32, probe_ms: u32) -> u32 { if probe_ms <= PROMPT_MS { settle_ms } else { settle_ms.saturating_add(probe_ms).min(SETTLE_MAX_MS) } }
+
+/// A bulk camera's stop and settling, a step at a time (158-DRV-0082): the closing program has its answer first, the
+/// steps run one a turn of the gateway's loop with every other stream pumped between, and an open of the camera that
+/// comes sooner finishes them and waits out the settling, pumping the other streams, instead of holding them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settle { pub next: Option<Step>, pub closed_ns: u64, pub reset_ns: u64, pub ms: u32 }
+
+impl Default for Settle { fn default() -> Self { Settle { next: None, closed_ns: 0, reset_ns: 0, ms: SETTLE_MS } } }
+
+impl Settle {
+    /// Its stream closed at `now`: the halt is cleared next.
+    pub fn closed(&mut self, now: u64) { (self.next, self.closed_ns) = (Some(Step::Halt), now); }
+    /// Step `step` ended at `now`, done or failed: the next one is tried all the same.
+    pub fn done(&mut self, step: Step, now: u64) { self.next = after(step); if step == Step::Reset { self.reset_ns = now; } }
+    /// Whether it may be probed at `now`: no step left, and `ms` past its reset.
+    pub fn ready(&self, now: u64) -> bool { self.next.is_none() && (self.reset_ns == 0 || now.saturating_sub(self.reset_ns) >= self.ms as u64 * 1_000_000) }
+    /// Opened with a probe and commit of `probe_ms`: after a reset, the settling learns from it. True when it changed.
+    pub fn opened(&mut self, probe_ms: u32) -> bool {
+        let was = self.ms;
+        if self.reset_ns != 0 { self.ms = learned(self.ms, probe_ms); }
+        self.reset_ns = 0;
+        self.ms != was
+    }
+}

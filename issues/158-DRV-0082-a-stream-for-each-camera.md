@@ -75,8 +75,31 @@
     - camera 1 at 30 a second: `599 FRAMES`, `569 GOOD FRAMES, 3 BROKEN`.
   - The figures hold for that machine and those cameras (MC-12.1).
 - **What is left:**
-  - **The longest gaps come from the gateway holding itself:** 283 to 475 ms, while the other camera's stream closed (its reset) or broke. Frames of the camera beside it break meanwhile. The close's wait was moved to the next open of the same camera; the reset itself still takes about 0.4 s on camera 0.
+  - **The longest gaps come from the gateway holding itself:** 283 to 475 ms, while the other camera's stream closed or changed its mode. Frames of the camera beside it break meanwhile. An earlier line here put this down to the reset itself, which was wrong. The logs give it to two things:
+    - **my own waits:** 250 ms after each close (c687acf56) or before each re-open (b712571ac);
+    - **the camera's late answer:** after its reset (setting 0 selected again), camera 0 answered the next probe late. From close to the probe's answer took 412 ms with no wait (`2211.670 CLOSED` to `2212.082 ASKED`) and 404 ms after the 250 ms wait.
+    - The clear-halt and the reset together took 32 to 35 ms (from `BULK STREAM ENDED` to the close's line).
   - **The maintainer has not looked at two windows yet.** The machine runs these builds until its next boot for that.
+- **The reset at close off the gateway's main path** (the owner session's step 2):
+  - **At a bulk camera's close** only its stream in `usb_host` ends (`bulk-stream` off: two controller commands). The closing program then has its answer.
+  - **The clear-halt and the reset come after it,** one a turn of the gateway's loop, every stream pumped between (`Usb::step`).
+  - **An open of the camera that comes sooner** finishes those steps and then waits out its settling while it pumps every other stream (`settle`), instead of sleeping or sending a probe the camera answers late.
+  - **The settling** starts at 250 ms after the reset. A probe and commit that still take more than 20 ms lengthen it by that time, up to 1 s (`choices::Settle`, `learned`). Camera 0's figures above would make it 400 ms after one change.
+  - **The other readers' calls** still wait while the gateway settles a camera. Their streams keep being read meanwhile, so their next frame is whole, only late.
+  - **The log says** `STOPPED n MS AFTER ITS CLOSE: CLEAR-HALT a MS, SETTING 0 b MS, A STEP A TURN` and, at a re-open, `OPENED AGAIN n MS AFTER ITS RESET, w MS WAITED (THE OTHER STREAMS PUMPED); ITS PROBE AND COMMIT p MS; IT SETTLES s MS NEXT`.
+  - **Tested:** host cases (`tests/video_gw_host.rs`: the steps' order, the settling, what it learns).
+  - **Not yet run on the Ryzen:** `main` is at ABI 37 and the machine at 35 until its stick is rewritten.
+- **What this `usb_host` does differently for devices that are not cameras:**
+  - **The bulk stream:** it is made only when a client calls `bulk-stream`. In the tree only `video_gw` calls it: `rg bulk_stream` finds its two calls and the library's wrapper. A bulk stream takes the controller's pages, but leaves 12 of its 64 free, so a device plugged in meanwhile still gets them, and gives them back at its end.
+  - **Unchanged code paths:** without a bulk stream, `streams_of`, `end_streams`, `stream_event`, `take_stream`, `queue_td`, `isochronous` and `release` run as before. Each new branch is taken only for a stream marked bulk. An isochronous stream still takes at most 4 pages (`ISO_PAGES`, the old `STREAM_PAGES`).
+  - **The one change with no bulk stream:** `bulk` is refused (invalid) on an endpoint that has a stream on the same endpoint number. Before, it put a transfer on the ring that endpoint had before its setting changed.
+  - **Why no device of ours meets it:** no device used with MIND Core has a bulk and an isochronous endpoint at one number:
+    - the keyboards, mice and tablets have interrupt endpoints;
+    - the USB drives have bulk ones;
+    - the CH340 and FT232 have bulk ones;
+    - the USB audio devices have isochronous ones;
+    - Bluetooth's isochronous settings are not selected.
+  - **The gate:** the suites `usb`, `ehci`, `usbaudio`, `link`, `iso` (a USB boot disk), `boot` (its EHCI disk) and the USB image's boot ran with this `usb_host`. Their results are in the progress below.
 - **What the gate shows:** the `cameras` suite checks two streams of the gateway at once, with the patterns. Nothing in the gate shows two real streams starving each other:
   - QEMU 8.2 has no USB camera (`-device help` lists none);
   - the bulk stream of `usb_host` is not reached by any QEMU device, and is evidence on the Ryzen alone;
