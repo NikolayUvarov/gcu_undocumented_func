@@ -192,6 +192,9 @@ pub unsafe fn quiesce(device: &Device) -> bool {
 // New Realtek drivers install their rings before explicitly enabling bus mastering.
 pub unsafe fn registers_only(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Registers) }
 
+// A memory BAR's grant: memory decoding and mastering; I/O decoding stays as the firmware or an I/O grant left it.
+pub unsafe fn enable_memory(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Memory) }
+
 // Request only address spaces the function implements; unsupported Command bits may be hardwired to zero.
 pub unsafe fn enable(device: &Device) -> bool {
     let decode = device.bars.iter().filter(|bar| bar.size != 0).fold(0, |bits, bar| bits | if bar.io { 1 } else { 2 });
