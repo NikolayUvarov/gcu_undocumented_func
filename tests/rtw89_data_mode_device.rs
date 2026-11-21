@@ -11,6 +11,9 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
     // Whole receive buffers, after `incoming`: frames with their PPDU count and rate, and captured reports (213-DRV-0087).
     pub buffers:Vec<Vec<u8>>,
+    // 213-DRV-0091: the next reads of the indirect window that answer DEADBEEF, and whether the first of them begins a
+    // firmware recovery as `ser` does (the Ryzen's boot 62).
+    pub window_dead:usize,pub window_dead_ser:bool,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -168,6 +171,8 @@ impl RegisterIo for Device{
                 if n==0{self.raw().put(0xc348,4,0x010f);self.control.borrow_mut().ser_heal=None;}else{self.control.borrow_mut().ser_heal=Some(n-1);}
             }
         }
+        if self.active&&(0x40000..0x40020).contains(&at)&&self.control.borrow().window_dead>0{
+            let mut c=self.control.borrow_mut();c.window_dead-=1;if std::mem::take(&mut c.window_dead_ser){c.ser=true;}return Ok(0xdead_beef)}
         if self.active&&self.control.borrow().fault==15&&at==fwcmd::DMA_BUSY{return Ok(1<<18)}
         if self.control.borrow().armed&&matches!((self.control.borrow().fault,at),(10,0x200)|(11,0x2f0)|(13,0x10734)){return Ok(0)}
         if self.control.borrow().corrupt&&at==0x1110{return Ok(self.raw().get(at,4)^4096)}self.station.read32(at)}

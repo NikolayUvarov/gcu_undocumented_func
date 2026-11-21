@@ -123,6 +123,60 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 - **Sends that outran their time:** this evening the old driver had almost none too (9 in boot 60's 15 minutes of a 30 MB download). The lower count of 20:13–20:16 was the hour, not the change; nothing is claimed about them.
 - **Tonight's test:** the boot image's driver runs through the night, with Effector's traffic. Its boot logs are read for the beacons, late sends, holes, stalls and anything new from the firmware now that it knows the link.
 
+**2026-11-22, boot 62: the data mode stopped twice on an unreadable CMAC register** (98 minutes, the boot image's driver):
+- **The stops:** at 1003.959 s and 3248.465 s. Each was `Station(CheckFailure { cause: Fault { kind: PowerState, register: 0x40018, value: DEADBEEF } })`: the station check read the CMAC window and got DEADBEEF. A fresh driver started each time.
+- **The registers at the stops:**
+  - HALT_H2C_CTRL (0x160), HALT_C2H_CTRL (0x164) and HALT_C2H (0x16C) read 0;
+  - SER_DBG_INFO read F0000001 at the first stop and F0000002 at the second;
+  - CMAC_ERR_ISR read 0.
+- **Between the stops,** the third driver logged `FIRMWARE RECOVERY 1 BETWEEN OPERATIONS (SER_DBG_INFO F0000001, CMAC_ERR_ISR 00000040)`. BB and the scheduler were back after 509 µs and the data mode went on.
+
+  CMAC_ERR_ISR bit 6 is B_AX_WMAC_RX_ERR_IND (reg.h). So the firmware recovers from a receive error, and a station check that happens to fall inside the recovery reads DEADBEEF and stops the data mode.
+
+**2026-11-22, the check mended** (branch `claude/213-DRV-0091-the-check-mended`; host cases, not yet run on the Ryzen):
+- **`data_mode.rs`, `live()`:** a station check whose first failure reads DEADBEEF first takes the path a recovery between operations already takes: if SER_DBG_INFO moved, it waits for BB and the scheduler. Then `read_again()` checks again 2 ms apart, up to 8 reads in all, and outlasts a recovery whenever SER_DBG_INFO moves meanwhile.
+- **When it stops:** only on a mismatch that persists with a readable value, or on a register still DEADBEEF after the 8 reads. The CMAC table check is kept.
+- **The line for each meeting:**
+
+  ```
+  [RTW89] CHECK MET A FIRMWARE RECOVERY n: <reg> READ DEADBEEF, READABLE AGAIN AFTER r READS IN t US; SER_DBG_INFO a -> b (213-DRV-0091)
+  ```
+
+  It says `AN UNREADABLE CMAC` in place of `A FIRMWARE RECOVERY` when no recovery was seen. n counts every meeting.
+- **The probe of a hole or a stop** also reads the error masks: DMAC_ERR_IMR 0x8520, CMAC_ERR_IMR 0xC160 and RX_ERR_FLAG_IMR 0xC804.
+- **Host case:** `service_a_check_that_meets_an_unreadable_cmac_window_reads_again_and_goes_on` (tests/rtw89_service_cases.rs). The model's CMAC window can read DEADBEEF for a set number of reads, with or without a recovery started. The case covers:
+  - the check first, with no recovery: meeting 1, `recovered` false;
+  - the check first, the recovery starting during it: meeting 2, `recovered` true, SER_DBG_INFO changed;
+  - the recovery first, then the check: the recovery is taken, then meeting 3;
+  - traffic going on after each;
+  - a window that stays unreadable for 1000 reads: the service stops with a radio failure.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, why the firmware recovers: the error masks and the host's part in a recovery** (reading only; Linux 05f7e89's mac.c, ser.c, reg.h and rtw8852b.c):
+- **The masks are the same as Linux's for the 8852B.**
+  - `post_mac.rs` writes the DMAC and CMAC tables of Linux's `enable_imr_ax` with the 8852B's `imr_info` values (the `MASKS` table, from `post_mac_regs.rs`).
+  - It writes `err_imr_ctrl`'s DMAC_ERR_IMR and CMAC_ERR_IMR as all ones.
+  - Linux never writes R_AX_RX_ERR_FLAG_IMR (0xC804) for the 8852B; mac.c only prints it in its error dump.
+  - What the masks read in data mode is not yet known: the probe reads them from this branch on.
+- **What a recovery needs from the host** (ser.c):
+  - Linux takes the firmware's error from HALT_C2H. `rtw89_mac_get_err_status` waits for HALT_C2H_CTRL to be nonzero, reads HALT_C2H and clears HALT_C2H_CTRL; ser.c's `rtw89_ser_notify` turns the code into an event.
+  - **L0** (ERR_CMAC0/1, L0_RESET_DONE) becomes SER_EV_L0_RESET, which no state of ser.c acts on: the firmware recovers alone.
+  - **L1** (L1_ERR_DMAC, L0_PROMOTE_TO_L1) is a handshake. The host:
+    1. stops TX, DMA and RX and resets the rings;
+    2. answers M2 through HALT_H2C;
+    3. waits for M3;
+    4. answers M4;
+    5. waits for M5.
+
+    Each wait has a 1 s alarm, and a timeout goes to L2.
+  - **This driver** never reads or clears HALT_C2H and has no L1 handshake. A recovery between operations only waits for BB and the scheduler.
+  - **What boot 62 shows:** both stops read HALT_C2H_CTRL and HALT_C2H as 0, and the recovery between them was over in 509 µs with no host action. That fits an L0 recovery, which Linux would also leave to the firmware. With only two readings, this is not established.
+- **Which to fix first:** the host's part, by its first step only.
+  - The change: read HALT_C2H_CTRL at each data-mode check; when it is nonzero, read HALT_C2H, clear the CTRL as Linux does, and log the code and the level.
+  - The measurement: one night. It says whether L1 requests come and go unanswered, which would need the handshake, or the recoveries are L0 only.
+  - The masks match Linux, so changing them would only move away from the reference without a reason.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

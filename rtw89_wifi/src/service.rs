@@ -152,6 +152,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn take_event(&mut self)->Option<Event>{self.event.take()}
     #[cfg(test)]
     pub(crate) fn take_recovery(&mut self)->Option<data_mode::Recovery>{self.data().take_recovery()}
+    #[cfg(test)]
+    pub(crate) fn take_unreadable(&mut self)->Option<data_mode::Unreadable>{self.data().take_unreadable()}
     /// Whether a country that refuses the channel stops sending (wlanhw 1.2), or is only logged (KEEP_SENDING).
     #[cfg(test)]
     pub(crate) fn strict(mut self,on:bool)->Self{self.strict=on;self}
@@ -490,6 +492,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let more=self.step();if let Some(event)=self.event.take(){events(event)}
             if let Some(r)=self.owner.as_deref_mut().and_then(|data|data.take_recovery()){
                 events(Event::Recovered{count:r.count,ser:r.ser,cmac:r.cmac,bb_us:r.bb_us,restored:r.restored,waited_us:r.waited_us,after_reconcile:r.after_reconcile})}
+            if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
+                events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,
+                    ser_before:u.ser_before,ser_after:u.ser_after,recovered:u.recovered})}
             if !more{break}
         }self.stop()
     }

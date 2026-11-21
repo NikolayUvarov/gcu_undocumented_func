@@ -80,6 +80,10 @@ pub enum Event {
     /// for the first service.rs's HOLES_PROBED.
     Hole { n: u32, channel: u8, bssid: [u8; 6], by_beacons: bool, ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64,
         pending: bool, probe: Option<data_mode::Probe> },
+    /// A station register check that met an unreadable CMAC domain (DEADBEEF) and went on (213-DRV-0091): the n-th, the
+    /// register and value first read, the reads and the time until it answered, SER_DBG_INFO before and after, and
+    /// whether a firmware recovery was outlasted meanwhile.
+    Unreadable { count: u32, register: usize, value: u32, reads: u32, waited_us: u64, ser_before: u32, ser_after: u32, recovered: bool },
     /// The firmware told of the station's link (213-DRV-0091): connected to `bssid` as `aid` (join info and address CAM as
     /// INFRA), or no link again (None); `was`, the AID before; the registers just before and after, the first two times.
     Linked { channel: u8, bssid: [u8; 6], aid: Option<u16>, was: Option<u16>, before: Option<data_mode::Probe>, after: Option<data_mode::Probe> },

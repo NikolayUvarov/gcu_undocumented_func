@@ -22,6 +22,13 @@ const SER_GRACE_US:u64=20_000;
 // it ran out in whichever register they read (the Ryzen, 2026-11-08). False: the frame's deadline caps them.
 const OWN_DEADLINES:bool=true;
 const SER_DBG_INFO:usize=0x8424;
+// 213-DRV-0091: a station register check that met an unreadable CMAC domain (DEADBEEF, as the Ryzen's boot 62 read the
+// CMAC table's window twice in 98 minutes once the firmware knew the link) reads again UNREADABLE_TRIES times,
+// UNREADABLE_GAP_US apart, and outlasts a firmware recovery that SER_DBG_INFO or the BB and the scheduler show meanwhile;
+// only a mismatch with a readable value, or no answer at all after it, stops the data mode.
+const UNREADABLE:u32=0xdead_beef;
+const UNREADABLE_TRIES:u32=8;
+const UNREADABLE_GAP_US:u32=2_000;
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
 pub(crate) const SCHEDULER:u16=0x010f;
@@ -71,7 +78,8 @@ impl core::fmt::Debug for Snapshot{
 /// window's indirect read, as the coexistence reconcile makes it:
 /// - MAC: SYS_FUNC_EN in 0x0, the coexistence control byte in 0x73, the scoreboard; HALT_H2C/C2H and their controls,
 ///   WCPU_FW_CTRL; the RXQ and RPQ rings' indexes (host in bits 0-11, hardware in 16-27: equal, nothing was fed);
-///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_ISR; MACID pause and sleep, CTN_TXEN (transmit paused); port 0's PORT_CFG
+///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_IMR and _ISR (and CMAC_ERR_IMR, RX_ERR_FLAG_IMR below: what the MAC raises to
+///   the firmware, 213-DRV-0091); MACID pause and sleep, CTN_TXEN (transmit paused); port 0's PORT_CFG
 ///   (net type, BSSID fit, TSF update); CMAC_ERR_ISR, RX_ERR_FLAG, RX_FLTR_OPT, the CTRL/MGNT/DATA type filters (two
 ///   bits a subtype: 1 to the host, 2 to the WLAN CPU) and BCN_PSR_RPT; the pollution 0xC67C; Linux's coexistence
 ///   monitor set for the 8852B
@@ -81,9 +89,9 @@ impl core::fmt::Debug for Snapshot{
 ///   TX collision (0xC70); CCK (0x700) and the CCK path (0x2344), as the channel stage sets them.
 /// - RF of both paths: mode (0x00), channel (0x18), VCO (0xB2) and the synthesizer's lock (0xC5 bit 15).
 /// - The LTE window's SW_CFG_1: the grants the coexistence writes. All ones: not read.
-pub const PROBE_MAC:[usize;38]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8524,
-    0x9eb0,0xc2c0,0xc348,0xc400,0xc164,0xc800,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,0xda20,
-    0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
+pub const PROBE_MAC:[usize;41]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8520,0x8524,
+    0x9eb0,0xc2c0,0xc348,0xc400,0xc160,0xc164,0xc800,0xc804,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,
+    0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
 pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
     0xc70,0x700,0x2344];
 pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
@@ -96,6 +104,11 @@ impl core::fmt::Debug for Probe{
         for(path,values)in self.rf.iter().enumerate(){for(at,value)in PROBE_RF.iter().zip(values){write!(f,"{}{:X}={:X} ",['A','B'][path],at,value)?;}}
         write!(f,"LTE38={:X}",self.grants)
     }
+}
+
+// The station check's fault when it read an unreadable CMAC domain (213-DRV-0091).
+fn unreadable(result:&Result<(),Cause>)->Option<Fault>{
+    match result{Err(Cause::Station(failure)) if failure.cause.value==UNREADABLE=>Some(failure.cause),_=>None}
 }
 
 /// Actual station context is consumed; the calibrated policy and board remain immutably borrowed throughout data mode.
@@ -127,7 +140,14 @@ pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>,stopped:bool,
     cleanup_allowed:bool,last_shutdown:Option<Shutdown>,counts:Counts,tx_deadline:Option<u64>,snapshot:Option<Snapshot>,
     ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,grace_us:u64,
+    // 213-DRV-0091: the station checks that met an unreadable CMAC domain and went on, and the last, for the service's line.
+    unreadables:u32,unreadable:Option<Unreadable>,
 }
+/// A station register check that met an unreadable CMAC domain and went on (213-DRV-0091): the n-th, the register and
+/// the value it read first, the reads until it answered and over how long, SER_DBG_INFO before and after, and whether a
+/// firmware recovery was outlasted meanwhile.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Unreadable{pub count:u32,pub register:usize,pub value:u32,pub reads:u32,pub waited_us:u64,pub ser_before:u32,pub ser_after:u32,pub recovered:bool}
 pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:DataSession<'q,'memory,'p,'a,'command,'receive,B>,pub failure:Failure,
 }
@@ -178,7 +198,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn activate(session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>)
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
-            ser_seen:0,recoveries:0,recovery:None,grace_us:0};
+            ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
         own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
     }
@@ -291,13 +311,46 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
         let mut deadline=self.outlast_ser(deadline,false)?;
         let mut result=self.checks(deadline).and_then(|()|self.permits(deadline));
+        // 213-DRV-0091: a station check that met an unreadable CMAC domain, and what it was then.
+        let first=unreadable(&result);let(ser_before,start,recoveries)=(self.ser_seen,self.session.now()?,self.recoveries);
         // OUTLAST_SER: a recovery that began during the checks or the permits' (the Ryzen, 2026-11-08: the scheduler read
         // zero there after 42 minutes) is outlasted, and they are made once more.
         if result.is_err()&&OUTLAST_SER{
             let before=self.recoveries;let after=self.outlast_ser(deadline,false)?;
             if self.recoveries!=before{deadline=after;result=self.checks(deadline).and_then(|()|self.permits(deadline));}
         }
+        // An unreadable domain is read again; whichever way it answers, the meeting is counted.
+        if let Some(first)=first{
+            // The checks made so far: the first, and once more if a recovery was outlasted above.
+            let mut reads=if self.recoveries!=recoveries{2}else{1};
+            if unreadable(&result).is_some(){(deadline,reads)=self.read_again(deadline,reads)?;}else{result?;}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let ser_after=io::read32(&mut window,SER_DBG_INFO);self.session.last=window.last;
+            self.unreadables=self.unreadables.saturating_add(1);
+            self.unreadable=Some(Unreadable{count:self.unreadables,register:first.register,value:first.value,reads,
+                waited_us:self.session.now()?.saturating_sub(start),ser_before,ser_after:ser_after.map_err(Cause::Register)?,
+                recovered:self.recoveries!=recoveries});
+            result=Ok(());
+        }
         result?;self.session.left(deadline)?;Ok(deadline)
+    }
+    // 213-DRV-0091: the checks made again while they meet an unreadable CMAC domain, UNREADABLE_GAP_US apart, a firmware
+    // recovery that SER_DBG_INFO shows meanwhile outlasted first. A readable mismatch, or no answer after
+    // UNREADABLE_TRIES, ends as the check's failure. Returns the deadline and the checks made in all.
+    fn read_again(&mut self,deadline:u64,made:u32)->Result<(u64,u32),Cause>{
+        let mut deadline=deadline;let mut reads=made;
+        loop{
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let ser=window.delay_us(UNREADABLE_GAP_US).and_then(|()|io::read32(&mut window,SER_DBG_INFO));
+            self.session.last=window.last;
+            if ser.map_err(Cause::Register)?!=self.ser_seen{deadline=self.outlast_ser(deadline,false)?;}
+            reads+=1;
+            match self.checks(deadline).and_then(|()|self.permits(deadline)){
+                Ok(())=>return Ok((deadline,reads)),
+                Err(Cause::Station(failure)) if failure.cause.value==UNREADABLE&&reads<UNREADABLE_TRIES=>continue,
+                Err(cause)=>return Err(cause),
+            }
+        }
     }
     fn permits(&mut self,deadline:u64)->Result<(),Cause>{let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;Ok(())}
     fn checks(&mut self,deadline:u64)->Result<(),Cause>{
@@ -397,6 +450,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn grace_us(&self)->u64{self.grace_us}
     /// The firmware recovery outlasted since the last call, if any (OUTLAST_SER).
     pub(crate) fn take_recovery(&mut self)->Option<Recovery>{self.recovery.take()}
+    /// The last station check that met an unreadable CMAC domain and went on (213-DRV-0091), once.
+    pub(crate) fn take_unreadable(&mut self)->Option<Unreadable>{self.unreadable.take()}
     /// The SNAPSHOT registers now, read only.
     pub(crate) fn registers(&mut self)->Snapshot{
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
