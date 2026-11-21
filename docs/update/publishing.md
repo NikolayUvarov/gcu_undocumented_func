@@ -132,7 +132,13 @@ python3 scripts/release.py verify-sums DIR                # VERIFIED, or why not
   2. the release role's threshold of signatures;
   3. every file of the directory as listed, none missing and none more.
 
-The command that makes every download of a commit is the task's next step.
+Every download of the built tree as one release, then the list (352-UPD-0050):
+
+```bash
+python3 scripts/release.py artifacts 7 dist/release-7    # the tree's manifests must name version 7 (sign_manifest.py --version 7)
+```
+
+For each architecture it writes the installer ISO and the USB image, both in slots with the release's channel and key file in slot A, and the update bundle. Then it writes `RELEASE.json`, what they were made of, and the signed list. The channel goes to a server in a temporary directory, never to a real one: publishing stays the maintainer's act. The ISO and the bundle are the same on a second run of the same commit, and the USB image is not yet.
 
 ## Keys and who holds them (MC-9.6)
 
