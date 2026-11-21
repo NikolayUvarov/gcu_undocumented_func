@@ -4,7 +4,8 @@ directory verifies; a version not above the channel's is refused; an upload cut 
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
 refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014); a bundle
 holds what a device needs of the channel, stored, the same for the same release, and only of a layout that verifies
-(751-UPD-0032). The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
+(751-UPD-0032). A release's downloads (352-UPD-0050): listed in SHA256SUMS, signed by the release keys of the key file
+beside it, and every changed, missing or added file refused. The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
 published only above the server's version; a channel signed by a key it does not name refused; real keys refused on a
 server without one."""
 import datetime
@@ -261,6 +262,43 @@ class Releases(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "missing or not as listed"):
             release.bundle(self.dest, self.dir / "bad.zip", now=NOW)
         self.assertFalse((self.dir / "bad.zip").exists())
+
+    def test_a_release_downloads_listed_and_signed(self):
+        # 352-UPD-0050: SHA256SUMS of every download, its signature lines and the key file, and what verify-sums refuses.
+        out = self.dir / "downloads"
+        out.mkdir()
+        (out / "mind-core-x86_64.iso").write_bytes(b"iso" * 1000)
+        (out / "mind-core-x86_64.img").write_bytes(b"img")
+        body = release.write_sums(out)
+        self.assertEqual(body.decode().splitlines()[0].split("  ")[1], "mind-core-x86_64.img")
+        self.assertEqual(body.decode().splitlines()[1], hashlib.sha256(b"iso" * 1000).hexdigest() + "  mind-core-x86_64.iso")
+        self.assertIsNone(release.verify_sums(out, now=NOW))
+        good = {p.name: p.read_bytes() for p in out.iterdir()}
+        def reason(change):
+            for name, data in good.items():
+                (out / name).write_bytes(data)
+            for p in out.iterdir():
+                if p.name not in good:
+                    p.unlink()
+            change()
+            return release.verify_sums(out, now=NOW)
+        self.assertIn("its SHA-256 is not", reason(lambda: (out / "mind-core-x86_64.img").write_bytes(b"imh")))
+        self.assertIn("does not list the files there: extra.txt", reason(lambda: (out / "extra.txt").write_bytes(b"x")))
+        self.assertIn("does not list the files there", reason(lambda: (out / "mind-core-x86_64.iso").unlink()))
+        self.assertIn("signed by 0 of the release keys", reason(lambda: (out / "SHA256SUMS.sig").write_bytes(
+            release.signature_lines((out / "SHA256SUMS").read_bytes(), [sm.TEST_SEED]))))
+        def signed_list(body):
+            (out / "SHA256SUMS").write_bytes(body)
+            (out / "SHA256SUMS.sig").write_bytes(release.signature_lines(body, [release.TEST_RELEASE_SEED]))
+        self.assertIn("signed by 0 of the release keys", reason(lambda: (out / "SHA256SUMS").write_bytes(b"00  ../x\n")))
+        self.assertIn("not a line of its form", reason(lambda: signed_list(b"0" * 64 + b"  ../x\n")))
+        self.assertIn("KEYS: signed by 0 of the root keys", reason(lambda: (out / "KEYS").write_bytes(
+            release.test_keys_file(roots=(release.TEST_RELEASE_SEED,)))))
+        self.assertIn("SHA256SUMS.sig: missing", reason(lambda: (out / "SHA256SUMS.sig").unlink()))
+        self.assertIsNone(reason(lambda: None))
+        # Real release keys need the key file that names them.
+        with self.assertRaisesRegex(release.ReleaseError, "name the key file"):
+            release.write_sums(out, seeds=[hashlib.sha256(b"another release key").digest()])
 
     def keys(self, *argv):
         # release.py keys …, its exit status and what it printed.

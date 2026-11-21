@@ -1,6 +1,6 @@
 # 352-UPD-0050 — A release's artifacts from one commit, with one signed list of their sums
 
-**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** open (plan, 2026-11-20) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
+**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (the signed list made, 2026-11-21) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -41,6 +41,25 @@
 - [ ] A changed byte in any artifact, or in `SHA256SUMS`, is refused by `verify-sums`.
 - [ ] The ISO, the USB image and a board image of one architecture hold the same boot volume (the same SHA-256 of its FAT image).
 - [ ] A CI job builds the artifacts under the test keys and keeps them for a short time; it is not a release.
+
+## Progress (2026-11-21)
+
+**Plan step 3 made** on `claude/352-UPD-0050-release-artifacts`. `release.py sums DIR [--keys FILE]` and `verify-sums DIR`:
+- `SHA256SUMS` in `sha256sum`'s form;
+- `SHA256SUMS.sig`, the release keys' signature lines over it;
+- `KEYS`, the key file that names them, checked against the root set by `verify-sums`;
+- real release keys need `--keys`.
+
+The files' provenance in each line, plan step 3's last point, is left: `SHA256SUMS` stays in `sha256sum`'s form. The commit and the tools' versions go to a record of their own, listed with the downloads, in step 1.
+
+**Tested** in this session's container: `tests/release_test.py` 17 of 17, among them the new test:
+- the list verifies;
+- each of these is refused: a changed byte, an added file, a missing file, a signature of another key, a line not of the form, a key file the root set does not trust, a missing signature file;
+- real keys without a key file are refused.
+
+`sha256sum -c` reads the list.
+
+**Left:** steps 1, 2, 4 to 6.
 
 ## Related
 
