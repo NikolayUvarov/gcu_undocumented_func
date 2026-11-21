@@ -67,6 +67,35 @@ impl core::fmt::Debug for Snapshot{
     }
 }
 
+/// What a hole in the reception is read with (213-DRV-0090), and a good link for comparison; reads only, but the LTE
+/// window's indirect read, as the coexistence reconcile makes it:
+/// - MAC: SYS_FUNC_EN in 0x0, the coexistence control byte in 0x73, the scoreboard; HALT_H2C/C2H and their controls,
+///   WCPU_FW_CTRL; the RXQ and RPQ rings' indexes (host in bits 0-11, hardware in 16-27: equal, nothing was fed);
+///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_ISR; MACID pause and sleep, CTN_TXEN and CTN_DRV_TXEN (transmit paused);
+///   CMAC_ERR_ISR, RX_ERR_FLAG, RX_FLTR_OPT; the pollution 0xC67C; Linux's coexistence monitor set for the 8852B
+///   (rtw89_btc_8852b_mon_reg: 0xCEF4, 0xD200, 0xD220, 0xDA10-0xDA4C); DMA_STOP and INIT_CONFIG.
+/// - BB: the same monitor set's 0x980, 0x4738, 0x4688, 0x4694; DIG's PD lower bound (0x4860, 0x4B64) and initial
+///   LNA/TIA/RXB gains (0x472C, 0x4A80, 0x473C, 0x46A8); the EDCCA level (0x4884) and its reports (0x1738, 0x173C);
+///   TX collision (0xC70); CCK (0x700) and the CCK path (0x2344), as the channel stage sets them.
+/// - RF of both paths: mode (0x00), channel (0x18), VCO (0xB2) and the synthesizer's lock (0xC5 bit 15).
+/// - The LTE window's SW_CFG_1: the grants the coexistence writes. All ones: not read.
+pub const PROBE_MAC:[usize;34]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8524,
+    0x9eb0,0xc2c0,0xc348,0xc398,0xc164,0xc800,0xce20,0xc67c,0xcef4,0xd200,0xd220,0xda10,0xda20,0xda24,0xda28,0xda2c,0xda30,
+    0xda34,0xda4c,fwcmd::DMA_STOP];
+pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
+    0xc70,0x700,0x2344];
+pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub struct Probe{pub mac:[u32;PROBE_MAC.len()],pub bb:[u32;PROBE_BB.len()],pub rf:[[u32;PROBE_RF.len()];2],pub grants:u32}
+impl core::fmt::Debug for Probe{
+    fn fmt(&self,f:&mut core::fmt::Formatter<'_>)->core::fmt::Result{
+        for(at,value)in PROBE_MAC.iter().zip(self.mac){write!(f,"{:X}={:X} ",at,value)?;}
+        for(at,value)in PROBE_BB.iter().zip(self.bb){write!(f,"B{:X}={:X} ",at,value)?;}
+        for(path,values)in self.rf.iter().enumerate(){for(at,value)in PROBE_RF.iter().zip(values){write!(f,"{}{:X}={:X} ",['A','B'][path],at,value)?;}}
+        write!(f,"LTE38={:X}",self.grants)
+    }
+}
+
 /// Actual station context is consumed; the calibrated policy and board remain immutably borrowed throughout data mode.
 pub(crate) struct PreparedActivation<'p>{board:&'p Board,tuned:&'p channel::Tuned,calibrated:&'p channel_rfk::Completed,
     owner:&'p Initialized,station:station::Prepared,command:u64,transmit:u64,physical:u64}
@@ -104,7 +133,7 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals}
+    pub signals:crate::ppdu::Signals,pub beacons:u64}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
@@ -114,6 +143,8 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
             let frame=match crate::frames::from_packet(packet,buffer){Ok(frame)=>frame,Err(_)=>{
                 self.counts.invalid=self.counts.invalid.saturating_add(1);return Ok(true)}};
             if !filter.accepts(frame.mpdu()){self.counts.filtered=self.counts.filtered.saturating_add(1);return Ok(true)}
+            // 213-DRV-0090: the joined BSS's beacons as the ring gives them, read by the station or not.
+            let m=frame.mpdu();if m[0]==0x80&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}
             if full{self.counts.pressure=self.counts.pressure.saturating_add(1);return Ok(true)}
             return Ok(false)
         }
@@ -357,6 +388,15 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     /// The SNAPSHOT registers now, read only.
     pub(crate) fn registers(&mut self)->Snapshot{
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
+    }
+    /// PROBE's registers as they are now (213-DRV-0090).
+    pub(crate) fn probe(&mut self)->Probe{
+        let bus=&mut *self.session.bus;
+        let mac=PROBE_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX));
+        let bb=PROBE_BB.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX));
+        let rf=[0u8,1].map(|path|PROBE_RF.map(|at|crate::phy::rf_read(bus,path,at,0xfffff).unwrap_or(u32::MAX)));
+        let grants=crate::btc_control::lte_grants(bus).unwrap_or(u32::MAX);
+        Probe{mac,bb,rf,grants}
     }
     /// Independently stop radiation and owned packet DMA; caller still verifies kernel PCI quiescence and keeps all memory.
     pub(crate) fn shutdown(&mut self)->Shutdown{

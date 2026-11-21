@@ -414,3 +414,39 @@ fn service_a_frame_carries_the_signal_of_the_report_after_it(){run(0,true,true,|
     let stopped=service.stop();assert!(stopped.failure.is_none());
     assert_eq!(stopped.owner.counts().signals,Signals{measured:1,late:1,unmatched:1});assert_eq!(stopped.owner.counts().filtered,1);clean();
 });}
+
+// 213-DRV-0090: a second with no beacon of the joined BSS, once one was heard, is a hole: logged when it opens and when
+// its next beacon closes it, with the counts since and the registers; every minute a line of the traffic.
+fn bss_beacon()->Vec<u8>{
+    let mut f=vec![0x80,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff,2,9,8,7,6,5,2,9,8,7,6,5,0x10,0];
+    f.extend_from_slice(&[0;8]);f.extend_from_slice(&[100,0,0x11,4,0,3,b'n',b'e',b't']);f
+}
+#[test]
+fn service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it(){run(0,true,true,|data,c|{
+    use crate::{btc_session::data_mode::{PROBE_MAC,PROBE_RF},receive_service::Event};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    // No beacon heard yet: no hole, however long.
+    ipc::advance(1500);assert!(service.step());assert!(service.take_event().is_none());
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());assert!(service.take_event().is_none());
+    // Then only frames to this station, for 1.2 s.
+    let mut events=vec![];
+    for _ in 0..3{c.borrow_mut().incoming.push(packet());ipc::advance(400);assert!(service.step());events.extend(service.take_event());}
+    let [Event::Hole{n:1,channel:6,bssid,ms,wifi:3,kept:3,pending:false,probe:Some(probe),..}]=events.as_slice()else{panic!("no hole: {events:?}")};
+    assert_eq!(*bssid,[2,9,8,7,6,5]);assert!((1000..1300).contains(ms),"{ms} ms");
+    let at=|address:usize|probe.mac[PROBE_MAC.iter().position(|&a|a==address).unwrap()];
+    assert_eq!(at(0xc348)&0xffff,0x10f,"the scheduler as admitted");
+    let rx=at(0x1050);assert_eq!(rx&0xfff,(rx>>16)&0xfff,"the receive ring read to its end");
+    let rf18=PROBE_RF.iter().position(|&a|a==0x18).unwrap();assert_eq!(probe.rf[0][rf18]&0xff,6,"RF 0x18 on channel 6");
+    // Its next beacon closes it; another hole is counted from it.
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());
+    let Some(Event::HoleEnded{n:1,ms,wifi,kept,probe:Some(_),..})=service.take_event()else{panic!("no end")};
+    assert!((1200..1300).contains(&ms),"{ms} ms");assert_eq!((wifi,kept),(1,1));
+    // The minute's line: its one hole and the longest, and a good link's registers on its first.
+    let mut traffic=None;let mut other=vec![];
+    for _ in 0..70{c.borrow_mut().incoming.push(bss_beacon());ipc::advance(900);assert!(service.step());
+        match service.take_event(){Some(e@Event::Traffic{..})=>{traffic=Some(e);break},Some(e)=>other.push(e),None=>{}}}
+    assert!(other.is_empty(),"{other:?}");
+    let Some(Event::Traffic{channel:6,holes:1,longest_ms,probe:Some(_),beacons,..})=traffic else{panic!("no traffic line")};
+    assert_eq!(longest_ms,ms);assert!(beacons>=60);drop(service);clean();
+});}
