@@ -24,7 +24,7 @@ use mind::idl::{keystore, parse, socket, tls};
 use mind::ipc::Endpoint;
 use words::Config;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS | REQUEST_OWN);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
