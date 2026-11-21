@@ -31,6 +31,17 @@ Usage:
                                                  more (351-UPD-0030): signed by the recovery keys alone
     release.py bundle DEST OUT [--channel stable] [--arch x86_64]   one ZIP of what a device needs of the channel
                                                  (751-UPD-0032), checked first: for the Effector gateway's install
+    release.py sums DIR [--keys FILE]       SHA256SUMS of every file in DIR (sha256sum's form), with SHA256SUMS.sig, the
+                                                 release keys' signature lines over it, and KEYS, the key file that names them
+                                                 (352-UPD-0050): a release's downloads
+    release.py artifacts VERSION OUT [--arch x86_64] [--arch aarch64] [--channel stable] [--date EPOCH]
+                                                 every download of this tree's build as release VERSION (352-UPD-0050):
+                                                 for each architecture its ISO and USB image, in slots with the channel,
+                                                 and its update bundle; RELEASE.json; then `sums`. The tree's manifests
+                                                 must name VERSION (sign_manifest.py --version). Publishing stays a
+                                                 person's act: OUT is only written
+    release.py verify-sums DIR [--now ISO-8601]   KEYS against the root set, SHA256SUMS.sig against KEYS' release role,
+                                                 and every file of DIR as SHA256SUMS lists it, none more
     release.py --public                     the public test release key
     release.py keys make OUT --version N --role boot=KEY[,KEY…]:T --role recovery=… --role release=… --role timestamp=…
                          [--days 365]       a key file's body, unsigned: every role, its public keys and threshold
@@ -808,6 +819,120 @@ def check_timestamp(target, channel, k, now=None):
     return None
 
 
+# A release's downloads (352-UPD-0050): the list of their sums, its signature lines and the key file that names its keys.
+SUMS, SUMS_SIG, SUMS_KEYS = "SHA256SUMS", "SHA256SUMS.sig", "KEYS"
+SUMS_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_sums(directory, keys=None, seeds=None):
+    """SHA256SUMS of every file in `directory` but the list's own three, names sorted, in sha256sum's form; then
+    SHA256SUMS.sig, a signature line of each release seed over it; then KEYS, the key file (`keys`, else the test one).
+    Returns the list's bytes."""
+    directory, seeds = Path(directory), seeds or release_seeds()
+    if keys is None and seeds != [TEST_RELEASE_SEED]:
+        raise ReleaseError("real release keys: name the key file that holds them (--keys FILE, the server's keys/current)")
+    names = sorted(p.name for p in directory.iterdir() if p.is_file() and p.name not in (SUMS, SUMS_SIG, SUMS_KEYS))
+    bad = [n for n in names if not SUMS_NAME.fullmatch(n)]
+    if bad or not names:
+        raise ReleaseError(f"{directory}: {'no file to list' if not names else 'a name SHA256SUMS cannot hold: ' + bad[0]}")
+    body = "".join(f"{file_sha256(directory / name)}  {name}\n" for name in names).encode()
+    (directory / SUMS).write_bytes(body)
+    (directory / SUMS_SIG).write_bytes(signature_lines(body, seeds))
+    (directory / SUMS_KEYS).write_bytes(keys if keys is not None else test_keys_file())
+    return body
+
+
+def verify_sums(directory, root=None, now=None):
+    """None if KEYS is a key file the root set trusts, SHA256SUMS.sig holds its release role's threshold of signatures
+    over SHA256SUMS, and every file of `directory` is listed there with its SHA-256, none missing and none more; else
+    the reason."""
+    directory = Path(directory)
+    try:
+        body, lines, keys = ((directory / name).read_bytes() for name in (SUMS, SUMS_SIG, SUMS_KEYS))
+    except OSError as e:
+        return f"{Path(e.filename).name}: missing"
+    k, why = check_keys(keys, root, now)
+    if k is None:
+        return f"{SUMS_KEYS}: {why}"
+    signatures = []
+    for line in lines.splitlines():
+        m = SIGNATURE_LINE.fullmatch(line)
+        if not m:
+            return f"{SUMS_SIG}: not a signature line"
+        signatures.append((bytes.fromhex(m[1].decode()), bytes.fromhex(m[2].decode())))
+    release_keys, threshold = k["roles"]["release"]
+    good, enough = counted(release_keys, threshold, body, signatures)
+    if not enough:
+        return f"{SUMS} is signed by {good} of the release keys {SUMS_KEYS} names, not {threshold}"
+    listed = {}
+    for line in body.decode("ascii", "replace").splitlines():
+        m = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if not m or not SUMS_NAME.fullmatch(m[2]) or m[2] in listed:
+            return f"{SUMS}: not a line of its form: {line[:80]!r}"
+        listed[m[2]] = m[1]
+    present = {p.name for p in directory.iterdir() if p.is_file() and p.name not in (SUMS, SUMS_SIG, SUMS_KEYS)}
+    if present != set(listed):
+        return f"{SUMS} does not list the files there: {', '.join(sorted(present ^ set(listed))[:5])}"
+    for name, digest in listed.items():
+        if file_sha256(directory / name) != digest:
+            return f"{name}: its SHA-256 is not the one {SUMS} lists"
+    return None
+
+
+def build_date():
+    """The build's date: $SOURCE_DATE_EPOCH, else the commit's, so the same commit gives the same downloads."""
+    if os.environ.get("SOURCE_DATE_EPOCH"):
+        return int(os.environ["SOURCE_DATE_EPOCH"])
+    out = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=sm.ROOT, capture_output=True, text=True)
+    if out.returncode or not out.stdout.strip():
+        raise ReleaseError("no build date: pass --date or SOURCE_DATE_EPOCH, or run in the git tree")
+    return int(out.stdout.strip())
+
+
+def artifacts(version, out, arches, channel="stable", when=None, volumes=None, payloads=None):
+    """Every download of release `version` into `out`, which must not exist (352-UPD-0050): for each of `arches`, the
+    installer ISO and the USB image, both around one boot volume in slots with the release's channel and key file in slot
+    A, and the update bundle; RELEASE.json, what they were made of; then SHA256SUMS, its signature and KEYS. The channel is published to a
+    server of its own in a temporary directory, never to a real one. `volumes` and `payloads` (an arch's files by name)
+    stand in for the built tree in tests. Returns the names written."""
+    import make_iso, make_usb_image
+    out, when = Path(out), when if when is not None else build_date()
+    now = datetime.datetime.fromtimestamp(when, datetime.timezone.utc)
+    volumes = volumes or {arch: sm.ROOT / ARCHES[arch] for arch in arches}
+    payloads = payloads or (lambda arch: make_usb_image.read_payloads(volumes[arch], arch))
+    out.mkdir(parents=True, exist_ok=False)
+    with tempfile.TemporaryDirectory(prefix=".mind-artifacts-", dir=out.parent) as work:
+        work = Path(work)
+        staged = stage(version, work / "staged", volumes)
+        server = work / "server"
+        server.mkdir()
+        publish(staged, server, channel, now=now)
+        keys, channel_file = (server / "keys/current").read_bytes(), (server / f"channels/{channel}").read_bytes()
+        for arch in arches:
+            files = make_usb_image.slots(payloads(arch), arch, channel_file, keys)
+            volume = work / f"{arch}.fat"
+            make_iso.boot_volume(files, volume, when)
+            make_iso.write_iso(volume, out / f"mind-core-{version}-{arch}.iso", when, arch)
+            # The same FAT volume as the ISO's, so both hold the same boot volume and the same date gives the same bytes.
+            make_usb_image.pack_volume(volume, out / f"mind-core-{version}-{arch}.img", files, when)
+            volume.unlink()
+            bundle(server, out / f"mind-core-{version}-{arch}-update.zip", channel, [arch], now=now)
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=sm.ROOT, capture_output=True, text=True).stdout.strip()
+    record = {"version": version, "channel": channel, "commit": commit, "date": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "arches": list(arches), "boards": "none yet (352-UPD-0049)", "test_keys": release_seeds() == [TEST_RELEASE_SEED]}
+    (out / "RELEASE.json").write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
+    write_sums(out, keys)
+    return sorted(p.name for p in out.iterdir())
+
+
 def main(argv):
     def option(name, default=None, many=False):
         values = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == name]
@@ -843,6 +968,20 @@ def main(argv):
         elif argv[:1] == ["bundle"] and len(argv) >= 3:
             paths = bundle(argv[1], argv[2], option("--channel", "stable"), option("--arch", many=True) or None)
             print(f"BUNDLED {len(paths)} FILES OF channels/{option('--channel', 'stable')} INTO {argv[2]} ({Path(argv[2]).stat().st_size} BYTES)")
+        elif argv[:1] == ["sums"] and len(argv) >= 2:
+            keys = option("--keys")
+            body = write_sums(argv[1], Path(keys).read_bytes() if keys else None)
+            print(f"LISTED {len(body.splitlines())} FILES IN {Path(argv[1]) / SUMS}" + (" (THE TEST RELEASE KEY)" if release_seed() == TEST_RELEASE_SEED else ""))
+        elif argv[:1] == ["artifacts"] and len(argv) >= 3:
+            date = option("--date")
+            names = artifacts(int(argv[1]), argv[2], option("--arch", many=True) or [a for a, v in ARCHES.items() if (sm.ROOT / v / "MANIFEST").exists()],
+                              option("--channel", "stable"), int(date) if date else None)
+            print(f"MADE {len(names)} FILES IN {argv[2]}: {', '.join(names)}" + (" (THE TEST RELEASE KEY)" if release_seed() == TEST_RELEASE_SEED else ""))
+        elif argv[:1] == ["verify-sums"] and len(argv) >= 2:
+            now = option("--now")
+            reason = verify_sums(argv[1], now=datetime.datetime.fromisoformat(now) if now else None)
+            print(reason or "VERIFIED")
+            return 1 if reason else 0
         elif argv[:1] == ["check"] and len(argv) >= 2:
             now = option("--now")
             reason = check(argv[1], option("--channel", "stable"), now=datetime.datetime.fromisoformat(now) if now else None)

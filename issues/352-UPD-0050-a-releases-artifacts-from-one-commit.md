@@ -1,6 +1,6 @@
 # 352-UPD-0050 — A release's artifacts from one commit, with one signed list of their sums
 
-**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** open (plan, 2026-11-20) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
+**Type:** script, release · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (the signed list and the one command made, 2026-11-21) · **Blocked by:** [352-UPD-0047](352-UPD-0047-an-installer-iso.md), [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md) (their artifacts) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -41,6 +41,58 @@
 - [ ] A changed byte in any artifact, or in `SHA256SUMS`, is refused by `verify-sums`.
 - [ ] The ISO, the USB image and a board image of one architecture hold the same boot volume (the same SHA-256 of its FAT image).
 - [ ] A CI job builds the artifacts under the test keys and keeps them for a short time; it is not a release.
+
+## Progress (2026-11-21)
+
+**Plan step 3 made** on `claude/352-UPD-0050-release-artifacts`. `release.py sums DIR [--keys FILE]` and `verify-sums DIR`:
+- `SHA256SUMS` in `sha256sum`'s form;
+- `SHA256SUMS.sig`, the release keys' signature lines over it;
+- `KEYS`, the key file that names them, checked against the root set by `verify-sums`;
+- real release keys need `--keys`.
+
+The files' provenance in each line, plan step 3's last point, is left: `SHA256SUMS` stays in `sha256sum`'s form. The commit and the tools' versions go to a record of their own, listed with the downloads, in step 1.
+
+**Tested** in this session's container: `tests/release_test.py` 17 of 17, among them the new test:
+- the list verifies;
+- each of these is refused: a changed byte, an added file, a missing file, a signature of another key, a line not of the form, a key file the root set does not trust, a missing signature file;
+- real keys without a key file are refused.
+
+`sha256sum -c` reads the list.
+
+**Plan step 1, in part:** `release.py artifacts VERSION OUT [--arch …] [--channel stable] [--date EPOCH]`, from the built tree whose manifests name VERSION.
+- **For each architecture,** in OUT:
+  - `mind-core-<V>-<arch>.iso` (`make_iso.py`);
+  - `mind-core-<V>-<arch>.img` (`make_usb_image.py`'s writer);
+  - `mind-core-<V>-<arch>-update.zip` (`bundle`).
+- **The ISO and the USB image** are made in slots, with the release's channel and key file in slot A, as a device that is updated needs.
+- **The channel** is published to a server in a temporary directory, never to a real one, with the build's date as its `now`.
+- **`RELEASE.json`** names the version, the channel, the commit, the date, the architectures, the test keys if used, and that no board image is made yet.
+- **Then `sums`.**
+
+**Tested:**
+- `tests/release_test.py` 18 of 18. The new test makes an ISO and a bundle from a stand-in volume (the USB image left out): slot A holds the channel, the key file, the manifest and the kernel; the list verifies; the same date gives the same list; an existing OUT is refused.
+- **A real run** in this session's container, on a copy of the x86 build signed as version 5: the ISO, the USB image, the bundle, `RELEASE.json` and the list, in 3 s; `verify-sums` VERIFIED.
+- **Twice on the same commit:** the ISO, the bundle and `RELEASE.json` gave the same SHA-256. The USB image did not: QEMU's `vvfat` builds its FAT from the files' times, and the log volume carries the time of the run. That is step 4's to fix or name.
+
+**Plan steps 2 and 4, for the ISO and the USB image** (2026-11-21):
+- `make_usb_image.py`'s `pack_volume` makes the USB image around the FAT image `make_iso.boot_volume` made: an MBR whose ESP entry holds it at 1 MiB, then the log and the store's partitions.
+- `MIND LOG`'s dates are the build's, and the disk's signature comes from the volume's hash.
+- `artifacts` builds one boot volume for each architecture and puts it into both the ISO and the USB image. QEMU's `vvfat` is no longer used there, and `qemu-img` is not needed.
+
+**Tested:** `tests/release_test.py` 18 of 18. The artifacts test now makes the USB image too:
+- its ESP is the ISO's FAT image, byte for byte;
+- its log and store partitions follow it;
+- two runs with the same date give the same `SHA256SUMS`, the USB image's line among them.
+
+**A real run** in this session's container, on a copy of an x86 build signed as version 6:
+- `artifacts` ran twice and gave the same ISO, USB image, bundle and `RELEASE.json`, so the same `SHA256SUMS`; `verify-sums` VERIFIED;
+- the USB image, booted in QEMU (OVMF, a USB disk, the image read-only), reached the shell: `BOOT: RECORD MIND\BOOT0 SEQUENCE 1: SLOT A, CONFIRMED`, the manifest verified, `BOOT: VOLUME MBR PARTITION 1 AT LBA 2048`;
+- the image's SHA-256 was the same after the boot.
+
+**Left:**
+- the board images (352-UPD-0049), and the cards' share of the boot volume;
+- step 4's check of the bundle and the ISO on a second build of the commit, as 350-UPD-0001's;
+- steps 5 and 6.
 
 ## Related
 
