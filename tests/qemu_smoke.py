@@ -12040,6 +12040,9 @@ def download_runs(vm, release, port, big, small, cut, rules):
                  "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
+    # Each connection past 1 MiB says, as it closes, how fast and how often its client found the queue full (801-NET-0092).
+    summaries = re.findall(r"\[NETSTACK\] TCP SOCKET \d+ CLOSED: (\d+) KIB IN \d+ MS, \d+ KIB/S; ITS QUEUE FULL AT (\d+) OF (\d+) READS", vm.command("dmesg -s netstack", raw=True))
+    assert sum(int(k) for k, _, _ in summaries) >= (size >> 10) - 64 and all(int(f) <= int(r) for _, f, r in summaries), summaries
     first = out
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
     require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
