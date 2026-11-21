@@ -4315,6 +4315,60 @@ def files_check(vm, pid):
     return output
 
 
+def iso_suite(args):
+    """352-UPD-0047: the hybrid ISO make_iso.py makes of this build. Written as a USB disk, it boots to the shell, and
+    vfs_server mounts its volume at the MBR partition's start, the one holding the verified manifest. As an IDE CD-ROM, OVMF starts the loader
+    from the El Torito entry, larger than the entry's 16-bit count, and the loader reads the kernel and the services
+    from that volume, checked against the signed manifest. The ISO's bytes are the same after both boots. The system on
+    a disc has no driver for its volume yet: that is the volume in memory, the task's step 2."""
+    if args.arch != "x86_64":
+        print("SKIP: the iso suite is x86 for now (352-UPD-0047)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: iso suite needs mkfs.fat and mtools", flush=True)
+        return
+    import make_iso
+    from make_usb_image import read_payloads
+    when = 1763668800  # a fixed date: the same build gives the same ISO
+    with tempfile.TemporaryDirectory(prefix="smoke-iso-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        volume, iso = temp / "boot.img", temp / "mind.iso"
+        make_iso.boot_volume(read_payloads(ROOT / IMAGE, "x86_64"), volume, when)
+        digest = make_iso.write_iso(volume, iso, when, "x86_64")
+        volume.unlink()
+        start = make_iso.VOLUME_LBA * make_iso.BLOCK // make_iso.SECTOR
+        vm = VM(args, iso.relative_to(ROOT).as_posix(), usb=True)
+        try:
+            # OVMF takes the El Torito entry on a disk too, ahead of the MBR: the loader is given no partition, and
+            # vfs_server mounts the volume that holds the manifest the loader verified (211-KRN-0012).
+            require(ANSI.sub("", vm.log), "BOOT: VOLUME UNKNOWN PARTITION 0 AT LBA 0")
+            vfs = vm.service_logs("vfs_server", f"[VFS] MOUNTED FAT16 FROM USB AT LBA {start}")
+            require(vfs, f"[VFS] MOUNTED FAT16 FROM USB AT LBA {start}")
+            require(vfs, "[VFS] THE BOOT VOLUME: A VOLUME THE FIRMWARE DID NOT NAME, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            require(vm.command("run files &"), "PID=1 NAME=files BACKGROUND")
+            files_check(vm, 1)
+            vm.command("kill 1")
+        finally:
+            vm.close()
+        blank = temp / "blank.img"
+        with blank.open("wb") as f:
+            f.truncate(16 << 20)
+        cd = iso.relative_to(ROOT).as_posix().replace(",", ",,")
+        vm = VM(args, blank.relative_to(ROOT).as_posix(), raw=True,
+                extra=["-drive", f"file={cd},format=raw,media=cdrom,readonly=on,if=none,id=cd", "-device", "ide-cd,drive=cd,bootindex=0"])
+        try:
+            log = ANSI.sub("", vm.log).replace("\r", "")
+            assert re.search(r"BOOT: MANIFEST \S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED\n", log), log[-3000:]
+            require(log, "MIND CORE BOOT: KERNEL AND ")
+            require(log, "MIND CORE KERNEL: INIT STARTED")
+        finally:
+            vm.close()
+        with iso.open("rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == digest, "the ISO changed"
+    print(f"PASS: the hybrid ISO ({digest[:16]}) boots as a USB disk to the shell from its volume at LBA {start}, and as an "
+          "IDE CD-ROM through El Torito, its loader reading and checking the kernel and the services; the ISO unchanged", flush=True)
+
+
 def ahci_suite(vm):
     baseline = heap_used(vm)
     services = vm.services()
@@ -19675,6 +19729,9 @@ def main():
             continue
         if suite == "ehci":
             ehci_suite(args)
+            continue
+        if suite == "iso":
+            iso_suite(args)
             continue
         if suite == "hda":
             hda_suite(args)
