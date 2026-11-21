@@ -29,7 +29,8 @@ fn abi10_prefix_offsets_survive_additional_images() {
     assert_eq!(offset_of!(BootInfo, extra_programs), size_of::<Abi10BootInfo>());
     // ABI 13: the link's words follow the images (800-KRN-0128).
     assert_eq!(offset_of!(BootInfo, link_present), size_of::<Abi10BootInfo>() + (BOOT_IMAGES - 36) * size_of::<ProgramImage>());
-    assert_eq!(size_of::<BootInfo>(), (offset_of!(BootInfo, link_words) + LINK_WORDS_MAX).next_multiple_of(align_of::<BootInfo>()));
+    // Handoff 36: the live volume's address and length after boot_flags (352-KRN-0268).
+    assert_eq!(size_of::<BootInfo>(), offset_of!(BootInfo, live_volume_len) + size_of::<u64>());
     assert!(size_of::<BootInfo>() <= 4096, "the scheduler grants one page for task boot information");
 }
 
@@ -54,16 +55,17 @@ fn version_read_needs_only_the_old_record() {
 // (110-NET-0070).
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 35);
+    assert_eq!(BOOT_HANDOFF_VERSION, 36);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
     // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
-    // 351-KRN-0166). Handoffs 33, 34 and 35 came at ABI 32 (110-NET-0070, 112-NET-0072, 000-KRN-0235), as handoff 30 at ABI 29 (100000-KRN-0221), and ABIs 33 (801-KRN-0246), 34 (000-KRN-0217) and 35 (801-KRN-0261) left it: the next change of the
+    // 351-KRN-0166). Handoffs 33, 34 and 35 came at ABI 32 (110-NET-0070, 112-NET-0072, 000-KRN-0235), as handoff 30 at ABI 29 (100000-KRN-0221), and ABIs 33 (801-KRN-0246), 34 (000-KRN-0217) and 35 (801-KRN-0261) left it. Handoff 36 came at ABI 35, with ABI 36
+    // (352-KRN-0268: BootInfo's live volume): the next change of the
     // handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
-    const ABI_AT_THE_HANDOFF: u32 = 32;
+    const ABI_AT_THE_HANDOFF: u32 = 35;
     assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
     assert_eq!(BOOT_IMAGES, 52, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1192, "a change of BootInfo is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1208, "a change of BootInfo is a change of the handoff");
     // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes after effector, as the
     // gateway's lists of services hold the first 48 units alone (requests-EFF.md).
     let at = BOOT_SERVICES.iter().position(|&name| name == "httpd").unwrap();
@@ -97,10 +99,11 @@ fn the_handoff_takes_only_its_own_loader() {
     assert!(nnd > BOOT_SERVICES.iter().position(|&name| name == "vfs_server").unwrap() && nnd < BOOT_SERVICES.iter().position(|&name| name == "shell").unwrap());
 }
 
-// 173-KRN-0036: boot_flags stays the last field.
+// 173-KRN-0036: boot_flags follows the link's words; since handoff 36 the live volume's two fields follow it (352-KRN-0268).
 #[test]
-fn boot_flags_is_the_last_field() {
+fn boot_flags_follows_the_links_words() {
     assert_eq!(offset_of!(BootInfo, boot_flags), offset_of!(BootInfo, link_words) + LINK_WORDS_MAX);
+    assert_eq!(offset_of!(BootInfo, live_volume), (offset_of!(BootInfo, boot_flags) + size_of::<u32>()).next_multiple_of(align_of::<u64>()));
 }
 
 // 351-KRN-0167: a kernel that refuses the handoff reads the trial and the ACPI root from ABI 10's record alone.
