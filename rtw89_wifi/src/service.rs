@@ -98,7 +98,7 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     later:Option<Event>,
     // 213-DRV-0091: the link the firmware was told of: None, or the AID it was told; and a change still to tell it (the
     // AID of an association response, or None after a deauthentication), done when no send is pending.
-    linked:Option<u16>,link_change:Option<Option<u16>>,
+    linked:Option<u16>,link_change:Option<Option<u16>>,links:u32,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -142,7 +142,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
-            linked:None,link_change:None})
+            linked:None,link_change:None,links:0})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -281,11 +281,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let Some(change)=self.link_change else{return Ok(())};
         if self.pending.is_some(){return Ok(())}
         if change==self.linked{self.link_change=None;return Ok(())}
+        // The registers just before and after, the first two times (213-DRV-0090's probe).
+        let probed=self.links<2;let before=probed.then(||self.data().probe());
         match self.data().connect(change,COMMAND_US){
             Ok(())=>{
-                self.link_change=None;let was=self.linked;self.linked=change;
+                self.link_change=None;let was=self.linked;self.linked=change;self.links=self.links.saturating_add(1);
                 let(channel,bssid)=(self.data().channel(),self.data().current_filter().bssid());
-                let event=Event::Linked{channel,bssid,aid:change,was};
+                let after=probed.then(||self.data().probe());
+                let event=Event::Linked{channel,bssid,aid:change,was,before,after};
                 if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
             }
             Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),

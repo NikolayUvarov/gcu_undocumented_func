@@ -493,7 +493,7 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     assert!(service.take_event().is_none());assert_eq!((h2c(c,8).len(),h2c(c,6).len()),(joins,cams));
     // Status 0, AID 1.
     c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
-    let Some(Event::Linked{channel:6,bssid:[2,9,8,7,6,5],aid:Some(1),was:None})=service.take_event()else{panic!("no link")};
+    let Some(Event::Linked{channel:6,bssid:[2,9,8,7,6,5],aid:Some(1),was:None,before:Some(_),after:Some(_)})=service.take_event()else{panic!("no link")};
     let(join,cam)=(h2c(c,8),h2c(c,6));assert_eq!((join.len(),cam.len()),(joins+1,cams+1));
     assert_eq!(join.last().unwrap()[..4],[0,0,0,6],"OP 0, NET_TYPE INFRA, WIFI_ROLE STATION");
     let cam=cam.last().unwrap();let w=|i:usize|u32::from_le_bytes(cam[4*i..4*i+4].try_into().unwrap());
@@ -501,7 +501,7 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     assert_eq!(cam[22..28],[2,9,8,7,6,5]);
     // Its deauthentication: no link again.
     c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(12,&[3,0]),0,0)];assert!(service.step());
-    let Some(Event::Linked{aid:None,was:Some(1),..})=service.take_event()else{panic!("no unlink")};
+    let Some(Event::Linked{aid:None,was:Some(1),before:Some(_),after:Some(_),..})=service.take_event()else{panic!("no unlink")};
     assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4],"OP 1, NO_LINK");
     let cam=h2c(c,6);let cam=cam.last().unwrap();let w2=u32::from_le_bytes(cam[8..12].try_into().unwrap());assert_eq!((w2>>1)&3,0);
     // Linked again, then a new filter: no link first, then the filter's own CAM entry.
