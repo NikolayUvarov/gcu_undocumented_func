@@ -1,6 +1,6 @@
 # 352-APP-0157 — The shell's `install`: MIND Core from a live boot onto a disk of this machine
 
-**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written and host-tested, 2026-11-21; the whole install in QEMU is KRN's run in the `iso` suite) · **Blocked by:** — ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), the installer's service, is in `main`, round 165) · **Main task:** 352, through [352-UPD-0048](352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md) · **Roadmap:** track C (update) and G · **Constitution:** MC-3.11, MC-10.3, MC-12.3
+**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done on x86 in QEMU by hand, 2026-11-21; the `iso` suite's run, KRN's, and aarch64 left) · **Blocked by:** — ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), the installer's service, is in `main`, round 165) · **Main task:** 352, through [352-UPD-0048](352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md) · **Roadmap:** track C (update) and G · **Constitution:** MC-3.11, MC-10.3, MC-12.3
 
 **Recorded by:** the tools track, 2026-11-21, from KRN's request in `issues/requests-APP.md` ("The shell's `install` command, for 352-UPD-0048").
 
@@ -36,8 +36,19 @@
   - `shell/src/installer.rs` holds the command's words, `installctl.rs` its calls;
   - the line is read at the console with Backspace and Esc, 32 characters at most, within 2 minutes;
   - the `help` line.
-- **Tested:** `tests/shell_host.rs`'s `install_lists_shows_and_names_what_failed`.
-- **Left:** the whole install in the `iso` suite (KRN's, asked in `KRN/`), and on a machine.
+- **Then:** mistyped words are refused at once, before the second question. The installer compares them again.
+- **Tested:**
+  - `tests/shell_host.rs`'s `install_lists_shows_and_names_what_failed`; the shell and tools suites pass with the command.
+  - **The whole install on x86 in QEMU,** by a script outside the repository on the `iso` suite's machine: the ISO as a CD-ROM and a blank 512 MiB disk.
+    - `install` listed `1  ATA  512 MIB  EMPTY  TO INSTALL: INSTALL 1, THEN TYPE ATA 512 EMPTY`.
+    - `install 1` with `ata 512 empty` wrote it: `INSTALL: DONE ON DISK 1, MBR 0A073267: THE ESP AT SECTOR 2048 (184320 SECTORS), MIND LOG AT 186368 (131072), THE STORE AT 317440 (262144)`.
+    - A second `install 1` showed `MBR 0A073267, 3 PARTITIONS` and refused mistyped words.
+    - The disk then booted alone, without the ISO, to the shell's prompt, its `store.txt` there.
+  - This is a run by hand, not a check of the repository's (MC-12.2).
+- **Left:**
+  - the `iso` suite's run, KRN's, asked in `KRN/`;
+  - aarch64 (`VIRTIO 512 EMPTY`);
+  - a real machine.
 
 ## Related
 
