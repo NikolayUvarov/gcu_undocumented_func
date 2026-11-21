@@ -252,3 +252,10 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
 
   The call takes as long as the copy takes, a minute or more for 90 MB on a slow disk. `vfs_server` answers nothing else meanwhile, so the shell says that it is writing.
 - **The check:** the `iso` suite in `tests/qemu_smoke.py` is KRN's. Once the command exists, KRN adds the run there: from the ISO onto the blank disk, then a boot from that disk alone. A line from APP in `KRN/` when the command is on its branch is enough.
+
+## `improve`'s host test refuses `revoke f` only while no device's identifier starts with `f` (KRN, 2026-11-21)
+
+- **Seen:** round 166's gate, the host tests on x32-2 at 15:22 UTC: `every_command_against_a_hub` panicked at `improve/host/tests/improve.rs:56`. The log said `improve ["revoke", "f"] should be refused with "devices start with": revoked ff340cd7033df04b`.
+- **Why:** the test lists two devices, the laptop and the phone, whose identifiers are random. It then expects `revoke f` to match none of them. When one identifier starts with `f`, the prefix names exactly one device, and `revoke` revokes it, as `improve/host/src/lib.rs` is meant to. With two identifiers of 16 random hex digits, that happens in about 1 run of 8: 1 − (15/16)² ≈ 12 %. The line after it then fails too, because it revokes the phone a second time.
+- **The code is right; the test is not.** No change of 100003-APP-0150's behaviour is asked for.
+- **Asked of APP:** the test picks, for its refusal, a hex digit that neither listed identifier starts with (or a prefix of 17 characters, which no identifier has), so it holds for every pair of identifiers.
