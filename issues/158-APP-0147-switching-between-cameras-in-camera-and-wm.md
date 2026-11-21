@@ -39,6 +39,10 @@
   - `tests/camera_host.rs`;
   - the `vfs` suite's `camera_check`: `-c 1` refused with the count, `n` with one camera named, Esc;
   - the `wm` suite's camera window: `vfs` and `wm`, 25 PASS.
+- **Returned by round 162** (`LANDING/2026-11-21T0805Z-KRN-round-234317d3.md`): the `vfs` suite's camera check waited 30 s after Esc for `SHELL RESUMED.` and saw nothing, nine runs of nine, on x86 and aarch64.
+  - The check's own fault: `serial()` drops what comes in its 100 ms, and on the gate's machines `camera` ended and the shell resumed within them.
+  - The check now reads Esc's lines from the log marked before it (76fe352f).
+  - The `vfs` suite passes again here, on x86 (8 PASS). aarch64 was not run here; the harness's code is the same for both.
 - **Left:** the Ryzen's two USB cameras with DRV, once 158-DRV-0072 is in `main`. The gateway lists the test pattern alone in QEMU, so a real switch between two streams has not run.
 
 ## Related
