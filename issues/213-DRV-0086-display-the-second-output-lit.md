@@ -93,7 +93,8 @@ MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `V
 ROM SIGNATURE 55AA`, `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven `NOT READ` batches with their registers, `STEP 1 DONE:
 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`, `NO REGISTER READ OR WRITTEN` and `COMMAND 0006 AFTER STEP 1`;
 DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
-below 0x1B000 (the highest, PHY E's DPCS, ends at 0x1A880), so the engine's window needs no widening for them.
+below 0x1B000 (the highest is `RDPCSTX0_RDPCSTX_PHY_FUSE3` at 0x17848, which tables 12 and 76 write), so the engine's
+window needs no widening for them.
 
 ## Progress: the ATOM interpreter, host-only (2026-11-21)
 
