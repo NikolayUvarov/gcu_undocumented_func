@@ -1369,7 +1369,9 @@ impl Updater {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
+    // A live system (352-UPD-0047): its volume is the installer's medium, read-only in memory, so no slot is filled there.
+    let live = info.boot_volume.kind == VOLUME_ELTORITO;
+    let slot = match info.boot_slot.slot { _ if live => 0, BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
     let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None,
                                 failure: String::new(), install: None, handles: 0, store: None, trusted: None, stamp_seen: 0,
                                 order_seen: 0, order_refused: None, cable_seen: [0; 32] };
@@ -1386,7 +1388,8 @@ fn main(info: &'static BootInfo) {
     // it for the Effector server's word, and when init cannot say, it stays a trial (801-UPD-0037).
     let (mut waiting, mut ask_at) = (false, None);
     if slot == 0 {
-        mind::println!("[UPDATER] BOOTED FROM THE VOLUME'S ROOT: NO SLOT TO FILL");
+        if live { mind::println!("[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL"); }
+        else { mind::println!("[UPDATER] BOOTED FROM THE VOLUME'S ROOT: NO SLOT TO FILL"); }
         // The key file kept, read only when there is one: a boot from the root starts no parser for nothing.
         if [TRUSTED, TRUSTED_NEW].iter().any(|path| File::open(path).is_ok()) { updater.trust_kept(parser().endpoint()); }
     } else {
