@@ -42,10 +42,10 @@ The 2.4 GHz channel is crowded, and its antenna is shared with Bluetooth. The 5 
 
 ## Acceptance criteria
 
-- [ ] Host cases cover the 5 GHz channel setting, the policy and its limits, and that nothing is sent on a radar channel before a beacon is heard there. The generators reproduce the tables.
+- [x] Host cases cover the 5 GHz channel setting, the policy and its limits, and that nothing is sent on a radar channel before a beacon is heard there. The generators reproduce the tables.
 - [ ] On the Ryzen the scan lists the network on channel 100, the station joins it, and 6 MB arrive at a recorded rate. This holds for that machine, that access point and that channel (MC-12.1).
 - [ ] The Ryzen still joins on channel 8 with the same build, and its rate there is recorded.
-- [ ] The issue says what was not done: other channel widths, HT and VHT, other machines.
+- [x] The issue says what was not done: other channel widths, HT and VHT, other machines.
 
 ## The data model (2026-11-21)
 
@@ -110,6 +110,25 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 **2026-11-21, the listen-only rule in data mode:** a host case runs the data service admitted on channel 100 for an access point heard there: a CCK rate is `invalid`; a probe request and a frame to another receiver are `failed` and nothing is published; a frame to the access point is sent; after 5 s with no beacon of it, nothing more is sent.
 
 **Not done yet:** a transmission, a calibration and a join on 5 GHz on the Ryzen, which wait for a lawful channel and country (above); the coexistence's TDMA policies for a busy Wi-Fi beside a busy Bluetooth (not ported on 2.4 GHz either, 213-DRV-0052).
+
+## Where it stands (2026-11-21, evening)
+
+| Part | State | Host cases | On the Ryzen |
+|---|---|---|---|
+| Band model, 41 channels, `info` (bands 7, `supported`) | written | `rtw89_receive_service_cases`, `rtw89_service_cases` | the station saw 41 channels |
+| Country rules on 5 GHz (DFS and NO-IR listen-only; WMM, indoor/outdoor out) | written | `rtw89_country_host` (UZ, US, 00, RU, DE) | RU applied: no 5 GHz channel, as the catalogue says |
+| 5 GHz power tables and their generator | written | `rtw89_channel_policy_host` (Linux's slots; Linux's `txpwr_table` on channel 100), `rtw89_power_tables_test.py`, `--check` | not sent at |
+| Power image on 5 GHz | written | `rtw89_channel_power_host` | written on every passive tune |
+| Channel stage on 5 GHz, BTG back on 2.4 GHz | written | `rtw89_receive_service_cases` (100 and back to 6; 36, 64, 144, 165) | 40 passive tunes, none failed; beacons heard on 36-157, CoolNet2 on 100 |
+| Listen-only rule (receive-only and data mode) | written | `rtw89_receive_service_cases`, `rtw89_service_cases` | not reached: no listen-only channel was allowed |
+| IQK, TSSI, DPK on 5 GHz | written | `rtw89_iqk_cases`, `rtw89_tssi_cases`, `rtw89_dpk_cases`, `rtw89_tssi_tables_test.py`, `--check` | not run: nothing may be sent on 5 GHz here |
+| Coexistence on 5 GHz | written | `rtw89_btc_codec_cases`, `rtw89_btc_runtime_cases` (the whole admission on channel 100 in the models) | not run |
+| A join and a download on 5 GHz | blocked by the country and the access point's channel (above) | — | — |
+| 2.4 GHz with the same code | unchanged path | every 2.4 GHz case as before | joined channel 8; 159/242/215 KB/s against the release's 184/262/277 in the same minutes |
+
+**What a person must do for a 5 GHz join here:** choose the Ryzen's country if it is not RU (`wifi set-country XX`, which the station keeps), and put CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). As long as the driver reports no signal, the station joins the first CoolNet2 it heard, the 2.4 GHz one: for that run a driver build whose `supported` leaves 2.4 GHz out is needed (a bench build, not committed).
+
+**Not done, each a later task:** other channel widths, HT and VHT, aggregation; the signal in the receive header (the PPDU status reports are counted, not parsed); DPK tracking and TSSI tracking on 5 GHz (not on 2.4 GHz either); the coexistence's TDMA policies; other machines than the Ryzen.
 
 ## Related
 
