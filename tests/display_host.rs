@@ -277,10 +277,11 @@ impl Model {
     fn index_of(&self, reg: Reg) -> usize { self.log.iter().position(|&r| r == reg).expect("register never written") }
 }
 
-// The route's choice (hwdocs/cezanne-display.md): pipe 1 for HDMI-A-1 on PHY A, the firmware on pipe 0 and PHY E.
-const PIPE1: Pipe = Pipe { otg: 1, opp: 1, dig_fe: 1 };
+// The route's choice (hwdocs/cezanne-display.md): HDMI-A-1 on PHY A through pipe 1 and DIG front end A, with the
+// firmware assumed on pipe 0 and PHY E's front end and back end (to be read under MIND Core first).
+const PIPE1: Pipe = Pipe { otg: 1, opp: 1, dig_fe: 0 };
 const HDMI_A: Output = Output { phy: 0, hpd: 0, encoder_id: 0x1E, connector_id: 0x0C };
-const FIRMWARE: Protected = Protected { otg: 0, opp: 0, dig_fe: 0, phy: 4 };
+const FIRMWARE: Protected = Protected { otg: 0, opp: 0, dig_fe: 4, phy: 4 };
 
 #[test]
 fn first_light_programs_the_second_pipe_in_display_cores_order() {
@@ -301,10 +302,10 @@ fn first_light_programs_the_second_pipe_in_display_cores_order() {
     assert_eq!(m.read(R::OtgVBlankStartEnd.at(1)), o.v_blank_start | o.v_blank_end << 16);
     assert_eq!(m.read(R::OtgVSyncA.at(1)), o.v_sync_end << 16);
     assert_eq!(m.read(R::VtgControl.at(1)) >> 16 & 0x7FFF, o.vcount_init);
-    // The wiring: OTG 1 from OPP 1, DIG front end 1 from OTG 1, PHY A's back end from front end 1 in DVI mode.
+    // The wiring: OTG 1 from OPP 1, DIG front end A from OTG 1, PHY A's back end from front end A in DVI mode.
     assert_eq!(m.read(R::OptcDataSourceSelect.at(1)) >> 8 & 0xF, 1);
-    assert_eq!(m.read(R::DigFeCntl.at(1)) & 7, 1);
-    assert_eq!(m.read(R::DigBeCntl.at(0)) >> 8 & 0x7F, 1 << 1);
+    assert_eq!(m.read(R::DigFeCntl.at(0)) & 7, 1);
+    assert_eq!(m.read(R::DigBeCntl.at(0)) >> 8 & 0x7F, 1);
     assert_eq!(m.read(R::DigBeCntl.at(0)) >> 16 & 7, 2);
     assert_eq!(m.read(R::DpgControl.at(1)) & 0xF1, 0x01);
     assert_eq!(m.read(R::DpgDimensions.at(1)), 1920 << 16 | 1080);
@@ -322,7 +323,7 @@ fn first_light_programs_the_second_pipe_in_display_cores_order() {
     let step_of = |reg: Reg| plan.steps().position(|s| matches!(s, Step::Update { reg: r, .. } if r == reg)).unwrap();
     assert!(at(dcn::TABLE_SETPIXELCLOCK) < step_of(R::OtgHTotal.at(1)), "the pixel clock before the timing");
     assert!(at(dcn::TABLE_DIG1TRANSMITTERCONTROL) > step_of(R::DigBeCntl.at(0)), "the PHY after its back end");
-    assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(1)));
+    assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(0)));
 }
 
 #[test]
@@ -334,21 +335,21 @@ fn first_light_command_table_parameters() {
     assert_eq!(&p[..10], &[0xC8, 0xA8, 0x16, 0x00, 20, 0x1E, 2, 0, 1, 0]); // 1 485 000 x 100 Hz, PHY A's PLL, UNIPHY, DVI, OTG 1
     let (p, n) = tables[1].parameters();
     assert_eq!(n, 12);
-    assert_eq!(&p[..9], &[1, 0x0F, 2, 4, 0x02, 0x3A, 0, 0, 2]); // DIG 1, stream setup, DVI, 4 lanes, 14 850 x 10 kHz, 8 bpc
+    assert_eq!(&p[..9], &[0, 0x0F, 2, 4, 0x02, 0x3A, 0, 0, 2]); // DIG A, stream setup, DVI, 4 lanes, 14 850 x 10 kHz, 8 bpc
     let (p, n) = tables[2].parameters();
     assert_eq!(n, 32);
-    assert_eq!(&p[..11], &[0, 1, 2, 4, 0x02, 0x3A, 0, 0, 1, 2, 0x0C]); // PHY A on, DVI, 4 lanes, HPD1, front end 1, HDMI type A
+    assert_eq!(&p[..11], &[0, 1, 2, 4, 0x02, 0x3A, 0, 0, 1, 1, 0x0C]); // PHY A on, DVI, 4 lanes, HPD1, front end A, HDMI type A
 }
 
 #[test]
 fn first_light_refuses_the_firmwares_pipe_bad_instances_and_clocks_beyond_the_signal() {
     let p = |otg, opp, dig_fe| Pipe { otg, opp, dig_fe };
-    for pipe in [p(0, 1, 1), p(1, 0, 1), p(1, 1, 0)] {
+    for pipe in [p(0, 1, 0), p(1, 0, 0), p(1, 1, 4)] {
         assert_eq!(first_light(pipe, HDMI_A, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::Protected);
     }
     let phy_e = Output { phy: 4, ..HDMI_A };
     assert_eq!(first_light(PIPE1, phy_e, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::Protected);
-    assert_eq!(first_light(p(4, 1, 1), HDMI_A, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::NoSuchInstance);
+    assert_eq!(first_light(p(4, 1, 0), HDMI_A, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::NoSuchInstance);
     assert_eq!(first_light(PIPE1, Output { phy: 5, ..HDMI_A }, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::NoSuchInstance);
     // The HDMI monitor's own 3440x1440 at 324 MHz: beyond one DVI link, within HDMI without scrambling.
     assert_eq!(first_light(PIPE1, HDMI_A, &HDMI_PREFERRED, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::ClockTooHigh);
