@@ -103,7 +103,10 @@
     - **A read of a camera stream whose frame is not there yet** mints its lent buffer into a slot of its own (`CAP_GRANT`, as `camera` and the stub lend it), maps it, and saves its answer (`defer_read`). The request's own slot is freed for the next request.
     - **Each turn of the loop looks at every waiting read once** (`poll_camera_at`, the old wait's one pass, with the frame's number and time fixed when the read came). It answers the read when its frame is ready or FIRST_MS passed without one, then frees its mapping and slot (`finish_read`).
     - **Reads of the test patterns are answered as before,** at their time, and so is a camera read when one of these steps fails or 8 already wait.
-    - **Not run on the Ryzen yet;** the patterns do not reach it in QEMU.
+    - **Run on the Ryzen, 2026-11-21 19:42-19:43 UTC** (release 202611211911, `video_gw` of 3dba2c434 by `replace`, then put back): camera 1 at 320×240 for 30 s beside camera 0 in YUY2 1280×720 for 12 s, the case that held camera 1's reads 5 s before.
+      - Camera 1: `297 READS ANSWERED, AT MOST 298 MS APART`, with 791 good frames and 78 broken.
+      - Camera 0 gave 88 good frames this time and 49 broken (`AT MOST 428 MS APART`), where it had given none beside camera 1. So the 5 s case itself did not recur, and the deferral of a read that waits 5 s is not yet shown.
+      - The patterns do not reach this in QEMU.
     - **YUY2 at 1280×960 and 1280×720 beside a second camera break almost every frame at about 133 KB:** about the 32 pages `usb_host` keeps queued (128 KiB), which the camera fills in a few ms at the bus's rate. MJPEG frames of those sizes (0.1 to 0.2 MB) stream beside another camera.
     - **The other cases:** more pages need more of `usb_host`'s DMA memory, which `init` grants (KRN). Or the gateway may prefer MJPEG for large sizes beside another stream.
 - **What this `usb_host` does differently for devices that are not cameras:**
