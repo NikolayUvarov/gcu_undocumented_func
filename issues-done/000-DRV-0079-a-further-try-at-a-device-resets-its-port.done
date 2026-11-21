@@ -41,13 +41,13 @@ The device's own fault is the transaction error (completion 4) on a control tran
 
 **The order Linux and Windows use first** (release 202611202000): on a further try, Address Device with BSR (the slot and endpoint 0 set up, no SET_ADDRESS), the device descriptor asked at address 0, the port reset once more, then SET_ADDRESS. The speakerphone failed the descriptor request at address 0 as it had failed SET_ADDRESS. So the order of the set-up is not what stops this device on a root port, and no device here is known to need it. The code was taken out again.
 
-**What this says of the speakerphone:** in the DEXP's root port it answers neither request after a port reset, with 20 ms or 50 ms of recovery. Through the Genesys hub on the Ryzen it is set up. That is recorded for its own project as its task `19-usb-root-port-02-intel-set-address-transaction-error`.
+**What this says of the speakerphone:** in the DEXP's root port 2 it answers neither request after a port reset, with 20 ms or 50 ms of recovery. Through the Genesys hub it is set up, and on 2026-11-21, when the maintainer changed the sockets, so it was in root port 3 and then in port 2 itself. That is recorded for its own project as its task `19-usb-root-port-02-intel-set-address-transaction-error`.
 
 ## Resolution
 
 Done on 2026-11-20 in `usb_host/src/xhci.rs` (`enable_port(port, again)`, the two recovery times, `control` keeping a failed transfer's code) and `usb_host/src/main.rs` (`discard` keeping the code, the reset's line in `scan`).
 
-It holds for the DEXP's Intel xHCI and this device (MC-12.1). It does not make the speakerphone work in a root port: every try still fails, now for a reason the log shows. No device here is known that a further try with a reset sets up.
+It holds for the DEXP's Intel xHCI and this device (MC-12.1). It did not make the speakerphone work in that root port, port 2, that evening: every try still failed, now for a reason the log shows. A day later the same device was set up at its first try in root port 3, and then in port 2 as well (000-DRV-0073): the failure is not of that socket, and its cause is not known. No device here is known that a further try with a reset sets up.
 
 ## Related
 

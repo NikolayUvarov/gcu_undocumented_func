@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the DEXP's Intel xHCI plays clean notes through its own USB audio; the Ryzen's run waits for the speakerphone) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; on the DEXP's Intel xHCI the speakerphone plays and hears through a hub; the Ryzen's run is next) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -105,12 +105,47 @@ That shows the stream on an Intel xHCI. What was heard then was a rasp: the next
 307.620 audio_gw: [AUDIO] USB ENDPOINT 01: 48000 HZ ASKED, THE DEVICE SAYS 48000 HZ
 307.620 audio_gw: [AUDIO] USB PLAYBACK STARTED: INTERFACE 2 SETTING 1
 ```
-A minute of notes (440, 660 and 880 Hz, 5 s each): the maintainer heard them clean. Two shorter runs just before it he did not hear at all; why is not known, and the log of all three is the same.
+Twelve rising notes over a minute (300 to 850 Hz, 5 s each): the maintainer heard all twelve, clean, from the lowest (`60972 PACKETS SENT, 0 MISSED, 0 TIMES DRY`).
+
+**Not explained:** of the runs before that one, an 8 s run was not heard at all, and of a minute of four cycles two were heard. Their logs read as the last run's does. In the minute run the log was read through the cable 6 s in, and the ring ran dry twice then; that does not make half a minute of silence.
+
+## The speakerphone on the DEXP, through the hub (2026-11-21)
+
+Release 202611210533, the STM-Speaker's CN13 in the Genesys hub on the DEXP's root port 3. It is set up there (`CAFE:4014 ON PORT 3.2`, then 3.4), and the gateway takes it in place of the DEXP's own device (000-DRV-0080).
+
+- **A tone:** six rising notes, 30 s, three times. The maintainer heard all six.
+  ```
+  852.913 usb_host: [USB] SLOT 13 INTERFACE 1 SETTING 1: ENDPOINT 01 STREAMS OUT (196 BYTES EVERY 1000 US); STATE 1, USBSTS 00000010
+  852.913 usb_host: [USB] SLOT 13 INTERFACE 1 SETTING 1: ENDPOINT 82 STREAMS IN (3 BYTES EVERY 1000 US); STATE 1, USBSTS 00000010
+  854.913 audio_gw: [AUDIO] USB PLAYBACK 2 S IN: 2022 PACKETS TAKEN (0 SILENCE), 121476 BYTES QUEUED, RATE 47.981 FRAMES A MS
+  883.919 usb_host: [USB] SLOT 13 ENDPOINT 2: STREAM ENDED: 30999 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  883.919 usb_host: [USB] SLOT 13 ENDPOINT 5: STREAM ENDED: 92994 BYTES, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  883.920 audio_gw: [AUDIO] USB PLAYBACK STOPPED: INTERFACE 1; 31004 PACKETS SENT, 998 OF THEM SILENCE, THE LAST RATE 48.001 FRAMES A MS
+  ```
+  The feedback endpoint is read each millisecond, and the pacer follows it (47.981 to 48.001 frames a millisecond).
+- **`say`:** an English sentence, 3.6 s, heard (`4586 PACKETS SENT, 0 MISSED`).
+- **`listen 6`:** the maintainer's speech recorded from its microphones and played back to him.
+  ```
+  2079.570 usb_host: [USB] SLOT 13 INTERFACE 2 SETTING 1: ENDPOINT 81 STREAMS IN (98 BYTES EVERY 1000 US); STATE 1, USBSTS 00000010
+  2080.600 audio_gw: [AUDIO] CAPTURE: THE FIRST SECOND'S PEAK 2416 OF 32767
+  2085.635 usb_host: [USB] SLOT 13 ENDPOINT 3: STREAM ENDED: 581180 BYTES, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
+  2085.635 audio_gw: [AUDIO] CAPTURE STOPPED: 6016 MS OF SOUND, PEAK 5510, 0 OVERFLOWS
+  ```
+
+**Straight in root port 3,** with the hub moved to port 2 (`CAFE:4014 ON PORT 3 (FULL SPEED)`, set up at the first try): the same six notes twice, heard, `30989 PACKETS SENT, 0 MISSED, 0 TIMES DRY` with the feedback read. So full-speed isochronous transfers run on an Intel root port without a hub between.
+
+**Straight in root port 2,** the sockets changed back: set up at the first try, the six notes heard, `31007 PACKETS SENT, 0 MISSED`, and on the feedback endpoint `93018 BYTES, 0 MISSED, 1 TIMES DRY, 5 WITH ERRORS`. The five errors are the last five packets: the device stopped answering as the stream was closed (below, under what is still open).
+
+This holds for the DEXP's Intel xHCI, through that hub and in its root ports 2 and 3 (MC-12.1). The acceptance criterion names the Ryzen and the speakerphone's own counters over 5 minutes; neither is covered by these runs.
 
 **Still open:**
 - **The Ryzen.** Release 202611201957 is on it since 2026-11-20 20:04 UTC: the same fix, with the AMD gate (`no_isochronous` for 1022) taken off in that build only. Its run waits for the speakerphone and the cable, which are at the DEXP. The gate comes out of `main` after that run shows a stream there.
-- **The speakerphone on the DEXP.** In root port 2 it is not set up: SET_ADDRESS ends with a transaction error on every try (000-DRV-0079 has the log; its own project has it as task `19-usb-root-port-02`). Through a hub it would be set up after the DEXP's own USB audio, and the gateway took only the first device: 000-DRV-0080 makes the one set up last play.
+- **The speakerphone stops answering, and why is not known.**
+  - On the evening of 2026-11-20 it was not set up in the DEXP's root port 2 at all: SET_ADDRESS ended with a transaction error on every try (000-DRV-0079 has the log).
+  - The next morning it was set up at the first try in that socket and played for 31 s without an error. At the request that closes the stream it stopped answering everything, all at once, with no disconnection: every request after it ended with completion 4.
+  - Minutes later, straight in the Ryzen's second AMD xHCI, it did not answer SET_ADDRESS in three tries, twice.
+  - Two explanations stand, neither tested: the board's firmware stopped serving USB (its project's reading), or a contact of a data line. Its project has it as task `19-usb-root-port-02`.
 
 ## Related
 
-[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (an xHCI that stops answering is set up again), [000-DRV-0079](../issues-done/000-DRV-0079-a-further-try-at-a-device-resets-its-port.done) (a further try resets the port), [000-DRV-0080](000-DRV-0080-of-several-usb-audio-devices-the-one-set-up-last-plays.md) (the device set up last plays), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
+[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (an xHCI that stops answering is set up again), [000-DRV-0079](../issues-done/000-DRV-0079-a-further-try-at-a-device-resets-its-port.done) (a further try resets the port), [000-DRV-0080](../issues-done/000-DRV-0080-of-several-usb-audio-devices-the-one-set-up-last-plays.done) (the device set up last plays), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
