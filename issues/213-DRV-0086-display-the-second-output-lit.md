@@ -177,6 +177,29 @@ through the Effector server. Every line expected came, none dropped (228 `[DISPL
 So KRN's grant is as asked (the command register stays 0006 through the grant and after), the VFCT copy holds the same
 image Linux read, and this build reads and writes nothing. Run 0 is evidence for that machine and that build (MC-12.1).
 
+## Step 1 on the Ryzen (2026-11-21, reads only, the owner session's word)
+
+The owner session allowed reads only: `BATCHES_ALLOWED` 1, 3, 5 and 7, one release per value, each after the previous
+run's log came in full, the machine answered and its values were as expected; `STAGES_ALLOWED` stays 0. Each release
+is the owner's bench tree `claude/DRV-ryzen-bench-37` with only that constant changed, put on the machine through the
+Effector server (`update_agent`); each run's whole boot log is kept outside the repository (it carries the Wi-Fi
+agent's lines too).
+
+**Run 1** (`BATCHES_ALLOWED` 1): the first release, 202611211837, never reached the machine (the bundle's download
+broke over the Ryzen's Wi-Fi, `failed | upload`; nothing changed there). Retried as release 202611211902 (the bench tree at
+3ac64624b, which also carries 213-DRV-0090's Wi-Fi diagnostics), slot B confirmed 19:09 UTC. 229 `[DISPLAY]` lines, none
+dropped:
+- `B1 HPD: READING 10 REGISTERS NEXT`, then the ten values: `DC_HPD_INT_STATUS` 00000012 in HPD blocks 0 and 3,
+  00000000 in blocks 1, 2 and 4; `DC_HPD_CONTROL` 10FA09C4 in all five;
+- `B1 HPD SENSE 1:1 2:0 3:0 4:1 5:0; ENABLED 1:1 2:1 3:1 4:1 5:1`: a monitor on HPD 1 (HDMI-A-1, PHY A) and on HPD 4
+  (DP-2, PHY E, the firmware's screen), none on HPD 2, 3 or 5, as the survey's connector table expects; every block's
+  detection enabled (the firmware leaves it so);
+- `STEP 1 DONE: 1 OF 7 BATCHES READ, 10 REGISTERS, NOTHING WRITTEN`, step 3 shown for the survey's expectation
+  (`STEP 1'S BATCH 2 WAS NOT READ`), `10 REGISTERS READ, NONE WRITTEN`, `COMMAND 0006 AFTER STEP 1`.
+
+The machine kept answering after the reads. These values are evidence for that machine, that boot and that build
+(MC-12.1).
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
