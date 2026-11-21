@@ -140,6 +140,8 @@ pub struct Request {
     pub visibility: Visibility,
     /// About a vulnerability: private always, sent the way SECURITY.md names, never on the board.
     pub security: bool,
+    /// The user's leave for their display name beside the request on the board (6.4); no name without it.
+    pub named: bool,
     pub attachments: Vec<Attachment>,
 }
 
@@ -154,16 +156,21 @@ impl Request {
             let found = links(&self.title) + links(&self.text);
             if found > most as usize { return Err(Error::Links(most as usize)); }
         }
-        if self.attachments.len() > limits.attachments as usize { return Err(Error::Count("attachments", limits.attachments as usize)); }
-        for (i, a) in self.attachments.iter().enumerate() {
-            line("attachments.name", &a.name, NAME_MAX)?;
-            if a.name.contains('/') || a.name.contains('\\') || a.name.starts_with('.') { return Err(Error::Value("attachments.name")); }
-            if a.size == 0 { return Err(Error::Empty("attachments.size")); }
-            if a.size > limits.attachment_bytes { return Err(Error::Size("attachments.size", limits.attachment_bytes)); }
-            if self.attachments[..i].iter().any(|b| b.name == a.name) { return Err(Error::Value("attachments.name")); }
-        }
-        Ok(())
+        attachments_within(&self.attachments, limits)
     }
+}
+
+/// Attachments within a band's count and size, each named as a file of its own: no path, no leading dot, none twice.
+pub fn attachments_within(list: &[Attachment], limits: &Limits) -> Result<(), Error> {
+    if list.len() > limits.attachments as usize { return Err(Error::Count("attachments", limits.attachments as usize)); }
+    for (i, a) in list.iter().enumerate() {
+        line("attachments.name", &a.name, NAME_MAX)?;
+        if a.name.contains('/') || a.name.contains('\\') || a.name.starts_with('.') { return Err(Error::Value("attachments.name")); }
+        if a.size == 0 { return Err(Error::Empty("attachments.size")); }
+        if a.size > limits.attachment_bytes { return Err(Error::Size("attachments.size", limits.attachment_bytes)); }
+        if list[..i].iter().any(|b| b.name == a.name) { return Err(Error::Value("attachments.name")); }
+    }
+    Ok(())
 }
 
 pub fn client_id(id: &str) -> Result<(), Error> {
@@ -183,9 +190,12 @@ pub struct Message {
     /// A verdict's word, and the release it was checked on.
     pub verdict: Option<Verdict>,
     pub release: Option<String>,
+    /// A log, a screenshot or a text with an answer or a verdict (6.2): their entries here, their bytes after.
+    pub attachments: Vec<Attachment>,
 }
 
 impl Message {
+    /// Within the form's bounds; attachments within the largest band's, which the hub narrows to the user's.
     pub fn check(&self) -> Result<(), Error> {
         body("text", &self.text, TEXT_MAX)?;
         match (self.kind, self.answers.is_some(), self.verdict.is_some()) {
@@ -198,7 +208,8 @@ impl Message {
         if self.release.is_some() && self.kind != MessageKind::Verdict && self.kind != MessageKind::Result { return Err(Error::Value("release")); }
         if let Some(release) = &self.release { line("release", release, SHORT_MAX)?; }
         if self.kind == MessageKind::Verdict && self.release.is_none() { return Err(Error::Empty("release")); }
-        Ok(())
+        if !self.attachments.is_empty() && !matches!(self.kind, MessageKind::Answer | MessageKind::Verdict) { return Err(Error::Value("attachments")); }
+        attachments_within(&self.attachments, &crate::trust::BANDS[crate::trust::BANDS.len() - 1])
     }
 }
 

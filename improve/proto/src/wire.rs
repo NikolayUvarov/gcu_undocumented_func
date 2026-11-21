@@ -1,4 +1,4 @@
-//! The forms in JSON, `hub-api 1` (docs/hub/README.md, 10.1). Each object carries exactly its keys: a missing key, an
+//! The forms in JSON, `hub-api 2` (docs/hub/README.md, 10.1). Each object carries exactly its keys: a missing key, an
 //! unknown one or a value of another type is refused, naming it. Decoding builds the form; its bounds are `check`'s.
 
 use crate::form::*;
@@ -12,6 +12,8 @@ pub enum Error {
     Json(json::Error),
     /// Not an object of the API's version.
     Api,
+    /// An object of a version no longer taken, by its name (crate::RETIRED).
+    Retired(&'static str),
     Missing(&'static str),
     Unknown(String),
     Type(&'static str),
@@ -47,8 +49,28 @@ impl<'a> Fields<'a> {
 }
 
 fn api(value: &Value) -> Result<(), Error> {
-    if value.get("api").and_then(Value::as_str) != Some(crate::API) { return Err(Error::Api); }
-    Ok(())
+    let got = value.get("api").and_then(Value::as_str);
+    if got == Some(crate::API) { return Ok(()); }
+    match crate::RETIRED.iter().find(|old| Some(**old) == got) { Some(old) => Err(Error::Retired(old)), None => Err(Error::Api) }
+}
+
+fn encode_attachments(w: &mut Writer, list: &[Attachment]) {
+    w.key("attachments").begin_array();
+    for a in list {
+        w.begin_object().field_str("kind", a.kind.name()).field_str("name", &a.name).field_int("size", a.size as i64)
+            .field_str("sha256", &crate::hex32(&a.sha256)).end_object();
+    }
+    w.end_array();
+}
+
+fn decode_attachments(value: &Value) -> Result<Vec<Attachment>, Error> {
+    let list = value.get("attachments").and_then(Value::as_array).ok_or(Error::Type("attachments"))?;
+    let mut out = Vec::with_capacity(list.len().min(8));
+    for item in list {
+        let a = Fields::of(item, &["kind", "name", "size", "sha256"], &[])?;
+        out.push(Attachment { kind: a.word("kind", AttachmentKind::from_name)?, name: a.str("name")?.into(), size: a.unsigned("size")?, sha256: a.hex32("sha256")? });
+    }
+    Ok(out)
 }
 
 fn begin(w: &mut Writer) { w.begin_object().field_str("api", crate::API); }
@@ -93,25 +115,16 @@ pub fn encode_request(r: &Request) -> String {
     let mut w = Writer::new();
     begin(&mut w);
     w.field_str("client_id", &r.client_id).field_str("kind", r.kind.name()).field_str("title", &r.title).field_str("text", &r.text)
-        .field_str("visibility", r.visibility.name()).field_bool("security", r.security);
-    w.key("attachments").begin_array();
-    for a in &r.attachments {
-        w.begin_object().field_str("kind", a.kind.name()).field_str("name", &a.name).field_int("size", a.size as i64)
-            .field_str("sha256", &crate::hex32(&a.sha256)).end_object();
-    }
-    w.end_array().end_object();
+        .field_str("visibility", r.visibility.name()).field_bool("security", r.security).field_bool("named", r.named);
+    encode_attachments(&mut w, &r.attachments);
+    w.end_object();
     w.finish()
 }
 
 pub fn decode_request(value: &Value) -> Result<Request, Error> {
     api(value)?;
-    let f = Fields::of(value, &["api", "client_id", "kind", "title", "text", "visibility", "security", "attachments"], &[])?;
-    let list = value.get("attachments").and_then(Value::as_array).ok_or(Error::Type("attachments"))?;
-    let mut attachments = Vec::with_capacity(list.len().min(8));
-    for item in list {
-        let a = Fields::of(item, &["kind", "name", "size", "sha256"], &[])?;
-        attachments.push(Attachment { kind: a.word("kind", AttachmentKind::from_name)?, name: a.str("name")?.into(), size: a.unsigned("size")?, sha256: a.hex32("sha256")? });
-    }
+    let f = Fields::of(value, &["api", "client_id", "kind", "title", "text", "visibility", "security", "named", "attachments"], &[])?;
+    let attachments = decode_attachments(value)?;
     Ok(Request {
         client_id: f.str("client_id")?.into(),
         kind: f.word("kind", Kind::from_name)?,
@@ -119,6 +132,7 @@ pub fn decode_request(value: &Value) -> Result<Request, Error> {
         text: f.str("text")?.into(),
         visibility: f.word("visibility", Visibility::from_name)?,
         security: f.bool("security")?,
+        named: f.bool("named")?,
         attachments,
     })
 }
@@ -130,16 +144,20 @@ pub fn encode_message(m: &Message) -> String {
     if let Some(q) = m.answers { w.field_int("answers", q as i64); }
     if let Some(v) = m.verdict { w.field_str("verdict", v.name()); }
     if let Some(r) = &m.release { w.field_str("release", r); }
+    if !m.attachments.is_empty() { encode_attachments(&mut w, &m.attachments); }
     w.end_object();
     w.finish()
 }
 
 pub fn decode_message(value: &Value) -> Result<Message, Error> {
     api(value)?;
-    let f = Fields::of(value, &["api", "kind", "text"], &["answers", "verdict", "release"])?;
+    let f = Fields::of(value, &["api", "kind", "text"], &["answers", "verdict", "release", "attachments"])?;
     let answers = f.opt_unsigned("answers")?.map(|n| u32::try_from(n).map_err(|_| Error::Value("answers"))).transpose()?;
     let verdict = f.opt_str("verdict")?.map(|w| Verdict::from_name(w).ok_or(Error::Value("verdict"))).transpose()?;
-    Ok(Message { kind: f.word("kind", MessageKind::from_name)?, text: f.str("text")?.into(), answers, verdict, release: f.opt_str("release")?.map(String::from) })
+    // Attachments are there only when there are some: an empty list is not their one encoding.
+    let attachments = match value.get("attachments") { Some(_) => decode_attachments(value)?, None => Vec::new() };
+    if value.get("attachments").is_some() && attachments.is_empty() { return Err(Error::Value("attachments")); }
+    Ok(Message { kind: f.word("kind", MessageKind::from_name)?, text: f.str("text")?.into(), answers, verdict, release: f.opt_str("release")?.map(String::from), attachments })
 }
 
 fn role_from_name(name: &str) -> Option<Role> {

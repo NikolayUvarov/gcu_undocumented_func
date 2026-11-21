@@ -1,4 +1,4 @@
-//! `hub-api 1` over HTTP (docs/hub/README.md, 10): the devices' routes, the agents', the admin's and the board, each
+//! `hub-api 2` over HTTP (docs/hub/README.md, 10): the devices' routes, the agents', the admin's and the board, each
 //! signed over a challenge the hub gave, and every answer carrying the next challenge. The pages are `pages`'.
 
 use crate::event::{Decision, Event, Owner};
@@ -71,8 +71,14 @@ pub enum Signer { Device([u8; 32]), Agent([u8; 32]), Admin(String), Unregistered
 
 impl Shared {
     pub fn commit(&mut self, events: Vec<Event>) -> Result<(), Refusal> {
-        journal::commit(&mut self.hub, &mut self.journal, events).map_err(|e| refuse(500, "hub", format!("the hub refused its own change: {e}")))
+        let erasing = events.iter().any(|e| matches!(e, Event::Deleted { .. } | Event::Erased { .. }));
+        journal::commit(&mut self.hub, &mut self.journal, events).map_err(|e| refuse(500, "hub", format!("the hub refused its own change: {e}")))?;
+        if erasing { self.erase().map_err(|e| refuse(500, "journal", format!("the deleted texts cannot leave the journal: {e}")))?; }
+        Ok(())
     }
+
+    /// The deleted texts out of the journal and the attachments no one keeps out of the store (`journal::erase`).
+    pub fn erase(&mut self) -> std::io::Result<()> { journal::erase(&self.hub, &mut self.journal, &self.attachments, util::now_ms()) }
 
     /// The signer of a request, by its `Hub-Signature` over a challenge given and not used (4.1, 10.3).
     pub fn signer(&mut self, req: &Request, now: u64) -> Result<(Signer, [u8; 32]), Refusal> {
@@ -151,17 +157,28 @@ pub fn write_summary(w: &mut Writer, r: &Item) {
     if let Some(t) = &r.task { w.field_str("task", t); }
     if let Some(t) = &r.release { w.field_str("release", t); }
     if let Some(d) = r.duplicate_of { w.field_int("duplicate_of", d as i64); }
+    w.field_bool("named", r.form.named);
+    if !r.flags.is_empty() {
+        w.key("flagged").begin_array();
+        for f in &r.flags { w.string(f); }
+        w.end_array().field_bool("cleared", r.cleared);
+    }
+    if r.deleted { w.field_bool("deleted", true); }
+}
+
+fn write_attachments(w: &mut Writer, list: &[improve_proto::form::Attachment], received: &[bool]) {
+    w.key("attachments").begin_array();
+    for (a, got) in list.iter().zip(received) {
+        w.begin_object().field_str("kind", a.kind.name()).field_str("name", &a.name).field_int("size", a.size as i64)
+            .field_str("sha256", &hex(&a.sha256)).field_bool("received", *got).end_object();
+    }
+    w.end_array();
 }
 
 pub fn write_request(w: &mut Writer, r: &Item) {
     write_summary(w, r);
     w.field_str("text", &r.form.text);
-    w.key("attachments").begin_array();
-    for (a, got) in r.form.attachments.iter().zip(&r.received) {
-        w.begin_object().field_str("kind", a.kind.name()).field_str("name", &a.name).field_int("size", a.size as i64)
-            .field_str("sha256", &hex(&a.sha256)).field_bool("received", *got).end_object();
-    }
-    w.end_array();
+    write_attachments(w, &r.form.attachments, &r.received);
     w.key("thread").begin_array();
     for p in &r.thread {
         w.begin_object().field_int("n", p.n as i64).field_int("at_ms", p.at as i64).field_str("author", &p.author.text())
@@ -170,6 +187,7 @@ pub fn write_request(w: &mut Writer, r: &Item) {
         if let Some(v) = p.message.verdict { w.field_str("verdict", v.name()); }
         if let Some(r) = &p.message.release { w.field_str("release", r); }
         if p.message.kind == MessageKind::Question { w.field_bool("answered", p.answered); }
+        if !p.message.attachments.is_empty() { write_attachments(w, &p.message.attachments, &p.received); }
         w.end_object();
     }
     w.end_array();
@@ -229,7 +247,12 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
     let seg = segments(rest);
     let m = req.method.as_str();
     match (m, seg.as_slice()) {
-        ("GET", ["challenge"]) => { let mut w = begin(); w.end_object(); return ok(200, w); }
+        ("GET", ["challenge"]) => {
+            // The proof of work a registration needs now, so that a device solves it before it asks (5.4).
+            let mut w = begin();
+            w.field_int("work_bits", s.hub.work_bits(now) as i64).end_object();
+            return ok(200, w);
+        }
         ("GET", ["board"]) => return Ok(Response::json(200, wire::encode_board(&s.hub.board()))),
         _ => {}
     }
@@ -300,26 +323,38 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
             w.field_int("id", id as i64).field_str("state", r.state.name()).field_bool("filed_before", again).end_object();
             ok(if again { 200 } else { 201 }, w)
         }
-        ("PUT", ["requests", id, "attachments", n]) => {
-            let (id, n) = (number(id).ok_or_else(|| refuse(404, "request", "no such request"))?, number(n).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| refuse(404, "attachment", "no such attachment"))?);
-            let events = s.hub.attach(now, &device, id, n, &req.body)?;
-            if !events.is_empty() { store(s, &req.body)?; }
+        ("PUT", ["requests", id, "attachments", n]) => put_attachment(s, now, &device, id, None, n, &req.body),
+        ("PUT", ["requests", id, "messages", p, "attachments", n]) => {
+            let p = number(p).and_then(|p| u32::try_from(p).ok()).ok_or_else(|| refuse(404, "message", "no such message"))?;
+            put_attachment(s, now, &device, id, Some(p), n, &req.body)
+        }
+        ("GET", ["requests", id, "attachments", n]) => { let r = own(s, user, id)?; attachment(s, &r, None, n) }
+        ("GET", ["requests", id, "messages", p, "attachments", n]) => { let r = own(s, user, id)?; attachment(s, &r, Some(p), n) }
+        ("DELETE", ["requests", id]) => {
+            let id = number(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
+            let events = s.hub.delete_request(now, &device, id)?;
             s.commit(events)?;
-            let mut w = begin(); w.end_object(); ok(200, w)
+            let mut w = begin(); w.field_bool("deleted", true).end_object(); ok(200, w)
+        }
+        ("GET", ["me", "export"]) => Ok(Response::json(200, export(&s.hub, user, now))),
+        ("DELETE", ["me"]) => {
+            let events = s.hub.erase(now, &device)?;
+            s.commit(events)?;
+            let mut w = begin(); w.field_bool("erased", true).end_object(); ok(200, w)
         }
         ("GET", ["requests"]) => {
             let since = query(req, "since").map(|v| number(&v).ok_or_else(|| refuse(400, "since", "since is a time in ms"))).transpose()?.unwrap_or(0);
             let mut w = begin();
             w.key("requests").begin_array();
-            for r in s.hub.requests().iter().filter(|r| r.user == user && r.since >= since) { w.begin_object(); write_summary(&mut w, r); w.end_object(); }
+            for r in s.hub.requests().iter().filter(|r| r.user == user && r.since >= since && !r.deleted) { w.begin_object(); write_summary(&mut w, r); w.end_object(); }
             w.end_array().end_object();
             ok(200, w)
         }
         ("GET", ["requests", id]) => {
-            let r = number(id).and_then(|id| s.hub.request(id)).filter(|r| r.user == user).ok_or_else(|| refuse(404, "request", "no such request of this user"))?;
+            let r = own(s, user, id)?;
             let mut w = begin();
             w.key("request").begin_object();
-            write_request(&mut w, r);
+            write_request(&mut w, &r);
             w.end_object().end_object();
             ok(200, w)
         }
@@ -329,7 +364,7 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
             let message = wire::read(text, wire::decode_message).map_err(wire_refusal)?;
             post(s, now, Actor::Device(device), id, message)
         }
-        _ => Err(refuse(404, "route", "no such route of hub-api 1")),
+        _ => Err(refuse(404, "route", "no such route of hub-api 2")),
     }
 }
 
@@ -355,13 +390,63 @@ pub fn store(s: &Shared, bytes: &[u8]) -> Result<(), Refusal> {
     std::fs::rename(&tmp, &path).map_err(fail)
 }
 
-fn attachment(s: &Shared, r: &Item, n: &str) -> Result<Response, Refusal> {
-    let n = number(n).ok_or_else(|| refuse(404, "attachment", "no such attachment"))? as usize;
-    let a = r.form.attachments.get(n).filter(|_| r.received[n]).ok_or_else(|| refuse(404, "attachment", "no such attachment received"))?;
+/// An attachment's bytes: the request's own `n`th, or the `n`th of its message `post`.
+pub fn attachment(s: &Shared, r: &Item, post: Option<&str>, n: &str) -> Result<Response, Refusal> {
+    let none = || refuse(404, "attachment", "no such attachment received");
+    let n = number(n).ok_or_else(none)? as usize;
+    let (list, received, name) = match post {
+        None => (&r.form.attachments, &r.received, format!("request-{}-{}.bin", r.id, n)),
+        Some(p) => {
+            let p = number(p).and_then(|p| r.thread.iter().find(|x| x.n as u64 == p)).ok_or_else(none)?;
+            (&p.message.attachments, &p.received, format!("request-{}-message-{}-{}.bin", r.id, p.n, n))
+        }
+    };
+    let a = list.get(n).filter(|_| received[n]).ok_or_else(none)?;
     let bytes = std::fs::read(s.attachments.join(hex(&a.sha256))).map_err(|e| refuse(500, "store", format!("the attachment cannot be read: {e}")))?;
     // Data, never opened by the browser: a download under a name of its own.
     Ok(Response { status: 200, headers: vec![("Content-Type".into(), "application/octet-stream".into()),
-                                             ("Content-Disposition".into(), format!("attachment; filename=\"request-{}-{}.bin\"", r.id, n))], body: bytes })
+                                             ("Content-Disposition".into(), format!("attachment; filename=\"{name}\""))], body: bytes })
+}
+
+fn own(s: &Shared, user: u64, id: &str) -> Result<Item, Refusal> {
+    number(id).and_then(|id| s.hub.request(id)).filter(|r| r.user == user && !r.deleted).cloned().ok_or_else(|| refuse(404, "request", "no such request of this user"))
+}
+
+fn put_attachment(s: &mut Shared, now: u64, device: &[u8; 32], id: &str, post: Option<u32>, n: &str, body: &[u8]) -> Result<Response, Refusal> {
+    let id = number(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
+    let n = number(n).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| refuse(404, "attachment", "no such attachment"))?;
+    let events = s.hub.attach(now, device, id, post, n, body)?;
+    if !events.is_empty() { store(s, body)?; }
+    s.commit(events)?;
+    let mut w = begin(); w.end_object(); ok(200, w)
+}
+
+/// Everything the hub keeps of a user, as JSON: their name, trust and its history, their devices with their contact
+/// and registration's conversation, and their requests with their threads (design 9). Attachments by their entries;
+/// their bytes come from their routes.
+pub fn export(hub: &Hub, user: u64, now: u64) -> String {
+    let u = hub.user(user).expect("a user");
+    let mut w = begin();
+    w.field_int("exported_ms", now as i64).key("user").begin_object().field_int("id", u.id as i64).field_str("display_name", &u.display_name)
+        .field_int("trust", u.trust.value() as i64).key("trust_history").begin_array();
+    for c in &u.history {
+        w.begin_object().field_int("at_ms", c.at as i64).field_int("from", c.from as i64).field_int("to", c.to as i64)
+            .field_str("reason", &c.reason).field_str("author", &c.author.text()).end_object();
+    }
+    w.end_array().end_object().key("devices").begin_array();
+    for id in &u.devices {
+        let d = hub.device(id).expect("a user's device");
+        w.begin_object().field_str("device", &hex(&d.id)).field_str("public_key", &hex(&d.key)).field_str("state", d.state.name()).field_str("name", &d.name)
+            .field_str("kind", d.kind.name()).field_str("platform", &d.platform).field_str("version", &d.version).field_int("registered_ms", d.at as i64);
+        if let Some(c) = &d.contact { w.field_str("contact", c); }
+        w.key("notes").begin_array();
+        for n in &d.notes { w.begin_object().field_int("at_ms", n.at as i64).field_str("from", &n.from.text()).field_str("kind", n.kind).field_str("text", &n.text).end_object(); }
+        w.end_array().end_object();
+    }
+    w.end_array().key("requests").begin_array();
+    for r in hub.requests().iter().filter(|r| r.user == user && !r.deleted) { w.begin_object(); write_request(&mut w, r); w.end_object(); }
+    w.end_array().end_object();
+    w.finish()
 }
 
 fn state_body(req: &Request) -> Result<(State, String, Extra), Refusal> {
@@ -397,7 +482,8 @@ fn agent_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resul
             w.end_object().end_object();
             ok(200, w)
         }
-        ("GET", ["requests", id, "attachments", n]) => { let r = readable(s, id)?; attachment(s, &r, n) }
+        ("GET", ["requests", id, "attachments", n]) => { let r = readable(s, id)?; attachment(s, &r, None, n) }
+        ("GET", ["requests", id, "messages", p, "attachments", n]) => { let r = readable(s, id)?; attachment(s, &r, Some(p), n) }
         ("POST", ["requests", id, "messages"]) => {
             let id = number(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
             let text = std::str::from_utf8(&req.body).map_err(|_| refuse(400, "body", "the body is not UTF-8"))?;
@@ -500,7 +586,18 @@ pub fn admin_call(s: &mut Shared, req: &Request, now: u64, admin: &str, rest: &s
         }
         ("GET", ["requests", id, "attachments", n]) => {
             let r = number(id).and_then(|id| s.hub.request(id)).cloned().ok_or_else(|| refuse(404, "request", "no such request"))?;
-            attachment(s, &r, n)
+            attachment(s, &r, None, n)
+        }
+        ("GET", ["requests", id, "messages", p, "attachments", n]) => {
+            let r = number(id).and_then(|id| s.hub.request(id)).cloned().ok_or_else(|| refuse(404, "request", "no such request"))?;
+            attachment(s, &r, Some(p), n)
+        }
+        ("POST", ["requests", id, "clear"]) => {
+            let id = number(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
+            let b = Body::read(req, &["reason"], &[])?;
+            let events = s.hub.clear_flag(now, admin, id, b.str("reason")?)?;
+            s.commit(events)?;
+            let mut w = begin(); w.end_object(); ok(200, w)
         }
         ("POST", ["requests", id, "state"]) => {
             let id = number(id).ok_or_else(|| refuse(404, "request", "no such request"))?;

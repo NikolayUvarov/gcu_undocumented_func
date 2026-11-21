@@ -1,6 +1,6 @@
 # 100003 — MIND Hub: a user's request done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.3; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stages 1 and 2 done (100003-APP-0145, 0146: the separate hub, [docs/hub/server.md](../docs/hub/server.md)), what stage 2 left in 100003-APP-0148, stage 3 and 4 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.4; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stages 1 and 2 done (100003-APP-0145, 0146 and 0148: the protocol crate, the separate hub over `hub-api 2`, [docs/hub/server.md](../docs/hub/server.md)), stages 3 and 4 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 **History:**
 - **Recorded** by the kernel session, 2026-10-25, at the maintainer's request, as `improve`: a request to improve the OS from the phone, and its status (`MOB`).
@@ -25,7 +25,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
   - a conversation per request;
   - a public board of the requests that became tasks;
   - the updates: OS releases and module packages, signed by UPD's keys, which the hub never holds.
-- **Two forms, one API** (`hub-api 1`), one protocol crate (`improve/proto`), one conformance suite:
+- **Two forms, one API** (`hub-api 2`), one protocol crate (`improve/proto`), one conformance suite:
   - the separate hub `tools/mindhub` first, in Rust (the maintainer's choice, 2026-11-20);
   - the native hub on MIND Core later.
 - **Clients:**
@@ -58,7 +58,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
 |---|---|---|
 | 1 | [100003-APP-0145](../issues-done/100003-APP-0145-the-hub-protocol-crate.done), done | the protocol crate and its vectors |
 | 2 | [100003-APP-0146](../issues-done/100003-APP-0146-the-separate-hub.done), done | the separate hub: intake, registration, trust, anti-flood, threads, the board, the admin pages, the agents' API, the conformance suite |
-| 2+ | [100003-APP-0148](100003-APP-0148-the-hubs-remaining-parts.md) | what stage 2 left: export and deletion, a verdict's attachments, a name on the board, the proof of work raised by itself, the flag on a request for a credential |
+| 2+ | [100003-APP-0148](../issues-done/100003-APP-0148-the-hubs-remaining-parts.done), done | what stage 2 left: export and deletion, a verdict's attachments, a name on the board, the proof of work raised by itself, the flag on a request for a credential |
 | 3 | numbered when it starts | the hub's updates (needs UPD's `COMMIT` beside a release; restricted channels need UPD's signed fetch) |
 | 4 | numbered when it starts | `improve` on MIND Core, the console |
 | 5 | numbered when it starts | `improve` on a host, and the web pages |

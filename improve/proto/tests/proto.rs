@@ -138,7 +138,7 @@ fn limits() -> trust::Limits { BANDS[0] }
 
 fn request() -> Request {
     Request { client_id: "c-0001-abcd".into(), kind: Kind::Improvement, title: "Тише вентилятор в простое".into(), text: "На Ryzen вентилятор шумит.\nВо всех режимах.".into(),
-              visibility: Visibility::Public, security: false, attachments: vec![] }
+              visibility: Visibility::Public, security: false, named: false, attachments: vec![] }
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn a_registration_and_a_message_in_their_bounds() {
     assert_eq!(with(&|r| r.joining = Joining::Pair { code: "abcd2345".into() }), Err(Error::Value("pair_code")));
     assert_eq!(with(&|r| r.contact = Some("owner@example.org".into())), Ok(()));
     for wrong in ["owner", "@example.org", "a@b@c", "a b@c"] { assert_eq!(with(&|r| r.contact = Some(wrong.into())), Err(Error::Value("contact")), "{}", wrong); }
-    let message = |kind, answers, verdict: Option<Verdict>, release: Option<&str>| Message { kind, text: "ok".into(), answers, verdict, release: release.map(String::from) };
+    let message = |kind, answers, verdict: Option<Verdict>, release: Option<&str>| Message { kind, text: "ok".into(), answers, verdict, release: release.map(String::from), attachments: vec![] };
     assert_eq!(message(MessageKind::Comment, None, None, None).check(), Ok(()));
     assert_eq!(message(MessageKind::Answer, Some(3), None, None).check(), Ok(()));
     assert_eq!(message(MessageKind::Answer, None, None, None).check(), Err(Error::Value("kind")), "an answer names its question");
@@ -201,6 +201,18 @@ fn a_registration_and_a_message_in_their_bounds() {
     assert_eq!(message(MessageKind::Comment, None, Some(Verdict::Works), None).check(), Err(Error::Value("kind")));
     assert_eq!(message(MessageKind::Result, None, None, Some("202611201200")).check(), Ok(()));
     assert_eq!(message(MessageKind::Question, None, None, Some("x")).check(), Err(Error::Value("release")));
+    // 100003-APP-0148: attachments with an answer or a verdict alone, within the largest band's bounds.
+    let log = Attachment { kind: AttachmentKind::Log, name: "boot.log".into(), size: 10, sha256: [1; 32] };
+    let with = |m: Message, list: Vec<Attachment>| Message { attachments: list, ..m }.check();
+    assert_eq!(with(message(MessageKind::Answer, Some(3), None, None), vec![log.clone()]), Ok(()));
+    assert_eq!(with(message(MessageKind::Verdict, None, Some(Verdict::Partly), Some("202611201200")), vec![log.clone()]), Ok(()));
+    assert_eq!(with(message(MessageKind::Comment, None, None, None), vec![log.clone()]), Err(Error::Value("attachments")));
+    assert_eq!(with(message(MessageKind::Answer, Some(3), None, None), vec![log.clone(), log.clone()]), Err(Error::Value("attachments.name")));
+    assert_eq!(with(message(MessageKind::Answer, Some(3), None, None), vec![log.clone(); 5]), Err(Error::Count("attachments", 4)));
+    let huge = Attachment { size: 8 * 1024 * 1024 + 1, ..log.clone() };
+    assert_eq!(with(message(MessageKind::Answer, Some(3), None, None), vec![huge]), Err(Error::Size("attachments.size", 8 * 1024 * 1024)));
+    assert_eq!(attachments_within(&[log.clone()], &BANDS[0]), Ok(()));
+    assert_eq!(attachments_within(&[log], &PENDING), Err(Error::Count("attachments", 0)));
     // Who may post what.
     assert!(may_post(Role::User, MessageKind::Verdict) && !may_post(Role::User, MessageKind::Question) && !may_post(Role::User, MessageKind::Status));
     assert!(may_post(Role::Track, MessageKind::Proposal) && !may_post(Role::Track, MessageKind::Verdict));
@@ -298,8 +310,15 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     assert_eq!(wire::read(&wire::encode_registration(&reg), wire::decode_registration), Ok(reg.clone()));
     let paired = Registration { joining: Joining::Pair { code: "ABCD2345".into() }, contact: Some("a@b".into()), work: Some(77), ..reg };
     assert_eq!(wire::read(&wire::encode_registration(&paired), wire::decode_registration), Ok(paired));
-    let m = Message { kind: MessageKind::Verdict, text: "работает".into(), answers: None, verdict: Some(Verdict::DoesNotWork), release: Some("202611201200".into()) };
-    assert_eq!(wire::read(&wire::encode_message(&m), wire::decode_message), Ok(m));
+    let m = Message { kind: MessageKind::Verdict, text: "работает".into(), answers: None, verdict: Some(Verdict::DoesNotWork), release: Some("202611201200".into()),
+                      attachments: vec![Attachment { kind: AttachmentKind::Log, name: "after.log".into(), size: 2048, sha256: [0x5c; 32] }] };
+    assert_eq!(wire::read(&wire::encode_message(&m), wire::decode_message), Ok(m.clone()));
+    let plain = Message { attachments: vec![], ..m.clone() };
+    assert!(!wire::encode_message(&plain).contains("attachments"), "no attachments, no key");
+    let empty = wire::encode_message(&plain).replace(r#""release""#, r#""attachments":[],"release""#);
+    assert_eq!(wire::read(&empty, wire::decode_message), Err(wire::Error::Value("attachments")), "an empty list is not its encoding");
+    let named = Request { named: true, ..request() };
+    assert_eq!(wire::read(&wire::encode_request(&named), wire::decode_request), Ok(named));
     let c = Change { from: State::Landed, to: State::Delivered, role: Role::Hub, at_ms: 123, reason: "release 202611201200 on stable".into() };
     assert_eq!(wire::read(&wire::encode_change(&c), wire::decode_change), Ok(c));
     let board = vec![BoardEntry { id: 7, title: "Тише вентилятор".into(), kind: Kind::Improvement, track: "DRV".into(), task: "213-DRV-0099".into(),
@@ -314,11 +333,17 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     assert_eq!(wire::read(&missing, wire::decode_request), Err(wire::Error::Missing("security")));
     let typed = wire::encode_request(&request()).replace(r#""security":false"#, r#""security":"no""#);
     assert_eq!(wire::read(&typed, wire::decode_request), Err(wire::Error::Type("security")));
-    let old = wire::encode_request(&request()).replace("hub-api 1", "hub-api 0");
-    assert_eq!(wire::read(&old, wire::decode_request), Err(wire::Error::Api));
+    let unknown = wire::encode_request(&request()).replace("hub-api 2", "hub-api 0");
+    assert_eq!(wire::read(&unknown, wire::decode_request), Err(wire::Error::Api));
+    // The version before is refused by its name, never read (MC-12.4).
+    let old = wire::encode_request(&request()).replace("hub-api 2", "hub-api 1");
+    assert_eq!(wire::read(&old, wire::decode_request), Err(wire::Error::Retired("hub-api 1")));
+    let missing_named = wire::encode_request(&request()).replace(r#","named":false"#, "");
+    assert_eq!(wire::read(&missing_named, wire::decode_request), Err(wire::Error::Missing("named")));
     let both = wire::encode_registration(&registration()).replace(r#""display_name""#, r#""pair_code":"ABCD2345","display_name""#);
     assert_eq!(wire::read(&both, wire::decode_registration), Err(wire::Error::Value("pair_code")));
     let negative = wire::encode_change(&Change { from: State::New, to: State::Accepted, role: Role::Intake, at_ms: 1, reason: "x".into() }).replace(r#""at_ms":1"#, r#""at_ms":-1"#);
     assert_eq!(wire::read(&negative, wire::decode_change), Err(wire::Error::Value("at_ms")));
     vector("request.json", &(wire::encode_request(&request()) + "\n"));
+    vector("message.json", &(wire::encode_message(&m) + "\n"));
 }

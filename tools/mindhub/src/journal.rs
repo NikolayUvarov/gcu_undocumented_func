@@ -2,7 +2,9 @@
 //! A last line cut by a crash before its sync was never answered, so it is dropped and said so; any other line that is
 //! not an event stops the start, naming it, rather than be repaired.
 
-use crate::event::Event;
+use crate::event::{Event, Redaction};
+use crate::util::hex;
+use std::collections::HashSet;
 use crate::hub::Hub;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -33,6 +35,29 @@ impl Journal {
 
     pub fn path(&self) -> &Path { &self.path }
 
+    /// The journal written again with each event as `f` gives it, in a file of its own that then takes the journal's
+    /// place, so that a crash leaves the old one or the new one whole. Deleted texts leave it this way (design 9).
+    pub fn rewrite(&mut self, f: impl Fn(&Event) -> Event) -> io::Result<bool> {
+        let text = std::fs::read_to_string(&self.path)?;
+        let mut out = String::with_capacity(text.len());
+        for line in text.lines() {
+            let e = Event::decode(line).map_err(io::Error::other)?;
+            out.push_str(&f(&e).encode());
+            out.push('\n');
+        }
+        if out == text { return Ok(false); }
+        let tmp = self.path.with_extension("jsonl.rewrite");
+        {
+            let mut t = File::create(&tmp)?;
+            t.write_all(out.as_bytes())?;
+            t.sync_all()?;
+        }
+        std::fs::rename(&tmp, &self.path)?;
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) { File::open(dir)?.sync_all()?; }
+        self.file = OpenOptions::new().read(true).append(true).open(&self.path)?;
+        Ok(true)
+    }
+
     /// The journal's last `count` lines from line `from` on (1 is the first), for the admin.
     pub fn lines(&self, from: u64, count: usize) -> io::Result<Vec<(u64, String)>> {
         let text = std::fs::read_to_string(&self.path)?;
@@ -61,4 +86,28 @@ pub fn commit(hub: &mut Hub, journal: &mut Journal, events: Vec<Event>) -> io::R
 fn stop(path: &Path, e: io::Error) -> ! {
     eprintln!("MINDHUB: THE JOURNAL {} CANNOT BE WRITTEN ({e}): THE HUB STOPS, AND ITS NEXT START DROPS A CUT LAST LINE", path.display());
     std::process::exit(70)
+}
+
+/// The deleted requests' and erased users' texts out of the journal, and the attachments no request keeps any more out
+/// of the store (design 9). The journal then says what the state says. A start does it too, in case a crash came
+/// between a deletion and its erasure.
+pub fn erase(hub: &Hub, journal: &mut Journal, store: &Path, now: u64) -> io::Result<()> {
+    let requests: HashSet<u64> = hub.requests().iter().filter(|r| r.deleted).map(|r| r.id).collect();
+    let users: HashSet<u64> = hub.users().iter().filter(|u| u.erased).map(|u| u.id).collect();
+    if requests.is_empty() && users.is_empty() { return Ok(()); }
+    let devices: HashSet<[u8; 32]> = hub.users().iter().filter(|u| u.erased).flat_map(|u| u.devices.iter().copied()).collect();
+    journal.rewrite(|e| e.redacted(&Redaction { requests: &requests, users: &users, devices: &devices, now }))?;
+    let named = |deleted: bool| -> HashSet<String> {
+        hub.requests().iter().filter(|r| r.deleted == deleted)
+            .flat_map(|r| r.form.attachments.iter().chain(r.thread.iter().flat_map(|p| p.message.attachments.iter())))
+            .map(|a| hex(&a.sha256)).collect()
+    };
+    let kept = named(false);
+    for h in named(true).difference(&kept) {
+        match std::fs::remove_file(store.join(h)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
 }

@@ -1,4 +1,4 @@
-//! MIND Hub's protocol, `hub-api 1` (100003-APP-0145; docs/hub/README.md, sections 4 to 6 and 10). One crate for every
+//! MIND Hub's protocol, `hub-api 2` (100003-APP-0145, 0148; docs/hub/README.md, sections 4 to 6 and 10). One crate for every
 //! side, so that MIND Core's `improve`, the native hub and `tools/mindhub` agree byte for byte:
 //! - `form`: a registration, a request, an attachment's entry, a message, a state change, a board entry, and their bounds;
 //! - `state`: which role moves a request from which state to which;
@@ -27,7 +27,10 @@ pub mod wire;
 pub mod work;
 
 /// The API's name and version, sent with every request and answer.
-pub const API: &str = "hub-api 1";
+pub const API: &str = "hub-api 2";
+/// Versions no longer taken, each refused by its name (MC-12.4): `hub-api 1` had no `named` in a request and no
+/// attachments on a message (100003-APP-0148).
+pub const RETIRED: &[&str] = &["hub-api 1"];
 
 /// A day on the hub's clock, in milliseconds.
 pub const DAY_MS: u64 = 86_400_000;

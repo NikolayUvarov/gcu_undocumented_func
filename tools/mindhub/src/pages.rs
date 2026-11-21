@@ -72,13 +72,14 @@ pub fn handle(s: &mut Shared, req: &Request, cx: &Context) -> Response {
 fn board(s: &Shared) -> Response {
     let mut rows = String::new();
     for e in s.hub.board() {
-        rows += &format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                         e.id, html(&e.title), e.kind.name(), html(&e.task), e.state.name(), when(e.since_ms), html(e.release.as_deref().unwrap_or("")));
+        rows += &format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                         e.id, html(&e.title), e.kind.name(), html(&e.task), e.state.name(), when(e.since_ms), html(e.release.as_deref().unwrap_or("")),
+                         html(e.author.as_deref().unwrap_or("")));
     }
-    if rows.is_empty() { rows = "<tr><td colspan=7>Nothing has become a task yet.</td></tr>".into(); }
+    if rows.is_empty() { rows = "<tr><td colspan=8>Nothing has become a task yet.</td></tr>".into(); }
     page("Board", &format!("<nav><a href=\"/hub/\">My requests</a><a href=\"/hub/v1/board\">JSON</a></nav><h1>The board</h1>\
-<p class=meta>Requests that became tasks. Private ones and those about security are never here, and no user is named.</p>\
-<div class=scroll><table><tr><th>#</th><th>Title</th><th>Kind</th><th>Task</th><th>State</th><th>Since</th><th>Release</th></tr>{rows}</table></div>"))
+<p class=meta>Requests that became tasks. Private ones and those about security are never here, and a user is named only when they allowed it.</p>\
+<div class=scroll><table><tr><th>#</th><th>Title</th><th>Kind</th><th>Task</th><th>State</th><th>Since</th><th>Release</th><th>From</th></tr>{rows}</table></div>"))
 }
 
 // ---- the user's pages ----
@@ -91,11 +92,24 @@ fn user(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Response {
     let Some(Owner::User { device, .. }) = s.hub.session(&token, now).map(|x| x.owner.clone()) else { return sign_in_page(false, None).with("Set-Cookie", clear(USER_COOKIE, "/hub/")) };
     let result = match (req.method.as_str(), seg.as_slice()) {
         ("GET", []) => Ok(home(s, &token, &device, now)),
-        ("GET", ["requests", id]) => number(id).and_then(|id| s.hub.request(id)).filter(|r| s.hub.device(&device).is_some_and(|d| d.user == r.user)).cloned()
+        ("GET", ["requests", id]) => number(id).and_then(|id| s.hub.request(id)).filter(|r| !r.deleted && s.hub.device(&device).is_some_and(|d| d.user == r.user)).cloned()
             .map(|r| thread_page(&token, &r, false)).ok_or_else(|| refuse(404, "request", "no such request of yours")),
         ("POST", ["sign-out"]) => form_fields(req, &token).and_then(|_| s.commit(s.hub.sign_out(now, &token)))
             .map(|_| Response::see("/hub/").with("Set-Cookie", clear(USER_COOKIE, "/hub/"))),
         ("POST", ["requests"]) => form_fields(req, &token).and_then(|f| file_form(s, now, &device, &f)),
+        // The user's data as JSON, a download (design 9).
+        ("GET", ["export"]) => s.hub.device(&device).map(|d| d.user).ok_or_else(|| refuse(404, "user", "no such user"))
+            .map(|user| Response::json(200, api::export(&s.hub, user, now)).with("Content-Disposition", "attachment; filename=\"mind-hub-export.json\"".into())),
+        ("POST", ["requests", id, "delete"]) => {
+            let id = number(id).unwrap_or(0);
+            form_fields(req, &token).and_then(|_| { let events = s.hub.delete_request(now, &device, id)?; s.commit(events) }).map(|_| Response::see("/hub/"))
+        }
+        ("POST", ["erase"]) => form_fields(req, &token).and_then(|f| {
+            if field(&f, "sure") != Some("yes") { return Err(refuse(400, "sure", "tick the box that says you are sure")); }
+            let events = s.hub.erase(now, &device)?;
+            s.commit(events)
+        }).map(|_| page("Deleted", "<h1>Your account is deleted</h1><p>Your requests that no track took are gone, your devices are revoked, and your name and contact are erased.</p>")
+            .with("Set-Cookie", clear(USER_COOKIE, "/hub/"))),
         ("POST", ["requests", id, "messages"]) => {
             let id = number(id).unwrap_or(0);
             form_fields(req, &token).and_then(|f| message_form(&f, false)).and_then(|m| {
@@ -149,8 +163,9 @@ fn home(s: &Shared, token: &[u8; 32], device: &[u8; 32], now: u64) -> Response {
     let (requests, messages) = s.hub.quotas(device, now);
     let band = u.trust.band().map(|b| format!("band {b}")).unwrap_or_else(|| "read-only".into());
     let mut list = String::new();
-    for r in s.hub.requests().iter().filter(|r| r.user == u.id).rev() {
-        let q = if r.thread.iter().any(|p| p.message.kind == MessageKind::Question && !p.answered) { " <strong>· a question for you</strong>" } else { "" };
+    for r in s.hub.requests().iter().filter(|r| r.user == u.id && !r.deleted).rev() {
+        let q = if r.thread.iter().any(|p| p.message.kind == MessageKind::Question && !p.answered) { " <strong>· a question for you</strong>" }
+            else if r.waits_for_admin() { " · waits for the admin" } else { "" };
         list += &format!("<div class=card><a href=\"/hub/requests/{id}\">#{id} {t}</a>{q}<div class=meta>{st} since {since}</div></div>",
                          id = r.id, t = html(&r.form.title), st = r.state.name(), since = when(r.since));
     }
@@ -163,10 +178,14 @@ fn home(s: &Shared, token: &[u8; 32], device: &[u8; 32], now: u64) -> Response {
 <div class=row><label><input type=radio name=visibility value=public checked> public: may be on the board, without your name</label>\
 <label><input type=radio name=visibility value=private> private</label></div>\
 <label><input type=checkbox name=security value=yes> about a vulnerability (private always, never on the board)</label>\
+<label><input type=checkbox name=named value=yes> show my name with it on the board, once it is a task</label>\
 <button>Send</button></form><p class=meta>Attachments are sent from a device's <code>improve</code>.</p>", h = hidden(token))
     } else { "<p class=meta>No new request can be sent now: see your limits above.</p>".into() };
     page("My requests", &format!("<nav><a href=\"/hub/board\">The board</a><form method=post action=\"/hub/sign-out\" style=\"display:inline;margin:0\">{h}<button>Sign out</button></form></nav>\
-<h1>{name}'s requests</h1><p class=meta>Signed in through {dev} · trust {trust} ({band}) · {requests} new requests and {messages} messages left now</p>{list}{new}",
+<h1>{name}'s requests</h1><p class=meta>Signed in through {dev} · trust {trust} ({band}) · {requests} new requests and {messages} messages left now</p>{list}{new}\
+<h2>Your data</h2><p><a href=\"/hub/export\">Export it</a>: all the hub keeps of you, as JSON.</p>\
+<form method=post action=\"/hub/erase\">{h}<label><input type=checkbox name=sure value=yes required> I am sure</label>\
+<button>Delete my account</button><p class=meta>Your requests that no track took are deleted, every device of yours is revoked, and your name and contact are erased. Requests that became tasks stay, with no name.</p></form>",
         h = hidden(token), name = html(&u.display_name), dev = html(&d.name), trust = u.trust.value()))
 }
 
@@ -179,6 +198,7 @@ fn file_form(s: &mut Shared, now: u64, device: &[u8; 32], f: &[(String, String)]
         text: util::lines(get("text")),
         visibility: if get("visibility") == "private" { Visibility::Private } else { Visibility::Public },
         security: get("security") == "yes",
+        named: get("named") == "yes",
         attachments: Vec::new(),
     };
     let form = Form { visibility: if form.security { Visibility::Private } else { form.visibility }, ..form };
@@ -198,21 +218,30 @@ fn message_form(f: &[(String, String)], admin: bool) -> Result<Message, Refusal>
     let answers = (kind == MessageKind::Answer).then(|| number(get("answers")).and_then(|n| u32::try_from(n).ok())).flatten();
     let verdict = (kind == MessageKind::Verdict).then(|| Verdict::from_name(get("verdict"))).flatten();
     let release = (kind == MessageKind::Verdict).then(|| get("release").trim().to_string()).filter(|r| !r.is_empty());
-    let m = Message { kind, text: util::lines(get("text")), answers, verdict, release };
+    let m = Message { kind, text: util::lines(get("text")), answers, verdict, release, attachments: Vec::new() };
     m.check().map_err(|e| refuse(400, "message", format!("the message is not complete: {e:?}")))?;
     Ok(m)
 }
 
-fn thread_html(r: &Item) -> String {
+fn thread_html(r: &Item, admin: bool) -> String {
     let mut out = String::new();
     for p in &r.thread {
+        let mut files = String::new();
+        for (k, (a, got)) in p.message.attachments.iter().zip(&p.received).enumerate() {
+            let link = match (*got, admin) {
+                (true, true) => format!(" · <a href=\"/hub/admin/requests/{}/messages/{}/attachments/{k}\">download</a>", r.id, p.n),
+                (false, _) => " · not received".into(),
+                _ => String::new(),
+            };
+            files += &format!("<div class=meta>{} · {} · {} bytes{link}</div>", a.kind.name(), html(&a.name), a.size);
+        }
         let extra = match p.message.kind {
             MessageKind::Answer => format!(" to #{}", p.message.answers.unwrap_or(0)),
             MessageKind::Verdict => format!(": {} on {}", p.message.verdict.map(Verdict::name).unwrap_or(""), html(p.message.release.as_deref().unwrap_or(""))),
             MessageKind::Question if !p.answered => " · not answered yet".into(),
             _ => String::new(),
         };
-        out += &format!("<div class=card id=m{n}><div class=meta>#{n} · {k}{extra} · {a} · {t}</div><pre>{x}</pre></div>",
+        out += &format!("<div class=card id=m{n}><div class=meta>#{n} · {k}{extra} · {a} · {t}</div><pre>{x}</pre>{files}</div>",
                         n = p.n, k = p.message.kind.name(), a = html(&p.author.text()), t = when(p.at), x = html(&p.message.text));
     }
     out
@@ -233,6 +262,11 @@ fn thread_page(token: &[u8; 32], r: &Item, admin: bool) -> Response {
 <label>Task <input name=task maxlength=24 size=18></label><label>Duplicate of <input name=duplicate_of size=6></label></div>\
 <label><input type=checkbox name=not_a_request value=yes> not a request (trust -16)</label><label><input type=checkbox name=spam value=yes> spam (trust -256)</label>\
 <button>Move</button></form>", id = r.id);
+        }
+        if r.waits_for_admin() {
+            forms += &format!("<h2>Flagged: {why}</h2><p class=meta>It seems to ask for a credential, a key or authority, so no agent reads it until you clear it.</p>\
+<form method=post action=\"{base}/requests/{id}/clear\">{h}<label>Reason <input name=reason maxlength=200 required></label><button>Clear the flag</button></form>",
+                id = r.id, why = r.flags.join(", "));
         }
         forms += &format!("<h2>Write</h2><form method=post action=\"{base}/requests/{id}/messages\">{h}<label>Kind <select name=kind><option>comment</option><option>question</option></select></label>\
 <label>Text <textarea name=text maxlength=8192 required></textarea></label><button>Post</button></form>", id = r.id);
@@ -256,17 +290,23 @@ fn thread_page(token: &[u8; 32], r: &Item, admin: bool) -> Response {
 <option value=does-not-work>does not work</option></select></label><label>Checked on release <input name=release maxlength=32 value=\"{rel}\" required></label>\
 <label>What you saw <textarea name=text maxlength=8192 required></textarea></label><button>Send the verdict</button></form>", id = r.id, rel = html(r.release.as_deref().unwrap_or("")));
         }
+        if r.deletable() {
+            forms += &format!("<h2>Delete it</h2><form method=post action=\"{base}/requests/{id}/delete\">{h}<p class=meta>No track took it yet: it and its thread leave the hub.</p>\
+<button>Delete this request</button></form>", id = r.id);
+        }
         if !r.state.closed() {
             forms += &format!("<h2>Comment</h2><form method=post action=\"{base}/requests/{id}/messages\">{h}<input type=hidden name=kind value=comment>\
 <textarea name=text maxlength=8192 required></textarea><button>Post</button></form>", id = r.id);
         }
     }
-    let who = if admin { format!(" · user {} · device <code>{}</code>", r.user, &hex(&r.device)[..16]) } else { String::new() };
+    let mut who = if admin { format!(" · user {} · device <code>{}</code>", r.user, &hex(&r.device)[..16]) } else { String::new() };
+    if r.deleted { who += " · deleted by its user"; }
+    if r.form.named { who += " · named on the board"; }
     let nav = if admin { admin_nav(token) } else { "<nav><a href=\"/hub/\">Back</a><a href=\"/hub/board\">The board</a></nav>".to_string() };
     page(&format!("Request {}", r.id), &format!("{nav}<h1>#{id} {t}</h1>\
 <p class=meta>{k} · {v}{sec} · {st} since {since}{task}{release}{who}</p><div class=card><pre>{text}</pre></div><h2>The thread</h2>{thread}{forms}",
         id = r.id, t = html(&r.form.title), k = r.form.kind.name(), v = r.form.visibility.name(), sec = if r.form.security { " · security" } else { "" },
-        st = r.state.name(), since = when(r.since), text = html(&r.form.text), thread = thread_html(r)))
+        st = r.state.name(), since = when(r.since), text = html(&r.form.text), thread = thread_html(r, admin)))
 }
 
 // ---- the admin pages ----
@@ -290,7 +330,7 @@ fn admin(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Response {
                 let r = number(id).and_then(|id| s.hub.request(id)).cloned().ok_or_else(|| refuse(404, "request", "no such request"))?;
                 Ok(thread_page(&token, &r, true))
             }
-            ("GET", ["requests", _, "attachments", _]) => api::admin_call(s, req, now, &name, rest.trim_start_matches('/')),
+            ("GET", ["requests", _, "attachments", _]) | ("GET", ["requests", _, "messages", _, "attachments", _]) => api::admin_call(s, req, now, &name, rest.trim_start_matches('/')),
             ("GET", ["settings"]) => Ok(admin_settings(s, &token)),
             ("GET", ["journal"]) => admin_journal(s, req, &token),
             ("POST", rest_seg) => {
@@ -315,6 +355,10 @@ fn admin(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Response {
                         let extra = Extra { track: opt("track"), task: opt("task"), duplicate_of: opt("duplicate_of").and_then(|v| number(&v)),
                                             not_a_request: get("not_a_request") == "yes", spam: get("spam") == "yes" };
                         (s.hub.move_request(now, &Actor::Admin(name.clone()), id, to, get("reason").trim(), &extra)?, format!("/hub/admin/requests/{id}"))
+                    }
+                    ["requests", id, "clear"] => {
+                        let id = number(id).unwrap_or(0);
+                        (s.hub.clear_flag(now, &name, id, get("reason").trim())?, format!("/hub/admin/requests/{id}"))
                     }
                     ["requests", id, "messages"] => {
                         let id = number(id).unwrap_or(0);
@@ -394,8 +438,9 @@ fn admin_users(s: &Shared, token: &[u8; 32]) -> Response {
 fn admin_requests(s: &Shared, token: &[u8; 32]) -> Response {
     let mut rows = String::new();
     for r in s.hub.requests().iter().rev() {
+        let st = if r.deleted { "deleted".to_string() } else if r.waits_for_admin() { format!("{} · flagged", r.state.name()) } else { r.state.name().to_string() };
         rows += &format!("<tr><td><a href=\"/hub/admin/requests/{id}\">{id}</a></td><td>{t}</td><td>{st}</td><td>{k}</td><td>{v}{sec}</td><td>{u}</td><td>{task}</td><td>{since}</td></tr>",
-            id = r.id, t = html(&r.form.title), st = r.state.name(), k = r.form.kind.name(), v = r.form.visibility.name(), sec = if r.form.security { ", security" } else { "" },
+            id = r.id, t = html(&r.form.title), k = r.form.kind.name(), v = r.form.visibility.name(), sec = if r.form.security { ", security" } else { "" },
             u = r.user, task = html(r.task.as_deref().unwrap_or("")), since = when(r.since));
     }
     page("Requests", &format!("{}<h1>Requests</h1><p class=meta>Open a request to moderate it.</p>\

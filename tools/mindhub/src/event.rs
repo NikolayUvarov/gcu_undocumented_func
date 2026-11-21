@@ -1,7 +1,7 @@
 //! The journal's events (docs/hub/README.md, 4 to 7): everything that changes the hub's state is one of them, written
 //! before it is applied, so the state is the journal's replay (MC-10.3). One JSON object a line, its keys exactly these.
 
-use improve_proto::form::{DeviceKind, Message, Request};
+use improve_proto::form::{Attachment, DeviceKind, Message, Request};
 use improve_proto::json::{self, Value, Writer};
 use improve_proto::state::{Role, State};
 use improve_proto::wire;
@@ -67,13 +67,68 @@ pub enum Event {
     Session { at: u64, token: [u8; 32], code: [u8; 32], until: u64 },
     SignedOut { at: u64, token: [u8; 32] },
     Filed { at: u64, id: u64, user: u64, device: [u8; 32], form: Request, held: bool },
-    Attached { at: u64, id: u64, n: u32 },
+    /// An attachment's bytes received: the request's own `n`th, or the `n`th of its message `post` (100003-APP-0148).
+    Attached { at: u64, id: u64, post: Option<u32>, n: u32 },
     Posted { at: u64, id: u64, author: Author, message: Message },
     Moved { at: u64, id: u64, to: State, role: Role, author: Author, reason: String,
             track: Option<String>, task: Option<String>, duplicate_of: Option<u64>, release: Option<String> },
     Trust { at: u64, user: u64, to: i16, reason: String, author: Author },
     Setting { at: u64, name: String, value: String, admin: String },
     Version { at: u64, device: [u8; 32], version: String },
+    /// A request deleted by its user before it was accepted (design 9): its texts and its thread's leave the journal.
+    Deleted { at: u64, id: u64, author: Author },
+    /// A user's account deleted: their names and contact, and their devices' answers, leave the journal.
+    Erased { at: u64, user: u64, author: Author },
+    /// The admin cleared a request's flag (6.2): the agents read it from then on.
+    Cleared { at: u64, id: u64, admin: String, reason: String },
+}
+
+/// What a deleted text reads as, in the state and in the journal.
+pub const DELETED: &str = "[deleted]";
+pub const ERASED_NAME: &str = "deleted user";
+pub const ERASED_DEVICE: &str = "deleted";
+pub const ERASED_NETWORK: &str = "erased";
+
+/// The attachments' entries with their names gone: a name is the user's words; the kind, size and SHA-256 stay.
+pub fn redact_attachments(list: &[Attachment]) -> Vec<Attachment> {
+    list.iter().enumerate().map(|(i, a)| Attachment { name: format!("deleted-{}", i + 1), ..a.clone() }).collect()
+}
+
+pub fn redact_request(form: &Request) -> Request {
+    Request { title: DELETED.into(), text: DELETED.into(), attachments: redact_attachments(&form.attachments), ..form.clone() }
+}
+
+pub fn redact_message(m: &Message) -> Message {
+    Message { text: DELETED.into(), attachments: redact_attachments(&m.attachments), ..m.clone() }
+}
+
+/// What the journal keeps of the deleted and the erased (100003-APP-0148).
+pub struct Redaction<'a> {
+    pub requests: &'a std::collections::HashSet<u64>,
+    pub users: &'a std::collections::HashSet<u64>,
+    pub devices: &'a std::collections::HashSet<[u8; 32]>,
+    /// A registration's network stays a day, for the anti-flood count; an older one is erased.
+    pub now: u64,
+}
+
+impl Event {
+    /// The event as the journal keeps it after the deletions and erasures named.
+    pub fn redacted(&self, r: &Redaction) -> Event {
+        match self {
+            Event::Filed { id, form, .. } if r.requests.contains(id) => {
+                let Event::Filed { at, id, user, device, held, .. } = self.clone() else { unreachable!() };
+                Event::Filed { at, id, user, device, held, form: redact_request(form) }
+            }
+            Event::Posted { at, id, author, message } if r.requests.contains(id) => Event::Posted { at: *at, id: *id, author: author.clone(), message: redact_message(message) },
+            Event::Registered { at, key, kind, platform, version, network, user, display_name, code, .. } if r.users.contains(user) => Event::Registered {
+                at: *at, key: *key, name: ERASED_DEVICE.into(), kind: *kind, platform: platform.clone(), version: version.clone(),
+                network: if *at + crate::util::DAY_MS <= r.now { ERASED_NETWORK.into() } else { network.clone() },
+                user: *user, display_name: display_name.as_ref().map(|_| ERASED_NAME.into()), contact: None, code: *code,
+            },
+            Event::Answered { at, device, .. } if r.devices.contains(device) => Event::Answered { at: *at, device: *device, text: DELETED.into() },
+            e => e.clone(),
+        }
+    }
 }
 
 fn role_name(name: &str) -> Option<Role> {
@@ -86,7 +141,7 @@ impl Event {
             Event::Registered { at, .. } | Event::Decided { at, .. } | Event::Answered { at, .. } | Event::Revoked { at, .. }
             | Event::Code { at, .. } | Event::Session { at, .. } | Event::SignedOut { at, .. } | Event::Filed { at, .. }
             | Event::Attached { at, .. } | Event::Posted { at, .. } | Event::Moved { at, .. } | Event::Trust { at, .. }
-            | Event::Setting { at, .. } | Event::Version { at, .. } => *at,
+            | Event::Setting { at, .. } | Event::Version { at, .. } | Event::Deleted { at, .. } | Event::Erased { at, .. } | Event::Cleared { at, .. } => *at,
         }
     }
 
@@ -96,7 +151,8 @@ impl Event {
             Event::Revoked { .. } => "revoked", Event::Code { .. } => "code", Event::Session { .. } => "session",
             Event::SignedOut { .. } => "signed-out", Event::Filed { .. } => "filed", Event::Attached { .. } => "attached",
             Event::Posted { .. } => "posted", Event::Moved { .. } => "moved", Event::Trust { .. } => "trust",
-            Event::Setting { .. } => "setting", Event::Version { .. } => "version",
+            Event::Setting { .. } => "setting", Event::Version { .. } => "version", Event::Deleted { .. } => "deleted",
+            Event::Erased { .. } => "erased", Event::Cleared { .. } => "cleared",
         }
     }
 
@@ -134,7 +190,11 @@ impl Event {
                 w.field_int("id", *id as i64).field_int("user", *user as i64).field_str("device", &hex(device))
                     .field_str("form", &wire::encode_request(form)).field_bool("held", *held);
             }
-            Event::Attached { id, n, .. } => { w.field_int("id", *id as i64).field_int("n", *n as i64); }
+            Event::Attached { id, post, n, .. } => {
+                w.field_int("id", *id as i64);
+                if let Some(p) = post { w.field_int("post", *p as i64); }
+                w.field_int("n", *n as i64);
+            }
             Event::Posted { id, author, message, .. } => {
                 w.field_int("id", *id as i64).field_str("author", &author.text()).field_str("message", &wire::encode_message(message));
             }
@@ -151,6 +211,9 @@ impl Event {
             }
             Event::Setting { name, value, admin, .. } => { w.field_str("name", name).field_str("value", value).field_str("admin", admin); }
             Event::Version { device, version, .. } => { w.field_str("device", &hex(device)).field_str("version", version); }
+            Event::Deleted { id, author, .. } => { w.field_int("id", *id as i64).field_str("author", &author.text()); }
+            Event::Erased { user, author, .. } => { w.field_int("user", *user as i64).field_str("author", &author.text()); }
+            Event::Cleared { id, admin, reason, .. } => { w.field_int("id", *id as i64).field_str("admin", admin).field_str("reason", reason); }
         }
         w.end_object();
         w.finish()
@@ -169,12 +232,15 @@ impl Event {
             "session" => (&["token", "code", "until_ms"], &[]),
             "signed-out" => (&["token"], &[]),
             "filed" => (&["id", "user", "device", "form", "held"], &[]),
-            "attached" => (&["id", "n"], &[]),
+            "attached" => (&["id", "n"], &["post"]),
             "posted" => (&["id", "author", "message"], &[]),
             "moved" => (&["id", "to", "role", "author", "reason"], &["track", "task", "duplicate_of", "release"]),
             "trust" => (&["user", "to", "reason", "author"], &[]),
             "setting" => (&["name", "value", "admin"], &[]),
             "version" => (&["device", "version"], &[]),
+            "deleted" => (&["id", "author"], &[]),
+            "erased" => (&["user", "author"], &[]),
+            "cleared" => (&["id", "admin", "reason"], &[]),
             other => return Err(format!("an unknown event {other:?}")),
         };
         let f = Fields { value: &value };
@@ -207,7 +273,10 @@ impl Event {
                 form: wire::read(&f.str("form")?, wire::decode_request).map_err(|e| format!("form: {e:?}"))?,
                 held: value.get("held").and_then(Value::as_bool).ok_or("held")?,
             },
-            "attached" => Event::Attached { at, id: f.unsigned("id")?, n: u32::try_from(f.unsigned("n")?).map_err(|_| "n")? },
+            "attached" => Event::Attached {
+                at, id: f.unsigned("id")?, n: u32::try_from(f.unsigned("n")?).map_err(|_| "n")?,
+                post: f.opt("post").map(|_| f.unsigned("post").and_then(|p| u32::try_from(p).map_err(|_| "post".to_string()))).transpose()?,
+            },
             "posted" => Event::Posted {
                 at, id: f.unsigned("id")?, author: f.author("author")?,
                 message: wire::read(&f.str("message")?, wire::decode_message).map_err(|e| format!("message: {e:?}"))?,
@@ -223,6 +292,9 @@ impl Event {
             },
             "setting" => Event::Setting { at, name: f.str("name")?, value: f.str("value")?, admin: f.str("admin")? },
             "version" => Event::Version { at, device: f.hex("device")?, version: f.str("version")? },
+            "deleted" => Event::Deleted { at, id: f.unsigned("id")?, author: f.author("author")? },
+            "erased" => Event::Erased { at, user: f.unsigned("user")?, author: f.author("author")? },
+            "cleared" => Event::Cleared { at, id: f.unsigned("id")?, admin: f.str("admin")?, reason: f.str("reason")? },
             _ => unreachable!(),
         })
     }
