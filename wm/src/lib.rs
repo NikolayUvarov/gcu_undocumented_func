@@ -11,3 +11,6 @@ pub mod menu;
 pub mod pointer;
 pub mod scale;
 pub mod settings;
+/// MIND Hub's requests that wait for the user, which `improve` keeps in the user's files (100003-APP-0153).
+#[path = "../../improve/app/src/waiting.rs"]
+pub mod waiting;

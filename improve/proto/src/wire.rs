@@ -1,4 +1,4 @@
-//! The forms in JSON, `hub-api 2` (docs/hub/README.md, 10.1). Each object carries exactly its keys: a missing key, an
+//! The forms in JSON, `hub-api 3` (docs/hub/README.md, 10.1). Each object carries exactly its keys: a missing key, an
 //! unknown one or a value of another type is refused, naming it. Decoding builds the form; its bounds are `check`'s.
 
 use crate::form::*;
@@ -142,6 +142,7 @@ pub fn encode_message(m: &Message) -> String {
     begin(&mut w);
     w.field_str("kind", m.kind.name()).field_str("text", &m.text);
     if let Some(q) = m.answers { w.field_int("answers", q as i64); }
+    if let Some(c) = m.consent { w.field_str("consent", c.name()); }
     if let Some(v) = m.verdict { w.field_str("verdict", v.name()); }
     if let Some(r) = &m.release { w.field_str("release", r); }
     if !m.attachments.is_empty() { encode_attachments(&mut w, &m.attachments); }
@@ -151,13 +152,14 @@ pub fn encode_message(m: &Message) -> String {
 
 pub fn decode_message(value: &Value) -> Result<Message, Error> {
     api(value)?;
-    let f = Fields::of(value, &["api", "kind", "text"], &["answers", "verdict", "release", "attachments"])?;
+    let f = Fields::of(value, &["api", "kind", "text"], &["answers", "consent", "verdict", "release", "attachments"])?;
     let answers = f.opt_unsigned("answers")?.map(|n| u32::try_from(n).map_err(|_| Error::Value("answers"))).transpose()?;
+    let consent = f.opt_str("consent")?.map(|w| Consent::from_name(w).ok_or(Error::Value("consent"))).transpose()?;
     let verdict = f.opt_str("verdict")?.map(|w| Verdict::from_name(w).ok_or(Error::Value("verdict"))).transpose()?;
     // Attachments are there only when there are some: an empty list is not their one encoding.
     let attachments = match value.get("attachments") { Some(_) => decode_attachments(value)?, None => Vec::new() };
     if value.get("attachments").is_some() && attachments.is_empty() { return Err(Error::Value("attachments")); }
-    Ok(Message { kind: f.word("kind", MessageKind::from_name)?, text: f.str("text")?.into(), answers, verdict, release: f.opt_str("release")?.map(String::from), attachments })
+    Ok(Message { kind: f.word("kind", MessageKind::from_name)?, text: f.str("text")?.into(), answers, consent, verdict, release: f.opt_str("release")?.map(String::from), attachments })
 }
 
 fn role_from_name(name: &str) -> Option<Role> {
