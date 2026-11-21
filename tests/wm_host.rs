@@ -31,6 +31,8 @@ mod settings;
 mod scale;
 #[path = "../wm/src/pointer.rs"]
 mod pointer;
+#[path = "../improve/app/src/waiting.rs"]
+mod waiting;
 #[path = "../common/font16.rs"]
 mod font16;
 
@@ -2365,3 +2367,39 @@ fn the_line_s_moves_are_logged_between_still_and_traffic() {
     let logged = (0..100).filter_map(|i| many.next(if i % 2 == 0 { still } else { "NET IN 1/S OUT 0/S" })).count();
     assert_eq!(logged, background::NetMoves::MOST);
 }
+
+#[test]
+fn the_hubs_mark_left_of_the_battery() {
+    use background::Power;
+    // 100003-APP-0153: none while nothing waits; with requests waiting, a mark left of the battery, and the title left of it.
+    let mut wm = Wm::new(160, 50);
+    wm.desk.add(text(1, "fm"));
+    assert!(wm.hub_chip().is_none() && !wm.status().contains("HUB="));
+    wm.battery = Some(Power { on_ac: false, charging: false, percent: 87, to_empty: 161, to_full: background::NO_MINUTES });
+    wm.hub = vec![1, 4];
+    assert_eq!(wm.hub_chip().as_deref(), Some(" HUB 2 "));
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut none = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    let right: String = (142..160).map(|x| grid.get(x, 0).ch).collect();
+    assert_eq!(right, " fm  HUB 2  ▮ 87% ", "the title, the mark, the battery");
+    assert!(wm.top_bar().0.iter().all(|&(at, width, _)| at + width <= 142), "the items leave them room");
+    assert!(wm.status().ends_with("BATTERY=▮ 87% HUB=2"), "{}", wm.status());
+    // A click on it says what waits on the status line; on the battery it still shows the minutes.
+    wm.pointer(148, 0, 1, 0);
+    wm.pointer(148, 0, 0, 0);
+    assert_eq!(wm.notice.as_deref(), Some("MIND Hub: 2 requests wait for you (#1 #4): improve list in the shell"));
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 87% "), "the battery's item unchanged");
+    wm.pointer(157, 0, 1, 0);
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 2:41 "));
+    // Without a battery it is at the right end.
+    wm.battery = None;
+    wm.hub = vec![3];
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    let right: String = (153..160).map(|x| grid.get(x, 0).ch).collect();
+    assert_eq!(right, " HUB 1 ");
+    wm.hub.clear();
+    assert!(wm.hub_chip().is_none());
+}
+

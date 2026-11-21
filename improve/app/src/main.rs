@@ -6,9 +6,11 @@
 // its own secret in keystore (SLOT_SECRETS), its own directory for the hub's address and pins (SLOT_OWN), and the
 // user's files its launcher lends, read for an attachment and written by an export (REQUEST_FILES). It holds a
 // long-term key and the network, so the hub's answers are parsed by `parse` (MC-11.11), and their tree is checked with
-// improve/proto's forms. Each call is signed over a challenge the hub gave in the body of `GET challenge`.
+// improve/proto's forms. Each call is signed over a challenge the hub gave in the body of `GET challenge`. The requests
+// that wait for the user go into the user's files, data/improve/waiting, for the shell's notice and wm's mark.
 extern crate alloc;
 
+mod waiting;
 mod words;
 
 use alloc::format;
@@ -435,6 +437,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut hub = Hub::open()?;
             let v = hub.expect(Method::Get, "/hub/v1/requests", b"", &[200])?;
             let all = list(&v, "requests");
+            keep_waiting(all);
             if all.is_empty() { mind::println!("no requests"); }
             for r in all {
                 let mark = if flag(r, "open_question") { "  [a question for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" }
@@ -502,6 +505,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut hub = Hub::open()?;
             hub.expect(Method::Post, "/hub/v1/devices/me/version", &body(&[("version", word(1, "the release")?)]), &[200])?;
             mind::println!("the hub knows this machine runs {}", word(1, "the release")?);
+            refresh_waiting(&mut hub);
             Ok(())
         }
         Some("devices") => {
@@ -534,6 +538,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut hub = Hub::open()?;
             hub.expect(Method::Delete, &format!("/hub/v1/requests/{id}"), b"", &[200])?;
             mind::println!("request {id} deleted, with its thread");
+            refresh_waiting(&mut hub);
             Ok(())
         }
         _ => Err(String::from(USAGE)),
@@ -553,7 +558,25 @@ fn post(id: u64, message: Message, args: &[String]) -> Result<(), String> {
     let m = n(&v, "n");
     put_files(&mut hub, &format!("/hub/v1/requests/{id}/messages/{m}"), &files)?;
     mind::println!("message #{m} on request {id}; the request is {}", s(&v, "state"));
+    refresh_waiting(&mut hub);
     Ok(())
+}
+
+/// The requests that wait for the user (an open question, a check), kept for the shell and wm in the user's files when
+/// they changed (100003-APP-0153). Without the user's files lent, nothing is kept.
+fn keep_waiting(all: &[Value]) {
+    let mut ids: Vec<u64> = all.iter().filter(|r| flag(r, "open_question") || s(r, "state") == "awaiting-check").filter_map(|r| u64::try_from(n(r, "id")).ok()).collect();
+    ids.sort_unstable();
+    let mut old = [0u8; waiting::BYTES];
+    let before = mind::fs::File::open(waiting::FILE).ok().and_then(|f| f.read_at(0, &mut old).ok()).and_then(|n| core::str::from_utf8(&old[..n]).ok()).and_then(waiting::read);
+    if before.as_deref() == Some(ids.as_slice()) { return; }
+    let _ = mind::fs::mkdir(waiting::DIR);
+    if let Ok(mut file) = mind::fs::File::create(waiting::FILE) { let _ = file.write_at(0, waiting::text(&ids).as_bytes()); }
+}
+
+/// The user's requests read again after a change of the user's, for `keep_waiting`; a refusal keeps what was there.
+fn refresh_waiting(hub: &mut Hub) {
+    if let Ok(v) = hub.expect(Method::Get, "/hub/v1/requests", b"", &[200]) { keep_waiting(list(&v, "requests")); }
 }
 
 /// What a delivered request asks of the user (6.3): the release that carries it is not on this machine yet, or it is,
@@ -591,6 +614,7 @@ fn watch(once: bool) -> Result<(), String> {
             since = since.max(n(r, "since_ms"));
         }
         if changed.is_empty() && once { mind::println!("no news"); }
+        refresh_waiting(&mut hub);
         let _ = mind::fs::own::write("seen", format!("{since}").as_bytes());
         if once { return Ok(()); }
         // The hub's interval, with Esc ending the wait.

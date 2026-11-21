@@ -1,6 +1,6 @@
 # MIND Hub: requests from users done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Version:** 0.4 (2026-11-21): `hub-api 2`, with a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself and the flag on a request for a credential (100003-APP-0148); 0.3 (2026-11-21): the separate hub built, its routes in section 10 and its page [server.md](server.md); 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** stages 1 and 2 are built and tested on the host: the protocol crate `improve/proto` and the separate hub `tools/mindhub` ([server.md](server.md) says what is tested and what is not). The rest is a plan, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Version:** 0.5 (2026-11-21): the shell's notice and `wm`'s mark of what waits for the user (100003-APP-0153); the user's check on MIND Core in `improve`'s words (100003-APP-0151); 0.4 (2026-11-21): `hub-api 2`, with a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself and the flag on a request for a credential (100003-APP-0148); 0.3 (2026-11-21): the separate hub built, its routes in section 10 and its page [server.md](server.md); 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** stages 1 and 2 are built and tested on the host: the protocol crate `improve/proto` and the separate hub `tools/mindhub` ([server.md](server.md) says what is tested and what is not). The rest is a plan, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 ## 1. What it is
 
@@ -48,7 +48,7 @@ Later, the same intake takes the machines' own problem reports of [263](../../is
 - `improve watch`: waits for news, polling at the server's interval with backoff;
 - `improve devices`, `improve pair`, `improve revoke`: the user's devices.
 
-**On MIND Core,** the shell says above its first prompt when an answer waits: `IMPROVE: 2 ANSWERS WAIT FOR YOU (improve list)`. `wm` shows a mark in its top bar.
+**On MIND Core,** the shell says above its first prompt which requests wait for the user, a question of the agents or a check: `IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)`, and says it again above a later prompt when it changes. `wm` shows a mark in its top bar, ` HUB 2 `. Both read what `improve` last saw, in `data/improve/waiting` ([improve.md](improve.md), section 5).
 
 ## 3. Two forms of the server, one API
 
@@ -385,7 +385,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | 3 | numbered when it starts | the hub's updates: the release tree through `httpd`'s library, the packages, the channels by band, the delivery link |
 | 4 | 100003-APP-0151 (in progress) | `improve` on MIND Core, the console; QEMU against the separate hub (the `hub` suite) ([improve.md](improve.md), section 5) |
 | 5 | 100003-APP-0150 (done) | `improve` on a host ([improve.md](improve.md)); the web pages for browsers, made with stage 2 |
-| 6 | numbered when it starts | the shell's notice and `wm`'s window; the phone's screen with `MOB` |
+| 6 | [100003-APP-0153](../../issues/100003-APP-0153-the-shells-notice-and-wms-mark.md), in progress | the shell's notice and `wm`'s mark; `wm`'s window and the phone's screen with `MOB` later |
 | 7 | numbered when it starts | the native hub on MIND Core |
 | 8 | at the maintainer's word | the agents' rule in AGENTS.md (7.3); the intake agent named |
 

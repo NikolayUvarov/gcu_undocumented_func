@@ -561,6 +561,8 @@ pub struct Wm {
     /// The battery as last read (211-APP-0070), None without one; its item shows the minutes in place of the charge.
     pub battery: Option<Power>,
     pub battery_minutes: bool,
+    /// MIND Hub's requests that wait for the user, as `improve` last saw them (100003-APP-0153): a mark left of the battery.
+    pub hub: Vec<u64>,
     /// The time in ms, as the caller last gave it: two presses on a title within `DOUBLE_MS` are a double click.
     pub now: usize,
     /// The screen in pixels and wm's scale in percent, which Settings' screen page shows and changes (000-APP-0061).
@@ -574,7 +576,7 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, offer: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, offer: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, hub: Vec::new(), now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -751,6 +753,9 @@ impl Wm {
         if pressed && y == 0 && self.desk.full_screen().is_none() {
             // The battery's item: a click shows the minutes, or the charge again (211-APP-0070).
             if self.chip().is_some_and(|chip| x + chip.chars().count() >= self.desk.cols) { self.battery_minutes = !self.battery_minutes; return Action::Redraw; }
+            // The hub's mark: what waits, on the status line (100003-APP-0153).
+            let (battery, hub) = self.right_chips();
+            if hub > 0 && x + battery < self.desk.cols && x + battery + hub >= self.desk.cols { self.notice = Some(crate::waiting::said(&self.hub)); return Action::Redraw; }
             if let Some(&(at, _, item)) = self.top_bar().0.iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
         }
         // The status line's notice offers a command: a click on it runs that.
@@ -885,10 +890,17 @@ impl Wm {
     /// The battery's item now (`battery_chip`).
     pub fn chip(&self) -> Option<String> { battery_chip(self.battery.as_ref(), self.battery_minutes) }
 
+    /// MIND Hub's mark now, left of the battery (100003-APP-0153).
+    pub fn hub_chip(&self) -> Option<String> { crate::waiting::mark(&self.hub) }
+
+    // The cells the battery's item and the hub's mark take at the bar's right end.
+    fn right_chips(&self) -> (usize, usize) { (self.chip().map_or(0, |c| c.chars().count()), self.hub_chip().map_or(0, |c| c.chars().count())) }
+
     /// The top bar now: its items and those in `more ▼`'s menu, the title and the battery kept at its right
     /// (`bar_layout`).
     pub fn top_bar(&self) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) {
-        let right = self.title_chip().map_or(0, |t| t.chars().count()) + self.chip().map_or(0, |c| c.chars().count());
+        let (battery, hub) = self.right_chips();
+        let right = self.title_chip().map_or(0, |t| t.chars().count()) + battery + hub;
         bar_layout(self.desk.cols, right)
     }
 
@@ -1015,7 +1027,14 @@ impl Wm {
             let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x + chip_w >= cols);
             grid.text_right(cols, 0, chip, if low { Style::new(0xFFFFFF, 0xB02020) } else if hovered { lit } else { Style::new(0xFFFFFF, 0x203848) });
         }
-        if let Some(title) = title { grid.text_right(cols.saturating_sub(chip_w), 0, &title, Style::new(0xFFFFFF, 0x305070)); }
+        // MIND Hub's mark left of the battery (100003-APP-0153).
+        let hub = self.hub_chip();
+        let hub_w = hub.as_ref().map_or(0, |c| c.chars().count());
+        if let Some(hub) = &hub {
+            let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x + chip_w < cols && x + chip_w + hub_w >= cols);
+            grid.text_right(cols.saturating_sub(chip_w), 0, hub, if hovered { lit } else { Style::new(0x000000, 0xE0C040) });
+        }
+        if let Some(title) = title { grid.text_right(cols.saturating_sub(chip_w + hub_w), 0, &title, Style::new(0xFFFFFF, 0x305070)); }
         let status_y = grid.rows.saturating_sub(1);
         let status = match (&self.mode, &self.notice) {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
@@ -1082,6 +1101,7 @@ impl Wm {
             _ => String::new(),
         };
         let battery = self.chip().map_or(String::new(), |c| format!(" BATTERY={}", c.trim()));
-        format!("MODE={} {}{}{}{}", self.mode_name(), self.desk.status(), pointer, menu, battery)
+        let hub = if self.hub.is_empty() { String::new() } else { format!(" HUB={}", self.hub.len()) };
+        format!("MODE={} {}{}{}{}{}", self.mode_name(), self.desk.status(), pointer, menu, battery, hub)
     }
 }

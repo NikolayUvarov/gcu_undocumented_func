@@ -54,6 +54,8 @@ const NET_SHELL_MS: u32 = 250;
 const SHELL_QUIET_MS: usize = 5_000;
 // How often the battery is read: as often as its service reads it (idl/battery.wit).
 const BATTERY_MS: usize = 5000;
+// How often MIND Hub's requests that wait for the user are read again (100003-APP-0153).
+const HUB_MS: usize = 5000;
 // How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
 const FRESH_MS: usize = 120_000;
 
@@ -81,6 +83,14 @@ fn battery(last: Option<Power>) -> Option<Power> {
         Ok(Err(mind::idl::battery::Error::Unavailable)) => last,
         _ => None,
     }
+}
+
+// MIND Hub's requests that wait for the user, from data/improve/waiting: none when it is missing or not of its format.
+fn hub_waiting() -> Vec<u64> {
+    let Ok(file) = mind::fs::File::open(wm::waiting::FILE) else { return Vec::new() };
+    let mut buffer = [0u8; wm::waiting::BYTES];
+    let n = file.read_at(0, &mut buffer).unwrap_or(0);
+    core::str::from_utf8(&buffer[..n]).ok().and_then(wm::waiting::read).unwrap_or_default()
 }
 
 // The lease of window `id`'s surface and its wake endpoint.
@@ -686,6 +696,7 @@ fn main(info: &'static BootInfo) {
     let mut shell_quiet_until = 0usize;
     let has_battery = holds(SLOT_BATTERY);
     let mut next_battery = 0;
+    let mut next_hub = 0;
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
@@ -929,6 +940,16 @@ fn main(info: &'static BootInfo) {
             next_battery = now + BATTERY_MS;
             let read = battery(manager.wm.battery);
             if read != manager.wm.battery { manager.wm.battery = read; relayout = true; }
+        }
+        // MIND Hub's requests that wait for the user, as improve keeps them (100003-APP-0153).
+        if now >= next_hub {
+            next_hub = now + HUB_MS;
+            let read = hub_waiting();
+            if read != manager.wm.hub {
+                mind::println!("[WM] HUB: REQUESTS THAT WAIT FOR THE USER: {}", read.len());
+                manager.wm.hub = read;
+                relayout = true;
+            }
         }
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
         // either came.
