@@ -124,6 +124,19 @@ pub fn battery_place() -> Option<(u16, u16, u8, Option<(u8, u8)>)> {
     Some((command, data, base?, ac))
 }
 
+/// The first ACPI table with `signature`, as a read-only copy init may grant, and its length by its header
+/// (213-KRN-0271: the VFCT's VBIOS image for display); None where the tables have none.
+pub fn acpi_table(signature: &[u8; 4]) -> Option<(usize, usize)> {
+    for index in 0..256 {
+        let (slot, map) = object(PLATFORM_ACPI_TABLE, index)?;
+        let bytes = map.as_slice();
+        let length = bytes.get(4..8).map_or(0, |l| u32::from_le_bytes(l.try_into().unwrap()) as usize).min(bytes.len());
+        if bytes.starts_with(signature) { drop(map); return Some((slot, length)); }
+        done((slot, map));
+    }
+    None
+}
+
 /// The FADT's fixed hardware (000-KRN-0216), for the power button; None where the tables have no FADT.
 pub fn fadt() -> Option<mind::fadt::Fixed> {
     let mut found = None;
