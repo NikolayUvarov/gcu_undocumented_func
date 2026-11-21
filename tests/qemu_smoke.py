@@ -4354,7 +4354,9 @@ def iso_suite(args):
     with tempfile.TemporaryDirectory(prefix="smoke-iso-", dir=ROOT / IMAGE) as temp:
         temp = Path(temp)
         volume, iso = temp / "boot.img", temp / "mind.iso"
-        make_iso.boot_volume(read_payloads(ROOT / IMAGE, args.arch), volume, when)
+        # In slots, as the installer will copy them (352-UPD-0048): the live updater fills none (352-UPD-0047 step 3).
+        from make_usb_image import slots
+        make_iso.boot_volume(slots(read_payloads(ROOT / IMAGE, args.arch), args.arch), volume, when)
         digest = make_iso.write_iso(volume, iso, when, args.arch)
         kb = volume.stat().st_size // 1024
         volume.unlink()
@@ -4382,9 +4384,17 @@ def iso_suite(args):
                 require(vfs, "[VFS] MOUNTED FAT16 FROM RAM AT LBA 0 (READ-ONLY DEVICE)")
                 require(vfs, "READ INTO MEMORY, AND THE MANIFEST THE BOOTLOADER VERIFIED")
                 require(vm.command("run files &"), "PID=1 NAME=files BACKGROUND")
-                files_check(vm, 1)
+                output = ""
+                for _ in range(50):
+                    output += vm.command("logs 1")
+                    if "[FILES] DONE" in output:
+                        break
+                    time.sleep(.2)
+                size = (ROOT / IMAGE / "kernel.elf").stat().st_size
+                require(output, f"[FILES] READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
                 vm.command("kill 1")
                 require(vm.command("write data/probe.txt live"), "READ-ONLY DEVICE")
+                require(vm.service_logs("updater", "NO SLOT TO FILL"), "[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL")
             finally:
                 vm.close()
         with iso.open("rb") as f:

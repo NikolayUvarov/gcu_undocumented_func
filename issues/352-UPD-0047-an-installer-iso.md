@@ -69,6 +69,8 @@ A computer is given MIND Core today only as a raw disk image (`dist/mind-core-us
 
 **Step 2, the volume in memory,** is [352-KRN-0268](352-KRN-0268-the-live-volume-in-memory.md) (the kernel track's part, an ABI change): from a disc and from a USB disk, the loader reads the El Torito volume into memory, `ramdisk#2` serves it read-only and `vfs_server` mounts it. Programs then run from a disc too. With it the `iso` suite runs on aarch64 as well (AAVMF, a SCSI CD-ROM), in the group `aarch64: tools`.
 
+**Step 3, in part** (on 352-KRN-0268's branch): on a live boot the updater fills no slot, as the volume is read-only in memory; it says `[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL`. The `iso` suite now builds the ISO in slots, as the installer will copy them, and checks that line. Writes are refused by the read-only volume, and the log stays in memory without a `MIND LOG`.
+
 **Left:**
 - steps 3 to 5;
 - a real machine.
