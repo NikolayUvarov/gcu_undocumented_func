@@ -10547,6 +10547,85 @@ def slot_applications_check(args):
           "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
+def hub_check(args, disk):
+    """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
+    (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
+    question answered in its thread; a wrong pin refused; a thread with a text past 512 bytes named as unread until
+    NET's change to `parse` (requests-NET.md)."""
+    work = Path(tempfile.mkdtemp(prefix="mind-hub-"))
+    target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
+    subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
+    mindhub = str(target / "release" / "mindhub")
+    _certificates(work)
+    pin = _spki_pin(work / "server.pem")
+    keys = {name: work / f"{name}.key" for name in ("admin", "intake")}
+    public = {name: subprocess.run([mindhub, "key", str(path)], check=True, capture_output=True, text=True).stdout.strip() for name, path in keys.items()}
+    data = work / "data"
+    data.mkdir()
+    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\n")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    hub = subprocess.Popen([mindhub, "serve", str(data), "--listen", f"127.0.0.1:{port}", "--cert", str(work / "server.pem"), "--key", str(work / "server.key")],
+                           stderr=subprocess.PIPE, text=True)
+    started = ""
+    while "MINDHUB: SERVING" not in started:
+        line = hub.stderr.readline()
+        assert line, f"mindhub did not start: {started}"
+        started += line
+    assert pin in started, (pin, started)
+
+    def call(key, method, path, body=None):
+        out = subprocess.run([mindhub, "call", "--key", str(keys[key]), "--hub", f"https://127.0.0.1:{port}", "--pin", pin, method, path, *([body] if body else [])],
+                             capture_output=True, text=True, timeout=60)
+        assert out.returncode == 0, (method, path, out.stdout, out.stderr)
+        return out.stdout
+
+    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6).
+    (disk / "netpolicy.txt").write_text(f"# improve reaches the test's hub on the host\nimprove 10.0.2.2 tcp {port} 600 {1 << 20}\n")
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.command("improve", timeout=30), "usage: improve COMMAND")
+        require(vm.command("improve status", timeout=30), "no hub yet: improve setup")
+        out = vm.command(f"improve setup mind.test 10.0.2.2 {port} {pin}", timeout=60)
+        require_all(out, f"hub mind.test:{port}", "this device's key ")
+        device_key = re.search(r"this device's key ([0-9a-f]{64})", out)[1]
+        require(vm.command('improve register "QEMU tester" --name qemu', timeout=120), ": pending (the admin decides")
+        devices = call("admin", "GET", "/hub/admin/v1/devices")
+        assert "QEMU tester" in devices and '"state":"pending"' in devices, devices
+        device = hashlib.sha256(bytes.fromhex(device_key)).hexdigest()
+        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 2","decision":"approve","text":"Welcome to the hub"}')
+        out = vm.command("improve status", timeout=60)
+        require_all(out, "device qemu (", "): approved", "user QEMU tester #1, trust 0 (band 0), access open", "admin maintainer, welcome: Welcome to the hub")
+        require(vm.command("improve new fault 'Fan noise' 'It is loud at idle' --yes", timeout=60), "request 1: new")
+        assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
+        require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
+        out = vm.command("improve show 1", timeout=60)
+        require_all(out, "#1 Fan noise", "needs-info", "One fan or two?", "waits for your answer")
+        question = re.search(r"#(\d+) question", out)[1]
+        require(vm.command(f"improve reply 1 'Two, one stopped' --answer {question}", timeout=60), "the request is new")
+        assert "Two, one stopped" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
+        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        # Another key than the pinned one: refused, whoever signed it.
+        vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
+        require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / "mind-core-hub.log").write_text(vm.log)
+        hub.terminate()
+        hub.wait(timeout=10)
+        shutil.rmtree(work, ignore_errors=True)
+    print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
+          "approved by the admin, a request filed, the agents' question answered; a wrong pin refused; a text past 512 bytes named as unread "
+          "until NET's change to parse (100003-APP-0151)", flush=True)
+
+
 def tone_power(samples, rate, start, hz, seconds=0.04):
     """How much of `hz` the `seconds` (40 ms) of `samples` from `start` hold."""
     window = samples[start:start + int(rate * seconds)]
@@ -19754,7 +19833,7 @@ def main():
     parser.add_argument("--previous-tree", help="a built tree of the release before, for the previous suite (scripts/previous_release.sh, 801-UPD-0038)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,download,tls,sshd (112-NET-0072, also in tls),effector,effector-update (751-EFF-0023, its own group),hub (100003-APP-0151, in the network group),rollback (801-UPD-0041, its own group),netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,updatestore (351-UPD-0033; also in updater),hda,ehci,stack,workers,bigmem,fill,power (000-KRN-0216, x86)")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -20035,6 +20114,9 @@ def main():
                 continue
             if suite == "download":  # net's downloads, `get` and the API clients' checks alone (000-NET-0047)
                 download_check(args, disk)
+                continue
+            if suite == "hub":  # improve on MIND Core against tools/mindhub on the host (100003-APP-0151)
+                hub_check(args, disk)
                 continue
             if suite == "sshd":
                 # The SSH server's check alone (112-NET-0072), which the tls suite runs at its end.

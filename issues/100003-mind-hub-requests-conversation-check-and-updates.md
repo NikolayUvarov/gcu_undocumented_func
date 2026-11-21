@@ -1,6 +1,6 @@
 # 100003 — MIND Hub: a user's request done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.4; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stages 1, 2 and 5 done (100003-APP-0145, 0146 and 0148: the protocol crate, the separate hub over `hub-api 2`, [docs/hub/server.md](../docs/hub/server.md); 0150: `improve` on a host, [docs/hub/improve.md](../docs/hub/improve.md)), stages 3 and 4 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Type:** main task (an application and its servers) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18; before, `MOB` · **Priority:** P1 · **Status:** open: the design ([docs/hub/README.md](../docs/hub/README.md) 0.4; the maintainer's choices of 2026-11-20: Rust, the rest as proposed), stages 1, 2 and 5 done (100003-APP-0145, 0146 and 0148: the protocol crate, the separate hub over `hub-api 2`, [docs/hub/server.md](../docs/hub/server.md); 0150: `improve` on a host, [docs/hub/improve.md](../docs/hub/improve.md)), stage 4 in progress (0151, done in QEMU on x86; long texts wait for NET), stage 3 next · **Blocked by:** — for stages 1 and 2; later stages below · **Roadmap:** track G (user services), track C (update and delivery) · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 **History:**
 - **Recorded** by the kernel session, 2026-10-25, at the maintainer's request, as `improve`: a request to improve the OS from the phone, and its status (`MOB`).
@@ -60,7 +60,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
 | 2 | [100003-APP-0146](../issues-done/100003-APP-0146-the-separate-hub.done), done | the separate hub: intake, registration, trust, anti-flood, threads, the board, the admin pages, the agents' API, the conformance suite |
 | 2+ | [100003-APP-0148](../issues-done/100003-APP-0148-the-hubs-remaining-parts.done), done | what stage 2 left: export and deletion, a verdict's attachments, a name on the board, the proof of work raised by itself, the flag on a request for a credential |
 | 3 | numbered when it starts | the hub's updates (needs UPD's `COMMIT` beside a release; restricted channels need UPD's signed fetch) |
-| 4 | numbered when it starts | `improve` on MIND Core, the console |
+| 4 | [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md), in progress | `improve` on MIND Core, the console: done in QEMU on x86 against the separate hub; a thread's long texts wait for NET's `parse` |
 | 5 | [100003-APP-0150](../issues-done/100003-APP-0150-improve-on-a-host.done), done | `improve` on a host ([docs/hub/improve.md](../docs/hub/improve.md)); the web pages were made in 0146 and 0148 |
 | 6 | numbered when it starts | the shell's notice, `wm`'s window; the phone's screen with `MOB` |
 | 7 | numbered when it starts | the native hub (needs 110's MIND Core server side, NET's) |
