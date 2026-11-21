@@ -1,6 +1,6 @@
 # Publishing releases
 
-**Version:** 0.8 (2026-11-13): the boot keys are the key file's `boot` role, at boot too; the bootloader is built with the root set (351-UPD-0029); 0.7 (2026-11-13): recovery orders (351-UPD-0030); 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.9 (2026-11-21): a release's downloads listed and signed (352-UPD-0050); 0.8 (2026-11-13): the boot keys are the key file's `boot` role, at boot too; the bootloader is built with the root set (351-UPD-0029); 0.7 (2026-11-13): recovery orders (351-UPD-0030); 0.6 (2026-11-13): a channel's timestamp, short-lived and renewed without the release key (351-UPD-0028); 0.5 (2026-11-13): the key file's `root` role, its history and the device's chain of versions; rotation and revocation (351-UPD-0027); 0.4 (2026-11-13): the key file and the root keys, and signature lines that name their keys (351-UPD-0026); 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
 How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side is the updater ([updater.md](updater.md)): it checks a channel and stages its release in a slot with the same checks as `check` below.
 
@@ -114,6 +114,25 @@ python3 scripts/release.py publish /tmp/release-8 updates@example.org:/srv/mind 
   - the blobs those manifests list.
 
   The Effector gateway streams it to the updater (`update.wit` 1.3 `install-…`), which checks it as any source ([updater.md](updater.md)). The same release makes the same file.
+
+## A release's downloads (352-UPD-0050)
+
+The ISOs, disk images and bundles of one release are listed with their SHA-256 in one file, signed by the release keys:
+
+```bash
+python3 scripts/release.py sums DIR --keys keys/current   # SHA256SUMS, SHA256SUMS.sig and KEYS beside the downloads
+python3 scripts/release.py verify-sums DIR                # VERIFIED, or why not
+```
+
+- **`SHA256SUMS`** is in `sha256sum`'s form, so `sha256sum -c SHA256SUMS` checks the files on any Linux machine.
+- **`SHA256SUMS.sig`** holds a signature line of each release key over it, `ed25519 <key> <signature>`, as a channel's.
+- **`KEYS`** is the key file that names those keys. Without `--keys`, the test release key and the test key file are used, and real keys are refused.
+- **`verify-sums`** checks, in order:
+  1. `KEYS` against the root set ($MIND_ROOT_KEYS, else the test set);
+  2. the release role's threshold of signatures;
+  3. every file of the directory as listed, none missing and none more.
+
+The command that makes every download of a commit is the task's next step.
 
 ## Keys and who holds them (MC-9.6)
 
