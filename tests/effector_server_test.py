@@ -194,6 +194,17 @@ class EffectorServerTests(unittest.TestCase):
         self.assertEqual(self.request("GET", route)[0], 409, "not before it is sent")
         self.poll()
         self.assertEqual(self.request("GET", route)[1], bundle)
+        # 801-EFF-0038: a heartbeat is answered while a body larger than the sockets' buffers is still being read.
+        connection = self.connection()
+        connection.request("GET", self.fixture.prefix + route, None, {"Authorization": "Bearer " + self.fixture.token})
+        response = connection.getresponse()
+        response.read(10)
+        time.sleep(0.5)
+        started = time.monotonic()
+        self.heartbeat()
+        self.assertLess(time.monotonic() - started, 2, "the heartbeat waited for the download")
+        self.assertEqual(response.read(), bundle[10:])
+        connection.close()
         # The answer comes after the agent's restart, while the command is still the one sent.
         result = json.dumps({"status": "completed", "exit_code": 0, "stdout": "updated 6, slot B confirmed", "stderr": "", "truncated": False, "run_as": "effector"})
         self.assertEqual(self.request("POST", "/api/commands/ack", {"command_id": command, "result": result})[0], 200)

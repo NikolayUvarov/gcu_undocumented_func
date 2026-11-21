@@ -291,13 +291,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not command or command["agent_id"] != agent or command["action"] not in ("deliver_file", "update_agent") or command["status"] != "sent":
                     self._error(409, "no sent delivery")
                     return
-                self._download(fixture.files.get("command:" + command_id), fault)
+                data = fixture.files.get("command:" + command_id)
+            # Written outside the lock, so a heartbeat beside the download is answered meanwhile (801-EFF-0038).
+            self._download(data, fault)
         elif self.route.startswith("/api/deployment/download/"):
             package = self.route.rsplit("/", 1)[1]
             if not package_identifier(package):
                 raise ValueError("invalid package id")
             with fixture.lock:
-                self._download(fixture.files.get("package:" + package), fault)
+                data = fixture.files.get("package:" + package)
+            self._download(data, fault)
         else:
             self._error(404, "unknown route")
 
