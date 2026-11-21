@@ -80,7 +80,9 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **Host cases:** the country's 5 GHz rules (UZ, US, 00, RU, DE); the 5 GHz tables at Linux's slots; the 5 GHz power image and its maximum; a passive tune to channel 100 and back to 6 with each band's registers read back; nothing admitted on a radar channel before its access point's beacon, a probe request never, and a tune forgetting what was heard; a receive-only listen on channel 100. All 39 `rtw89_*_host.rs` files pass. Changed by design, not by the 2.4 GHz path: the info cases now see 41 channels and bands 7, the world rules count 38 channels (25 of them 5 GHz), and the listen case's refused frequencies no longer include 5180 MHz.
 
-**Not done yet:** the calibrations' 5 GHz branches (IQK, TSSI, DPK), the coexistence on 5 GHz, the Linux reference, anything on the Ryzen.
+**2026-11-21, IQK on 5 GHz:** `iqk.rs` takes the band of the tuned channel: `_lok_res_table`'s 5 GHz entry, `_iqk_txk_setting`'s 5 GHz branch (XGLNA2, BIASA, LUTWA 0x80), LOK's GR1 of 4, `_txk_group_sel`'s `_a_` track ranges and ITQT, `_rxk_group_sel`'s `_a_` gains on RR_RXA2's HATT and CC2 with RXK's 5 GHz select, RF18 checked with its band fields, IQKCH's band field, RX DCK and the BTC notices with the band in their phy map. Host case: channel 100 runs both paths' 26 one-shots with each of those values and restores the RF backups; a 2.4 GHz RF18 refuses it before any command. The 2.4 GHz IQK cases pass unchanged.
+
+**Not done yet:** TSSI and DPK on 5 GHz, the coexistence on 5 GHz, anything on the Ryzen.
 
 ## Related
 
