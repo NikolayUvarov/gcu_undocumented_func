@@ -134,10 +134,15 @@ struct Engine {
     hook: Option<(u32, u32, u32)>,
     // Statuses the hardware sets: bits that read as set, and acknowledge bits that read as their request bit (one lower).
     set: Vec<(u32, u32)>, follow: Vec<(u32, u32)>,
+    // After a write to the first offset, the statuses at the second are no longer answered (a status that never comes).
+    cut: Vec<(u32, u32)>,
+    // After the first write to the offset, the n-th read cannot be read, once (a table or a stage failing midway).
+    fail: Option<(u32, usize)>, armed: Option<usize>,
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
         self.clock += 10;
+        if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
         let o = r.offset();
         if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move { self.frames += 1; return Some(self.frames); }
         let mut v = *self.regs.get(&o).unwrap_or(&0);
@@ -156,6 +161,8 @@ impl Poke for Engine {
             else if (0..4).any(|t| reg(R::OtgControl, t) == o) { (v & !0x1_0000) | (v & 1) << 16 } else { v };
         self.regs.insert(o, v);
         if let Some((at, target, value)) = self.hook { if at == o { self.regs.insert(target, value); } }
+        for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); } }
+        if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
     }
 }
 impl Clock for Engine {
@@ -539,6 +546,97 @@ fn the_vfct_table_yields_the_radeons_image() {
     assert_eq!(atom::vfct_image(b"XXXX"), None);
 }
 
+// The model with the statuses the Ryzen's tables wait for answered (hwdocs, "What first light's VBIOS tables write").
+const STATUSES: [(u32, u32, bool); 5] = [
+    ((0x34C0 + 0x2940) * 4, 1 << 28, false), // RDPCS_SRAM_INIT_DONE
+    ((0x34C0 + 0x294C) * 4, 1 << 7, false), // RDPCS_PHY_DP_MPLLB_STATE
+    ((0x34C0 + 0x2943) * 4, 0x2020_2020, true), // each lane's TX_ACK after its TX_REQ
+    ((0x34C0 + 0x2928) * 4, 1 << 2, true), // DPCS_SYMCLK_CLOCK_ON after DPCS_SYMCLK_EN
+    ((0x34C0 + 0x2931) * 4, 1 << 10, true), // RDPCS_SYMCLK_DIV2_CLOCK_ON after its EN
+];
+fn answered() -> Engine {
+    let mut e = engine();
+    for (at, bits, follows) in STATUSES { if follows { e.follow.push((at, bits)); } else { e.set.push((at, bits)); } }
+    e
+}
+
+// A stage that failed: every register written before it is as before (but PHY A's control register bus, left by
+// design), the firmware's pipe reads as before, and the log says so.
+fn undone_whole(e: &Engine, before: &HashMap<u32, u32>, log: &[String], stage: u8) {
+    restored_but(e, before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X} after stage {} failed", o, stage); }
+    let end = format!("STEP 3 FAILED AT STAGE {} AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", stage);
+    assert!(log.iter().any(|x| x == &end), "{:#?}", &log[log.len().saturating_sub(12)..]);
+}
+
+// Stage `stage` failing at each read from `after` (a write that comes before it) until the failures move past it: each
+// one undoes it and every stage before, and its off call, if it has one, runs to its end. The number of its failures.
+fn fail_at_each_read(img: &[u8], stage: u8, after: u32, answered_engine: &dyn Fn() -> Engine) -> usize {
+    let mut seen = 0;
+    for k in 0..4000 {
+        let mut e = answered_engine();
+        e.fail = Some((after, k));
+        let before = e.regs.clone();
+        let (outcome, log) = run(img, &mut e, STAGES);
+        match outcome {
+            Outcome::Failed { stage: s, why: Failure::Unreadable(_) } if s < stage => undone_whole(&e, &before, &log, s),
+            Outcome::Failed { stage: s, why: Failure::Unreadable(_) | Failure::Table(atom::Error::Unreadable { .. }) } if s == stage => {
+                undone_whole(&e, &before, &log, s);
+                for (n, t) in [(2u8, 12u8), (8, 76)] {
+                    if n <= stage { assert!(log.iter().any(|x| x.starts_with(&format!("U{} TABLE {} DONE", n, t))), "stage {} read {}: U{}'s call did not end", stage, k, n); }
+                }
+                seen += 1;
+            }
+            o => { eprintln!("stage {} read {}: {:?}", stage, k, o); return seen }
+        }
+    }
+    panic!("stage {} kept failing", stage);
+}
+
+#[test]
+fn a_stage_that_fails_at_any_read_is_undone_whole_with_its_off_calls_run_to_their_end() {
+    // Synthetic tables: stages 2 (table 12), 6 (table 4) and 8 (table 76) failing at every read.
+    for (stage, after) in [(2u8, reg(R::OtgClockControl, 1)), (6, reg(R::OptcDataSourceSelect, 1)), (8, reg(R::DigBeCntl, 0))] {
+        assert!(fail_at_each_read(&good(), stage, after, &engine) > 0, "stage {}", stage);
+    }
+    // The Ryzen's own tables, when its image is given.
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut counts = vec![];
+    for (stage, after) in [(2u8, reg(R::OtgClockControl, 1)), (6, reg(R::OptcDataSourceSelect, 1)), (8, reg(R::DigBeCntl, 0))] {
+        counts.push((stage, fail_at_each_read(&bytes, stage, after, &answered)));
+    }
+    eprintln!("the Ryzen's tables failing at each read: {:?} (stage, failures at that stage)", counts);
+    assert!(counts.iter().all(|&(_, n)| n > 0));
+}
+
+#[test]
+fn stage_8_failing_at_each_of_its_waits_is_undone_whole() {
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("stage_8_failing_at_each_of_its_waits_is_undone_whole SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    // Once stage 7 has written, each status in turn stops being answered: a wait of table 76's that ends by its limit.
+    let mut waits = vec![];
+    for (at, _, _) in STATUSES {
+        let mut e = answered();
+        e.cut.push((reg(R::DigBeCntl, 0), at));
+        let before = e.regs.clone();
+        let (outcome, log) = run(&bytes, &mut e, STAGES);
+        match outcome {
+            Outcome::Failed { stage: 8, why: Failure::Table(atom::Error::TimeLimit { .. } | atom::Error::StepLimit { .. }) } => {
+                undone_whole(&e, &before, &log, 8);
+                for x in log.iter().filter(|x| x.starts_with("U8 ") && !x.contains(" RESTORED ") && !x.contains(" WROTE ")) { eprintln!("{:05X} cut: {}", at, x); }
+                waits.push(at);
+            }
+            Outcome::Stopped { done: 8 } => {} // table 76 does not wait for this one
+            o => panic!("{:05X}: {:?} {:#?}", at, o, &log[log.len().saturating_sub(12)..]),
+        }
+    }
+    eprintln!("table 76 waits for: {:05X?}", waits);
+    assert!(!waits.is_empty());
+}
+
 #[test]
 fn the_ryzens_own_tables_through_step_3() {
     let skip = |why: String| { use std::io::Write; let _ = writeln!(std::io::stderr(), "the_ryzens_own_tables_through_step_3 SKIPPED: {}", why); };
@@ -563,16 +661,6 @@ fn the_ryzens_own_tables_through_step_3() {
 
     // With the four statuses answered (hwdocs, "What first light's VBIOS tables write"), all eight stages run on the
     // Ryzen's tables, every write on the route, the firmware's pipe unchanged.
-    let answered = || {
-        let mut e = engine();
-        let phy = |d: u32| seg(2, d);
-        e.set.push((phy(0x2940), 1 << 28)); // RDPCS_SRAM_INIT_DONE
-        e.set.push((phy(0x294C), 1 << 7)); // RDPCS_PHY_DP_MPLLB_STATE
-        e.follow.push((phy(0x2943), 0x2020_2020)); // each lane's TX_ACK after its TX_REQ
-        e.follow.push((phy(0x2928), 1 << 2)); // DPCS_SYMCLK_CLOCK_ON after DPCS_SYMCLK_EN
-        e.follow.push((phy(0x2931), 1 << 10)); // RDPCS_SYMCLK_DIV2_CLOCK_ON after its EN
-        e
-    };
     let mut e = answered();
     let before = e.regs.clone();
     let (outcome, log) = run(&bytes, &mut e, STAGES);
