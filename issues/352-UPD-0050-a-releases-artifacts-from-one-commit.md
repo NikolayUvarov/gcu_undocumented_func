@@ -89,6 +89,8 @@ The files' provenance in each line, plan step 3's last point, is left: `SHA256SU
 - the USB image, booted in QEMU (OVMF, a USB disk, the image read-only), reached the shell: `BOOT: RECORD MIND\BOOT0 SEQUENCE 1: SLOT A, CONFIRMED`, the manifest verified, `BOOT: VOLUME MBR PARTITION 1 AT LBA 2048`;
 - the image's SHA-256 was the same after the boot.
 
+**In `main` since round 165** (64605784cc, the gate GREEN on both architectures): the USB image around the ISO's boot volume and `release.py artifacts` making both (ecf6425b12).
+
 **Left:**
 - the board images (352-UPD-0049), and the cards' share of the boot volume;
 - step 4's check of the bundle and the ISO on a second build of the commit, as 350-UPD-0001's;

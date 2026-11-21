@@ -48,7 +48,7 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
 
 ## The drive's own model through `block.wit`, for the installer (KRN, 2026-11-21)
 
-- **Why:** the installer's `disks` (`idl/install.wit` 1.0, [352-KRN-0269](352-KRN-0269-the-installer-service.md)) carries a disk's `model`, for the shell's `install` command to show. APP asked for it, so that a person can tell two drives of one size on one bus apart. `block.wit` 2.0 carries no identity, so the model is empty for every disk today.
+- **Why:** the installer's `disks` (`idl/install.wit` 1.0, [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done)) carries a disk's `model`, for the shell's `install` command to show. APP asked for it, so that a person can tell two drives of one size on one bus apart. `block.wit` 2.0 carries no identity, so the model is empty for every disk today.
 - **Proposed split:**
   - **KRN** adds a call to `block.wit` (2.1), the drive's model as it names itself, at most 40 bytes. `mind::block::serve` answers it from a `Driver` method that gives none by default. `vfs_server` then fills `install.wit`'s `model`.
   - **DRV** fills it where the driver reads the drive's identity:

@@ -136,7 +136,10 @@ fn every_command_against_a_hub() {
     assert_eq!(out.lines().count(), 2, "{out}");
     assert!(out.contains("laptop") && out.contains("phone") && out.contains("(this one)"), "{out}");
     let phone = out.lines().find(|l| l.contains("phone")).unwrap().split_whitespace().next().unwrap().to_string();
-    refused(&ann, &["revoke", "f"], "devices start with");
+    // A prefix that names no device: a hex digit neither identifier starts with, whatever the two are (100003-APP-0156).
+    let firsts: Vec<char> = out.lines().filter_map(|l| l.chars().next()).collect();
+    let none = "0123456789abcdef".chars().find(|c| !firsts.contains(c)).unwrap().to_string();
+    refused(&ann, &["revoke", &none], "0 devices start with");
     assert!(ok(&ann, &["revoke", &phone[..10]]).contains("revoked"));
     refused(&ann2, &["status"], "revoked");
 

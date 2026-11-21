@@ -348,9 +348,9 @@ Every date in it is the build's (`SOURCE_DATE_EPOCH` or the commit's), so the sa
 
 **What is shown, in QEMU only** (the `iso` suite; x86 with OVMF and an IDE CD-ROM, aarch64 with AAVMF and a SCSI CD-ROM), from a CD-ROM and from a USB disk:
 - the loader reads the kernel and the services from the El Torito volume and checks them against the manifest;
-- then it reads the whole volume into memory ([352-KRN-0268](../issues/352-KRN-0268-the-live-volume-in-memory.md)): `ramdisk#2` serves it read-only, and the system mounts it as its boot volume;
+- then it reads the whole volume into memory ([352-KRN-0268](../issues-done/352-KRN-0268-the-live-volume-in-memory.done)): `ramdisk#2` serves it read-only, and the system mounts it as its boot volume;
 - programs run from it, and nothing is written to the medium;
-- the system writes nothing of its own ([352-KRN-0269](../issues/352-KRN-0269-the-installer-service.md)): the block store runs on `ramdisk#1`, and there is no update zone;
+- the system writes nothing of its own ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done)): the block store runs on `ramdisk#1`, and there is no update zone;
 - `vfs_server` holds every other disk whole for the installer, and names the live medium as refused.
 
 **What does not work yet:**
