@@ -71,8 +71,10 @@ impl Source {
     fn gone(&self) -> bool { matches!(self, Source::Camera(live) if live.gone) }
 }
 
-// `opened`: what `opened` answers its owner (video.wit 1.1).
-struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64, sequence: u32, frame: Pages, last: Option<idl::Frame>, source: Source, opened: idl::Opened }
+// `opened`: what `opened` answers its owner (video.wit 1.1). `answers`, `answered_ns`, `apart_ns`: the reads answered, the
+// last one's time, and the longest time between two: a picture that froze shows there (158-DRV-0082).
+struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64, sequence: u32, frame: Pages, last: Option<idl::Frame>, source: Source, opened: idl::Opened,
+    answers: u32, answered_ns: u64, apart_ns: u64 }
 
 struct Usb { host: Option<Host>, cameras: Vec<Camera>, looked: usize }
 
@@ -163,6 +165,9 @@ fn timing(live: &Live) -> String {
     format!("[VIDEO]   {} PUMPS IN {} MS, THE LONGEST GAP {} MS{}{}", live.pumps, (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_gap_ns / 1_000_000,
         if live.bulk.is_none() { "" } else if live.streamed { ", BULK KEPT POLLED BY USB_HOST" } else { ", BULK READ BY WAITING TRANSFERS" }, decodes)
 }
+
+// A stream's reads for the log: how many were answered and the longest time between two (158-DRV-0082).
+fn answered(s: &Stream) -> String { format!(" ({} READS ANSWERED, AT MOST {} MS APART)", s.answers, s.apart_ns / 1_000_000) }
 
 // What a camera stream got, for the log.
 fn report(live: &Live) -> String {
@@ -487,7 +492,8 @@ fn open_stream(streams: &mut Vec<Stream>, usb: &mut Usb, sender: u64, camera: u8
             };
             mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}; MODE {}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) },
                 if opened.index == NO_MODE { String::from("NONE LISTED") } else { format!("{}{}", opened.index, if opened.scaled { ", SCALED" } else { "" }) });
-            streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source, opened });
+            streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source, opened,
+                answers: 0, answered_ns: 0, apart_ns: 0 });
             let _ = display::camera(DISPLAY);
             Ok(())
         }
@@ -644,7 +650,7 @@ fn main(_info: &'static BootInfo) {
         while let Some(i) = streams.iter().position(|s| !mind::process::alive(s.owner)) {
             let s = streams.swap_remove(i);
             let got = if let Source::Camera(live) = &s.source { stop(&mut usb, live) } else { String::new() };
-            mind::println!("[VIDEO] PID {} ENDED: STREAM CLOSED AFTER {} FRAMES {}", s.owner, s.sequence, got);
+            mind::println!("[VIDEO] PID {} ENDED: STREAM CLOSED AFTER {} FRAMES{} {}", s.owner, s.sequence, answered(&s), got);
         }
         if !streams.is_empty() && mind::time::uptime_ms().wrapping_sub(marked) >= MARK_MS {
             let _ = display::camera(DISPLAY);
@@ -733,6 +739,9 @@ fn main(_info: &'static BootInfo) {
                                 out.as_mut_slice()[..bytes].copy_from_slice(&s.frame.as_mut_slice()[..bytes]);
                                 frame.bytes = bytes as u32;
                                 s.last = Some(frame);
+                                let now = mind::time::monotonic_ns();
+                                if s.answers > 0 { s.apart_ns = s.apart_ns.max(now - s.answered_ns); }
+                                (s.answers, s.answered_ns) = (s.answers + 1, now);
                                 frame.sequence
                             })
                         }
@@ -762,7 +771,7 @@ fn main(_info: &'static BootInfo) {
                 let result = if let Some(i) = mine {
                     let s = streams.swap_remove(i);
                     let got = if let Source::Camera(live) = &s.source { stop(&mut usb, live) } else { String::new() };
-                    mind::println!("[VIDEO] PID {} CLOSED AFTER {} FRAMES {}", sender, s.sequence, got);
+                    mind::println!("[VIDEO] PID {} CLOSED AFTER {} FRAMES{} {}", sender, s.sequence, answered(&s), got);
                     Ok(())
                 } else { Err(idl::Error::NotOpen) };
                 idl::reply_close(call, result)
