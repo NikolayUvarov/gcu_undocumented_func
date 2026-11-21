@@ -450,8 +450,9 @@ fn service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it(){run(0,true,
     let Some(Event::Traffic{channel:6,holes:1,longest_ms,probe:Some(_),beacons,..})=traffic else{panic!("no traffic line")};
     assert_eq!(longest_ms,ms);assert!(beacons>=60);drop(service);clean();
 });}
-// While no beacon of the BSS reaches the host (the Ryzen, 2026-11-21: none counted in data mode), a second with no Wi-Fi
-// frame at all is a hole, closed by the next frame; a refused beacon of another network is counted on the minute's line.
+// While no beacon of the BSS reaches the host (the Ryzen, 2026-11-21: none counted in data mode), 3 s with no Wi-Fi frame
+// at all is a hole, closed by the next frame (a second or so of an idle link is none); a refused beacon of another network
+// is counted on the minute's line, and the first minute's line has the refused frames' headers.
 #[test]
 fn service_with_no_beacon_of_its_bss_a_second_without_any_frame_is_a_hole(){run(0,true,true,|data,c|{
     use crate::receive_service::Event;
@@ -459,14 +460,16 @@ fn service_with_no_beacon_of_its_bss_a_second_without_any_frame_is_a_hole(){run(
     let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
     let mut other=bss_beacon();other[10..22].copy_from_slice(&[2,7,7,7,7,7,2,7,7,7,7,7]);
     c.borrow_mut().incoming.extend([packet(),other]);assert!(service.step());assert!(service.take_event().is_none());
-    ipc::advance(1100);assert!(service.step());
+    ipc::advance(1500);assert!(service.step());assert!(service.take_event().is_none(),"1.5 s idle is no hole");
+    ipc::advance(1600);assert!(service.step());
     let Some(Event::Hole{n:1,by_beacons:false,ms,kept:0,probe:Some(_),..})=service.take_event()else{panic!("no hole by frames")};
-    assert!((1100..1200).contains(&ms),"{ms} ms");
+    assert!((3100..3200).contains(&ms),"{ms} ms");
     c.borrow_mut().incoming.push(packet());assert!(service.step());
-    let Some(Event::HoleEnded{n:1,ms,kept:1,..})=service.take_event()else{panic!("no end")};assert!((1100..1200).contains(&ms));
+    let Some(Event::HoleEnded{n:1,ms,kept:1,..})=service.take_event()else{panic!("no end")};assert!((3100..3200).contains(&ms));
     let mut traffic=None;
     for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
-    let Some(Event::Traffic{beacons:0,other_beacons:1,bssid:[2,9,8,7,6,5],holes:1,..})=traffic else{panic!("{traffic:?}")};
+    let Some(Event::Traffic{beacons:0,other_beacons:1,bssid:[2,9,8,7,6,5],holes:1,refused:Some(refused),..})=traffic else{panic!("{traffic:?}")};
+    assert_eq!(refused.count,1);assert_eq!(refused.frames[0].1[..2],[0x80,0]);assert_eq!(refused.frames[0].1[16..22],[2,7,7,7,7,7]);
     drop(service);clean();
 });}

@@ -108,6 +108,28 @@ On the Ryzen, joined to CoolNet2 on channel 8 (about 650 frames of other station
   It stops with a radio fault otherwise, and it did not in any hole, so the BB stayed on and both paths on the channel through them.
 - **This boot's first join came at 34.9 s instead of 12.5 s,** because of the signal and 550-NET-0090's 5 GHz preference: the station picked CoolNet2's channel-100 access point, which RU bars. That is told to NET in `NET/2026-11-21T1918Z-…`.
 
+## No beacon reaches the host in data mode (boot 59 and a bench run, 2026-11-21)
+
+- **Boot 59 (1c83d581e):** the minute lines say `0 BEACONS` of A0:36:BC:11:F8:88, the filter's BSSID, and `0 BEACONS OF OTHERS FILTERED OUT`. No beacon of any network reaches the host in data mode, while the PPDU status reports come at 600–700 a second. The scan (receive-only, filter 0x03004400) hears beacons.
+- **The fallback holes ("NO WI-FI FRAME AT ALL", then 1 s): 10 in 3 minutes,** all 1.0–1.3 s, with 600–700 PPDU reports and a send acknowledged across each. That is an idle link with no beacon reaching the host, not deafness. The fallback now waits 3 s.
+- **19:54–19:57 UTC, a bench driver (not committed) with the station filter's beacon check cleared** (0xCE20 read 03164436): still 0 beacons of any network in two minutes. So the beacon check is not the gate.
+- **What differs between the two services when frames flow.** The receive-only service has no station stage. The data mode adds:
+  - port 0 at 0xC400 with PORT_FUNC_EN alone. Its net type stays NO_LINK, with no RX_BSSID_FIT_EN and no TSF_UDT_EN. Linux's rtw89_mac_port_update for a connected station sets INFRA, BSSID fit, TSF update, TBTT prohibit and BRK setup;
+  - beacon timing at 0xC404–0xC414;
+  - the CMAC table;
+  - the MACID pause H2C;
+  - role maintain;
+  - join info with op 1 (disconnect) and a net type of 1;
+  - the address CAM with this station's MAC and the BSSID, but NET_TYPE 0 (NO_LINK) in its word 2;
+  - CCTL;
+  - the station RX filter.
+
+  Linux sends role, join, CAM and port again at association, as INFRA and connected. The firmware and the MAC are told of no link. That is the next suspect for the beacons, and perhaps for the held sends: 213-DRV-0091.
+- **The probe now has more:**
+  - the type filters CTRL/MGNT/DATA_FLTR (0xCE24/28/2C; 0x55555555 at init, every subtype to the host);
+  - PORT_CFG (0xC400) and BCN_PSR_RPT (0xCE84);
+  - the first minute's line lists the first 8 frames the station's filter refused, by their headers (`REFUSED FRAME n`).
+
 ## What Linux's 2 s track work does that this driver does not
 
 Linux runs `rtw89_track_work` (`core.c`) every 2 s while associated. This driver runs none of it. In its order:

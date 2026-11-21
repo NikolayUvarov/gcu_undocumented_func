@@ -292,7 +292,10 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
-        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, sent, acked, late, holes, longest_ms, probe } => {
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe } => {
+            if let Some(r) = refused { for (n, (length, head)) in r.frames[..r.count].iter().enumerate() {
+                mind::println!("[RTW89] REFUSED FRAME {} OF THE FIRST {}: {} BYTES, {:02X?}", n + 1, r.count, length, head);
+            } }
             mind::println!("[RTW89] TRAFFIC ON {}: {} FRAMES, {} KEPT, {} FILTERED, {} INVALID, {} INBOX FULL; {} PPDU, {} BEACONS; {} SENT, {} ACKED, {} LATE; {} HOLES, LONGEST {} MS",
                 channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms);
             mind::println!("[RTW89] TRAFFIC ON {}: THE BEACONS ABOVE ARE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}'S; {} BEACONS OF OTHERS FILTERED OUT (213-DRV-0090)",
