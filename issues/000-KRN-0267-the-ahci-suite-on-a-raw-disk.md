@@ -1,6 +1,6 @@
 # 000-KRN-0267 — The `ahci` suite boots a raw disk: vvfat's bytes past a file's end change between reads
 
-**Type:** test · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** open (2026-11-21) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2, MC-12.9
+**Type:** test · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (landed in round 163, 2026-11-21; DRV's LEG9 run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2, MC-12.9
 
 ## Problem
 
@@ -26,8 +26,8 @@ Round 161's gate passed the same group on its machines.
 
 ## Acceptance criteria
 
-- [ ] The `ahci` suite passes on the raw image in this container, several runs in a row.
-- [ ] The group `x86: services, storage, audio` passes on a gate machine with it.
+- [x] The `ahci` suite passes on the raw image in this container, several runs in a row.
+- [x] The group `x86: services, storage, audio` passes on a gate machine with it.
 - [ ] DRV's LEG9 runs it green (DRV's run; until then it is shown only where named, MC-12.1).
 
 ## Progress (2026-11-21)
@@ -37,6 +37,10 @@ Round 161's gate passed the same group on its machines.
 **Runs in this session's container** (QEMU 8.2.2, x86, 4 CPUs, `main` 03c88c5144 built):
 - with the raw disk: 5 runs of 5 PASS;
 - `main`'s suite, on `vvfat`: 3 runs of 3 PASS. This QEMU does not show LEG9's failure, so the fix is shown here only to keep the suite green, not to remove the failure. DRV's run on LEG9 shows that.
+
+**Landed** in round 163 (`main` 689c7f5526). In that round's gate the group `x86: services, storage, audio` passed on i9 at the first run, in 1217 s.
+
+**Left:** DRV's run on LEG9.
 
 ## Related
 
