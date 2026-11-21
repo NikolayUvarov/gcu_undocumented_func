@@ -104,9 +104,11 @@ fn service_unsupported_ring_and_malformed_requests_drop_caps_exactly_once(){run(
 fn service_continuous_ipc_and_rx_each_progress_with_fixed_storage(){run(0,true,true,|data,c|{
     ipc::reset();let mut service=Service::new(data).unwrap();c.borrow_mut().incoming=vec![packet();20];
     for _ in 0..20{let id=ipc::buffer(1,&[]);assert!(service.step());assert!(ipc::response(id).is_some());}
-    for _ in 0..4{let id=ipc::buffer(5,&[]);assert!(service.step());assert_eq!(words(id)[0]&255,0);}
-    assert_eq!(ipc::receives().len(),24);assert!(ipc::receives().iter().all(|(_,ms)|*ms==2));
-    let stopped=service.stop();assert!(stopped.failure.is_none());assert!(stopped.owner.counts().pressure>0);clean();
+    // Twenty frames against a buffer of sixteen: the last four wait in the ring, and none is dropped for want of room.
+    for _ in 0..20{let id=ipc::buffer(5,&[]);assert!(service.step());assert_eq!(words(id)[0]&255,0);}
+    assert_eq!(ipc::receives().len(),40);assert!(ipc::receives().iter().all(|(_,ms)|*ms==2));
+    let empty=ipc::buffer(5,&[]);assert!(service.step());assert_ne!(words(empty)[0]&255,0,"a twenty-first frame");
+    let stopped=service.stop();assert!(stopped.failure.is_none());assert_eq!(stopped.owner.counts().pressure,0);clean();
 });}
 
 #[test]
@@ -257,7 +259,7 @@ fn service_a_frame_held_across_a_recovery_times_out_only_after_its_grace(){run(7
 #[test]
 fn service_watches_no_change_after_the_data_modes_own_shutdown(){run(0,true,true,|data,c|{
     ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
-    c.borrow_mut().fault=12;assert!(!service.step());
+    c.borrow_mut().fault=12;ipc::advance(10);assert!(!service.step(),"the next checks, 10 ms on");
     let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::Radio(_))));
     assert!(stopped.changes.0[8].is_none()&&stopped.changes.0[10].is_none(),"{:?}",stopped.changes);
     let found=stopped.owner.snapshot().unwrap();assert_eq!(found.0[8]>>16&3,3,"the BB on before the shutdown");clean();
@@ -275,7 +277,8 @@ fn service_a_late_send_is_answered_unacknowledged_and_its_release_awaited(){run(
     assert!(!wlanhw::Sent::decode(&mut r).unwrap().acked);
     let event=service.take_event();assert!(matches!(event,Some(Event::LateFrame{count:1,length:64,..})),"{event:?}");
     let busy=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(busy,wlanhw::Error::Busy);
-    ipc::advance(1001);assert!(!service.step());assert_eq!(c.borrow().published,1);
+    ipc::advance(1001);assert!(service.step(),"a frame the hardware still holds is waited for");
+    ipc::advance(4000);assert!(!service.step());assert_eq!(c.borrow().published,1);
     let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::TransmitTimeout(_))));clean();
 });}
 
@@ -284,7 +287,7 @@ fn service_a_late_send_is_answered_unacknowledged_and_its_release_awaited(){run(
 #[test]
 fn service_outlasts_a_recovery_that_begins_in_the_coexistence_reconcile(){run(0,true,true,|data,c|{
     ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
-    c.borrow_mut().bb_off=Some((2,3));assert!(service.step(),"{:?}",service.take_recovery());
+    c.borrow_mut().bb_off=Some((2,3));ipc::advance(10);assert!(service.step(),"{:?}",service.take_recovery());
     let recovery=service.take_recovery().unwrap();assert!(recovery.after_reconcile&&!recovery.restored,"{recovery:?}");
     assert!(sends(&mut service));let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
@@ -295,7 +298,7 @@ fn service_outlasts_a_recovery_that_begins_in_the_coexistence_reconcile(){run(0,
 fn service_outlasts_a_recovery_that_begins_in_the_permit_check(){for skip in[2,3]{run(0,true,true,|data,c|{
     ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
     {let mut c=c.borrow_mut();c.ser=true;c.ser_skip=skip;c.ser_heal=Some(20);}
-    let mut recovery=None;for _ in 0..3{assert!(service.step(),"skip {skip}");recovery=recovery.or(service.take_recovery());}
+    let mut recovery=None;for _ in 0..3{ipc::advance(10);assert!(service.step(),"skip {skip}");recovery=recovery.or(service.take_recovery());}
     assert!(recovery.is_some_and(|r|!r.restored),"skip {skip}: {recovery:?}");
     assert!(sends(&mut service));let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}}
