@@ -8318,12 +8318,12 @@ def cameras_suite(args):
             require(log, "OPENED test pattern 320x240 AT 10/S")
             # Meanwhile the second for 3 s beside it, and the first is busy for another program.
             second = vm.command("videostub 1 3", timeout=30)
-            read = re.search(r"VIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, 320X240, THE COUNTER 300 AHEAD\n", second.replace("\r", ""))
+            read = re.search(r"VIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, 320X240, THE COUNTER 300 AHEAD\n", second.replace("\r", ""))
             assert read and int(read[1]) >= 25, second
             require(vm.command("videostub 0 1", timeout=30), "VIDEO STUB: OPEN CAMERA 0 320X240 AT 10/S: Busy (2 CAMERAS LISTED)")
             # The first ends by itself, its frames on the rate and its own pattern's.
             first = vm.program_logs(started[1], "FRAMES IN", tries=120)
-            got = re.search(r"VIDEO STUB: CAMERA 0: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, 320X240, THE COUNTER 0 AHEAD", first)
+            got = re.search(r"VIDEO STUB: CAMERA 0: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, 320X240, THE COUNTER 0 AHEAD", first)
             assert got and int(got[1]) >= 142 and int(got[3]) - int(got[2]) + 1 - int(got[1]) <= 3, first
             for _ in range(40):
                 log += vm.service_logs("video_gw")
@@ -8355,7 +8355,7 @@ def cameras_modes_check(vm):
     frames = []
     for (index, width, height, rate) in [("0", "640", "480", "30"), ("1", "320", "240", "10"), ("2", "160", "120", "5")]:
         require(text, f'VIDEO STUB: OPENED CAMERA 1 "test pattern 2" {width}X{height} AT {rate}/S: MODE {index}, SYNTHETIC {width}X{height} AT {rate}/S\n')
-        got = re.search(rf"VIDEO STUB: MODE {index}: {width}X{height} AT {rate}/S\nVIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE \d+\.\.\d+, FIRST AFTER \d+ MS, "
+        got = re.search(rf"VIDEO STUB: MODE {index}: {width}X{height} AT {rate}/S\nVIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE \d+\.\.\d+, FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, "
                         rf"{width}X{height}, THE COUNTER {30 * int(rate)} AHEAD\n", text)
         assert got and int(got[1]) >= 2 * int(rate) * 7 // 10, (index, text)  # a loaded machine draws 640x480 at 30 slower
         frames.append(f"{width}x{height}: {got[1]}")

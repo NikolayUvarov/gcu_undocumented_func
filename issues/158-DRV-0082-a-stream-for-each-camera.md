@@ -75,8 +75,51 @@
     - camera 1 at 30 a second: `599 FRAMES`, `569 GOOD FRAMES, 3 BROKEN`.
   - The figures hold for that machine and those cameras (MC-12.1).
 - **What is left:**
-  - **The longest gaps come from the gateway holding itself:** 283 to 475 ms, while the other camera's stream closed (its reset) or broke. Frames of the camera beside it break meanwhile. The close's wait was moved to the next open of the same camera; the reset itself still takes about 0.4 s on camera 0.
+  - **The longest gaps come from the gateway holding itself:** 283 to 475 ms, while the other camera's stream closed or changed its mode. Frames of the camera beside it break meanwhile. An earlier line here put this down to the reset itself, which was wrong. The logs give it to two things:
+    - **my own waits:** 250 ms after each close (c687acf56) or before each re-open (b712571ac);
+    - **the camera's late answer:** after its reset (setting 0 selected again), camera 0 answered the next probe late. From close to the probe's answer took 412 ms with no wait (`2211.670 CLOSED` to `2212.082 ASKED`) and 404 ms after the 250 ms wait.
+    - The clear-halt and the reset together took 32 to 35 ms (from `BULK STREAM ENDED` to the close's line).
   - **The maintainer has not looked at two windows yet.** The machine runs these builds until its next boot for that.
+- **The reset at close off the gateway's main path** (the owner session's step 2):
+  - **At a bulk camera's close** only its stream in `usb_host` ends (`bulk-stream` off: two controller commands). The closing program then has its answer.
+  - **The clear-halt and the reset come after it,** one a turn of the gateway's loop, every stream pumped between (`Usb::step`).
+  - **An open of the camera that comes sooner waits for it with its answer deferred** (`Call::defer`, as `audio_gw` keeps its waiters). It is held in a short list (4 at most), and the camera counts as held, so a third program is refused as busy. Meanwhile the gateway goes on serving the other programs: their reads, and so their pictures, go on. The loop runs the camera's remaining steps, and once the camera has settled it opens it (`open_stream`) and answers. A wait longer than 2 s, or no room in the list, does it in the open itself, as before.
+  - **The settling** starts at 250 ms after the reset. A probe and commit that still take more than 20 ms lengthen it by that time, up to 1 s (`choices::Settle`, `learned`). Camera 0's figures above would make it 400 ms after one change.
+  - **What the maintainer saw** (2026-11-21, the gateway of b712571ac with `usb_host` 13ea6031d): two `camera` windows showed both cameras at once. Pressing `n` in one window froze the other for a moment, then both ran normally. That freeze is this flaw: the gateway held every program while the camera it reopened settled, and while its probe was answered late.
+  - **The log says** `STOPPED n MS AFTER ITS CLOSE: CLEAR-HALT a MS, SETTING 0 b MS, A STEP A TURN` and, at a re-open, `PID n WAITS FOR CAMERA c TO SETTLE; THE OTHER PROGRAMS ARE SERVED MEANWHILE`, then `OPENED AGAIN n MS AFTER ITS RESET, w MS AFTER IT WAS ASKED (THE OTHER PROGRAMS SERVED MEANWHILE); ITS PROBE AND COMMIT p MS; IT SETTLES s MS NEXT`.
+  - **Tested:** host cases (`tests/video_gw_host.rs`: the steps' order, the settling, what it learns).
+  - **Run on the Ryzen, 2026-11-21 18:43-19:01 UTC** (release 202611211819, ABI 37, whose `usb_host` is 5046dfbc6's; `video_gw` put in by `replace`, `tests/video_stub` from the console):
+    - **Camera 1 for 60 s at 320×240 beside camera 0** opening each of its offered modes in turn, 2 s each (1698c7b07):
+      - all 30 re-opens of camera 0 waited, deferred (`PID 71 WAITS FOR CAMERA 0 TO SETTLE`), and opened 0.25 to 0.47 s after they were asked;
+      - the settling learned from the first probe, 134 ms late: 250 ms became 384 ms, and every later probe and commit took 6 to 14 ms;
+      - camera 1 got 1529 good frames and 178 broken in 60 s, near what it breaks alone.
+    - **The same with the read gaps logged** (8ca499a80): camera 0's own reads were answered at most 100 to 101 ms apart in its YUY2 and MJPEG modes up to 1024×768.
+    - **The stop's steps:** the clear-halt takes under 1 ms. The reset (setting 0) took 31 to 45 ms in 46 of 50 stops, and 413 to 445 ms in four, each after a Motion JPEG or a failing stream. During those it holds the gateway, since a control transfer waits in `usb_host`.
+    - **A stop by the clear-halt alone** (a test build, not committed): MJPEG to MJPEG and YUY2 to MJPEG changes took effect, but MJPEG 800×600 to YUY2 640×360 did not (no good frame in 5 s, frames of another length). The reset stays.
+  - **What is still open (found on the run):**
+    - **A read that waits for its frame holds the gateway:** while camera 0's YUY2 1280×720 stream gave no good frame, its reader waited the whole 5 s, and camera 1's reads waited with it (`329 READS ANSWERED, AT MOST 5004 MS APART`).
+    - **The cure is to defer reads as opens now are.** A read's lent buffer is minted into a slot of its own, and its answer comes when its frame is ready, so one camera's wait never holds another program.
+  - **Deferred reads** (the commit after 0bc1d14a8):
+    - **A read of a camera stream whose frame is not there yet** mints its lent buffer into a slot of its own (`CAP_GRANT`, as `camera` and the stub lend it), maps it, and saves its answer (`defer_read`). The request's own slot is freed for the next request.
+    - **Each turn of the loop looks at every waiting read once** (`poll_camera_at`, the old wait's one pass, with the frame's number and time fixed when the read came). It answers the read when its frame is ready or FIRST_MS passed without one, then frees its mapping and slot (`finish_read`).
+    - **Reads of the test patterns are answered as before,** at their time, and so is a camera read when one of these steps fails or 8 already wait.
+    - **Run on the Ryzen, 2026-11-21 19:42-19:43 UTC** (release 202611211911, `video_gw` of 3dba2c434 by `replace`, then put back): camera 1 at 320×240 for 30 s beside camera 0 in YUY2 1280×720 for 12 s, the case that held camera 1's reads 5 s before.
+      - Camera 1: `297 READS ANSWERED, AT MOST 298 MS APART`, with 791 good frames and 78 broken.
+      - Camera 0 gave 88 good frames this time and 49 broken (`AT MOST 428 MS APART`), where it had given none beside camera 1. So the 5 s case itself did not recur, and the deferral of a read that waits 5 s is not yet shown.
+      - The patterns do not reach this in QEMU.
+    - **YUY2 at 1280×960 and 1280×720 beside a second camera break almost every frame at about 133 KB:** about the 32 pages `usb_host` keeps queued (128 KiB), which the camera fills in a few ms at the bus's rate. MJPEG frames of those sizes (0.1 to 0.2 MB) stream beside another camera.
+    - **The other cases:** more pages need more of `usb_host`'s DMA memory, which `init` grants (KRN). Or the gateway may prefer MJPEG for large sizes beside another stream.
+- **What this `usb_host` does differently for devices that are not cameras:**
+  - **The bulk stream:** it is made only when a client calls `bulk-stream`. In the tree only `video_gw` calls it: `rg bulk_stream` finds its two calls and the library's wrapper. A bulk stream takes the controller's pages, but leaves 12 of its 64 free, so a device plugged in meanwhile still gets them, and gives them back at its end.
+  - **Unchanged code paths:** without a bulk stream, `streams_of`, `end_streams`, `stream_event`, `take_stream`, `queue_td`, `isochronous` and `release` run as before. Each new branch is taken only for a stream marked bulk. An isochronous stream still takes at most 4 pages (`ISO_PAGES`, the old `STREAM_PAGES`).
+  - **The one change with no bulk stream:** `bulk` is refused (invalid) on an endpoint that has a stream on the same endpoint number. Before, it put a transfer on the ring that endpoint had before its setting changed.
+  - **Why no device of ours meets it:** no device used with MIND Core has a bulk and an isochronous endpoint at one number:
+    - the keyboards, mice and tablets have interrupt endpoints;
+    - the USB drives have bulk ones;
+    - the CH340 and FT232 have bulk ones;
+    - the USB audio devices have isochronous ones;
+    - Bluetooth's isochronous settings are not selected.
+  - **The gate:** the suites `usb`, `ehci`, `usbaudio`, `link`, `iso` (a USB boot disk), `boot` (its EHCI disk) and the USB image's boot ran with this `usb_host`. Their results are in the progress below.
 - **What the gate shows:** the `cameras` suite checks two streams of the gateway at once, with the patterns. Nothing in the gate shows two real streams starving each other:
   - QEMU 8.2 has no USB camera (`-device help` lists none);
   - the bulk stream of `usb_host` is not reached by any QEMU device, and is evidence on the Ryzen alone;

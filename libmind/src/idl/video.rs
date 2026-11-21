@@ -10,6 +10,9 @@
 //! and says which the gateway offers; `open` asked for an offered mode's size and rate streams that mode unscaled, and
 //! `opened` says which mode the camera sends. The calls of 1.0 are unchanged on the wire, so a 1.0 program works with a
 //! 1.1 gateway; a 1.0 gateway refuses `modes` and `opened` (the call is rejected as invalid).
+//!
+//! 1.2 (158-DRV-0084): the gateway decodes Motion JPEG, so a camera's MJPEG modes within the sizes and rates it takes
+//! are offered too, and `open` may stream one. Nothing changes on the wire: a 1.1 program works with a 1.2 gateway.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -19,7 +22,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:video";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,8 +57,8 @@ impl Wire for Frame {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { sequence: Wire::decode(r)?, timestamp_us: Wire::decode(r)?, width: Wire::decode(r)?, height: Wire::decode(r)?, bytes: Wire::decode(r)? }) }
 }
 
-/// 1.1: how a mode's frames come from the camera: YUY2 (which the gateway converts), Motion JPEG, another
-/// uncompressed format, or drawn by the gateway (the test pattern).
+/// 1.1: how a mode's frames come from the camera: YUY2 (which the gateway converts), Motion JPEG (which it decodes,
+/// 1.2), another uncompressed format, or drawn by the gateway (the test pattern).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Encoding { #[default] Yuy2 = 0, Mjpeg = 1, Uncompressed = 2, Synthetic = 3 }
@@ -71,8 +74,8 @@ impl Wire for Encoding {
 
 /// 1.1: a mode: a frame size in an encoding at one of the camera's frame intervals (100 ns units, as the camera
 /// states it), so at `rate` frames a second (10^7 / interval rounded down; 0 for less than one a second); `offered`
-/// when the gateway streams it now: a YUY2 mode within the sizes and rates it takes, which the camera's streaming
-/// settings carry.
+/// when the gateway streams it now: a mode it decodes (YUY2; Motion JPEG too, 1.2) within the sizes and rates it
+/// takes, which the camera's streaming settings carry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mode { pub encoding: Encoding, pub width: u16, pub height: u16, pub rate: u8, pub interval: u32, pub offered: bool }
 impl Wire for Mode {
