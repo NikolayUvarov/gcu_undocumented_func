@@ -110,6 +110,19 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - IP multicast (01:00:5E…) from EC:43:F6:D9:D7:A8.
 - **Next:** the back-to-back measurement against the boot image's driver (three downloads each way, 15 minutes of traffic), then step 2.
 
+**2026-11-21, 20:23–20:31 UTC, mirrored back to back on the Ryzen.** b3db40619 is the boot image's driver since the night release 202611212016; the old driver is 1c83d581e by `replace`. Channel 8, UZ, three 6 MB downloads each, by the sender's figures:
+
+| Driver | 6 MB downloads | BSS beacons a minute | Sends outrun a minute | Holes |
+|---|---|---|---|---|
+| b3db40619 (boot image) | 246, 285, 265 KB/s | 581 | 1 to 4 | none |
+| 1c83d581e (replace) | 300, 342, 223 KB/s | 0 | 0 in 2 minutes | 5 by frames, idle 1.0–1.3 s |
+| b3db40619 (boot image again) | 292, 259, 296 KB/s | 581 | 1 to 3 | none |
+
+- **The rate:** no difference is shown either way; the spread within each set is larger than between them.
+- **The beacons:** they reach the host with step 1 and not without it, on every boot and run so far (boot 61: 581 in its first minute, AID 23).
+- **Sends that outran their time:** this evening the old driver had almost none too (9 in boot 60's 15 minutes of a 30 MB download). The lower count of 20:13–20:16 was the hour, not the change; nothing is claimed about them.
+- **Tonight's test:** the boot image's driver runs through the night, with Effector's traffic. Its boot logs are read for the beacons, late sends, holes, stalls and anything new from the firmware now that it knows the link.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
