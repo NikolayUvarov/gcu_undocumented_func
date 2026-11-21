@@ -1,6 +1,6 @@
 # 000-DRV-0073 — USB Audio Class 1 devices in `audio_gw`: the STM-Speaker speakerphone plays and hears
 
-**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-20: the Isoch TRB's type was wrong and is fixed; the speakerphone plays and hears on the DEXP's Intel xHCI and on the Ryzen's AMD xHCI; the board's own counters over 5 minutes are still to be read) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`audio_gw`, `usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: the speakerphone plays and hears on the DEXP's Intel xHCI and on the Ryzen's AMD xHCI; the board's own counter stands still during a stream and rises at its close, 000-DRV-0081) · **Blocked by:** 000-DRV-0081 (the last criterion) · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -33,7 +33,8 @@
 - [x] QEMU (`--suites usbaudio`): `usb-audio` attached in the codec's place, its OUT endpoint streams about 1950 packets while `beep` plays, the device hears the tone (its wav holds at least a quarter of a second of loud samples), and unplugged, the codec comes back.
 - [ ] On the Ryzen, with the maintainer: the speakerphone plays `say` and a tone, and `listen` hears its microphones. The STM-Speaker's own counters (underruns, overruns, clock faults) stay at zero for 5 minutes.
   - **Met, 2026-11-21:** a tone, `say` and `listen`, each heard by the maintainer, on the second AMD xHCI.
-  - **Not yet:** the board's own counters. The host's side of the 5 minutes is clean (301043 packets, none missed).
+  - **The board's counters, in part:** during a stream its count of playback frames lacked stands still, and overruns stay at 0. The maintainer watched it through a minute of notes (92 before, 92 throughout). It rises at each close of a stream, by 82 to 92 frames: 92 after a five-minute stream from zero, 174 after the minute that followed. That is the order in which `usb_host` closes a stream, [000-DRV-0081](000-DRV-0081-a-stream-is-closed-by-telling-the-device-first.md).
+  - **Not yet:** a count of 0 after a five-minute stream and its close (with 000-DRV-0081), and the board's clock faults, which were not read.
 
 ## Progress (2026-11-20): the path, and the Ryzen's AMD xHCI
 
@@ -159,7 +160,7 @@ Release 202611201957: the stick's ABI 34 tree with the Isoch TRB's type fixed an
   42094.150 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 2: STREAM ENDED: 301043 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
   42094.150 usb_host: [USB] XHCI 1: SLOT 2 ENDPOINT 5: STREAM ENDED: 903129 BYTES, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS
   ```
-  The maintainer heard the notes. The board's own counters for that run are not read yet.
+  The maintainer heard the notes. A second run of five minutes, the board's counters started from zero: `301044 PACKETS SENT, 0 MISSED, 0 TIMES DRY, 0 WITH ERRORS`, and the board showed 92 frames lacked and 0 overrun after it (the acceptance criteria say where the 92 come from).
 
 **The AMD gate is out of the code** with this: a controller of vendor 1022 takes streams as any other. One that stops with an error while it streams is still set up again and takes none afterwards (000-DRV-0075).
 
@@ -177,4 +178,4 @@ This holds for the Ryzen's second AMD xHCI with the device straight in its root 
 
 ## Related
 
-[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (an xHCI that stops answering is set up again), [000-DRV-0079](../issues-done/000-DRV-0079-a-further-try-at-a-device-resets-its-port.done) (a further try resets the port), [000-DRV-0080](../issues-done/000-DRV-0080-of-several-usb-audio-devices-the-one-set-up-last-plays.done) (the device set up last plays), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
+[000-DRV-0075](../issues-done/000-DRV-0075-a-controller-that-stops-answering.done) (an xHCI that stops answering is set up again), [000-DRV-0079](../issues-done/000-DRV-0079-a-further-try-at-a-device-resets-its-port.done) (a further try resets the port), [000-DRV-0080](../issues-done/000-DRV-0080-of-several-usb-audio-devices-the-one-set-up-last-plays.done) (the device set up last plays), [000-DRV-0081](000-DRV-0081-a-stream-is-closed-by-telling-the-device-first.md) (the close of a stream), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) (a second HD Audio function), [022](../issues-done/022-audio-tools-say-listen.done) (`say`, `listen`).
