@@ -23,7 +23,8 @@ fn reg(r: R, i: u8) -> u32 { r.at(i).unwrap().offset() }
 // --- step 1's values ---
 
 // What step 1 would find if the GOP drives DP-2 as the survey expects: OTG 0 from OPP 0, HUBP 0 on it, DIG front end E
-// into PHY E's enabled back end, HPD 1 sensing HDMI-A-1's monitor, every pipe's domains on.
+// into PHY E's enabled back end, HPD 1 sensing HDMI-A-1's monitor, every pipe's domains on, and HUBPs 1 to 3 blanked on
+// their own idle OTGs (DCHUBP_CNTL as the Ryzen's: 000F0002, 000F001B, 000F002B, 000F003B).
 fn found() -> Store {
     let mut s = Store::default();
     for n in 0..5u8 { s.set(R::HpdIntStatus, n, if n == 0 || n == 4 { 0b10 } else { 0 }); s.set(R::HpdControl, n, 1 << 28); }
@@ -33,7 +34,7 @@ fn found() -> Store {
         s.set(R::OtgClockControl, t, if t == 0 { 0x101 } else { 0 });
     }
     for d in 0..8u8 { s.set(R::DomainPgStatus, d, 0); }
-    for n in 0..4u8 { s.set(R::HubpCntl, n, if n == 0 { 0 } else { 0xF << 4 }); }
+    for n in 0..4u8 { s.set(R::HubpCntl, n, if n == 0 { 0x000F_0002 } else { 0x000F_000B | (n as u32) << 4 }); }
     for d in 0..5u8 { s.set(R::DigFeCntl, d, if d == 4 { 1 << 24 } else { 7 }); }
     for p in batches::BOARD_PHYS {
         s.set(R::DigBeCntl, p, if p == 4 { (1 << 4) << 8 } else { 0 });
@@ -77,6 +78,8 @@ fn step_3_refuses_what_it_cannot_tell() {
     assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 0, 0)), Refusal::NoMonitor);
     assert_eq!(refuse(&|s| { s.set(R::DigBeCntl, 4, 0); s.set(R::DigFeCntl, 4, 0); }), Refusal::FirmwareFrontEnd);
     assert_eq!(refuse(&|s| for d in 0..4 { s.set(R::DigFeCntl, d, 1 << 24); }), Refusal::NoFreeFrontEnd);
+    // HUBP 1 on OTG 1, step 3's, not blanked: it would fetch once OTG 1 runs.
+    assert_eq!(refuse(&|s| s.set(R::HubpCntl, 1, 1 << 4)), Refusal::AttachedHubp(1));
 }
 
 // --- the guard ---
@@ -109,7 +112,7 @@ fn the_guard_refuses_every_block_of_the_firmwares_pipe_and_all_off_the_route() {
         assert!(g.check(Reg::new(o).unwrap()).is_ok(), "{:05X}", o);
     }
     // A choice that shares the firmware's DIG block is refused before anything runs.
-    let shared = Choice { pipe: dcn::Pipe { otg: 1, opp: 1, dig_fe: 4 }, output: HDMI_A_1 };
+    let shared = Choice { pipe: dcn::Pipe { otg: 1, opp: 1, dig_fe: 4 }, output: HDMI_A_1, attached: [false; 4] };
     assert_eq!(light::Guard::new(&f, &shared).err(), Some(Refusal::Overlap));
 }
 
@@ -382,7 +385,7 @@ fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
         restored_but(&e, &before, &[]);
         let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
         assert_eq!(undone, (1..=allowed).rev().collect::<Vec<u8>>());
-        assert!(log[..4].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
+        assert!(log[..6].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
         assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed)));
         assert!(!log.iter().any(|x| x.contains("LEFT IN PLACE")));
     }
@@ -393,6 +396,35 @@ fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
     let mut e = engine();
     e.frames_move = false;
     assert_eq!(run_undo(&mut e, STAGES).0, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
+}
+
+#[test]
+fn the_hubp_that_follows_step_3s_otg_is_read_after_stages_5_to_8() {
+    let hubp1 = reg(R::HubpCntl, 1);
+    // Its value as on the Ryzen: blanked, in blank, following OTG 1.
+    let engine1 = || { let mut e = engine(); e.regs.insert(hubp1, 0x000F_001B); e };
+    let mut e = engine1();
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", log);
+    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES 5 TO 8")));
+    for n in 1..=STAGES { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED (1 REGISTERS)", n))), n >= 5, "stage {}", n); }
+    assert!(!writes(&e).iter().any(|w| w.0 == hubp1), "HUBP1 was written");
+    // Its statuses moving when OTG 1 starts (in blank, the XRQ's requests) fail no stage.
+    let mut e = engine1();
+    e.hook = Some((reg(R::OptcDataSourceSelect, 1), hubp1, 0x000F_001B ^ (0x8 | 0x000E_0000)));
+    assert_eq!(run(&good(), &mut e, STAGES).0, Outcome::Stopped { done: 8 });
+    // Leaving its blank in stage 5 fails stage 5, which is undone with every stage before it.
+    let mut e = engine1();
+    let before = e.regs.clone();
+    e.hook = Some((reg(R::OptcDataSourceSelect, 1), hubp1, 0x000F_001A));
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    match outcome { Outcome::Failed { stage: 5, why: Failure::AttachedChanged { offset, before: 0x11, after: 0x10 } } if offset == hubp1 => {}, o => panic!("{:?} {:#?}", o, log) }
+    assert!(log.iter().any(|x| x.starts_with("S5 START FAILED: THE ATTACHED HUBP'S")));
+    restored_but(&e, &before, &[]);
+    // A change before stage 5 is not looked for until stage 5, and is caught there.
+    let mut e = engine1();
+    e.hook = Some((reg(R::OtgHTotal, 1), hubp1, 0x000F_001A));
+    match run(&good(), &mut e, STAGES).0 { Outcome::Failed { stage: 5, why: Failure::AttachedChanged { .. } } => {}, o => panic!("{:?}", o) }
 }
 
 #[test]

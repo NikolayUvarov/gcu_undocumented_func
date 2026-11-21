@@ -42,17 +42,22 @@ impl<T: Bus + Poke + Clock> Engine for T {}
 pub struct Firmware { pub otg: u8, pub opp: u8, pub dig_fe: u8, pub phy: u8, pub hubps: [bool; 4] }
 impl Firmware { pub fn protected(&self) -> Protected { Protected { otg: self.otg, opp: self.opp, dig_fe: self.dig_fe, phy: self.phy } } }
 
-/// The pipe and output step 3 takes.
+/// The pipe and output step 3 takes, and the powered HUBPs, not the firmware's, that follow its timing generator: blanked,
+/// never written, read after the stages that run it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Choice { pub pipe: Pipe, pub output: Output }
+pub struct Choice { pub pipe: Pipe, pub output: Output, pub attached: [bool; 4] }
+
+/// The first stage after which the attached HUBPs are read: the one that starts step 3's timing generator.
+pub const ATTACHED_FROM: u8 = 5;
 
 /// HDMI-A-1: VBIOS path 0, UNIPHY enum 1 on PHY A, HPD 1, connector HDMI type A.
 pub const HDMI_A_1: Output = Output { phy: 0, hpd: 0, encoder_id: 0x1E, connector_id: 0x0C };
 /// What the survey expects when step 1 has not been read: the GOP on OTG 0 and PHY E (DP-2's path 4), step 3 on OTG 1,
-/// DIG front end A, PHY A. Only for describing; a stage runs only on what step 1 found.
+/// DIG front end A, PHY A, with HUBP 1 following OTG 1, blanked (as step 1 found on the Ryzen). Only for describing; a
+/// stage runs only on what step 1 found.
 pub const EXPECTED: (Firmware, Choice) = (
     Firmware { otg: 0, opp: 0, dig_fe: 4, phy: 4, hubps: [true, false, false, false] },
-    Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1 },
+    Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1, attached: [false, true, false, false] },
 );
 
 /// Why step 3 does not run.
@@ -74,6 +79,8 @@ pub enum Refusal {
     NoFreeFrontEnd,
     /// The chosen pipe's blocks overlap the firmware's (a DIG block both use).
     Overlap,
+    /// A powered HUBP follows step 3's timing generator and is not blanked: it would fetch once the generator runs.
+    AttachedHubp(u8),
     Plan(PlanError),
 }
 
@@ -89,6 +96,7 @@ impl fmt::Display for Refusal {
             Refusal::NoFreePipe => f.write_str("NO FREE TIMING GENERATOR AND OPP"),
             Refusal::NoFreeFrontEnd => f.write_str("NO FREE DIG FRONT END"),
             Refusal::Overlap => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE FIRMWARE'S"),
+            Refusal::AttachedHubp(n) => write!(f, "HUBP{} FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED", n),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
         }
     }
@@ -122,7 +130,9 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     let t = (0..4).find(|&t| !running(t) && !opp_used(t)).ok_or(Refusal::NoFreePipe)?;
     let fe_used = |d: u8| d == dig_fe || d == phy || fe_on(d) || BOARD_PHYS.iter().any(|&p| enabled(p) && fe_mask(p) & 1 << d != 0);
     let d = (0..5).find(|&d| !fe_used(d)).ok_or(Refusal::NoFreeFrontEnd)?;
-    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output: HDMI_A_1 }))
+    let attached = [0u8, 1, 2, 3].map(|n| powered(n) && !hubps[n as usize] && s.field(R::HubpCntl, n, HUBP_VTG_SEL) == Some(t as u32));
+    if let Some(n) = (0..4u8).find(|&n| attached[n as usize] && s.field(R::HubpCntl, n, HUBP_BLANK_EN) != Some(1)) { return Err(Refusal::AttachedHubp(n)); }
+    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output: HDMI_A_1, attached }))
 }
 
 // --- the guard ---
@@ -233,6 +243,14 @@ impl Watch {
         }
         w
     }
+    /// The DCHUBP_CNTL of each HUBP that follows step 3's timing generator.
+    pub fn attached(choice: &Choice) -> Watch {
+        let mut w = Watch { regs: [None; WATCH], len: 0 };
+        for n in 0..4u8 {
+            if let (true, Some(reg)) = (choice.attached[n as usize], R::HubpCntl.at(n)) { w.regs[w.len] = Some((R::HubpCntl, n, reg)); w.len += 1; }
+        }
+        w
+    }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
     fn read(&self, bus: &mut impl Bus) -> Result<[u32; WATCH], Failure> {
@@ -295,7 +313,7 @@ impl fmt::Display for Bytes<'_> {
 // --- the plan ---
 
 /// Step 3 ready to run: the plan of the eight stages, the guard and the watch, for one firmware and choice.
-pub struct Light { pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard, watch: Watch }
+pub struct Light { pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard, watch: Watch, attached: Watch }
 
 impl Light {
     pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> {
@@ -303,10 +321,11 @@ impl Light {
         let plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
         let mut starts = [plan.len(); STAGES as usize + 1];
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
-        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware) })
+        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice) })
     }
     pub fn guard(&self) -> &Guard { &self.guard }
     pub fn watch(&self) -> &Watch { &self.watch }
+    pub fn attached(&self) -> &Watch { &self.attached }
     /// Stage `n`'s steps (markers left out).
     pub fn stage(&self, n: u8) -> impl Iterator<Item = Step> + '_ {
         let (a, b) = (self.starts[n as usize - 1], self.starts.get(n as usize).copied().unwrap_or(self.plan.len()).saturating_sub(if n < STAGES { 1 } else { 0 }));
@@ -332,6 +351,9 @@ impl Light {
         out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN DVI SIGNALLING (CTA VIC 16)",
             c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
             self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0));
+        for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
+            out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES {} TO {}", n, c.pipe.otg, ATTACHED_FROM, STAGES));
+        }
     }
 
     fn plan_lines(&self, n: u8, verb: &str, out: &mut dyn Out) {
@@ -380,6 +402,8 @@ pub enum Failure {
     NoFrames(u32),
     Table(atom::Error),
     FirmwareChanged { offset: u32, before: u32, after: u32 },
+    /// A HUBP that follows step 3's timing generator changed (beyond its statuses): it may have left its blank.
+    AttachedChanged { offset: u32, before: u32, after: u32 },
     JournalFull,
 }
 
@@ -393,6 +417,7 @@ impl fmt::Display for Failure {
             Failure::NoFrames(n) => write!(f, "THE FRAME COUNT MOVED {} TIMES ONLY", n),
             Failure::Table(e) => write!(f, "THE TABLE STOPPED: {:?}", e),
             Failure::FirmwareChanged { offset, before, after } => write!(f, "THE FIRMWARE'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
+            Failure::AttachedChanged { offset, before, after } => write!(f, "THE ATTACHED HUBP'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
             Failure::JournalFull => f.write_str("MORE WRITES THAN THE UNDO CAN HOLD"),
         }
     }
@@ -538,6 +563,10 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
+    let attached = match light.attached.read(e) {
+        Ok(v) => v,
+        Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE ATTACHED HUBPS: {}", why)); return Outcome::Failed { stage: 0, why }; }
+    };
     for n in 1..=STAGES {
         let name = STAGE_NAMES[n as usize - 1];
         if n > allowed {
@@ -550,10 +579,16 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         out.pause(PAUSE_BEFORE_STAGE_MS);
         let result = stage(light, e, interp, journal, n, out).and_then(|()| {
             let now = light.watch.read(e)?;
-            match light.watch.changed(&baseline, &now) { Some((reg, before, after)) => Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }), None => Ok(()) }
+            if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
+            if n < ATTACHED_FROM || light.attached.is_empty() { return Ok(()); }
+            let now = light.attached.read(e)?;
+            match light.attached.changed(&attached, &now) { Some((reg, before, after)) => Err(Failure::AttachedChanged { offset: reg.offset(), before, after }), None => Ok(()) }
         });
         match result {
-            Ok(()) => out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len())),
+            Ok(()) => {
+                out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len()));
+                if n >= ATTACHED_FROM && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
+            }
             Err(why) => {
                 out.line(format_args!("S{} {} FAILED: {}; UNDOING STAGES {} TO 1", n, name, why, n));
                 for m in (1..=n).rev() { undo(light, e, interp, journal, m, out); }
