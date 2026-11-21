@@ -388,6 +388,8 @@ mode, 8 the PHY (table 76) and the `DIG_START` pulse.
   masks: `OTG_BUSY`, `OPTC_DOUBLE_BUFFER_PENDING`, the DIG front end's metadata-missed flag, and `DCHUBP_CNTL`'s
   outstanding-request, in-blank, XRQ (0xF0000), timeout (0xF00000) and underflow (0x70000000) statuses. On the Ryzen,
   HUBP0's XRQ field reads F (step 1's run 5).
+- **The HUBP that follows step 3's OTG** (on the Ryzen HUBP1: powered, blanked, `HUBP_VTG_SEL` 1) is never written; it
+  must be blanked for step 3 to run, and its `DCHUBP_CNTL` is read after stages 5 to 8 under the same masks.
 - **Undo** (of a failed stage and every one before it, last first): stage 2 first calls table 12 with pixel clock 0 (as
   Display Core powers a PLL down), stage 8 table 76's DISABLE; then every register the stage wrote is put back.
 
