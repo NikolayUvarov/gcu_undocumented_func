@@ -512,6 +512,34 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     drop(service);clean();
 });}
 
+// 213-DRV-0091: the firmware's error codes are read at each data-mode check as Linux's rtw89_mac_get_err_status reads
+// them (HALT_C2H_CTRL set, then HALT_C2H, then the CTRL cleared), named with their level, counted in the minute's line,
+// and never answered.
+#[test]
+fn service_reads_the_firmwares_error_codes_names_their_level_and_answers_nothing(){run(0,true,true,|data,c|{
+    use crate::{btc_session::data_mode::{Errors,Level},receive_service::Event};
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    assert!(service.take_firmware_error().is_none(),"no code posted, none read");
+    // An L0 recovery's two codes, an L1 request, an assertion by its scenario, and a code ser.c does not know.
+    c.borrow_mut().halt_codes=vec![0x0001,0x0003,0x1000,0x3000_0012,0x8000_0000];
+    let mut seen=vec![];
+    for _ in 0..20{ipc::advance(20);assert!(service.step());while let Some(e)=service.take_firmware_error(){seen.push(e)}if seen.len()==5{break}}
+    let got:Vec<_>=seen.iter().map(|e|(e.count,e.raw,e.code,e.name,e.level)).collect();
+    assert_eq!(got,[(1,1,1,"L0_ERR_CMAC0",Level::L0),(2,3,3,"L0_RESET_DONE",Level::L0),(3,0x1000,0x1000,"L1_ERR_DMAC",Level::L1),
+        (4,0x3000_0012,0x4000,"ASSERTION",Level::L2),(5,0x8000_0000,0x8000_0000,"UNKNOWN",Level::Unknown)]);
+    assert_eq!((seen[0].event,seen[2].event,seen[3].event),("SER_EV_L0_RESET","SER_EV_L1_RESET (M1)","SER_EV_L2_RESET"));
+    assert!(seen.iter().all(|e|e.ctrl==1),"{seen:?}");
+    assert_eq!(c.borrow().halt_h2c_writes,0,"nothing answered: no M2, no M4");
+    // The minute's line counts them by level, and traffic runs on.
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{errors,..})=traffic else{panic!("no traffic line")};
+    assert_eq!(errors,Errors{l0:2,l1:1,l2:1,unknown:1});
+    c.borrow_mut().incoming.push(packet());let id=ipc::buffer(5,&[]);assert!(service.step());assert_eq!(words(id)[0]&255,0);
+    let _=Event::FirmwareError{count:0,ctrl:0,raw:0,ser:0,code:0,name:"",level:Level::L0,event:""};drop(service);clean();
+});}
+
 // 213-DRV-0091: a station check that meets an unreadable CMAC window (DEADBEEF, the Ryzen's boot 62 twice in 98 minutes)
 // reads again and goes on, logged; a firmware recovery that begins with it is outlasted first; one that never answers,
 // or answers with a mismatch, still stops the data mode.
