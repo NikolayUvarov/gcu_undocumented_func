@@ -67,10 +67,16 @@ A computer is given MIND Core today only as a raw disk image (`dist/mind-core-us
 - **OVMF takes the El Torito entry on a USB disk too,** ahead of the MBR. So the loader is given no partition (`BOOT: VOLUME UNKNOWN PARTITION 0 AT LBA 0`). vfs_server then mounts the volume that holds the manifest the loader verified, at the MBR partition's start, as 211-KRN-0012 does for a volume the firmware did not name. Naming the El Torito volume in `BootInfo` is a later step of this task.
 - **From a disc, the running system has no volume:** `ls` is not found, as no driver serves the CD drive. This is step 2.
 
+**Step 2, the volume in memory,** is [352-KRN-0268](../issues-done/352-KRN-0268-the-live-volume-in-memory.done) (the kernel track's part, an ABI change): from a disc and from a USB disk, the loader reads the El Torito volume into memory, `ramdisk#2` serves it read-only and `vfs_server` mounts it. Programs then run from a disc too. With it the `iso` suite runs on aarch64 as well (AAVMF, a SCSI CD-ROM), in the group `aarch64: tools`.
+
+**Step 3, in part** (on 352-KRN-0268's branch): on a live boot the updater fills no slot, as the volume is read-only in memory; it says `[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL`. The `iso` suite now builds the ISO in slots, as the installer will copy them, and checks that line. Writes are refused by the read-only volume, and the log stays in memory without a `MIND LOG`.
+
+**In `main` since round 165** (64605784cc, the gate GREEN on both architectures): step 2 (352-KRN-0268, closed) and step 3's part above. The installer's service of step 4 is in `main` too ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), closed): on a live boot `init` gives the store no disk, and the shell gets the installer's client. The shell's `install` command is APP's (requested).
+
 **Left:**
-- step 2, the volume in memory (KRN);
-- steps 3 to 5;
-- aarch64;
+- step 3's log on a `MIND LOG` partition of the stick;
+- step 4's start of the installer on the console, with APP's command (352-UPD-0048);
+- step 5;
 - a real machine.
 
 ## Related

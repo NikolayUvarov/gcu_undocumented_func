@@ -21,6 +21,8 @@ done
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
 cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
+cargo test --quiet --manifest-path improve/proto/Cargo.toml --target-dir "$OUT/improve-proto-target" # MIND Hub's protocol and its vectors (100003-APP-0145)
+(cd improve/proto && cargo build --quiet --release --target x86_64-unknown-none --target-dir "$OUT/improve-proto-target") # and still no_std, as MIND Core's programs link it
 cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-target" # the device key under a passphrase, Argon2id against RFC 9106 (308-NET-0055)
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
@@ -30,6 +32,8 @@ cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkp
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
 cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)
 cargo test --quiet --features test-hooks --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" --lib --test hooks # its test hooks (110-NET-0068)
+cargo test --quiet --manifest-path tools/mindhub/Cargo.toml --target-dir "$OUT/httpd-target" # MIND Hub's separate server: its state, journal, API, pages and the conformance suite, on loopback and TLS (100003-APP-0146)
+cargo test --quiet --manifest-path improve/host/Cargo.toml --target-dir "$OUT/httpd-target" # improve on a host: every command against a hub on loopback (100003-APP-0150)
 # The multi-device firmware's logic: frames between the boards, credits, control commands, the LED (800-LNK-0005).
 cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/tests/host_test.c devices/rp2-link/src/bridge.c devices/rp2-link/src/control.c devices/rp2-link/src/led.c
 "$OUT/rp2-link-tests"

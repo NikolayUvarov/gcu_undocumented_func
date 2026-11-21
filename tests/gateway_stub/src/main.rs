@@ -117,12 +117,14 @@ fn remote_mark() {
 }
 
 // This boot's plan (173-KRN-0035): a line a service, in the order init tried them, then where it came from; any
-// client of init may ask.
+// client of init may ask. A line every 20 ms: logd refuses a task's records past 64 a second, and the plan alone is
+// near that (352-KRN-0268: round 164 lost the line after it).
 fn boot_plan() {
     match init::boot_plan(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(plan)) => for s in plan.as_slice() {
             mind::println!("[GATEWAY-STUB] PLAN {} {} {} {} AFTER '{}' OFF '{}'", s.place, s.name.as_str(), if s.enabled { "ENABLED" } else { "DISABLED" },
                            if s.essential { "ESSENTIAL" } else { "CONFIGURABLE" }, s.after.as_str(), s.off.as_str());
+            mind::time::sleep(20);
         },
         _ => mind::println!("[GATEWAY-STUB] PLAN FAILED"),
     }
