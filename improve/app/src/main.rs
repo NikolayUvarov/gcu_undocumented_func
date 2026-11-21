@@ -10,6 +10,8 @@
 // that wait for the user go into the user's files, data/improve/waiting, for the shell's notice and wm's mark.
 extern crate alloc;
 
+// improve writes the file; the shell's line and wm's mark are theirs.
+#[allow(dead_code)]
 mod waiting;
 mod words;
 

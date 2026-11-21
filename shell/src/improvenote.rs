@@ -7,6 +7,8 @@ use crate::{passctl, Shell};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
+// The shell reads the file and says its line; the rest of it is improve's and wm's.
+#[allow(dead_code)]
 #[path = "../../improve/app/src/waiting.rs"]
 mod waiting;
 
