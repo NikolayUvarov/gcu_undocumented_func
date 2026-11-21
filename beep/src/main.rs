@@ -2,7 +2,7 @@
 #![no_main]
 // beep (issue u005): tones through the audio gateway, and nothing on the screen. `beep 440` sounds 440 Hz for 500 ms;
 // `beep 440 200 660 300` a series of notes, frequency and duration each (0 Hz: a pause). Without arguments, the
-// opening of "Also sprach Zarathustra", through the gateway's tones and beep's own samples (551-APP-0149). `beep left …` and `beep right …` play on that channel alone
+// opening of "Also sprach Zarathustra" as beep's own samples (551-APP-0149). `beep left …` and `beep right …` play on that channel alone
 // (551-APP-0138). It ends when the sound has played.
 mod notes;
 
@@ -10,17 +10,14 @@ use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::mem::Pages;
 use mind::util::FixedBuf;
-use notes::{Channel, Note, DEFAULT_HZ, DEFAULT_MS, MAX_NOTES, OPENING_SAMPLES, OPENING_TONES};
+use notes::{Channel, Note, DEFAULT_HZ, DEFAULT_MS, MAX_NOTES, OPENING};
 
 mind::request!(REQUEST_CONSOLE);
 
 // Frames generated at a time (stereo i16), then queued with play_all, which waits for room in the gateway's ring.
 const CHUNK_FRAMES: usize = 4800;
 
-fn demo(rate: usize) -> bool {
-    for note in OPENING_TONES { let _ = mind::audio::tone(note.hz as usize, note.ms as usize); }
-    play(&OPENING_SAMPLES, rate, Channel::Both)
-}
+fn demo(rate: usize) -> bool { play(&OPENING, rate, Channel::Both) }
 
 fn play(notes: &[Note], rate: usize, channel: Channel) -> bool {
     let Some(mut pcm) = Pages::new(CHUNK_FRAMES * 4) else { mind::println!("[BEEP] NO MEMORY"); return false };

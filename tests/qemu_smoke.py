@@ -10537,22 +10537,39 @@ def tone_power(samples, rate, start, hz, seconds=0.04):
     return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
 
 
-# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra", C, G and C as the gateway's tones, then
-# E falling to E flat as beep's own samples, then the timpani's C and G (beep/src/notes.rs).
+# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra" as beep's own samples: C, G and C, E
+# falling to E flat, then the timpani's C and G (beep/src/notes.rs).
 BEEP_OPENING = ((262, 0.4), (392, 0.4), (523, 0.6), (659, 0.15), (622, 0.6))
 
 
 def beep_demo_tones(left, rate, first):
-    """beep's default from sample `first`: each note of the opening stronger, 25 ms into it and over 100 ms, than every
-    other note (E and E flat lie 37 Hz apart, which 40 ms would not tell), then the timpani's low C."""
-    at = 0.0
-    for hz, seconds in BEEP_OPENING:
-        start = first + int(rate * (at + 0.025))
-        others = max(tone_power(left, rate, start, other, 0.1) for other, _ in BEEP_OPENING if other != hz)
-        assert tone_power(left, rate, start, hz, 0.1) > 5 * others, (hz, at)
-        at += seconds
-    timpani = first + int(rate * (at + 0.02))
-    assert tone_power(left, rate, timpani, 131) > 5 * tone_power(left, rate, timpani, 523), "the timpani's C"
+    """beep's default from sample `first`: the opening's notes in their order, each the strongest of them in 40 ms
+    windows every 50 ms, then the timpani's C and G. The order, not the times: a stream through QEMU's HD Audio stalls a
+    moment now and then, by some 50 ms in all, which shifts what follows."""
+    notes = [hz for hz, _ in BEEP_OPENING] + [131, 98]
+    runs = []
+    for at in range(first, first + int(rate * 3.5), int(rate * 0.05)):
+        window = left[at:at + int(rate * 0.04)]
+        if not window or max(abs(x) for x in window) < 1000:
+            continue
+        best = max(notes, key=lambda hz: tone_power(left, rate, at, hz))
+        if runs and runs[-1][0] == best:
+            runs[-1][1] += 1
+        else:
+            runs.append([best, 1])
+    # A single window between two of the same note is a stall's edge, not a note.
+    steady = []
+    for index, (hz, count) in enumerate(runs):
+        if count == 1 and 0 < index < len(runs) - 1 and runs[index - 1][0] == runs[index + 1][0]:
+            continue
+        if steady and steady[-1][0] == hz:
+            steady[-1][1] += count
+        else:
+            steady.append([hz, count])
+    heard = [hz for hz, _ in steady]
+    assert heard[:5] == [hz for hz, _ in BEEP_OPENING], runs
+    assert all(count >= 2 for _, count in steady[:5]), runs
+    assert {131, 98} <= set(heard[5:]), ("the timpani", runs)
 
 
 def sound_kept_check(args, disk):
@@ -10761,7 +10778,7 @@ def audio_suite(vm, wav):
     assert power(middle, 880) > 5 * power(middle, 440)
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra (the gateway's tones, then client PCM) in captured audio; "
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra as client PCM in captured audio; "
           f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
