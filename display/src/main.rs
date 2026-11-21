@@ -1,18 +1,25 @@
 #![no_std]
 #![no_main]
 // display (213-DRV-0086, DRV's): the Ryzen's Radeon display engine. It logs the grant as KRN's stub did (213-KRN-0270,
-// 0271), then runs step 1: the firmware's display state read in batches, as many as BATCHES_ALLOWED says; nothing is written.
+// 0271), then runs step 1 (the firmware's display state read in batches, as many as BATCHES_ALLOWED says) and step 3
+// (first light on HDMI-A-1 in stages, as many as STAGES_ALLOWED says; at 0 nothing is written and no writer is made).
+extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
 #[allow(dead_code)] mod dcn;
 #[allow(dead_code)] mod edid;
+#[allow(dead_code)] mod light;
 #[allow(dead_code)] mod timing;
+use alloc::boxed::Box;
 use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ, SLOT_MEM};
 use mind::dev::{cap_info, device_config, Mmio};
 
 /// How many of step 1's seven batches this build may read. 0 maps no register and reads none: it logs each batch and the
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
+/// How many of step 3's eight stages this build may run. 0 makes no writer: it logs each stage with every write it would
+/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED of 5 or more.
+const STAGES_ALLOWED: u8 = 0;
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 /// Before step 1, so that the boot's own lines are kept first.
@@ -41,27 +48,64 @@ fn main(_info: &'static BootInfo) {
     let size = |slot: usize, kind: usize| { let (k, _, len) = cap_info(slot); (k == kind).then_some(len) };
     match size(MAILBOX, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] THE SMU MAILBOX: {} BYTES GRANTED", len), None => mind::println!("[DISPLAY] NO SMU MAILBOX GRANTED") }
     match size(SECOND_SCREEN, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A SECOND SCREEN: {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO SECOND SCREEN'S MEMORY GRANTED") }
-    match size(VBIOS, CAP_KIND_MEMORY).and_then(|_| mind::mem::Mapping::new(VBIOS).ok()) {
+    let vfct = size(VBIOS, CAP_KIND_MEMORY).and_then(|_| mind::mem::Mapping::new(VBIOS).ok());
+    match &vfct {
         Some(table) => { let length = table.as_slice().get(4..8).map_or(0, |l| u32::from_le_bytes([l[0], l[1], l[2], l[3]]) as usize); vbios(&table.as_slice()[..length.min(table.len())]) }
         None => mind::println!("[DISPLAY] NO VBIOS IMAGE GRANTED"),
     }
-    let read = step1(id, engine);
-    if read == 0 { mind::println!("[DISPLAY] NO REGISTER READ OR WRITTEN"); }
-    else { mind::println!("[DISPLAY] {} REGISTERS READ, NONE WRITTEN", read); }
+    let mut store = batches::Store::default();
+    let (read, mmio) = step1(id, engine, &mut store);
+    let written = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()));
+    match (read, written) {
+        (0, 0) => mind::println!("[DISPLAY] NO REGISTER READ OR WRITTEN"),
+        (r, 0) => mind::println!("[DISPLAY] {} REGISTERS READ, NONE WRITTEN", r),
+        (r, w) => mind::println!("[DISPLAY] {} REGISTERS READ BY STEP 1, {} WRITES BY STEP 3", r, w),
+    }
     if let Ok(after) = device_config(ENGINE, 4) { mind::println!("[DISPLAY] COMMAND {:04X} AFTER STEP 1", after & 0xFFFF); }
     idle();
 }
 
-/// Step 1 on the engine's window; the registers it read.
-fn step1(id: u32, engine: usize) -> usize {
+/// Step 1 on the engine's window: the registers it read, kept in `store`, and the window's mapping when it made one.
+fn step1(id: u32, engine: usize, store: &mut batches::Store) -> (usize, Option<Mmio>) {
     mind::println!("[DISPLAY] STEP 1 MAY READ {} OF {} BATCHES, WRITES NOTHING", BATCHES_ALLOWED, batches::BATCHES);
-    if id != RADEON { mind::println!("[DISPLAY] NOT THE RADEON 1002:1638: STEP 1 NOT RUN"); return 0; }
-    if engine < dcn::DCN_BYTES.end as usize { mind::println!("[DISPLAY] THE ENGINE'S WINDOW IS BELOW {:#X} BYTES: STEP 1 NOT RUN", dcn::DCN_BYTES.end); return 0; }
+    if id != RADEON { mind::println!("[DISPLAY] NOT THE RADEON 1002:1638: STEP 1 NOT RUN"); return (0, None); }
+    if engine < dcn::DCN_BYTES.end as usize { mind::println!("[DISPLAY] THE ENGINE'S WINDOW IS BELOW {:#X} BYTES: STEP 1 NOT RUN", dcn::DCN_BYTES.end); return (0, None); }
     mind::time::sleep(START_PAUSE_MS);
-    if BATCHES_ALLOWED == 0 { return batches::run(&mut Unmapped, 0, &mut Log).registers_read; }
-    let Ok(mmio) = Mmio::map(ENGINE) else { mind::println!("[DISPLAY] THE ENGINE'S WINDOW NOT MAPPED: STEP 1 NOT RUN"); return 0 };
-    batches::run(&mut Registers(mmio), BATCHES_ALLOWED, &mut Log).registers_read
+    if BATCHES_ALLOWED == 0 { return (batches::run_into(&mut Unmapped, 0, &mut Log, store).registers_read, None); }
+    let Ok(mmio) = Mmio::map(ENGINE) else { mind::println!("[DISPLAY] THE ENGINE'S WINDOW NOT MAPPED: STEP 1 NOT RUN"); return (0, None) };
+    let mut registers = Registers(mmio);
+    let read = batches::run_into(&mut registers, BATCHES_ALLOWED, &mut Log, store).registers_read;
+    (read, Some(registers.0))
 }
+
+/// Step 3: the writes it made. At STAGES_ALLOWED 0 it only describes the stages, for the pipe step 1 found or, with
+/// step 1 not read, for the survey's expectation.
+fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usize {
+    let timing = timing::first_light_mode(&HDMI_A_1_VICS);
+    let (found, expected) = match light::assess(store) {
+        Ok(found) => (found, false),
+        Err(why) if STAGES_ALLOWED == 0 => { mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why); (light::EXPECTED, true) }
+        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
+    };
+    let plan = match light::Light::new(found.0, found.1, timing) {
+        Ok(plan) => plan,
+        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
+    };
+    if STAGES_ALLOWED == 0 { light::describe(&plan, expected, &mut Log); return 0; }
+    // Only here is a writer made: a build of STAGES_ALLOWED 0 has none.
+    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 3 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return 0 };
+    let Some((0x1002, 0x1638, image)) = vfct.and_then(atom::vfct_image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: NO VBIOS IMAGE FOR 1002:1638"); return 0 };
+    let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return 0 };
+    let mut interp = Box::new(atom::Interpreter::new(image));
+    let mut journal = Box::new(light::Journal::default());
+    light::run(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+    journal.len()
+}
+
+/// The VICs HDMI-A-1's EDID lists (read under Linux, 2026-11-21); the EDID over DDC is step 2.
+const HDMI_A_1_VICS: [u8; 17] = [1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 31, 63, 93, 94, 95, 96, 97];
+
+
 
 // The VFCT's first image (AMD's layout, as Linux's amdgpu_bios.c reads it): its PCI identity, length and ROM signature.
 fn vbios(table: &[u8]) {
@@ -85,6 +129,29 @@ impl batches::Bus for Registers {
     fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
         let offset = reg.offset() as usize;
         (offset + 4 <= self.0.len()).then(|| self.0.read32(offset))
+    }
+}
+
+/// Step 3's engine: reads, writes (only a `light::Writable`) and time. Made only when STAGES_ALLOWED is above 0.
+struct Writer(Mmio);
+impl batches::Bus for Writer {
+    fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
+        let offset = reg.offset() as usize;
+        (offset + 4 <= self.0.len()).then(|| self.0.read32(offset))
+    }
+}
+impl light::Poke for Writer {
+    fn write(&mut self, reg: light::Writable, value: u32) {
+        let offset = reg.reg().offset() as usize;
+        if offset + 4 <= self.0.len() { self.0.write32(offset, value); }
+    }
+}
+impl light::Clock for Writer {
+    fn now_us(&mut self) -> u64 { mind::time::monotonic_ns() / 1000 }
+    fn delay_us(&mut self, us: u32) {
+        if us >= 1000 { mind::time::sleep(us as usize / 1000); return; }
+        let end = mind::time::monotonic_ns() + us as u64 * 1000;
+        while mind::time::monotonic_ns() < end { core::hint::spin_loop(); }
     }
 }
 

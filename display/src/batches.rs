@@ -143,8 +143,33 @@ impl fmt::Display for Opt {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Report { pub batches_read: u8, pub registers_read: usize }
 
+/// Every value a run read, for step 3 to choose its pipe from (all seven batches: 147 registers).
+pub const STORE: usize = 160;
+#[derive(Clone, Copy, Debug)]
+pub struct Store { items: [Option<(R, u8, u32)>; STORE], len: usize, batches: u8 }
+
+impl Default for Store { fn default() -> Store { Store { items: [None; STORE], len: 0, batches: 0 } } }
+
+impl Store {
+    fn push(&mut self, r: R, inst: u8, v: u32) { if self.len < STORE { self.items[self.len] = Some((r, inst, v)); self.len += 1; } }
+    pub fn get(&self, r: R, inst: u8) -> Option<u32> {
+        self.items[..self.len].iter().flatten().find(|(x, i, _)| *x == r && *i == inst).map(|(_, _, v)| *v)
+    }
+    pub fn field(&self, r: R, inst: u8, f: Field) -> Option<u32> { self.get(r, inst).map(|v| f.get(v)) }
+    /// How many batches were read in full.
+    pub fn batches(&self) -> u8 { self.batches }
+    /// For host cases: a value as if step 1 had read it.
+    pub fn set(&mut self, r: R, inst: u8, v: u32) {
+        match self.items[..self.len].iter_mut().flatten().find(|(x, i, _)| *x == r && *i == inst) { Some(e) => e.2 = v, None => self.push(r, inst, v) }
+    }
+    pub fn set_batches(&mut self, n: u8) { self.batches = n; }
+}
+
 /// Step 1: batches 1 to `allowed` read, the others only named with the registers they would read.
-pub fn run(bus: &mut impl Bus, allowed: u8, out: &mut impl Out) -> Report {
+pub fn run(bus: &mut impl Bus, allowed: u8, out: &mut impl Out) -> Report { run_into(bus, allowed, out, &mut Store::default()) }
+
+/// Step 1, every value read kept in `store`.
+pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut Store) -> Report {
     let allowed = allowed.min(BATCHES);
     out.line(format_args!("STEP 1: THE ENGINE'S STATE IN {} BATCHES, READ ONLY; THIS BUILD MAY READ {}", BATCHES, allowed));
     let mut known = Known::default();
@@ -165,13 +190,14 @@ pub fn run(bus: &mut impl Bus, allowed: u8, out: &mut impl Out) -> Report {
         for n in list.iter() {
             let v = bus.read(n.reg);
             match v {
-                Some(v) => { out.line(format_args!("B{} {} = {:08X}", batch, n, v)); report.registers_read += 1; }
+                Some(v) => { out.line(format_args!("B{} {} = {:08X}", batch, n, v)); report.registers_read += 1; store.push(n.r, n.inst, v); }
                 None => out.line(format_args!("B{} {}: NOT MAPPED, NOT READ", batch, n)),
             }
             values.push(n, v);
         }
         summarize(batch, &values, &mut known, out);
         report.batches_read = batch;
+        store.batches = batch;
         out.pause(PAUSE_BETWEEN_BATCHES_MS);
     }
     out.line(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN", report.batches_read, BATCHES, report.registers_read));

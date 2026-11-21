@@ -297,6 +297,9 @@ needs from those (the PHY's state, the PLLs' lock) come from the VBIOS tables' o
   window set up in the memory hub that the graphics engine shares: the reason to prefer the carve-out.
 - Confidence: medium. The facts are from Linux's source and boot lines and the GOP's own framebuffer at BAR 0's base;
   the firmware's `DCN_VM_FB_LOCATION_*` and its HUBP address are not read yet (batch 6, batch 4).
+- **Open:** whether the Ryzen's memory map keeps the carve-out out of MIND Core's frame pool, which takes only the
+  firmware's conventional memory (213-KRN-0271). The hardware report that lists the map has not been read; it comes
+  with the first boot after the stick is rewritten. A 512 MiB region of a type other than conventional is what to see.
 
 ## What first light's VBIOS tables write (213-DRV-0086, on LEG9 against a model)
 
@@ -351,3 +354,29 @@ What follows for the route (plans, not guarantees):
   would hold the CPU there. The interpreter's step limit bounds it (a run stops with `StepLimit` naming the offset).
 - Table 4 leaves `DIG0_DIG_FE_CNTL` at 0, so the plan's own write of the front end's source afterwards is needed; table
   76 writes `DIG0_DIG_BE_CNTL` itself (the plan's earlier write of it is redundant, not wrong).
+
+## Step 3 as code: first light in eight stages (213-DRV-0086)
+
+`display/src/light.rs`, switched off (`STAGES_ALLOWED = 0` in `main.rs`): the route above as eight stages that a build
+lets go one at a time: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
+squares, 5 the OTG started and its frame count seen to move, 6 the DIG front end (table 4), 7 the back end in DVI
+mode, 8 the PHY (table 76) and the `DIG_START` pulse.
+
+- **The pipe** is chosen from step 1's values (batches 1 to 5 needed): the one timing generator running and its OPP,
+  the one enabled back end among PHYs A, B, D, E and its front end, the HUBPs following that generator, HPD 1's sense;
+  then the lowest free OTG with its own OPP, and the lowest free front end that is not the firmware's back end's.
+- **The guard** lets a write through only to the chosen pipe's blocks (OTG, ODM, VTG, OPP_PIPE, DPG, the two DIG
+  blocks, UNIPHY, the PHY's DPCS/RDPCS, its PLL resync, the OTG's pixel rate, SYMCLK in DCCG) and refuses first the
+  firmware's (the same blocks of its pipe and PHY, and the HUBP, DPP and MPCC of each HUBP that follows its OTG). The
+  write path is its own trait, taking only a `Writable` the guard made; the interpreter's writes go through it too.
+- **The firmware's pipe** (30 registers on the expected state, all read by step 1) is read before step 3 and after each
+  stage; any change but of known status bits fails the stage.
+- **Undo** (of a failed stage and every one before it, last first): stage 2 first calls table 12 with pixel clock 0 (as
+  Display Core powers a PLL down), stage 8 table 76's DISABLE; then every register the stage wrote is put back.
+
+What the model showed about the undo, with the Ryzen's tables:
+- Table 12's power-down call writes **nothing** when the stage stopped early (at the SRAM wait: 41 instructions, 0
+  writes), and **14 writes** after a table 12 that ran to its end. So the restore of the stage's own writes, not the
+  call, is what returns the registers to their state before step 3.
+- A completed table 12 makes 37 of its writes through PHY A's control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`). What
+  they set inside the PHY is not reached by restoring those two registers; the undo says so in the log.

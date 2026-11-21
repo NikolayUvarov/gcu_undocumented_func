@@ -92,7 +92,7 @@ ABI 37 release that holds KRN's image; the owner session says when. What to look
 MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT ... AN IMAGE FOR 1002:1638 ...
 ROM SIGNATURE 55AA`, `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven `NOT READ` batches with their registers, `STEP 1 DONE:
 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`, `NO REGISTER READ OR WRITTEN` and `COMMAND 0006 AFTER STEP 1`;
-DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
+Step 3 then logs `STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: STEP 1'S BATCH 1 WAS NOT READ (STEP 3 NEEDS BATCHES 1 TO 5)` and its eight stages `NOT RUN` with every write they would make (64 lines, the longest 161 bytes), ending `STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN`. DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
 below 0x1B000 (the highest is `RDPCSTX0_RDPCSTX_PHY_FUSE3` at 0x17848, which tables 12 and 76 write), so the engine's
 window needs no widening for them.
 
@@ -109,6 +109,46 @@ that answers four statuses the tables wait for (PHY A's SRAM init done, the lane
 clocks on). 111, 5 and 23 writes, all on PHY A's path and OTG 1's pixel clock, none on the firmware's pipe 0 or PHY E,
 none to the SMU or DISPCLK (hwdocs/cezanne-display.md, "What first light's VBIOS tables write"). Not run on the
 machine; the answers are assumptions about the hardware.
+
+## Progress: step 3 written and switched off (2026-11-21)
+
+`display/src/light.rs` runs first light in eight stages; `STAGES_ALLOWED = 0` in `main.rs`, so this build makes no
+writer at all and only logs each stage with every write it would make (hwdocs/cezanne-display.md, "Step 3 as code").
+A stage runs only on what step 1 found (`BATCHES_ALLOWED` of 5 or more), logs every write it will make before the first,
+makes them through the guard (never the firmware's pipe, never off the route), runs its VBIOS tables with each table and
+its parameters logged before it runs and each of its writes as it is made, within 1,000,000 instructions and 500 ms of
+the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
+stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
+
+`tests/display_light_host.rs`, 14 cases on a register model: the pipe chosen from step 1's values, and refused when they
+cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
+route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
+one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
+the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; a build of 0 that
+only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
+eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
+
+**What a person must see, stage by stage,** in the order they are let go (each a new boot; step 1's batches 1 to 5 are
+read on that boot first). Throughout, **DP-2 keeps MIND Core's screen with no flicker, blank or loss of signal**: if it
+does any of these, that is the stage's failure whatever the log says, and the run stops there.
+
+| Stage | On HDMI-A-1 | In the log, when it went through |
+|---|---|---|
+| 1 OTG clocks | dark, as before (no signal) | `S1 ... CLOCK_CONTROL AT ... SHOWED ITS STATUS IN n US` twice, `S1 OTG CLOCKS DONE; THE FIRMWARE'S PIPE UNCHANGED (n REGISTERS)` |
+| 2 pixel clock | dark | `S2 TABLE 12 DONE: n STEPS, n CALLS, n US OF DELAYS, n WRITES`, `S2 PIXEL CLOCK DONE; ...` |
+| 3 timing | dark | `S3 TIMING DONE; ...` |
+| 4 test pattern | dark | `S4 TEST PATTERN DONE; ...` |
+| 5 start | dark (the pipe runs, but nothing drives the PHY yet) | `S5 ... SHOWED ITS STATUS`, `S5 OTG1 COUNTED n FRAMES IN n MS`, `S5 START DONE; ...` |
+| 6 front end | dark | `S6 TABLE 4 DONE: ...`, `S6 FRONT END DONE; ...` |
+| 7 back end | dark | `S7 BACK END DONE; ...` |
+| 8 PHY | **the monitor wakes and shows the engine's colour squares**, a grid of coloured squares filling a 1920x1080 picture (its menu may say 1920x1080 at 60 Hz) | `S8 TABLE 76 DONE: ...`, `S8 PHY DONE; ...`, `STEP 3 STOPPED AFTER STAGE 8 OF 8 AS THIS BUILD ALLOWS` |
+
+A stage that fails logs `Sn NAME FAILED: <why>; UNDOING STAGES n TO 1`, then each stage's `Un ... UNDONE: n WRITES
+RESTORED`, then `STEP 3 FAILED AT STAGE n AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED`;
+HDMI-A-1 stays dark. A stage that stops at the build's count leaves its writes in place until the next boot.
+
+**Open:** the carve-out's place in the memory map and the frame pool (for step 4's framebuffer, not step 3): the
+hardware report that lists the map could not be had yet; it comes with the first boot after the stick is rewritten.
 
 ## Related
 

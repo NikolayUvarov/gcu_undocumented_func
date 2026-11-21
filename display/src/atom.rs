@@ -9,8 +9,9 @@
 //! Bounds: a table's index, offset and length are checked against the master table and the image before it runs;
 //! every fetch lies inside the running table and every jump lands inside it; data reads lie inside the image; work,
 //! parameter and scratch indices inside their spaces; a register only through `Reg::new` (the engine's bytes and the
-//! SMU mailbox, never MSI-X) in direct mode; no PCI, system I/O, indirect I/O, PLL or MC access; at most `MAX_STEPS`
-//! instructions, `MAX_DEPTH` nested calls and `MAX_DELAY_US` of delays a run.
+//! SMU mailbox, never MSI-X) in direct mode, and a write only where the machine accepts it (step 3's guard); no PCI,
+//! system I/O, indirect I/O, PLL or MC access; at most `MAX_STEPS` instructions, `MAX_DEPTH` nested calls, `MAX_DELAY_US`
+//! of delays and, when set, a wall-clock limit a run (for the waits the VBIOS leaves unbounded).
 
 use crate::dcn::{Reg, RegError};
 
@@ -85,13 +86,23 @@ pub enum Error {
     StepLimit { table: u8, at: usize },
     TooDeep { table: u8 },
     DelayLimit { table: u8, at: usize },
+    /// The run took longer than its wall-clock limit.
+    TimeLimit { table: u8, at: usize },
+    /// The machine could not read a register (not in its mapping).
+    Unreadable { table: u8, at: usize, offset: u32 },
+    /// The machine refused a write (step 3's guard).
+    Refused { table: u8, at: usize, offset: u32 },
 }
 
 /// The registers and time a run acts on.
 pub trait Machine {
-    fn read(&mut self, reg: Reg) -> u32;
-    fn write(&mut self, reg: Reg, value: u32);
+    /// The register's value; None stops the run.
+    fn read(&mut self, reg: Reg) -> Option<u32>;
+    /// Writes the register; false (a refusal) stops the run before anything else is done.
+    fn write(&mut self, reg: Reg, value: u32) -> bool;
     fn delay_us(&mut self, _us: u32) {}
+    /// A monotonic clock in microseconds, for the wall-clock limit; one that never moves never stops a run.
+    fn now_us(&mut self) -> u64 { 0 }
     /// A table starts, at a nesting depth (0 for the one called).
     fn enter(&mut self, _table: u8, _depth: usize) {}
 }
@@ -149,6 +160,22 @@ impl<'a> Image<'a> {
     }
 }
 
+/// The VBIOS image in an ACPI VFCT table (AMD's layout, as Linux's `amdgpu_bios.c` reads it): the table's length at 4,
+/// `VBIOSImageOffset` at 52 leading to an image header whose vendor and device are at 12 and 14 and image length at 24,
+/// the image after its 28 bytes. Returns (vendor, device, image) for an image that starts with the ROM signature 55AA.
+pub fn vfct_image(table: &[u8]) -> Option<(u16, u16, &[u8])> {
+    fn u16_in(t: &[u8], at: usize) -> Option<u16> { t.get(at..at.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]])) }
+    fn u32_in(t: &[u8], at: usize) -> Option<usize> { t.get(at..at.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize) }
+    if !table.starts_with(b"VFCT") { return None; }
+    let table = &table[..u32_in(table, 4)?.min(table.len())];
+    let header = u32_in(table, 52)?;
+    let (vendor, device) = (u16_in(table, header.checked_add(12)?)?, u16_in(table, header.checked_add(14)?)?);
+    let length = u32_in(table, header.checked_add(24)?)?;
+    let start = header.checked_add(28)?;
+    let image = table.get(start..start.checked_add(length)?)?;
+    image.starts_with(&[0x55, 0xAA]).then_some((vendor, device, image))
+}
+
 /// What a run did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Outcome {
@@ -179,7 +206,12 @@ pub struct Interpreter<'a> {
     steps: u32,
     delay_us: u64,
     calls: u32,
+    time_limit_us: u64,
+    started_us: u64,
 }
+
+/// Instructions between two looks at the clock.
+const CLOCK_EVERY: u32 = 64;
 
 /// One running table.
 struct Frame { table: u8, info: TableInfo, ws: [u32; 256], ps_base: usize, at: usize }
@@ -187,8 +219,12 @@ struct Frame { table: u8, info: TableInfo, ws: [u32; 256], ps_base: usize, at: u
 impl<'a> Interpreter<'a> {
     pub fn new(image: Image<'a>) -> Interpreter<'a> {
         Interpreter { image, scratch: [0; SCRATCH_DWORDS], ps: [0; PS_DWORDS], data_block: 0, reg_block: 0, fb_base: 0,
-            io: Io::Mm, io_attr: 0, divmul: [0; 2], shift: 0, equal: false, above: false, steps: 0, delay_us: 0, calls: 0 }
+            io: Io::Mm, io_attr: 0, divmul: [0; 2], shift: 0, equal: false, above: false, steps: 0, delay_us: 0, calls: 0,
+            time_limit_us: u64::MAX, started_us: 0 }
     }
+
+    /// The wall-clock limit of each run from now on, in microseconds of the machine's clock.
+    pub fn set_time_limit(&mut self, us: u64) { self.time_limit_us = us; }
 
     /// Runs command table `index` with `params` (little-endian bytes, at most `PS_DWORDS` dwords) on `machine`.
     pub fn run(&mut self, index: u8, params: &[u8], machine: &mut impl Machine) -> Result<Outcome, Error> {
@@ -202,6 +238,7 @@ impl<'a> Interpreter<'a> {
         // What Linux resets before each table it is asked to run.
         self.data_block = 0; self.reg_block = 0; self.fb_base = 0; self.io = Io::Mm; self.divmul = [0; 2];
         self.steps = 0; self.delay_us = 0; self.calls = 0;
+        self.started_us = machine.now_us();
         self.call(index, 0, 0, machine)?;
         Ok(Outcome { ps: self.ps, steps: self.steps, delay_us: self.delay_us, calls: self.calls })
     }
@@ -216,6 +253,9 @@ impl<'a> Interpreter<'a> {
         loop {
             let at = f.at;
             if self.steps >= MAX_STEPS { return Err(Error::StepLimit { table: index, at }); }
+            if self.steps % CLOCK_EVERY == 0 && machine.now_us().saturating_sub(self.started_us) > self.time_limit_us {
+                return Err(Error::TimeLimit { table: index, at });
+            }
             self.steps += 1;
             let op = self.fetch8(&mut f)?;
             if op == OP_EOT { return Ok(()); }
@@ -267,7 +307,7 @@ impl<'a> Interpreter<'a> {
             ARG_REG => {
                 let dword = self.fetch16(f)? as u64 + self.reg_block as u64;
                 let reg = self.register(f, at, dword, false)?;
-                machine.read(reg)
+                machine.read(reg).ok_or(Error::Unreadable { table: f.table, at, offset: reg.offset() })?
             }
             ARG_PS => {
                 let i = f.ps_base + self.fetch8(f)? as usize;
@@ -320,7 +360,7 @@ impl<'a> Interpreter<'a> {
             ARG_REG => {
                 let dword = self.fetch16(f)? as u64 + self.reg_block as u64;
                 let reg = self.register(f, at, dword, true)?;
-                machine.write(reg, merged);
+                if !machine.write(reg, merged) { return Err(Error::Refused { table: f.table, at, offset: reg.offset() }); }
             }
             ARG_PS => {
                 let i = f.ps_base + self.fetch8(f)? as usize;
