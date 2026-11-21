@@ -76,6 +76,12 @@ struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64
 
 struct Usb { host: Option<Host>, cameras: Vec<Camera>, looked: usize }
 
+// An open that waits for its camera to finish its stop and settle (158-DRV-0082): its answer deferred, so the gateway
+// serves the other programs meanwhile; it holds the camera as a stream does. `since_ns`: when it was asked.
+struct Waiting { call: wire::Call, owner: u64, camera: u8, key: Key, width: u16, height: u16, rate: u8, since_ns: u64 }
+const WAITING: usize = 4; // opens waiting at once; one more is opened at once, the others held meanwhile
+const WAIT_MS: u64 = 2000; // a wait longer than this ends: the open finishes the stop and the settling itself
+
 impl Stream {
     fn period(&self) -> u64 { 1_000_000_000 / self.rate as u64 }
     fn key(&self) -> Key { match &self.source { Source::Pattern(n) => Key::Pattern(*n), Source::Camera(live) => Key::Camera(live.camera) } }
@@ -439,6 +445,55 @@ fn settle(streams: &mut [Stream], usb: &mut Usb, handle: u32) -> u64 {
     mind::time::monotonic_ns() - started
 }
 
+// An open admitted, of `key` for `sender` at `width` × `height` and `rate`: its source started and its stream added, the
+// camera mark lit. A camera still stopping or settling is waited for here, the other streams pumped (`settle`); `asked_ns`:
+// when the open was asked, for the log of one that waited.
+fn open_stream(streams: &mut Vec<Stream>, usb: &mut Usb, sender: u64, camera: u8, key: Key, (width, height, rate): (u16, u16, u8), asked_ns: u64) -> Result<(), idl::Error> {
+    // The camera's place may have changed if one was lost while the earlier stream stopped.
+    let source = match key {
+        Key::Pattern(n) => Ok(Source::Pattern(n)),
+        Key::Camera(handle) => {
+            settle(streams, usb, handle);
+            let waited = (mind::time::monotonic_ns() - asked_ns) / 1_000_000;
+            let started = match (usb.host.as_mut(), usb.cameras.iter().find(|c| c.streaming == handle)) {
+                (Some(host), Some(c)) => start(host, c, width, height, rate).map(Source::Camera),
+                _ => Err(idl::Error::NotFound),
+            };
+            if let (Ok(Source::Camera(l)), Some(c)) = (&started, usb.cameras.iter_mut().find(|c| c.streaming == handle)) {
+                let reset = c.settle.reset_ns;
+                c.settle.opened(l.probe_ms);
+                if reset != 0 {
+                    mind::println!("[VIDEO] \"{}\": OPENED AGAIN {} MS AFTER ITS RESET, {} MS AFTER IT WAS ASKED (THE OTHER PROGRAMS SERVED MEANWHILE); ITS PROBE AND COMMIT {} MS; IT SETTLES {} MS NEXT",
+                        c.name, (mind::time::monotonic_ns() - reset) / 1_000_000, waited, l.probe_ms, c.settle.ms);
+                }
+            }
+            started
+        }
+    };
+    match (source, Pages::new(width as usize * height as usize * 4)) {
+        (Err(e), _) => Err(e),
+        (Ok(Source::Camera(live)), None) => { let _ = stop(usb, &live); Err(idl::Error::NoMemory) }
+        (Ok(_), None) => Err(idl::Error::NoMemory),
+        (Ok(source), Some(frame)) => {
+            let what = match &source {
+                Source::Pattern(0) => String::from("test pattern"),
+                Source::Pattern(_) => String::from("test pattern 2"),
+                Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} {}, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height,
+                    if l.mjpeg { "MJPEG" } else { "YUY2" }, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
+            };
+            let opened = match &source {
+                Source::Pattern(_) => pattern_opened(camera, width, height, rate),
+                Source::Camera(l) => usb.camera(l.camera).map_or_else(Default::default, |c| camera_opened(camera, c, l, width, height)),
+            };
+            mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}; MODE {}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) },
+                if opened.index == NO_MODE { String::from("NONE LISTED") } else { format!("{}{}", opened.index, if opened.scaled { ", SCALED" } else { "" }) });
+            streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source, opened });
+            let _ = display::camera(DISPLAY);
+            Ok(())
+        }
+    }
+}
+
 // A camera stream's packets could not be taken: its camera went, or with usb_host restarted every one. Their streams
 // stay their owners' until closed, and take no more packets.
 fn lost(streams: &mut [Stream], usb: &mut Usb, e: mind::Error, handle: u32) {
@@ -582,6 +637,7 @@ fn main(_info: &'static BootInfo) {
     if usb.cameras.is_empty() && patterns == 0 { mind::println!("[VIDEO] NO CAMERA{}", if usb.host.is_none() { " (NO USB)" } else { " ON USB NOW" }); }
     // A stream for each camera that has an owner (158-DRV-0082): two programs show two cameras at once.
     let mut streams: Vec<Stream> = Vec::new();
+    let mut waiting: Vec<Waiting> = Vec::new();
     let mut marked = 0usize;
     loop {
         // The mark is lit while a stream is open; a stream whose owner ended is closed.
@@ -596,15 +652,26 @@ fn main(_info: &'static BootInfo) {
         }
         // A closed bulk camera's next stop step, after its program's answer (158-DRV-0082).
         let stopping = match usb.stop_step() { Ok(more) => more, Err((e, handle)) => { lost(&mut streams, &mut usb, e, handle); false } };
+        // The opens whose camera is ready now (or gone, or waited for too long), answered (158-DRV-0082).
+        let now = mind::time::monotonic_ns();
+        while let Some(i) = waiting.iter().position(|w| {
+            let ready = match w.key { Key::Camera(h) => usb.camera(h).is_none_or(|c| c.settle.ready(now)), Key::Pattern(_) => true };
+            ready || !mind::process::alive(w.owner) || now - w.since_ns > WAIT_MS * 1_000_000
+        }) {
+            let w = waiting.swap_remove(i);
+            let result = if mind::process::alive(w.owner) { open_stream(&mut streams, &mut usb, w.owner, w.camera, w.key, (w.width, w.height, w.rate), w.since_ns) } else { Err(idl::Error::NotFound) };
+            if result.is_ok() { marked = mind::time::uptime_ms(); }
+            let _ = idl::reply_open(w.call, result);
+        }
         let live = pump_all(&mut streams, None, &mut usb);
-        let wait = if stopping { 1 } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
+        let wait = if stopping || !waiting.is_empty() { 1 } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) {
             Ok(request) => request,
             Err(mind::Error::Other(ERR_TIMEOUT)) => continue,
             Err(_) => continue,
         };
         let sender = request.sender;
-        let (request, call) = match idl::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
+        let (request, mut call) = match idl::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
         let mine = streams.iter().position(|s| s.owner == sender);
         let _ = match request {
             idl::Request::Cameras => {
@@ -621,65 +688,37 @@ fn main(_info: &'static BootInfo) {
             idl::Request::Open { camera, width, height, rate } => {
                 usb.look();
                 // The cameras in the order `cameras` lists them: the USB ones, then the patterns. Busy while another
-                // task owns this camera (video.wit); another camera may stream beside it.
+                // task owns this camera (video.wit), or waits for it (158-DRV-0082); another camera may stream beside it.
                 let handles: Vec<u32> = usb.cameras.iter().map(|c| c.streaming).collect();
                 let key = choices::key(camera, &handles, patterns, LISTED);
-                let held: Vec<(u64, Key)> = streams.iter().filter(|s| !s.source.gone()).map(|s| (s.owner, s.key())).collect();
+                let mut held: Vec<(u64, Key)> = streams.iter().filter(|s| !s.source.gone()).map(|s| (s.owner, s.key())).collect();
+                held.extend(waiting.iter().map(|w| (w.owner, w.key)));
                 let admitted = choices::admit(&held, sender, key).map_err(|refused| match refused { choices::Refused::NotFound => idl::Error::NotFound, choices::Refused::Busy => idl::Error::Busy });
-                let result = if let Err(e) = admitted { Err(e) }
+                let checked = if let Err(e) = admitted { Err(e) }
                     else if matches!(key, Some(Key::Pattern(_))) && !video::supported(width as usize, height as usize, rate) { Err(idl::Error::Invalid) }
                     else if matches!(key, Some(Key::Camera(_))) && !choices::opens(width, height, rate as u32) { Err(idl::Error::Invalid) }
-                    else {
+                    else { Ok(()) };
+                match (checked, key) {
+                    (Err(e), _) => idl::reply_open(call, Err(e)),
+                    (Ok(()), None) => idl::reply_open(call, Err(idl::Error::NotFound)),
+                    (Ok(()), Some(key)) => {
                         // An earlier stream of the same owner is closed first (`held` and `streams` differ by the gone ones).
                         if let Some(i) = mine { if let Source::Camera(live) = &streams.swap_remove(i).source { let _ = stop(&mut usb, live); } }
-                        // The camera's place may have changed if one was lost while the earlier stream stopped.
-                        let source = match key {
-                            Some(Key::Pattern(n)) => Ok(Source::Pattern(n)),
-                            Some(Key::Camera(handle)) => {
-                                // A bulk camera closed a moment ago finishes its stop and settles first, the other
-                                // streams pumped meanwhile (158-DRV-0082).
-                                let waited = settle(&mut streams, &mut usb, handle) / 1_000_000;
-                                let started = match (usb.host.as_mut(), usb.cameras.iter().find(|c| c.streaming == handle)) {
-                                    (Some(host), Some(c)) => start(host, c, width, height, rate).map(Source::Camera),
-                                    _ => Err(idl::Error::NotFound),
-                                };
-                                if let (Ok(Source::Camera(l)), Some(c)) = (&started, usb.cameras.iter_mut().find(|c| c.streaming == handle)) {
-                                    let reset = c.settle.reset_ns;
-                                    c.settle.opened(l.probe_ms);
-                                    if reset != 0 {
-                                        mind::println!("[VIDEO] \"{}\": OPENED AGAIN {} MS AFTER ITS RESET, {} MS WAITED (THE OTHER STREAMS PUMPED); ITS PROBE AND COMMIT {} MS; IT SETTLES {} MS NEXT",
-                                            c.name, (mind::time::monotonic_ns() - reset) / 1_000_000, waited, l.probe_ms, c.settle.ms);
-                                    }
-                                }
-                                started
-                            }
-                            None => Err(idl::Error::NotFound),
-                        };
-                        match (source, Pages::new(width as usize * height as usize * 4)) {
-                            (Err(e), _) => Err(e),
-                            (Ok(Source::Camera(live)), None) => { let _ = stop(&mut usb, &live); Err(idl::Error::NoMemory) }
-                            (Ok(_), None) => Err(idl::Error::NoMemory),
-                            (Ok(source), Some(frame)) => {
-                                let what = match &source {
-                                    Source::Pattern(0) => String::from("test pattern"),
-                                    Source::Pattern(_) => String::from("test pattern 2"),
-                                    Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} {}, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height,
-                                        if l.mjpeg { "MJPEG" } else { "YUY2" }, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
-                                };
-                                let opened = match &source {
-                                    Source::Pattern(_) => pattern_opened(camera, width, height, rate),
-                                    Source::Camera(l) => usb.camera(l.camera).map_or_else(Default::default, |c| camera_opened(camera, c, l, width, height)),
-                                };
-                                mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}; MODE {}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) },
-                                    if opened.index == NO_MODE { String::from("NONE LISTED") } else { format!("{}{}", opened.index, if opened.scaled { ", SCALED" } else { "" }) });
-                                streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source, opened });
-                                let _ = display::camera(DISPLAY);
-                                marked = mind::time::uptime_ms();
-                                Ok(())
-                            }
+                        // A camera still stopping or settling: the open waits for it, its answer deferred, and the other
+                        // programs are served meanwhile, so their pictures go on (158-DRV-0082).
+                        let now = mind::time::monotonic_ns();
+                        let settling = match key { Key::Camera(h) => usb.camera(h).is_some_and(|c| !c.settle.ready(now)), Key::Pattern(_) => false };
+                        if settling && waiting.len() < WAITING && call.defer().is_ok() {
+                            mind::println!("[VIDEO] PID {} WAITS FOR CAMERA {} TO SETTLE; THE OTHER PROGRAMS ARE SERVED MEANWHILE", sender, camera);
+                            waiting.push(Waiting { call, owner: sender, camera, key, width, height, rate, since_ns: now });
+                            Ok(())
+                        } else {
+                            let result = open_stream(&mut streams, &mut usb, sender, camera, key, (width, height, rate), now);
+                            if result.is_ok() { marked = mind::time::uptime_ms(); }
+                            idl::reply_open(call, result)
                         }
-                    };
-                idl::reply_open(call, result)
+                    }
+                }
             }
             idl::Request::Read { capacity, pixels } => {
                 let result = match mine {
