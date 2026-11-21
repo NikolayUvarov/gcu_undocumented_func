@@ -127,7 +127,7 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 | Listen-only rule (receive-only and data mode) | written | `rtw89_receive_service_cases`, `rtw89_service_cases` | not reached: no listen-only channel was allowed |
 | IQK, TSSI, DPK on 5 GHz | written | `rtw89_iqk_cases`, `rtw89_tssi_cases`, `rtw89_dpk_cases`, `rtw89_tssi_tables_test.py`, `--check` | not run: nothing may be sent on 5 GHz here |
 | Coexistence on 5 GHz | written | `rtw89_btc_codec_cases`, `rtw89_btc_runtime_cases` (the whole admission on channel 100 in the models) | not run |
-| The signal in the receive header (both modes) | written | `rtw89_ppdu_host`, `rtw89_receive_service_cases`, `rtw89_service_cases` | not run: ABI 37 builds wait for the stick |
+| The signal in the receive header (both modes) | written | `rtw89_ppdu_host`, `rtw89_receive_service_cases`, `rtw89_service_cases` | a8f70c7a1 on channel 8: every kept frame measured (59 in the scan, 20031 in data mode), none late; `wifi status` −64 dBm |
 | A join and a download on 5 GHz | blocked by the country and the access point's channel (above) | — | — |
 | 2.4 GHz with the same code | unchanged path | every 2.4 GHz case as before | joined channel 8; 159/242/215 KB/s against the release's 184/262/277 in the same minutes; the head's build (90699adaa, no bench delay) 289/292/303 KB/s at 15:54-15:57 UTC |
 
@@ -157,7 +157,11 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 - **What a report finds after the station took its frame** is counted as late, and that frame keeps its 0. This can happen only when the ring was read empty between the frame and its report, so the report was not yet written when the poll looked:
   - in receive-only mode, also when a step's 8 polls ended on the frame;
   - in data mode, the frame then went on at that empty poll.
-- **How often that happens under a download is not known yet.** It is a matter of the hardware's time between writing a frame and writing its report against the driver's poll. No bench run has been made with this code: the branch is on ABI 37 and the stick is not.
+- **How often that happens under a download, on the Ryzen** (a8f70c7a1, channel 8 under RU, 2026-11-21 18:28-18:35 UTC, four 6 MB downloads): never.
+  - The scan: `SIGNAL ON 59 OF THEM, 0 REPORTS AFTER THE STATION TOOK THE FRAME, 79 UNMATCHED`.
+  - Data mode, the last minute's line: `ON 20031 OF 20031 FRAMES KEPT; 0 REPORTS AFTER THE FRAME WAS HANDED ON, 237155 UNMATCHED`.
+  - The unmatched are the reports of the channel's other traffic, about 650 a second, twelve for each frame kept.
+  - This holds for that machine, channel and hour (MC-12.1).
 - **The counts that will tell it:**
   - **Scan:** `[RTW89] SCAN: … n FRAMES KEPT, …; SIGNAL ON m OF THEM, l REPORTS AFTER THE STATION TOOK THE FRAME, u UNMATCHED`, once a scan, for the frames the scan kept (beacons and probe responses mostly).
   - **Data mode:** `[RTW89] SIGNAL ON CHANNEL c SINCE THE ADMISSION: ON m OF k FRAMES KEPT; l REPORTS AFTER THE FRAME WAS HANDED ON, u UNMATCHED`, at most once a minute while the counts change.
@@ -165,10 +169,10 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 - **Whether beacons get their figure in time for the scan's ranking:**
   - A scan's beacon is handed to the station only after the step's polls end on an empty ring or after 8 polls. So it carries its figure when its report was in the ring by then.
   - A beacon without one has 0, which `dot11`'s ranking (`best_of`, by weakness) puts last, behind every measured one.
-  - Measured on the bench: not yet (the SCAN line above).
+  - On the Ryzen, every one of the 59 frames the scan kept had its figure (above). `wifi scan` then listed each network with its dBm (CoolNet2 −64, the others −64 to −83), where the boot image's driver gives `?`.
 - **What it adds to each packet:**
   - **For each Wi-Fi frame:** a counter and an `Option` store in the session, and the choice between two handler calls. For a frame kept, one 4-byte read of its descriptor's word 1 from the copy already made, and a 32-byte store.
-  - **For each report:** the parse, which reads the MAC info's two words, the PHY header's two and, for CCK and legacy OFDM types, one word per IE (3 to 5 in the captures), and one comparison.
+  - **For each report:** one comparison of the frame number it follows. Only the report of the kept frame has its descriptor's word 1 read and is parsed (since the run below). The parse reads the MAC info's two words, the PHY header's two and, for CCK and legacy OFDM types, one word per IE (3 to 5 in the captures).
   - **In the data service's copy loop:** one more comparison for each frame.
   - Reports were copied out of the ring and counted before this as well. No register is read, nothing more is copied, and no poll is added. Not measured as time on the bench.
 - **Host cases:**
@@ -177,6 +181,14 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
   - `tests/rtw89_service_cases.rs` (data mode, the same cases): the frame waits in the inbox for its report and reaches the station with 63. Alone in the ring it goes on with 0 and its report is late; the minute's line and the data mode's counts agree.
   - Without the inbox's wait, the data mode's first case fails: the frame went on with 0.
   - Frames without reports (every older case) keep 0 as before.
+
+**2026-11-21, 18:28-18:35 UTC, the head a8f70c7a1 on the Ryzen** (release 202611211819, ABI 37, `replace`d in, the boot image's put back after):
+- **The country** was RU, announced by the access points: 13 channels to send on, and every 5 GHz channel barred (`wifi channels`: `CHANNEL 100 5 GHZ BARRED`). So no 5 GHz join was possible, and none was tried.
+- **The station joined CoolNet2 on channel 8.** `wifi status` showed `36 MB/S -64 DBM`, where the boot image's driver shows `? DBM`.
+- **Four 6 MB downloads from the LAN,** the sender's figures: 241, 265, 263 and 211 KB/s. The stack's lines: 203, 216, 200 and 200 KiB/s.
+  - Earlier on 2026-11-21: 252 to 353 KB/s in the morning, and 289 to 303 KB/s at 15:54-15:57 with 90699adaa. The boot image's driver was not measured in the same minutes this time, so no difference is shown either way.
+  - In that build every report was parsed, about 650 a second, before it was compared. The commit after it parses only the kept frame's report. Its effect on the rate is not measured.
+- **The raw lines,** with those NET asked for (the restarts, the country after them), are in the owner session's handoff directory, `wifi/net-lines-37.txt`.
 
 ## What a machine running this driver does differently on 2.4 GHz (against `main`'s driver)
 
