@@ -41,6 +41,8 @@ pub(crate) const QUIET_MS:u64=10_000;
 // Unicast sends in a row not acknowledged, over at least UNHEARD_MS: logged once a run, the service goes on.
 pub(crate) const UNHEARD:u32=16;
 pub(crate) const UNHEARD_MS:u64=5_000;
+// 213-DRV-0087: what became of the PPDU status reports is logged this often while it changes.
+const SIGNALS_MS:u64=60_000;
 
 #[derive(Debug)]
 pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error),
@@ -78,6 +80,8 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     checked:Option<u64>,
     // 213-DRV-0087: on a listen-only channel, the access point admitted for and when its beacon was last heard.
     listen:Option<([u8;6],u64)>,
+    // 213-DRV-0087: the frames kept for the station, and when the reports' counts were last logged, as they were then.
+    kept:u64,signals_at:(u64,crate::ppdu::Signals),
 }
 /// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this, half
 /// the station's own silence; after it, and before the beacon comes back, nothing is sent there.
@@ -112,7 +116,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
-            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None})
+            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default())})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -162,10 +166,13 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if let Some(call)=self.pending.take().and_then(|p|p.call){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));}
         for waiter in &mut self.waiters{if let Some(waiter)=waiter.take(){let _=wlanhw::reply_wait(waiter.call,0);}}
     }
-    fn collect(&mut self)->Result<(),Fatal>{
+    // `hold`: the last poll gave a receive packet, so another may follow: a frame whose PPDU status report may be next waits
+    // for it in the inbox, as Linux's rx_queue holds a frame for its report (213-DRV-0087), until a poll finds none; the
+    // next step's drain polls again, so it waits a step at most, and no poll is added for it.
+    fn collect(&mut self,hold:bool)->Result<(),Fatal>{
         let data=self.owner.as_deref_mut().unwrap();
         for _ in 0..FRAMES{
-            if self.frames.count==FRAMES{break}
+            if self.frames.count==FRAMES||hold&&data.awaits_signal(){break}
             let Some(record)=data.packet()else{break};
             if record.metadata().channel!=rx::Channel::Rxq||record.metadata().packet.kind!=rxdesc::TYPE_WIFI{return Err(Fatal::RetainedControl)}
             let frame=frames::from_packet(record.metadata().packet,record.buffer()).map_err(Fatal::Frame)?;
@@ -173,8 +180,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let m=frame.mpdu();
                 if m.len()>=24&&matches!(m[0],0x80|0x50)&&m[16..22]==*bssid{*heard=time::monotonic_ns()/1_000_000;}
             }
-            let at=(self.frames.head+self.frames.count)%FRAMES;
+            let at=(self.frames.head+self.frames.count)%FRAMES;let signal=record.signal();
             let length=frame.write(data.channel(),data.current_filter().all_beacons(),&mut self.frames.bytes[at]).map_err(Fatal::Frame)?;
+            self.frames.bytes[at][frames::SIGNAL]=signal;self.kept=self.kept.saturating_add(1);
             self.frames.lengths[at]=length;self.frames.count+=1;data.consume_packet();
         }Ok(())
     }
@@ -198,7 +206,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let mut empty=false;
         for _ in 0..DRAIN{
             let full=self.frames.count==FRAMES;
-            let received=self.data().poll_more(!full,WORK_US).map_err(Fatal::Radio)?;self.collect()?;
+            let received=self.data().poll_more(!full,WORK_US).map_err(Fatal::Radio)?;self.collect(received[0])?;
             if received==[false,false]{empty=!full;break}
             if full{break}
         }
@@ -207,11 +215,11 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         // drops. CHECK_LATEST_MS without them, they are made over a queue that is not empty.
         let since=now.saturating_sub(self.checked.unwrap_or(self.start_ms));
         if (self.checked.is_none()||since>=CHECK_MS)&&(empty||since>=CHECK_LATEST_MS){
-            self.checked=Some(now);self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect()?;
+            self.checked=Some(now);let received=self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect(received[0])?;
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
-        self.listened(now)?;
+        self.listened(now)?;self.signals(now);
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
             if waiter.as_ref().is_some_and(|w|waiting!=0||now>=w.deadline){
@@ -250,6 +258,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let stall=Stall{quiet_ms,frames,sent:self.quiet.0,acked:self.quiet.1};
         if self.event.is_none(){self.event=Some(Event::Stalled{channel:self.data().channel(),quiet_ms,frames,sent:stall.sent,acked:stall.acked})}
         Err(Fatal::ReceiveStalled(stall))
+    }
+    // 213-DRV-0087: once in SIGNALS_MS while they changed, what became of the PPDU status reports since the admission.
+    fn signals(&mut self,now:u64){
+        if now.saturating_sub(self.signals_at.0)<SIGNALS_MS||self.event.is_some(){return}
+        let signals=self.data().counts().signals;
+        if signals!=self.signals_at.1{let crate::ppdu::Signals{measured,late,unmatched}=signals;
+            self.event=Some(Event::Signals{channel:self.data().channel(),kept:self.kept,measured,late,unmatched});}
+        self.signals_at=(now,signals);
     }
     // DEBUG: the first change of each SNAPSHOT register, while the data mode runs: after its shutdown they are its own
     // (BB off, DMA stopped), which the Ryzen's log of 2026-11-08 had taken for the firmware's.

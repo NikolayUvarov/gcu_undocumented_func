@@ -385,3 +385,32 @@ fn service_on_a_listen_only_channel_sends_to_the_heard_access_point_alone(){run_
     let late=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(late,wlanhw::Error::Failed);
     assert_eq!(c.borrow().published,1);drop(service);clean();
 });}
+
+// 213-DRV-0087: a frame waits in the inbox for its PPDU status report while the drain goes on, and the station gets it
+// with its signal; a report after the frame was handed on, or after another frame, is counted and put on none.
+fn header(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->Vec<u8>{
+    let id=ipc::buffer(5,&[]);assert!(service.step());let(w,b)=ipc::response(id).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let received=codec::decode_bytes::<2354>(&mut r).unwrap();assert!(r.done());received[..8].to_vec()
+}
+#[test]
+fn service_a_frame_carries_the_signal_of_the_report_after_it(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},ppdu::Signals,receive_service::Event,service::QUIET_MS};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let mut own=packet();own.extend_from_slice(&[0;4]);let report=bytes(FIVE);
+    let mut foreign=packet();foreign[4..10].copy_from_slice(&[2,8,7,6,5,4]);foreign.extend_from_slice(&[0;4]);
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),report.clone()];
+    let first=header(&mut service);assert_eq!((first[2],first[3],first[4]),(63,6,12),"-63 dBm, channel 6, 6 Mb/s");
+    // Alone in the ring: handed on when the drain finds it empty; the report a step later is late.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4)];assert_eq!(header(&mut service)[2],0);
+    c.borrow_mut().buffers=vec![report.clone()];assert!(service.step());
+    // A frame the filter drops comes between: the report is that frame's.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),buffer(&foreign,1,4),report.clone()];assert_eq!(header(&mut service)[2],0);
+    // Logged once a minute while it changes, frames coming meanwhile.
+    let mut logged=None;
+    for n in 0..8u64{c.borrow_mut().incoming.push(packet());ipc::advance(QUIET_MS-100);assert!(service.step());
+        if let Some(event)=service.take_event(){logged=Some((n,event));break}}
+    let Some((n,Event::Signals{channel:6,kept,measured:1,late:1,unmatched:1}))=logged else{panic!("no signal line: {logged:?}")};
+    assert_eq!(kept,3+n+1);
+    let stopped=service.stop();assert!(stopped.failure.is_none());
+    assert_eq!(stopped.owner.counts().signals,Signals{measured:1,late:1,unmatched:1});assert_eq!(stopped.owner.counts().filtered,1);clean();
+});}
