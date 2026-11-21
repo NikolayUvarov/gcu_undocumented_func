@@ -1,6 +1,6 @@
-# 551-APP-0149 — `beep`'s default sound: the opening of "Also sprach Zarathustra"
+# 551-APP-0149 — `beep`'s default sound: the opening of "Also sprach Zarathustra" — done
 
-**Type:** tools (`beep`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** in progress (the suites in QEMU) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Roadmap:** track A · **Constitution:** MC-12.1
+**Type:** tools (`beep`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [551](../issues/551-sound-on-pcs.md) · **Roadmap:** track A · **Constitution:** MC-12.1
 
 **Asked by:** the maintainer, 2026-11-21, through DRV (`APP/2026-11-21T0738Z-DRV-the-maintainer-asks-beeps-default-sound-as-the-opening-of-zarathustra.md` on `internal-dev-messages`):
 
@@ -28,4 +28,13 @@
 
 ## Related
 
-[551](551-sound-on-pcs.md), [551-APP-0138](../issues-done/551-APP-0138-beep-left-and-right.done), u005 (`beep`).
+[551](../issues/551-sound-on-pcs.md), [551-APP-0138](551-APP-0138-beep-left-and-right.done), u005 (`beep`).
+
+## Resolution
+
+- **`beep/src/notes.rs`:** `OPENING`, 14 notes and 2710 ms, and `opening_ms`. **`beep/src/main.rs`:** without arguments, `beep` plays them through `play`, beep's own samples, and logs `[BEEP] PLAYED THE OPENING, 2710 MS`. The help and the README say so.
+- **The gateway's tones were tried first and left:** `mind::audio::tone` queues only what the ring holds at once (0.68 s). The audio suite's WAV held C whole, G cut short and no high C, 1.97 s of 2.71.
+- **`tests/beep_host.rs`:** the opening's notes, their intervals and order, its length, each taken as `beep`'s arguments too.
+- **`tests/qemu_smoke.py`:** `beep_demo_tones` checks the notes in their order, each held 100 ms or more, then the timpani. This was first done at fixed times, which failed under HD Audio: QEMU's stream there stalls a moment now and then, some 50 ms over the opening, though the sound was right. The `audio` suite checks the length (2.6 to 2.9 s) and waits 2.5 s after `[BEEP] DONE`.
+- **Tested** in QEMU on x86_64, 4 CPUs, in this container: `audio`, `hda`, `usbaudio`, `tts` and `tablet` pass. Before that, `beep_host` passed (5 tests). No machine of the maintainer's was used.
+
