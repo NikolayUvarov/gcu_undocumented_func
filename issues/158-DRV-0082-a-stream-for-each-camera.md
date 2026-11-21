@@ -1,6 +1,6 @@
 # 158-DRV-0082 — `video_gw`: a stream for each camera, so two cameras show at once
 
-**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: the gateway's change committed with host cases and the `cameras` suite; two bulk cameras at once on the Ryzen being fixed) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: the gateway's change committed with host cases and the `cameras` suite; two bulk cameras at once still fail on the Ryzen, a bulk IN stream in `usb_host` being written) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -50,7 +50,14 @@
   - the camera streams from its commit on at its sensor's pace, and `pump_bulk` read a camera until a whole frame ended (about 33 ms);
   - meanwhile the other camera's endpoint had no transfer, so nothing was read from it and its buffer overflowed; its frames came cut (65524 bytes, one payload of three).
 - **The change:** while two bulk cameras stream, a pump is one transfer of 16 KiB at most, the cameras in turn, and the loop waits 1 ms at most for a request. Each camera then waits one 16 KiB transfer of the other's, not a frame. The close line of a bulk stream now gives its pumps and its transfers' time (`… PUMPS, … TRANSFERS IN … MS OF … MS OPEN, THE LONGEST … MS`), to see where the time goes.
-- **Not run on the Ryzen yet.**
+- **Run on the Ryzen, 2026-11-21 15:04-15:07 UTC: it does not cure it.** The gateway was 164518a43's, put in with `replace`. Both cameras were read by `tests/video_stub` from `data/link/`, started from the console's shell, 320×240 YUY2 at 10 a second:
+  - **camera 1 alone:** 10 s, 226 good frames and 32 broken; `1000 TRANSFERS IN 9976 MS OF 10038 MS OPEN, THE LONGEST 249 MS`. Each transfer waits for the camera's bytes, about 10 ms on average, so the gateway spends almost all its time inside transfers;
+  - **both, in 16 KiB turns:** camera 0 opened, then camera 1 beside it 9 s later. Camera 1 gave no good frame in 5 s: `10 PUMPS, 10 TRANSFERS IN 1883 MS OF 5109 MS OPEN, THE LONGEST 216 MS`. Camera 0 lost its frames too from then on: `NO GOOD FRAME FOR 5000 MS`, then closed with 133 good and 14 broken, `593 TRANSFERS IN 13280 MS OF 15685 MS OPEN, THE LONGEST 417 MS`;
+  - **both, in 4 KiB turns** (a test build): the same. Camera 1 had `10 TRANSFERS IN 1846 MS`, 3.9 KiB each, the longest 207 MS; camera 0's longest transfer was 598 MS.
+- **What this shows:**
+  - once the two streams run together, a single transfer of a few KiB takes about 200 ms, against 10 ms alone, whatever its size;
+  - so the cameras do not merely overflow between short turns: each stalls while the other's transfer holds the gateway (and `usb_host`, which waits for each transfer before it answers), and then starts again late.
+- **The cure:** keep transfers queued on both endpoints at once, as Linux's `uvcvideo` keeps several URBs per stream. `usb_host` then reads both cameras while the gateway does other work: a bulk IN stream, through a new call of `usb.wit` (1.6), drained as an isochronous one is. That is the next commit.
 
 **The `cameras` suite** (`tests/qemu_smoke.py`, in the gate's group `x86: keys, shell, tools`):
 - **Through a test program of DRV's,** `tests/video_stub` (`videostub CAMERA SECONDS [WxH] [RATE]`, built by `scripts/x86_fixtures.sh`), since `camera -c` (158-APP-0147) is not in `main`: two patterns listed; the first read for 8 s (81 frames) while the second is read for 3 s (28 frames), each its own pattern (the second's counter 300 ahead); the first busy for a third program; camera 2 not found. Passed on LEG9.
