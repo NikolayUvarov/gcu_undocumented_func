@@ -11,6 +11,8 @@
 
 Before that the board had counted 548 over nine streams. No stream lost a packet on the host's side.
 
+**Its size varies.** Two more closes that day added 33 and 45 frames. Every close read so far added some: 92, 82, 33 and 45.
+
 **Why.** When nothing is left to play, `audio_gw` sends a second of silence, gives no more packets and selects setting 0. `usb_host`'s `select` then:
 1. reads the configuration descriptor;
 2. drops the isochronous endpoints from the controller, so their packets end;
