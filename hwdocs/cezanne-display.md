@@ -390,10 +390,22 @@ mode, 8 the PHY (table 76) and the `DIG_START` pulse.
   HUBP0's XRQ field reads F (step 1's run 5).
 - **The HUBP that follows step 3's OTG** (on the Ryzen HUBP1: powered, blanked, `HUBP_VTG_SEL` 1) is never written; it
   must be blanked for step 3 to run, and its `DCHUBP_CNTL` is read after stages 5 to 8 under the same masks.
-- **Undo** (of a failed stage and every one before it, last first): stage 2 first calls table 12 with pixel clock 0 (as
-  Display Core powers a PLL down), stage 8 table 76's DISABLE; then every register the stage wrote is put back.
+- **Undo** (of a failed stage and every one before it, last first):
+  - first the off call: stage 2 calls table 12 with pixel clock 0 (as Display Core powers a PLL down), stage 8 table
+    76's DISABLE;
+  - then every register the stage wrote is put back;
+  - then every register only the off call wrote, so all are as before the stage;
+  - PHY A's control register bus is left as it is.
+
+  The guard knows the two registers table 76's DISABLE writes outside the DIG blocks: `DPn_DP_LINK_CNTL` and
+  `DPn_DP_DPHY_TRAINING_PATTERN_SEL` of the output's own DIG, both zeroed. So stage 8's off call runs to its end (on
+  the model: 160 steps, 6 calls, 18 writes).
 
 What the model showed about the undo, with the Ryzen's tables:
+- Each of tables 12, 4 and 76 failing at any of its reads (231, 42 and 86 places on the model) is undone whole: every
+  register as before (the bus aside), the firmware's pipe unchanged, the off calls run to their end. Table 76's one
+  wait is the lanes' `TX_ACK` (0x2943 + 0xD8p). If it never comes, stage 8 fails at its time limit; its DISABLE waits
+  for the same and stops too, and the restore still returns every register.
 - Table 12's power-down call writes **nothing** when the stage stopped early (at the SRAM wait: 41 instructions, 0
   writes), and **14 writes** after a table 12 that ran to its end. So the restore of the stage's own writes, not the
   call, is what returns the registers to their state before step 3.

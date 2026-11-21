@@ -122,7 +122,7 @@ its parameters logged before it runs and each of its writes as it is made, withi
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
 stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
 
-`tests/display_light_host.rs`, 18 cases on a register model: the pipe chosen from step 1's values, and refused when they
+`tests/display_light_host.rs`, 20 cases on a register model: the pipe chosen from step 1's values, and refused when they
 cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
 route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
 one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
@@ -598,10 +598,22 @@ the plan below holds.
   - whether the firmware resets PHY A's internals at the next boot;
   - what the DMCUB would have written instead, since under Linux it, not the host, ran these tables on this board;
   - whether the bytecode run from the host does on this hardware what the model shows.
-- **A gap in stage 8's undo,** which only matters if stage 8 fails. On the model, table 76's DISABLE writes
-  `DP0_DP_LINK_CNTL` (DIG A's DP block, dword 0x2108), which the guard refuses as off the route. So the off call stops
-  there, and the undo restores stage 8's writes without the VBIOS's own disable having run to its end. Allowing that
-  register for the off call only is a change to make before stage 8 is asked for with the undo.
+- **Stage 8's undo, closed since (e4b0b9056).** On the model, table 76's DISABLE writes 0 to two registers outside the
+  DIG blocks: `DP0_DP_LINK_CNTL` (dword 0x2108) and `DP0_DP_DPHY_TRAINING_PATTERN_SEL` (0x2118), in DIG A's DP block.
+  The guard refused them, so the off call stopped halfway.
+  - **The choice: the guard knows them**, rather than the undo restoring around them. Both lie in the output's own
+    DIG, and table 76's own disable writes them, for a TMDS output too. Skipping a refused write and going on would
+    run the rest of the vendor's sequence on a state it did not leave.
+  - Only these two registers of the DP block are allowed. The firmware's `DP4_` copies are denied by the same rule.
+  - Stage 8's off call now runs to its end on the model: 160 steps, 6 calls, 18 writes.
+  - Two more changes, so that a failure during the watched run never leaves its undo halfway:
+    - the undo puts back every register only the off call wrote, after the stage's own, so all are as before the
+      stage (PHY A's bus aside);
+    - a table write whose old value cannot be read is reported as unreadable, not as refused.
+  - Host cases: stages 2, 6 and 8 failing at every read, on the synthetic tables and on the Ryzen's (231, 42 and 86
+    places); stage 8 failing at table 76's one wait (the lanes' `TX_ACK`). Each is undone whole: every register as
+    before, the firmware's pipe unchanged, and the off calls run to their end, but when the missing status is the one
+    the DISABLE waits for too.
 
 ## Related
 
