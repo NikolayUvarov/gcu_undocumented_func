@@ -3,6 +3,7 @@
 extern crate alloc;
 pub use mind::sha256;
 pub mod bench;
+pub mod clock;
 pub mod config;
 pub mod journal;
 pub mod json;

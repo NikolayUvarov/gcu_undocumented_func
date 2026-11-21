@@ -7,6 +7,7 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import base64
+import calendar
 import codecs
 import hashlib
 import json
@@ -13942,15 +13943,17 @@ def effector_suite(args, disk):
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         effector_actions_check(vm, server, agent, until, beats)
         effector_packages_check(vm, server, agent, until, args)
-        # 801-EFF-0027: a command with a 10-minute term by the server's clock is run, not `command_expired`, though the
-        # device's clock is 3 h past it; the log names the offset.
+        # 801-EFF-0040: the device's clock, started 3 h ahead, set from the pinned server's Date at its first answer and
+        # read back near the host's; 801-EFF-0027: a command with a 10-minute term by the server's clock is run.
+        set_line = re.search(r"EFFECTOR: THE CLOCK SET FROM THE SERVER'S TIME: (\S+) -> (\S+)", session())
+        assert set_line, session()[-1500:]
+        off = guest_unix(vm) - time.time()
+        assert abs(off) < 30, (off, set_line[0])
         term_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
         until(f"EFFECTOR: ACK {term_id} completed WITH ITS RESULT ACCEPTED")
-        offset = re.search(r"THE DEVICE CLOCK IS (-?\d+) S OFF THE SERVER'S", session())
-        assert offset and -10900 <= int(offset[1]) <= -10700, (offset, session()[-1500:])
         assert server.operation(term_id)["status"] == "completed", server.operation(term_id)
-        print(f"PASS: the device clock {offset[1]} s off the server's: a command with a 10-minute term run and answered "
-              "completed, judged by the server's time", flush=True)
+        print(f"PASS: the device's clock 3 h ahead set from the server's time at its first answer ({set_line[1]} -> {set_line[2]}), "
+              f"read back {off:+.0f} s from the host's; a command with a 10-minute term run and answered completed", flush=True)
         # 750-EFF-0018: the machine's name set by the shell's `hostname` is what the heartbeats report from the next sample
         # on, with no restart; once removed, the agent's own name stands again.
         def reported(name, seconds=75):
@@ -14147,8 +14150,12 @@ def effector_suite(args, disk):
         old_id = server.queue(agent, "exec_v1", {"command": "health", "run_as": "service", "session": "service", "timeout_seconds": 60}, expires_in=600)
         until(f"EFFECTOR: ACK {old_id} completed WITH ITS RESULT ACCEPTED", 180)
         require(vm.command("dmesg -s tls", raw=True), "NOT ENFORCED, THE PIN BINDS THE KEY")
-        print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, and a command "
-              "with a 10-minute term run, judged by the server's time", flush=True)
+        # 801-EFF-0040: the clock set from the server's Date at the first answer, read back near the host's.
+        require(session(), "EFFECTOR: THE CLOCK SET FROM THE SERVER'S TIME: 2000-01-01T")
+        off = guest_unix(vm) - time.time()
+        assert abs(off) < 30, off
+        print("PASS: the clock at 2000-01-01: the pinned server reached, its certificate's start not enforced, the clock set "
+              f"from its time ({off:+.0f} s from the host's), and a command with a 10-minute term run", flush=True)
         # 801-EFF-0032 (LNK's report of the bench, 2026-11-14): the boot disk taken out while the system runs, its driver
         # stopped here with vfs_server the same. The agent and the gateway go on, the heartbeats too; a command is refused
         # `journal`, not run; `reboot`, under the owner's `reboot on`, is answered and asked of init. Seen at the fixture:
@@ -14728,6 +14735,13 @@ def refused_release(vm, server, agent, bundle, payload, logged):
           "through the agent, refused by the updater as its timestamp names another channel; the command answered failed "
           "(digest), the running slot, its boot "
           "record and nothing staged as before, and the agent's next heartbeat accepted", flush=True)
+
+
+def guest_unix(vm):
+    # The guest's clock in Unix seconds, from the shell's `date` in UTC (the suites set no zone).
+    line = re.search(r"DATE: (\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) (\S+)", vm.command("date"))
+    assert line and line[7].startswith("UTC"), line and line[0]
+    return calendar.timegm(tuple(int(line[i]) for i in range(1, 7)) + (0, 0, 0))
 
 
 def effector_actions_check(vm, server, agent, until, beats):

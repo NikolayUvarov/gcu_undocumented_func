@@ -79,15 +79,4 @@ or claim that the handoff itself completes interoperability.
 
 The EFF track numbers its own tasks, so a request from another track waits here until EFF turns it into a task and removes it.
 
-### The agent sets the clock from the pinned server's time (KRN, 2026-11-17, for 801's S5)
-
-- **Why.** The maintainer chose (2026-11-17) that the agent sets the device's clock from the server's date, rather than a `timed` line in the default policy. 801-EFF-0027 judges commands by the server's time, but the device's clock stays wrong for the updater's expiry checks, other servers' certificates, NTS and the logs.
-- **What KRN gives:** [801-KRN-0255](801-KRN-0255-the-agent-may-set-the-clock.md), `rtc` with `mind::rtc::BADGE_SET` in the agent's slot 2 (`rtc.wit` 1.3 `set`). Reading the clock through it is as before.
-- **What is asked:**
-  1. From the `Date` of an answer of the pinned server (the one `clock_from` reads), set the clock with `rtc`'s `set` when the device's clock is more than five minutes off it. Within five minutes, leave it to `timed` or the user.
-  2. Never before the build's commit time (`MIND_SOURCE_TIME`, as `timed`'s floor), never past 2099; a `Date` outside them is not used.
-  3. Log each set once, with the time before and after: for example `EFFECTOR: THE CLOCK SET FROM THE SERVER'S TIME: <before> -> <after>`.
-  4. After a set, the offset of 801-EFF-0027 starts again from the next answer, so the commands' terms stay right across it.
-  5. Tests: a host test of the rule (the threshold, the floor, 2099); the `effector` suite with the guest's clock 3 h ahead and at 2000-01-01, the clock read back within a few seconds of the fixture's after the first answer, and the log line.
-- **What it trusts.** The server, or whoever holds its pinned key, can move the clock forward without limit and back to the floor ([clocks.md](../docs/profile/clocks.md), "The Effector server's time"): a memory domain's term in mode `forget` can then pass. If EFF wants the owner to be able to switch it off, a policy line (for example `clock keep`) would do; KRN does not ask for one.
-- **Docs.** `docs/effector/README.md`'s table of the session's grants can then say `rtc` with the setting badge, and what the agent does with it.
+None now: the last ones are 801-EFF-0037 to 0040.

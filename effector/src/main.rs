@@ -67,10 +67,52 @@ fn server_unix() -> Option<u64> {
     mind::rtc::unix_time().map(|t| t.saturating_add_signed(CLOCK_OFFSET.load(core::sync::atomic::Ordering::Relaxed)))
 }
 
-/// The offset from an answer's `Date`, kept whole: under 2 s apart it counts as none.
+// The build's commit time (MIND_SOURCE_TIME, from 02_build.sh), as `timed`'s floor: the clock is never set before it.
+const BUILT_UNIX: u64 = digits(option_env!("MIND_SOURCE_TIME"));
+const fn digits(text: Option<&str>) -> u64 {
+    let Some(text) = text else { return 0 };
+    let (bytes, mut n, mut i) = (text.as_bytes(), 0u64, 0);
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() || i >= 12 { return 0; }
+        n = n * 10 + (bytes[i] - b'0') as u64;
+        i += 1;
+    }
+    n
+}
+// The clock refused a set once: the agent judges commands by the server's time and does not ask again (801-EFF-0040).
+static CLOCK_REFUSED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The device's clock set from the pinned server's `Date` when more than five minutes off it (801-EFF-0040), each set
+/// logged once; whether it was set. The offset then starts again from the next answer.
+fn set_clock(server: u64, device: Option<u64>) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    if CLOCK_REFUSED.load(Relaxed) { return false; }
+    let Some((date, seconds)) = mind::sntp::rtc_parts(server as i64 * 1000) else { return false };
+    let (mut before, mut after) = ([0u8; 20], [0u8; 20]);
+    let was = device.map_or("UNREADABLE", |d| wire::rfc3339_utc(d, &mut before));
+    match mind::idl::rtc::set(Endpoint(mind::abi::SLOT_RTC), date, seconds) {
+        Ok(Ok(())) => {
+            mind::println!("EFFECTOR: THE CLOCK SET FROM THE SERVER'S TIME: {} -> {}", was, wire::rfc3339_utc(server, &mut after));
+            CLOCK_OFFSET.store(0, Relaxed);
+            CLOCK_SAID.store(0, Relaxed);
+            true
+        }
+        other => {
+            CLOCK_REFUSED.store(true, Relaxed);
+            mind::println!("EFFECTOR: THE CLOCK NOT SET FROM THE SERVER'S TIME ({:?}): COMMANDS ARE JUDGED BY THE SERVER'S TIME", other.map(|r| r.err()));
+            false
+        }
+    }
+}
+
+/// The offset from an answer's `Date`, kept whole: under 2 s apart it counts as none. More than five minutes off, the
+/// device's clock is set from it instead (801-EFF-0040).
 fn clock_from(date: Option<u64>) {
     use core::sync::atomic::Ordering::Relaxed;
-    let (Some(server), Some(device)) = (date, mind::rtc::unix_time()) else { return };
+    let Some(server) = date else { return };
+    let device = mind::rtc::unix_time();
+    if effector::clock::to_set(server, device, BUILT_UNIX).is_some() && set_clock(server, device) { return; }
+    let Some(device) = device else { return };
     let offset = server as i64 - device as i64;
     let offset = if offset.abs() < 2 { 0 } else { offset };
     CLOCK_OFFSET.store(offset, Relaxed);
