@@ -149,7 +149,7 @@ The rates doubled and the stack's and the drivers' CPU time per MiB fell by abou
 - **Segmentation offloads** are not used. Frames still cost about 110 µs of stack time each, and much of that is the client calls (`tcp-receive` moves 4 KiB per call) and smoltcp itself. Larger frames would need a frame size beyond 1514 bytes in the ring and TCP segmentation that smoltcp does not do. Decide again with a measurement on hardware with KVM.
 - **The frame ring** is used whenever the driver offers it (`net.wit` 1.2).
 - **The receive window** (801-NET-0088):
-  - **Sizes:** a TCP connection a client opens receives into 64 KiB; the connections of a listening socket receive into 8 KiB. Above, on the tap, the round trip is short, and the tables were measured with 8 KiB.
+  - **Sizes:** a TCP connection a client opens receives into 128 KiB, its window scaled past 64 KiB (801-NET-0092); the connections of a listening socket receive into 8 KiB. Above, on the tap, the round trip is short, and the tables were measured with 8 KiB.
   - **Why:** over a long round trip 8 KiB a round trip is the limit. On the DEXP's Wi-Fi to the Effector server a 29 MB release took about 9 minutes, and six of ten such downloads were cut by a 10 s stall.
   - **With 64 KiB:** six in a row were taken, each in 132 to 194 s from the command to the restart (2026-11-19; MC-12.1: that machine and network, not a property of the stack).
   - **A stall:** a stream whose client keeps reading and gets nothing for 5 s is named in the log with smoltcp's state and queue.
