@@ -10442,17 +10442,28 @@ def slot_applications_check(args):
           "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
-def tone_power(samples, rate, start, hz):
-    """How much of `hz` the 40 ms of `samples` from `start` hold."""
-    window = samples[start:start + int(rate * 0.04)]
+def tone_power(samples, rate, start, hz, seconds=0.04):
+    """How much of `hz` the `seconds` (40 ms) of `samples` from `start` hold."""
+    window = samples[start:start + int(rate * seconds)]
     return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
 
 
+# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra", C, G and C as the gateway's tones, then
+# E falling to E flat as beep's own samples, then the timpani's C and G (beep/src/notes.rs).
+BEEP_OPENING = ((262, 0.4), (392, 0.4), (523, 0.6), (659, 0.15), (622, 0.6))
+
+
 def beep_demo_tones(left, rate, first):
-    """beep's demo from sample `first`: 523, 659 and 784 Hz, 150 ms each, each stronger than the other two."""
-    for index, hz in enumerate((523, 659, 784)):
-        start = first + int(rate * (0.05 + 0.15 * index))
-        assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
+    """beep's default from sample `first`: each note of the opening stronger, 25 ms into it and over 100 ms, than every
+    other note (E and E flat lie 37 Hz apart, which 40 ms would not tell), then the timpani's low C."""
+    at = 0.0
+    for hz, seconds in BEEP_OPENING:
+        start = first + int(rate * (at + 0.025))
+        others = max(tone_power(left, rate, start, other, 0.1) for other, _ in BEEP_OPENING if other != hz)
+        assert tone_power(left, rate, start, hz, 0.1) > 5 * others, (hz, at)
+        at += seconds
+    timpani = first + int(rate * (at + 0.02))
+    assert tone_power(left, rate, timpani, 131) > 5 * tone_power(left, rate, timpani, 523), "the timpani's C"
 
 
 def sound_kept_check(args, disk):
@@ -10543,8 +10554,8 @@ def audio_suite(vm, wav):
             break
         time.sleep(.2)
     require(output, "[BEEP] DEVICE=true RATE=48000")
-    require(output, "[BEEP] PCM QUEUED 24000 FRAMES")
-    time.sleep(1.5)
+    require(output, "[BEEP] PLAYED THE OPENING, 2710 MS")
+    time.sleep(2.5)  # DONE comes once the last of it is queued; the rest plays, then a second of silence
     # beep with notes (issue u005): a console program, no screen; frequency and duration pairs, 0 Hz a pause.
     require(vm.command("beep 10"), "BEEP: 10 HZ: A FREQUENCY IS 20-20000 HZ, OR 0 FOR A PAUSE")
     played = vm.command("beep 440 200 0 100 880 300")
@@ -10643,7 +10654,7 @@ def audio_suite(vm, wav):
         middle = part[0] + int(rate * 0.1)
         assert tone_power(sounds, rate, middle, hz) > 5 * tone_power(sounds, rate, middle, 880), hz
     seconds = (demo[-1] - demo[0]) / rate
-    assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
+    assert 2.6 < seconds < 2.9, seconds  # the opening, 2710 ms (551-APP-0149)
 
     def power(start, hz):
         return tone_power(left, rate, start, hz)
@@ -10661,7 +10672,7 @@ def audio_suite(vm, wav):
     assert power(middle, 880) > 5 * power(middle, 440)
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra (the gateway's tones, then client PCM) in captured audio; "
           f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
