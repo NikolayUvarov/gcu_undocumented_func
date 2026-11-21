@@ -1,5 +1,6 @@
-//! Step 1 of 213-DRV-0086: the firmware's display state read in seven batches, the registers Display Core itself reads
-//! (hwdocs/cezanne-display.md, "a read proposed as safe"). Each batch is named in the log before its first read and
+//! Step 1 of 213-DRV-0086: the firmware's display state read in eight batches, the registers Display Core itself reads
+//! (hwdocs/cezanne-display.md, "a read proposed as safe"), and in batch 8 those Linux's dmub code reads to tell whether
+//! the display microcontroller (DMCUB) runs. Each batch is named in the log before its first read and
 //! paused after, each value logged as it is read, so that a hang names its register; batch 4 reads only the HUBPs batch
 //! 3 shows powered. `Bus` has no write: nothing here can change the device. `tests/display_batches_host.rs` checks it.
 
@@ -7,7 +8,7 @@ use crate::dcn::{field::*, Field, Reg, R};
 use crate::timing::Otg;
 use core::fmt;
 
-pub const BATCHES: u8 = 7;
+pub const BATCHES: u8 = 8;
 /// The most registers one batch reads (batch 2: 19 for each of the four timing generators).
 pub const MAX_REGISTERS: usize = 80;
 /// After a batch's name is logged and before its first read: long enough for the line to be kept.
@@ -34,6 +35,7 @@ pub struct Named { pub r: R, pub inst: u8, pub reg: Reg }
 impl fmt::Display for Named {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.r.block() {
+            "" if self.r.instances() > 1 => write!(f, "{}{} AT {:05X}", self.r.name(), self.inst, self.reg.offset()),
             "" => write!(f, "{} AT {:05X}", self.r.name(), self.reg.offset()),
             block => write!(f, "{}{}_{} AT {:05X}", block, self.inst, self.r.name(), self.reg.offset()),
         }
@@ -80,12 +82,19 @@ const APERTURE: [R; 6] = {
     use R::*;
     [DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase]
 };
+/// Batch 8 around the scratch registers: whether the board has a DMCUB and its control; its mailboxes.
+const DMCUB_HEAD: [R; 3] = [R::CcDcPipeDis, R::DmcubCntl, R::DmcubSecCntl];
+const DMCUB_TAIL: [R; 10] = {
+    use R::*;
+    [DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress, DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr,
+     DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1, DmcubGpintDataout]
+};
 /// The DIG back ends of the board's outputs: PHYs A, B, D and E (the VBIOS's paths; C has no connector).
 pub const BOARD_PHYS: [u8; 4] = [0, 1, 3, 4];
 
 pub fn title(batch: u8) -> &'static str {
     match batch {
-        1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", _ => "?",
+        1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", 8 => "DMCUB", _ => "?",
     }
 }
 
@@ -109,6 +118,14 @@ pub fn plan(batch: u8, known: &Known) -> List {
             for n in 0..5 { list.push(R::PhypllPixclkResyncCntl, n); }
             list.push(R::DentistDispclkCntl, 0);
         }
+        // Its timer first and last, so that two reads show whether it counts.
+        8 => {
+            list.push(R::DmcubTimerCurrent, 0);
+            for r in DMCUB_HEAD { list.push(r, 0); }
+            for n in 0..16 { list.push(R::DmcubScratch, n); }
+            for r in DMCUB_TAIL { list.push(r, 0); }
+            list.push(R::DmcubTimerCurrent, 0);
+        }
         _ => {}
     }
     list
@@ -131,6 +148,16 @@ impl Values {
         self.items[..self.len].iter().flatten().find(|(n, _)| n.r == r && n.inst == inst).and_then(|(_, v)| *v)
     }
     fn field(&self, r: R, inst: u8, f: Field) -> Option<u32> { self.get(r, inst).map(|v| f.get(v)) }
+    /// The last value read of a register read more than once.
+    fn last(&self, r: R, inst: u8) -> Option<u32> {
+        self.items[..self.len].iter().flatten().filter(|(n, _)| n.r == r && n.inst == inst).last().and_then(|(_, v)| *v)
+    }
+}
+
+/// A register's value in hex, or a dash.
+struct Hex32(Option<u32>);
+impl fmt::Display for Hex32 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { match self.0 { Some(v) => write!(f, "{:08X}", v), None => f.write_str("-") } }
 }
 
 /// A value or a dash for one that was not read.
@@ -143,8 +170,8 @@ impl fmt::Display for Opt {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Report { pub batches_read: u8, pub registers_read: usize }
 
-/// Every value a run read, for step 3 to choose its pipe from (all seven batches: 147 registers).
-pub const STORE: usize = 160;
+/// Every value a run read, for step 3 to choose its pipe from (all eight batches: 178 registers).
+pub const STORE: usize = 192;
 #[derive(Clone, Copy, Debug)]
 pub struct Store { items: [Option<(R, u8, u32)>; STORE], len: usize, batches: u8 }
 
@@ -275,6 +302,20 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
             }
             out.line(format_args!("B7 DENTIST: DISPCLK WDIVIDER {}, RDIVIDER {}",
                 Opt(v.field(DentistDispclkCntl, 0, DENTIST_DISPCLK_WDIVIDER)), Opt(v.field(DentistDispclkCntl, 0, DENTIST_DISPCLK_RDIVIDER))));
+        }
+        8 => {
+            let (t0, t1) = (v.get(DmcubTimerCurrent, 0), v.last(DmcubTimerCurrent, 0));
+            let timer = match (t0, t1) { (Some(a), Some(b)) if a != b => "COUNTS", (Some(_), Some(_)) => "STILL", _ => "-" };
+            out.line(format_args!("B8 DMCUB: ON THE BOARD {}, ENABLED {}, SOFT RESET {}, PWAIT {}; SECURE RESET {}, ITS STATUS {}; TIMER {} ({})",
+                Opt(v.field(CcDcPipeDis, 0, DC_DMCUB_ENABLE)), Opt(v.field(DmcubCntl, 0, DMCUB_ENABLE)), Opt(v.field(DmcubCntl, 0, DMCUB_SOFT_RESET)),
+                Opt(v.field(DmcubCntl, 0, DMCUB_PWAIT_MODE_STATUS)), Opt(v.field(DmcubSecCntl, 0, DMCUB_SEC_RESET)),
+                Opt(v.field(DmcubSecCntl, 0, DMCUB_SEC_RESET_STATUS)), timer, Hex32(t1)));
+            out.line(format_args!("B8 DMCUB: SCRATCH0 (BOOT STATUS) {}, SCRATCH7 (GPINT ANSWER) {}, SCRATCH10 {}, GPINT IN {} OUT {}",
+                Hex32(v.get(DmcubScratch, 0)), Hex32(v.get(DmcubScratch, 7)), Hex32(v.get(DmcubScratch, 10)),
+                Hex32(v.get(DmcubGpintDatain1, 0)), Hex32(v.get(DmcubGpintDataout, 0))));
+            out.line(format_args!("B8 DMCUB: INBOX1 AT {} OF {} BYTES, READ {} WRITE {}; INBOX0 READ {} WRITE {}; OUTBOX1 READ {} WRITE {}",
+                Hex32(v.get(DmcubInbox1BaseAddress, 0)), Opt(v.get(DmcubInbox1Size, 0)), Opt(v.get(DmcubInbox1Rptr, 0)), Opt(v.get(DmcubInbox1Wptr, 0)),
+                Opt(v.get(DmcubInbox0Rptr, 0)), Opt(v.get(DmcubInbox0Wptr, 0)), Opt(v.get(DmcubOutbox1Rptr, 0)), Opt(v.get(DmcubOutbox1Wptr, 0))));
         }
         _ => {}
     }
