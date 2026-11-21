@@ -1,6 +1,6 @@
 # 158-DRV-0082 — `video_gw`: a stream for each camera, so two cameras show at once
 
-**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: the gateway's change committed with host cases and the `cameras` suite; two bulk cameras at once still fail on the Ryzen, a bulk IN stream in `usb_host` being written) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: a stream for each camera, and `usb_host` keeping each bulk camera polled (`usb.wit` 1.6); the two cameras streamed at once on the Ryzen to two test programs; the maintainer's look at two windows and the gate wait) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -32,7 +32,7 @@
 - [ ] `cameras` runs in the gate and passes: two cameras streaming to two programs at once; a held camera is `busy` for another program.
 - [ ] On the Ryzen two windows show the two cameras at once for five minutes, with the frame counts recorded; the maintainer saw both pictures move. This holds for that machine and those cameras (MC-12.1).
 - [ ] One program switches between the cameras while the other window stays live.
-- [ ] `idl/video.wit` is unchanged.
+- [x] `idl/video.wit` is unchanged by this task (its 1.1 is 158-DRV-0083's; `usb.wit` 1.6 is this task's, for the bulk streams).
 
 ## Progress (2026-11-21)
 

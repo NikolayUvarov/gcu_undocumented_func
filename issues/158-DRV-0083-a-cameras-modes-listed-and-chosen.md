@@ -1,6 +1,6 @@
 # 158-DRV-0083 — A camera's modes: listed by `video_gw` and chosen by the program
 
-**Type:** driver and interface (`video_gw`, `idl/video.wit`, `libmind` `uvc`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: `video.wit` 1.1 and the gateway's side committed; the Ryzen's runs to come) · **Blocked by:** — (the programs' part is APP's 158-APP-0152, on APP's branch `claude/wizardly-franklin-kec1a9`) · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.4, MC-12.7
+**Type:** driver and interface (`video_gw`, `idl/video.wit`, `libmind` `uvc`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: `video.wit` 1.1 and the gateway's side committed; camera 0's ten offered modes opened and counted on the Ryzen; Linux's lists and camera 1's modes as a whole to come) · **Blocked by:** — (the programs' part is APP's 158-APP-0152, on APP's branch `claude/wizardly-franklin-kec1a9`) · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.4, MC-12.7
 
 ## Problem
 
@@ -31,7 +31,7 @@ The maintainer (2026-11-21): switching must be possible from inside the applicat
 
 ## Acceptance criteria
 
-- [ ] `video.wit` is 1.1; a program built against 1.0 runs against the new gateway (a host case of the old wire).
+- [x] `video.wit` is 1.1; a program built against 1.0 runs against the new gateway (a host case of the old wire: `tests/idl_host.rs`, `a_video_1_0_program_works_with_a_1_1_gateway`).
 - [ ] `modes` lists each of the Ryzen's cameras' YUY2 modes as Linux lists them; the differences, if any, are named.
 - [ ] Each offered mode opens and delivers frames of its size at its rate, within a stated tolerance; the figures recorded for that machine and those cameras (MC-12.1).
 - [ ] The `cameras` suite checks `modes` and a change of mode, in the gate.
