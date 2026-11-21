@@ -62,6 +62,19 @@ pub enum Event {
     /// the station, and of the PPDU status reports those that gave one its signal, came after it was handed on, or
     /// followed no kept frame (213-DRV-0087).
     Signals { channel: u8, kept: u64, measured: u32, late: u32, unmatched: u32 },
+    /// In data mode, every minute (213-DRV-0090), since the admission: the Wi-Fi frames received, those kept for the
+    /// station, filtered out, invalid and dropped with the inbox full; the PPDU status reports; the joined BSS's beacons;
+    /// the sends answered, acknowledged and late; the holes and the longest. The registers on the first minute and every
+    /// tenth (service.rs's PROBE_MINUTES), for a good link's.
+    Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64, sent: u64,
+        acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe> },
+    /// The `n`-th hole (213-DRV-0090): no beacon of the joined `bssid` for `ms`; since its last one, the Wi-Fi frames, those
+    /// kept, the PPDU reports and the frames dropped with the inbox full, the sends answered and acknowledged, and whether
+    /// one is pending; the registers, for the first service.rs's HOLES_PROBED.
+    Hole { n: u32, channel: u8, bssid: [u8; 6], ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64,
+        pending: bool, probe: Option<data_mode::Probe> },
+    /// The `n`-th hole closed by a beacon, `ms` after the last one before it; the counts since it opened; the registers.
+    HoleEnded { n: u32, ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64, probe: Option<data_mode::Probe> },
 }
 
 #[derive(Debug)]

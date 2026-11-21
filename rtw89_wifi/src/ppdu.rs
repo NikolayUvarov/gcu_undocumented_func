@@ -120,14 +120,14 @@ impl Matcher {
     /// Whether the frame in slot `at` is kept and still waits for its report.
     pub(crate) fn waits(&self, at: usize) -> bool { self.kept.is_some_and(|k| k.unread && k.at == at) }
     /// A report after the `frame`-th Wi-Fi frame (None: after another report): the slot and the header byte to write.
+    /// Only the report of the kept frame is parsed; the others, most of them on a busy channel, cost a comparison.
     pub(crate) fn report(&mut self, frame: Option<u64>, packet: rxdesc::Packet, buffer: &[u8]) -> Option<(usize, u8)> {
-        let found = from_packet(packet, buffer).zip(self.kept.take())
-            .filter(|(report, kept)| frame == Some(kept.number) && (report.count, report.rate) == kept.key);
         let signals = &mut self.signals;
-        match found {
-            Some((report, kept)) if kept.unread => { signals.measured = signals.measured.saturating_add(1); Some((kept.at, weakness(report.signal_dbm))) }
-            Some(_) => { signals.late = signals.late.saturating_add(1); None }
-            None => { signals.unmatched = signals.unmatched.saturating_add(1); None }
-        }
+        let Some(kept) = self.kept.take().filter(|k| frame == Some(k.number) && word(buffer, 8).map(count_rate) == Some(k.key))
+            else { signals.unmatched = signals.unmatched.saturating_add(1); return None };
+        if !kept.unread { signals.late = signals.late.saturating_add(1); return None; }
+        let Some(report) = from_packet(packet, buffer) else { signals.unmatched = signals.unmatched.saturating_add(1); return None };
+        signals.measured = signals.measured.saturating_add(1);
+        Some((kept.at, weakness(report.signal_dbm)))
     }
 }

@@ -292,6 +292,21 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms, probe } => {
+            mind::println!("[RTW89] TRAFFIC ON {}: {} FRAMES, {} KEPT, {} FILTERED, {} INVALID, {} INBOX FULL; {} PPDU, {} BEACONS; {} SENT, {} ACKED, {} LATE; {} HOLES, LONGEST {} MS",
+                channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms);
+            if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
+        }
+        receive_service::Event::Hole { n, channel, bssid: b, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
+            mind::println!("[RTW89] HOLE {} ON {}: NO BEACON OF {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} FOR {} MS; SINCE IT {} FRAMES, {} KEPT, {} PPDU, {} INBOX FULL; {} SENT, {} ACKED{}",
+                n, channel, b[0], b[1], b[2], b[3], b[4], b[5], ms, wifi, kept, ppdu, pressure, sent, acked, if pending { ", ONE PENDING" } else { "" });
+            if let Some(probe) = probe { pieces("HOLE START", &probe); }
+        }
+        receive_service::Event::HoleEnded { n, ms, wifi, kept, ppdu, pressure, sent, acked, probe } => {
+            mind::println!("[RTW89] HOLE {} ENDED: ITS BEACON AFTER {} MS; MEANWHILE {} FRAMES, {} KEPT, {} PPDU, {} INBOX FULL; {} SENT, {} ACKED (213-DRV-0090)",
+                n, ms, wifi, kept, ppdu, pressure, sent, acked);
+            if let Some(probe) = probe { pieces("HOLE END", &probe); }
+        }
         receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
                 channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),
