@@ -24,3 +24,13 @@ disclaimer, rather than an independently established current legal opinion.
 The recorded source object and SHA-256 identify the input; no independently
 trusted PGP signature verification is claimed. See the
 [consumer contract](../hwdocs/rtl8852be-regulatory.md).
+
+**An owner's rule beside the catalogue** (550-DRV-0088): `OwnerRule` holds the
+fields of one `db.txt` rule line for one country, kept apart from the catalogue.
+`Country::plan(owner, center_khz, width_khz)` gives the one rule that holds a
+channel whole and whose it is (`Source::Catalogue` with its line, or
+`Source::Owner` with its place in the list). An owner's rule can hold a channel
+only where no catalogue rule of that country touches it, so the catalogue's
+power, flags and edges stand wherever it speaks. With no owner's rule the plan
+is the catalogue's. `db.txt` and `src/tables.rs` are not changed by it, and
+neither the station nor the radios use it yet.

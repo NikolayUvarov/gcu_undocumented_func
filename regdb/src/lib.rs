@@ -30,9 +30,12 @@ impl Flags {
     pub const NO_IR: Self = Self(1 << 7);
     pub const NO_HT40: Self = Self(1 << 8);
     pub const AUTO_BW: Self = Self(1 << 9);
+    const ALL: u16 = (1 << 10) - 1;
 
     pub const fn contains(self, restriction: Self) -> bool { self.0 & restriction.0 == restriction.0 }
     pub const fn is_empty(self) -> bool { self.0 == 0 }
+    /// These restrictions and `other`'s, for an owner's rule (550-DRV-0088).
+    pub const fn with(self, other: Self) -> Self { Self(self.0 | other.0) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,10 +110,67 @@ impl Country {
     pub fn channels_2g20(&self) -> impl Iterator<Item = Channel> + '_ {
         (1..=14).filter_map(|number| self.channel_2g20(number).ok())
     }
+
+    /// The one rule that holds the whole channel of `width_khz` around `center_khz` (550-DRV-0088), in any band. A rule of
+    /// the catalogue holds it as `channel_2g20` finds one. Only where no catalogue rule of this country touches the
+    /// channel can one of `owner`'s rules for this country hold it: the catalogue's power and flags stand wherever it
+    /// speaks, and an owner's rule never widens a catalogue rule's edge. With no owner's rule, the catalogue's plan alone.
+    pub fn plan(&self, owner: &[OwnerRule], center_khz: u32, width_khz: u32) -> Result<Planned, Error> {
+        if width_khz == 0 { return Err(Error::Channel); }
+        let low = center_khz.checked_sub(width_khz / 2).ok_or(Error::Channel)?;
+        let high = center_khz.checked_add(width_khz / 2).ok_or(Error::Channel)?;
+        let holds = |rule: &Rule| rule.max_bandwidth_khz >= width_khz && rule.start_khz <= low && high <= rule.end_khz;
+        let planned = |rule: Rule, source| Planned { country: self.alpha2, center_khz, width_khz, rule, source };
+        let mut found = None;
+        for (rule, source_line) in self.source_rules().filter(|(rule, _)| holds(rule)) {
+            if found.is_some() { return Err(Error::AmbiguousRule); }
+            found = Some(planned(*rule, Source::Catalogue { source_line }));
+        }
+        if let Some(found) = found { return Ok(found); }
+        if self.source_rules().any(|(rule, _)| rule.start_khz < high && low < rule.end_khz) { return Err(Error::OutsideRules); }
+        for (index, rule) in owner.iter().enumerate().filter(|(_, own)| own.country == self.alpha2).map(|(i, own)| (i, own.rule())) {
+            if !holds(&rule) { continue; }
+            if found.is_some() { return Err(Error::AmbiguousRule); }
+            found = Some(planned(rule, Source::Owner { index }));
+        }
+        found.ok_or(Error::OutsideRules)
+    }
 }
 
+/// A rule the machine's owner set beside the catalogue (550-DRV-0088): the fields of one of `db.txt`'s rule lines, for one
+/// country, kept apart from the catalogue and named as the owner's wherever it acts. In a plan it only adds channels
+/// that no rule of its country touches; it never changes, widens or weakens a catalogue rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error { CountryFormat, UnknownCountry, WorldIsNotCountry, Channel, OutsideRules, AmbiguousRule }
+pub struct OwnerRule { country: [u8; 2], start_khz: u32, end_khz: u32, max_bandwidth_khz: u32, max_eirp_mbm: i32, flags: Flags }
+
+impl OwnerRule {
+    /// Checked as a catalogue line's fields are: a country the catalogue holds (not 00), a range at least the width, a
+    /// positive width and power, and `db.txt`'s flags alone. It grants nothing by itself.
+    pub fn new(country: [u8; 2], start_khz: u32, end_khz: u32, max_bandwidth_khz: u32, max_eirp_mbm: i32, flags: Flags)
+        -> Result<Self, Error> {
+        select(country)?;
+        if max_bandwidth_khz == 0 || end_khz <= start_khz || end_khz - start_khz < max_bandwidth_khz || max_eirp_mbm <= 0
+            || flags.0 & !Flags::ALL != 0 { return Err(Error::OwnerRule); }
+        Ok(Self { country, start_khz, end_khz, max_bandwidth_khz, max_eirp_mbm, flags })
+    }
+    pub const fn country(&self) -> [u8; 2] { self.country }
+    /// As a catalogue rule reads, without WMM, so that the station and the radios read it alike.
+    pub const fn rule(&self) -> Rule {
+        Rule { start_khz: self.start_khz, end_khz: self.end_khz, max_bandwidth_khz: self.max_bandwidth_khz,
+            max_eirp_mbm: self.max_eirp_mbm, flags: self.flags, wmm: None }
+    }
+}
+
+/// Whose rule a planned channel follows: the catalogue's, by its `db.txt` line, or the owner's, by its place in the list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Source { Catalogue { source_line: u16 }, Owner { index: usize } }
+
+/// One channel of a country's plan: the one rule that holds it whole, and whose that rule is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Planned { pub country: [u8; 2], pub center_khz: u32, pub width_khz: u32, pub rule: Rule, pub source: Source }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error { CountryFormat, UnknownCountry, WorldIsNotCountry, Channel, OutsideRules, AmbiguousRule, OwnerRule }
 
 /// An explicit operator choice, with no default, persistence or transmission authority.
 #[derive(Clone, Copy, Debug)]
