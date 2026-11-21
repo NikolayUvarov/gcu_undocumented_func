@@ -11,6 +11,7 @@ pub mod display;
 pub mod effector;
 pub mod gpio;
 pub mod init;
+pub mod install;
 pub mod keyboard;
 pub mod keystore;
 pub mod loader;

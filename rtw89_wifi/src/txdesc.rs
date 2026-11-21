@@ -58,7 +58,11 @@ pub(crate) fn descriptor(meta:Frame,mac_id:u8,wp_sequence:u16,payload:u64,report
     put(&mut out,12,u32::from(meta.sequence));
     put(&mut out,24,1<<30|u32::from(meta.rate)<<16|1<<10);
     put(&mut out,28,1<<31|u32::from(SELECTED_LIMIT)<<25|u32::from(meta.rate)<<16);
-    put(&mut out,36,u32::from(report)<<10);put(&mut out,40,u32::from(wp_sequence&15));
+    put(&mut out,36,u32::from(report)<<10);
+    // RTS before a frame to one station, by the hardware's thresholds of time and length, as Linux's
+    // rtw89_build_txwd_info4 asks for every such frame: without it the long frames met the stations that the access
+    // point hears and this one does not (213-DRV-0032).
+    put(&mut out,40,u32::from(wp_sequence&15)|u32::from(!meta.group)<<27|1<<31);
     out[48..50].copy_from_slice(&(wp_sequence|0x8000).to_le_bytes());
     out[56..58].copy_from_slice(&(meta.length as u16).to_le_bytes());
     out[58..60].copy_from_slice(&0x8001u16.to_le_bytes());

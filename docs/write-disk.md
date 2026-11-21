@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.9 (2026-11-21): the installer ISO, its first step (352-UPD-0047, section 12); 1.8 (2026-11-17): the switch on a GPT disk beside Linux's own partitions and on aarch64 (000-KRN-0257); 1.7 (2026-11-05): a `rm`, a `mv` and a `mkdir` reach the disk at once (000-KRN-0212); 1.6 (2026-11-05): `logs` reads the loader's mark (000-KRN-0211); 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.10 (2026-11-21): a live boot writes nothing of its own, and the installer's service holds the other disks (352-KRN-0269, section 12); 1.9 (2026-11-21): the installer ISO, its first step (352-UPD-0047, section 12); 1.8 (2026-11-17): the switch on a GPT disk beside Linux's own partitions and on aarch64 (000-KRN-0257); 1.7 (2026-11-05): a `rm`, a `mv` and a `mkdir` reach the disk at once (000-KRN-0212); 1.6 (2026-11-05): `logs` reads the loader's mark (000-KRN-0211); 1.5 (2026-10-28): the store's partition, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -346,13 +346,15 @@ python3 scripts/make_iso.py                 # dist/mind-core-x86_64.iso; --slots
 
 Every date in it is the build's (`SOURCE_DATE_EPOCH` or the commit's), so the same build gives the same bytes. It needs `mkfs.fat` and mtools.
 
-**What is shown, in QEMU (x86, OVMF) only** (the `iso` suite):
-- written as a USB disk, it boots to the shell, and its programs run from its volume;
-- as an IDE CD-ROM, the loader reads the kernel and the services from the El Torito volume and checks them against the manifest.
+**What is shown, in QEMU only** (the `iso` suite; x86 with OVMF and an IDE CD-ROM, aarch64 with AAVMF and a SCSI CD-ROM), from a CD-ROM and from a USB disk:
+- the loader reads the kernel and the services from the El Torito volume and checks them against the manifest;
+- then it reads the whole volume into memory ([352-KRN-0268](../issues-done/352-KRN-0268-the-live-volume-in-memory.done)): `ramdisk#2` serves it read-only, and the system mounts it as its boot volume;
+- programs run from it, and nothing is written to the medium;
+- the system writes nothing of its own ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done)): the block store runs on `ramdisk#1`, and there is no update zone;
+- `vfs_server` holds every other disk whole for the installer, and names the live medium as refused.
 
 **What does not work yet:**
-- **from a disc, the running system cannot read its own volume:** no driver serves a CD drive, so programs such as `ls` are not found. The volume in memory is the task's next step;
-- **the installer onto a disk** is [352-UPD-0048](../issues/352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md);
-- **aarch64** and **a real PC** are not tried.
+- **the installer onto a disk** is [352-UPD-0048](../issues/352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md). Its writer and service are made (352-KRN-0269) and shown on disk images on the host. The shell's `install` command, `APP`'s, is not made yet, so nothing installs from the live system so far;
+- **a real machine** is not tried.
 
-A stick written with the ISO is written with `dd` or the USB writers, as the `.img` is. The firmware takes its El Torito entry on a disk too, so the loader names no partition, and the system mounts the volume that holds the manifest it verified.
+A stick is written with the ISO by `dd` or the USB writers, as with the `.img`. The firmware takes its El Torito entry on a disk too, so a stick runs from memory as a disc does.

@@ -1,6 +1,6 @@
 # 352-UPD-0048 — The installer: MIND Core onto a disk of the machine it runs on, from the ISO or from a card
 
-**Type:** `installer` service, `shell` command · **Owner:** `UPD` (the kernel session), with `PRT` (disk tools, 212) and `KRN` (`init`'s list) · **Priority:** P2 · **Status:** open (plan, 2026-11-20) · **Blocked by:** steps 2 to 4 of [212](212-disk-tools.md) (a service for raw disk changes, the partition table, FAT) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-9.4, MC-12.1, MC-12.3
+**Type:** `installer` service, `shell` command · **Owner:** `UPD` (the kernel session), with `PRT` (disk tools, 212) and `KRN` (`init`'s list) · **Priority:** P2 · **Status:** in progress (the service made in 352-KRN-0269, 2026-11-21) · **Blocked by:** [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done) (the service, in `vfs_server`), the shell's `install` command (requested of `APP`, [requests-APP.md](requests-APP.md)) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-9.4, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -66,6 +66,24 @@ The ESP's entry is written last, so a disk cut short has no ESP and the firmware
 - the first four hex digits of the MBR signature, or `EMPTY`.
 
 A model and a serial number are asked of `DRV` for `block.wit` when the first real machine shows they are needed.
+
+## Progress (2026-11-21)
+
+**The service side is [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done),** on `claude/352-KRN-0269-installer-service`. It follows the design above, with these changes:
+- **The store's partition is left blank and named in the new ESP's `store.txt`.** No superblock is written, so the store makes itself there at its first start, by its own layout, and the installer holds no copy of `STO`'s format.
+- **`vfs_server` writes the table and `MIND LOG` itself.** It does so with its own FAT code, so 212's service is not needed for this layout.
+- **On a live boot, `init` gives the store no disk and `vfs_server` every disk whole.** Without this, an empty VirtIO disk would be the store's.
+
+**Shown so far:**
+- the writer on disk images on the host (`tests/install_host.rs`): `fsck.fat` finds the volumes clean, mtools reads the files, and a write cut short at each step leaves no ESP's entry;
+- in QEMU, the disks offered on a live boot: the blank disk is offered, and the live medium is refused.
+
+**Left:**
+- the shell's `install` command (`APP`, requested);
+- an install in QEMU and a boot from the installed disk;
+- the refusals and the failures in QEMU;
+- a real PC;
+- an ARM device with eMMC.
 
 ## Acceptance criteria
 

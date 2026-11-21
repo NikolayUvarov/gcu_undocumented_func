@@ -45,6 +45,7 @@ pub enum Event {
     /// The `count`-th send that outran its time (service.rs's KEEP_LATE): its submissions finished, whether the last was
     /// fetched and released, its length and age; answered as not acknowledged, its release awaited.
     LateFrame { count: u32, finished: u8, fetched: bool, released: bool, length: u16, age_us: u64 },
+    LateRelease { ms: u64, attempts: u8, acked: bool },
     /// No Wi-Fi frame for `quiet_ms` in data mode (service.rs's QUIET_MS): the frames before, the sends finished and
     /// acknowledged since; the service stops (801-DRV-0071).
     Stalled { channel: u8, quiet_ms: u64, frames: u64, sent: u32, acked: u32 },
