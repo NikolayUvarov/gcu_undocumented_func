@@ -294,6 +294,19 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             self.reconcile(deadline)?;self.session.left(deadline)?;Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
+    /// A poll without the liveness checks and the coexistence reconcile, for the polls that follow a `poll_packets`
+    /// within the service's CHECK_MS: it made them, and the next makes them again. They cost six times the receive, and
+    /// made for every packet they left the driver no time on a crowded channel, whose foreign frames took 0.9 ms each,
+    /// about a thousand a second (the Ryzen, 2026-11-21, 213-DRV-0032). `rxq` false: the release reports alone.
+    pub(crate) fn poll_more(&mut self,rxq:bool,timeout_us:u32)->Result<[bool;2],Failure>{
+        Self::request(timeout_us)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;
+            let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
+            let outcome=self.session.poll_some(deadline,&mut handler,false,rxq)
+                .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
+            self.session.left(deadline)?;Ok(outcome)})();
+        result.map_err(|cause|self.runtime_failure(cause))
+    }
     pub(crate) fn begin(&mut self,frame:&[u8],rate:u8,max_submissions:u8,timeout_us:u32)->Result<(),Failure>{
         Self::request(timeout_us)?;
         if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
