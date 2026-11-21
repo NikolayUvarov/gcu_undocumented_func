@@ -450,3 +450,64 @@ fn service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it(){run(0,true,
     let Some(Event::Traffic{channel:6,holes:1,longest_ms,probe:Some(_),beacons,..})=traffic else{panic!("no traffic line")};
     assert_eq!(longest_ms,ms);assert!(beacons>=60);drop(service);clean();
 });}
+// While no beacon of the BSS reaches the host (the Ryzen, 2026-11-21: none counted in data mode), 3 s with no Wi-Fi frame
+// at all is a hole, closed by the next frame (a second or so of an idle link is none); a refused beacon of another network
+// is counted on the minute's line, and the first minute's line has the refused frames' headers.
+#[test]
+fn service_with_no_beacon_of_its_bss_a_second_without_any_frame_is_a_hole(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    let mut other=bss_beacon();other[10..22].copy_from_slice(&[2,7,7,7,7,7,2,7,7,7,7,7]);
+    c.borrow_mut().incoming.extend([packet(),other]);assert!(service.step());assert!(service.take_event().is_none());
+    ipc::advance(1500);assert!(service.step());assert!(service.take_event().is_none(),"1.5 s idle is no hole");
+    ipc::advance(1600);assert!(service.step());
+    let Some(Event::Hole{n:1,by_beacons:false,ms,kept:0,probe:Some(_),..})=service.take_event()else{panic!("no hole by frames")};
+    assert!((3100..3200).contains(&ms),"{ms} ms");
+    c.borrow_mut().incoming.push(packet());assert!(service.step());
+    let Some(Event::HoleEnded{n:1,ms,kept:1,..})=service.take_event()else{panic!("no end")};assert!((3100..3200).contains(&ms));
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{beacons:0,other_beacons:1,bssid:[2,9,8,7,6,5],holes:1,refused:Some(refused),..})=traffic else{panic!("{traffic:?}")};
+    assert_eq!(refused.count,1);assert_eq!(refused.frames[0].1[..2],[0x80,0]);assert_eq!(refused.frames[0].1[16..22],[2,7,7,7,7,7]);
+    drop(service);clean();
+});}
+
+// 213-DRV-0091: the access point's association response tells the firmware of the link: the join info connected as
+// INFRA, then the address CAM as INFRA with the AID (Linux's rtw89_core_sta_link_assoc); its deauthentication, and a
+// new filter, tell it of no link again.
+fn to_station(subtype:u8,body:&[u8])->Vec<u8>{
+    let mut f=vec![subtype<<4,0,0,0,2,3,4,5,6,7,2,9,8,7,6,5,2,9,8,7,6,5,0x20,0];f.extend_from_slice(body);f.extend_from_slice(&[0;4]);f
+}
+#[test]
+fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    let h2c=|c:&std::rc::Rc<std::cell::RefCell<Control>>,class:u8|c.borrow().normal_packets.iter().filter(|p|(p[0]&3,p[0]>>2,p[1])==(1,class,0))
+        .map(|p|p[8..].to_vec()).collect::<Vec<_>>();
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    let(joins,cams)=(h2c(c,8).len(),h2c(c,6).len());
+    // A refused association (status 17) tells nothing.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,17,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(service.take_event().is_none());assert_eq!((h2c(c,8).len(),h2c(c,6).len()),(joins,cams));
+    // Status 0, AID 1.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{channel:6,bssid:[2,9,8,7,6,5],aid:Some(1),was:None,before:Some(_),after:Some(_)})=service.take_event()else{panic!("no link")};
+    let(join,cam)=(h2c(c,8),h2c(c,6));assert_eq!((join.len(),cam.len()),(joins+1,cams+1));
+    assert_eq!(join.last().unwrap()[..4],[0,0,0,6],"OP 0, NET_TYPE INFRA, WIFI_ROLE STATION");
+    let cam=cam.last().unwrap();let w=|i:usize|u32::from_le_bytes(cam[4*i..4*i+4].try_into().unwrap());
+    assert_eq!(((w(2)>>1)&3,w(9)&0xfff,w(13)&1),(2,1,1),"NET_TYPE INFRA, AID 1, the BSSID valid");
+    assert_eq!(cam[22..28],[2,9,8,7,6,5]);
+    // Its deauthentication: no link again.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(12,&[3,0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{aid:None,was:Some(1),before:Some(_),after:Some(_),..})=service.take_event()else{panic!("no unlink")};
+    assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4],"OP 1, NO_LINK");
+    let cam=h2c(c,6);let cam=cam.last().unwrap();let w2=u32::from_le_bytes(cam[8..12].try_into().unwrap());assert_eq!((w2>>1)&3,0);
+    // Linked again, then a new filter: no link first, then the filter's own CAM entry.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(3,&[0x11,4,0,0,2,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(2),..})));
+    let joins=h2c(c,8).len();let id=ipc::buffer(3,&filter(true));assert!(service.step());assert_eq!(words(id),[0,0]);
+    assert_eq!(h2c(c,8).len(),joins+1);assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4]);
+    drop(service);clean();
+});}

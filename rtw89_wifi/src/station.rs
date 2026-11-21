@@ -166,12 +166,25 @@ fn verify_table(bus:&mut impl RegisterIo,address:u32,words:&[u32])->io::Result<(
     bus.delay_us(0)
 }
 fn encode<const N:usize>(words:[u32;N],out:&mut[u8]){for(i,word)in words.into_iter().enumerate(){out[i*4..i*4+4].copy_from_slice(&word.to_le_bytes());}}
-fn cam(mac:[u8;6],bssid:[u8;6])->[u8;60]{
+fn cam(mac:[u8;6],bssid:[u8;6])->[u8;60]{cam_for(mac,bssid,None)}
+/// The address CAM entry (Linux's rtw89_cam_fill_addr_cam_info, cam.c; layout cam.h's ADDR_CAM_W*): `aid` is the
+/// association's (213-DRV-0091), which makes its NET_TYPE (w2 bits 2:1) INFRA and fills AID12 (w9 bits 11:0), as
+/// rtw89_core_sta_link_assoc's rtw89_fw_h2c_cam(..., RTW89_ROLE_CON_DISCONN) does; None is NO_LINK with no AID.
+pub(crate) fn cam_for(mac:[u8;6],bssid:[u8;6],aid:Option<u16>)->[u8;60]{
     let hash=mac.into_iter().fold(0u8,|a,b|a^b);let peer_hash=bssid.into_iter().fold(0u8,|a,b|a^b);let mut out=[0;60];
-    encode([0,0x40<<16,1|u32::from(hash)<<16|u32::from(peer_hash)<<24,0,u32::from_le_bytes([mac[0],mac[1],mac[2],mac[3]]),
+    let net_type=if aid.is_some(){NET_TYPE_INFRA}else{0};let aid=u32::from(aid.unwrap_or(0)&0xfff);
+    encode([0,0x40<<16,1|net_type<<1|u32::from(hash)<<16|u32::from(peer_hash)<<24,0,u32::from_le_bytes([mac[0],mac[1],mac[2],mac[3]]),
         u32::from_le_bytes([mac[4],mac[5],bssid[0],bssid[1]]),u32::from_le_bytes([bssid[2],bssid[3],bssid[4],bssid[5]]),
-        0,0,2<<16,0,0,8<<16,1|0x3f<<2|u32::from(u16::from_le_bytes([bssid[0],bssid[1]]))<<16,
+        0,0,2<<16|aid,0,0,8<<16,1|0x3f<<2|u32::from(u16::from_le_bytes([bssid[0],bssid[1]]))<<16,
         u32::from_le_bytes([bssid[2],bssid[3],bssid[4],bssid[5]])],&mut out);out
+}
+/// RTW89_NET_TYPE_INFRA (core.h's rtw89_net_type).
+const NET_TYPE_INFRA:u32=2;
+/// The join info H2C's word (Linux's rtw89_fw_h2c_join_info, fw.c; layout fw.h's RTW89_H2C_JOININFO_W0_*): MACID 0,
+/// OP (bit 8) 1 for dis_conn, NET_TYPE (25:24) INFRA when connected and NO_LINK when not, WIFI_ROLE (29:26) STATION,
+/// SELF_ROLE (31:30) CLIENT. The station stage sends the disconnected one, as Linux's add-interface does (213-DRV-0091).
+pub(crate) fn join_info(connected:bool)->[u8;4]{
+    let state:u32=if connected{NET_TYPE_INFRA<<24}else{1<<8};(state|1<<26).to_le_bytes()
 }
 fn verify_filter(bus:&mut impl RegisterIo,expected:u32)->io::Result<()>{
     let value=io::read32(bus,RX_FILTER)?;
@@ -224,7 +237,7 @@ pub(crate) fn prepare<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Bo
         stage=Stage::MacId;let mut pause=[0u8;32];pause[16]=1;
         command(phy.bus_between_stages(),9,8,&pause,false,deadline)?;
         stage=Stage::Role;command(phy.bus_between_stages(),8,4,&(1u32<<13).to_le_bytes(),true,deadline)?;
-        stage=Stage::Join;command(phy.bus_between_stages(),8,0,&(1u32<<8|1<<26).to_le_bytes(),true,deadline)?;
+        stage=Stage::Join;command(phy.bus_between_stages(),8,0,&join_info(false),true,deadline)?;
         stage=Stage::Cam;command(phy.bus_between_stages(),6,0,&cam(board.identity.mac,[0;6]),true,deadline)?;
         stage=Stage::Control;command(phy.bus_between_stages(),5,2,&payload,true,deadline)?;
         stage=Stage::Verify;phy.bus_between_stages().registers(deadline,|bus|{verify(bus,&expected)?;select(bus,selector)})?;
