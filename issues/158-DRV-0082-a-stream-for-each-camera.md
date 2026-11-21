@@ -98,7 +98,12 @@
     - **A stop by the clear-halt alone** (a test build, not committed): MJPEG to MJPEG and YUY2 to MJPEG changes took effect, but MJPEG 800×600 to YUY2 640×360 did not (no good frame in 5 s, frames of another length). The reset stays.
   - **What is still open (found on the run):**
     - **A read that waits for its frame holds the gateway:** while camera 0's YUY2 1280×720 stream gave no good frame, its reader waited the whole 5 s, and camera 1's reads waited with it (`329 READS ANSWERED, AT MOST 5004 MS APART`).
-    - **The cure is to defer reads as opens now are.** A read's lent buffer is minted into a slot of its own, and its answer comes when its frame is ready, so one camera's wait never holds another program. That is the next change.
+    - **The cure is to defer reads as opens now are.** A read's lent buffer is minted into a slot of its own, and its answer comes when its frame is ready, so one camera's wait never holds another program.
+  - **Deferred reads** (the commit after 0bc1d14a8):
+    - **A read of a camera stream whose frame is not there yet** mints its lent buffer into a slot of its own (`CAP_GRANT`, as `camera` and the stub lend it), maps it, and saves its answer (`defer_read`). The request's own slot is freed for the next request.
+    - **Each turn of the loop looks at every waiting read once** (`poll_camera_at`, the old wait's one pass, with the frame's number and time fixed when the read came). It answers the read when its frame is ready or FIRST_MS passed without one, then frees its mapping and slot (`finish_read`).
+    - **Reads of the test patterns are answered as before,** at their time, and so is a camera read when one of these steps fails or 8 already wait.
+    - **Not run on the Ryzen yet;** the patterns do not reach it in QEMU.
     - **YUY2 at 1280×960 and 1280×720 beside a second camera break almost every frame at about 133 KB:** about the 32 pages `usb_host` keeps queued (128 KiB), which the camera fills in a few ms at the bus's rate. MJPEG frames of those sizes (0.1 to 0.2 MB) stream beside another camera.
     - **The other cases:** more pages need more of `usb_host`'s DMA memory, which `init` grants (KRN). Or the gateway may prefer MJPEG for large sizes beside another stream.
 - **What this `usb_host` does differently for devices that are not cameras:**

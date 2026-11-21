@@ -12,7 +12,7 @@ mod choices;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, ERR_TIMEOUT, SLOT_DEV0, SLOT_DEV1};
+use mind::abi::{BootInfo, CAP_GRANT, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, ERR_TIMEOUT, SLOT_DEV0, SLOT_DEV1};
 use mind::idl::codec::Text;
 use mind::idl::{display, video as idl, wire};
 use mind::ipc::Endpoint;
@@ -82,6 +82,12 @@ struct Usb { host: Option<Host>, cameras: Vec<Camera>, looked: usize }
 // serves the other programs meanwhile; it holds the camera as a stream does. `since_ns`: when it was asked.
 struct Waiting { call: wire::Call, owner: u64, camera: u8, key: Key, width: u16, height: u16, rate: u8, since_ns: u64 }
 const WAITING: usize = 4; // opens waiting at once; one more is opened at once, the others held meanwhile
+
+// A camera read waiting for its frame (158-DRV-0082): its answer deferred, its lent buffer minted into a slot of its own
+// (`slot`, mapped as `out`), so receiving another request does not replace it.
+// `due`: the frame's number and time, fixed when the read came, as a read that waits in the gateway has them.
+struct Reading { call: wire::Call, owner: u64, slot: usize, out: Mapping, capacity: u32, due: (u32, u64) }
+const READINGS: usize = 8; // reads waiting at once; one more waits in the gateway as before
 const WAIT_MS: u64 = 2000; // a wait longer than this ends: the open finishes the stop and the settling itself
 
 impl Stream {
@@ -537,58 +543,113 @@ fn next_pattern(streams: &mut [Stream], at: usize, usb: &mut Usb) -> idl::Frame 
     idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 }
 }
 
-// The next frame of camera stream `at` into its pixels: when it is due and a newer picture came, or half a camera
-// frame later than the camera's next one was expected; the other cameras' streams are pumped meanwhile. A Motion JPEG
-// frame that does not decode is dropped and the next one waited for (158-DRV-0084). Err(NotFound) without a frame
-// shown for FIRST_MS, or when the camera is gone.
+// A read of `sender`'s camera stream deferred with its buffer `pixels` (the slot the request brought it in, which the next
+// request takes): a copy of the capability in a slot of its own, mapped. None when one step fails: the read is then
+// answered as before. The request's own Call is dropped by the caller, which frees its slot.
+fn defer_read(sender: u64, capacity: u32, pixels: usize, due: (u32, u64)) -> Option<Reading> {
+    let slot = mind::ipc::mint(pixels, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0).ok()?;
+    let Ok(out) = Mapping::new(slot) else { let _ = mind::ipc::drop_cap(slot); return None };
+    let plain = mind::ipc::Received { data: [0; 2], sender, badge: 0, cap_received: false, is_call: true, irq: None, exit: None };
+    let mut call = wire::Call::words(&plain, slot);
+    if call.defer().is_err() { drop(out); let _ = mind::ipc::drop_cap(slot); return None; }
+    Some(Reading { call, owner: sender, slot, out, capacity, due })
+}
+
+// A deferred read answered: then its mapping and its slot go.
+fn finish_read(r: Reading, answer: Result<u32, idl::Error>) {
+    let Reading { call, slot, out, .. } = r;
+    let _ = idl::reply_read(call, answer);
+    drop(out);
+    let _ = mind::ipc::drop_cap(slot);
+}
+
+// Stream `s`'s picture of `frame` into a reader's buffer `out` (at most `capacity` bytes); its number.
+fn give(s: &mut Stream, out: &mut Mapping, capacity: u32, mut frame: idl::Frame) -> u32 {
+    let bytes = (capacity as usize).min(out.len()).min(s.width * s.height * 4);
+    out.as_mut_slice()[..bytes].copy_from_slice(&s.frame.as_mut_slice()[..bytes]);
+    frame.bytes = bytes as u32;
+    s.last = Some(frame);
+    let now = mind::time::monotonic_ns();
+    if s.answers > 0 { s.apart_ns = s.apart_ns.max(now - s.answered_ns); }
+    (s.answers, s.answered_ns) = (s.answers + 1, now);
+    frame.sequence
+}
+
+// A read answered now into `pixels`: the pattern's next frame, or the camera's (`ready`, when the poll already gave it;
+// else waited for here).
+fn read_into(streams: &mut [Stream], mine: Option<usize>, usb: &mut Usb, capacity: u32, pixels: usize, ready: Option<Result<idl::Frame, idl::Error>>) -> Result<u32, idl::Error> {
+    let Some(i) = mine else { return Err(idl::Error::NotOpen) };
+    let Ok(mut out) = Mapping::new(pixels) else { return Err(idl::Error::Invalid) };
+    let next = match ready {
+        Some(r) => r,
+        None if matches!(streams[i].source, Source::Pattern(_)) => Ok(next_pattern(streams, i, usb)),
+        None => next_camera(streams, i, usb),
+    };
+    next.map(|frame| give(&mut streams[i], &mut out, capacity, frame))
+}
+
+// The next frame of camera stream `at` into its pixels, waited for here: when it is due and a newer picture came, or
+// half a camera frame later than the camera's next one was expected; the other cameras' streams are pumped meanwhile.
+// Err(NotFound) without a frame shown for FIRST_MS, or when the camera is gone.
 fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::Frame, idl::Error> {
-    let (sequence, due) = streams[at].due();
-    let Source::Camera(live) = &streams[at].source else { return Err(idl::Error::NotOpen) };
-    let handle = live.camera;
-    let Some(name) = usb.camera(handle).map(|c| c.name).filter(|_| !live.gone) else { return Err(idl::Error::NotFound) };
-    let camera = &name;
+    let due = streams[at].due();
     loop {
-        let Some(host) = usb.host.as_mut() else { return Err(idl::Error::NotFound) };
-        let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
-        let taken = match pump(host, live) {
-            Ok(n) => n,
-            Err(e) => {
-                mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera, e, report(live));
-                lost(streams, usb, e, handle);
-                return Err(idl::Error::NotFound);
-            }
-        };
-        let now = mind::time::monotonic_ns();
-        let fresh = live.assembler.good > live.given;
-        // The last picture again when no newer came, unless it holds a dropped frame's rows.
-        let again = !live.torn && now >= due.max(live.good_ns) + live.interval_ns * 3 / 2;
-        if now >= due && live.assembler.good > 0 && (fresh || again) {
-            if !fresh && live.mjpeg && live.decoded > 0 { break; } // already in the pixels
-            match convert(streams, at, usb) {
-                Ok(()) => break,
-                Err(why) => {
-                    let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
-                    (live.dropped, live.torn) = (live.dropped + 1, true);
-                    if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A FRAME DROPPED: {}", camera, why.to_uppercase()); }
-                }
-            }
-        }
-        // Frames dropped one after another still end the wait FIRST_MS after the last one shown.
-        let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
-        let shown = if live.mjpeg { live.decoded_ns } else { live.good_ns };
-        if now - shown.max(live.opened_ns) > FIRST_MS * 1_000_000 {
-            mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
-            mind::println!("{}", timing(live));
-            (live.good_ns, live.decoded_ns) = (now, now); // the next read waits as long again
-            return Err(idl::Error::NotFound);
-        }
+        let (done, taken) = poll_camera_at(streams, at, usb, due);
+        if let Some(result) = done { return result; }
         pump_all(streams, Some(at), usb);
         if streams[at].source.gone() { return Err(idl::Error::NotFound); }
         if taken == 0 { let _ = mind::time::sleep(1); }
     }
-    let (width, height) = (streams[at].width, streams[at].height);
-    streams[at].sequence = sequence;
-    Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })
+}
+
+// One look at camera stream `at` for the read of frame `sequence`, due at `due`: its packets taken, and the frame given
+// into its pixels when it is due and a newer picture came, or half a camera frame later than the camera's next one was
+// expected. A Motion JPEG frame that does not decode is dropped and the next one waited for (158-DRV-0084). None: not
+// yet; Err(NotFound) without a frame shown for FIRST_MS, or when the camera is gone. Also the bytes taken.
+fn poll_camera_at(streams: &mut [Stream], at: usize, usb: &mut Usb, (sequence, due): (u32, u64)) -> (Option<Result<idl::Frame, idl::Error>>, usize) {
+    let Source::Camera(live) = &streams[at].source else { return (Some(Err(idl::Error::NotOpen)), 0) };
+    let handle = live.camera;
+    let Some(name) = usb.camera(handle).map(|c| c.name).filter(|_| !live.gone) else { return (Some(Err(idl::Error::NotFound)), 0) };
+    let camera = &name;
+    let Some(host) = usb.host.as_mut() else { return (Some(Err(idl::Error::NotFound)), 0) };
+    let Source::Camera(live) = &mut streams[at].source else { return (Some(Err(idl::Error::NotOpen)), 0) };
+    let taken = match pump(host, live) {
+        Ok(n) => n,
+        Err(e) => {
+            mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera, e, report(live));
+            lost(streams, usb, e, handle);
+            return (Some(Err(idl::Error::NotFound)), 0);
+        }
+    };
+    let now = mind::time::monotonic_ns();
+    let fresh = live.assembler.good > live.given;
+    // The last picture again when no newer came, unless it holds a dropped frame's rows.
+    let again = !live.torn && now >= due.max(live.good_ns) + live.interval_ns * 3 / 2;
+    if now >= due && live.assembler.good > 0 && (fresh || again) {
+        let shown = if !fresh && live.mjpeg && live.decoded > 0 { Ok(()) } else { convert(streams, at, usb) }; // MJPEG: already in the pixels
+        match shown {
+            Ok(()) => {
+                let (width, height) = (streams[at].width, streams[at].height);
+                streams[at].sequence = sequence;
+                return (Some(Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })), taken);
+            }
+            Err(why) => {
+                let Source::Camera(live) = &mut streams[at].source else { return (Some(Err(idl::Error::NotOpen)), taken) };
+                (live.dropped, live.torn) = (live.dropped + 1, true);
+                if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A FRAME DROPPED: {}", camera, why.to_uppercase()); }
+            }
+        }
+    }
+    // Frames dropped one after another still end the wait FIRST_MS after the last one shown.
+    let Source::Camera(live) = &mut streams[at].source else { return (Some(Err(idl::Error::NotOpen)), taken) };
+    let shown = if live.mjpeg { live.decoded_ns } else { live.good_ns };
+    if now - shown.max(live.opened_ns) > FIRST_MS * 1_000_000 {
+        mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
+        mind::println!("{}", timing(live));
+        (live.good_ns, live.decoded_ns) = (now, now); // the next read waits as long again
+        return (Some(Err(idl::Error::NotFound)), taken);
+    }
+    (None, taken)
 }
 
 // Camera stream `at`'s last good frame into its pixels, in bands of BAND_ROWS rows with every camera's stream pumped
@@ -654,9 +715,11 @@ fn main(_info: &'static BootInfo) {
     // A stream for each camera that has an owner (158-DRV-0082): two programs show two cameras at once.
     let mut streams: Vec<Stream> = Vec::new();
     let mut waiting: Vec<Waiting> = Vec::new();
+    let mut readings: Vec<Reading> = Vec::new();
     let mut marked = 0usize;
     loop {
         // The mark is lit while a stream is open; a stream whose owner ended is closed.
+        while let Some(j) = readings.iter().position(|r| !mind::process::alive(r.owner)) { finish_read(readings.swap_remove(j), Err(idl::Error::NotOpen)); }
         while let Some(i) = streams.iter().position(|s| !mind::process::alive(s.owner)) {
             let s = streams.swap_remove(i);
             let got = if let Source::Camera(live) = &s.source { stop(&mut usb, live) } else { String::new() };
@@ -680,7 +743,24 @@ fn main(_info: &'static BootInfo) {
             let _ = idl::reply_open(w.call, result);
         }
         let live = pump_all(&mut streams, None, &mut usb);
-        let wait = if stopping || !waiting.is_empty() { 1 } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
+        // Reads that waited for their frame, answered once it is there, the camera gone, or FIRST_MS without one.
+        let mut j = 0;
+        while j < readings.len() {
+            let at = streams.iter().position(|s| s.owner == readings[j].owner);
+            let done = match at {
+                None => Some(Err(idl::Error::NotOpen)),
+                Some(i) => poll_camera_at(&mut streams, i, &mut usb, readings[j].due).0,
+            };
+            match done {
+                None => j += 1,
+                Some(result) => {
+                    let mut r = readings.swap_remove(j);
+                    let answer = result.map(|frame| at.map_or(0, |i| give(&mut streams[i], &mut r.out, r.capacity, frame)));
+                    finish_read(r, answer);
+                }
+            }
+        }
+        let wait = if stopping || !waiting.is_empty() || !readings.is_empty() { 1 } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) {
             Ok(request) => request,
             Err(mind::Error::Other(ERR_TIMEOUT)) => continue,
@@ -737,27 +817,24 @@ fn main(_info: &'static BootInfo) {
                 }
             }
             idl::Request::Read { capacity, pixels } => {
-                let result = match mine {
-                    None => Err(idl::Error::NotOpen),
-                    Some(i) => match Mapping::new(pixels) {
-                        Err(_) => Err(idl::Error::Invalid),
-                        Ok(mut out) => {
-                            let next = if matches!(streams[i].source, Source::Pattern(_)) { Ok(next_pattern(&mut streams, i, &mut usb)) } else { next_camera(&mut streams, i, &mut usb) };
-                            let s = &mut streams[i];
-                            next.map(|mut frame| {
-                                let bytes = (capacity as usize).min(out.len()).min(s.width * s.height * 4);
-                                out.as_mut_slice()[..bytes].copy_from_slice(&s.frame.as_mut_slice()[..bytes]);
-                                frame.bytes = bytes as u32;
-                                s.last = Some(frame);
-                                let now = mind::time::monotonic_ns();
-                                if s.answers > 0 { s.apart_ns = s.apart_ns.max(now - s.answered_ns); }
-                                (s.answers, s.answered_ns) = (s.answers + 1, now);
-                                frame.sequence
-                            })
+                let camera_stream = mine.filter(|&i| matches!(streams[i].source, Source::Camera(_)));
+                // A camera read whose frame is not there yet waits with its answer deferred, its buffer in a slot of its
+                // own, so the gateway serves the other programs meanwhile (158-DRV-0082); else it is answered now.
+                let due = camera_stream.map(|i| streams[i].due());
+                let now_or_later = camera_stream.zip(due).map(|(i, due)| poll_camera_at(&mut streams, i, &mut usb, due).0);
+                match (due, now_or_later) {
+                    (Some(due), Some(None)) if readings.len() < READINGS => match defer_read(sender, capacity, pixels, due) {
+                        Some(reading) => { drop(call); readings.push(reading); Ok(()) }
+                        None => {
+                            let result = read_into(&mut streams, mine, &mut usb, capacity, pixels, None);
+                            idl::reply_read(call, result)
                         }
                     },
-                };
-                idl::reply_read(call, result)
+                    (_, now) => {
+                        let result = read_into(&mut streams, mine, &mut usb, capacity, pixels, now.flatten());
+                        idl::reply_read(call, result)
+                    }
+                }
             }
             idl::Request::Frame => {
                 let last = mine.ok_or(idl::Error::NotOpen).and_then(|i| streams[i].last.ok_or(idl::Error::NotOpen));
