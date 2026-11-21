@@ -58,6 +58,12 @@ pub fn shown(d: &Disk) -> String {
     format!("INSTALL: DISK {}: {}{model}, {} MIB, {}{lost}", d.number, bus(d.bus), d.mib, holds(d))
 }
 
+/// Whether `typed` is the disk's words, as the installer compares them: letters in either case, spaces between.
+pub fn words_match(typed: &str, words: &str) -> bool {
+    let (a, b): (alloc::vec::Vec<&str>, alloc::vec::Vec<&str>) = (typed.split_whitespace().collect(), words.split_whitespace().collect());
+    a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
 /// The second question, for a disk that lists partitions.
 pub fn erase_question(d: &Disk) -> String {
     format!("ERASE THE {} PARTITION{} OF DISK {}?", d.partitions, if d.partitions == 1 { "" } else { "S" }, d.number)

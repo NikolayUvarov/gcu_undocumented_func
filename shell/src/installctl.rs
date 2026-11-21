@@ -59,6 +59,8 @@ pub fn command(shell: &mut Shell, args: &[u8]) {
         let _ = writeln!(shell.term, "INSTALL: NOT INSTALLED");
         return;
     };
+    // Mistyped words are said at once, before the second question; the installer compares them again.
+    if !installer::words_match(&typed, disk.words) { let _ = writeln!(shell.term, "{}", installer::error(3)); return; }
     let erase = disk.partitions > 0;
     if erase && !crate::msh::ask(shell, &installer::erase_question(&disk)) { let _ = writeln!(shell.term, "INSTALL: NOT INSTALLED"); return; }
     say_and_log(shell, &format!("INSTALL: WRITING MIND CORE ONTO DISK {n}: A MINUTE OR MORE, AND THE FILE SERVICE ANSWERS NOTHING ELSE MEANWHILE"));

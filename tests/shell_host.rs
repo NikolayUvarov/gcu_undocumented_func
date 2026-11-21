@@ -1060,6 +1060,8 @@ fn install_lists_shows_and_names_what_failed() {
     let used = Disk { number: 2, bus: 1, model: "Samsung SSD 860", mib: 476940, signature: "1A2B3C4D", partitions: 3, words: "AHCI 476940 1A2B", refusal: 0 };
     assert_eq!(shown(&used), "INSTALL: DISK 2: AHCI Samsung SSD 860, 476940 MIB, MBR 1A2B3C4D, 3 PARTITIONS: ITS 3 PARTITIONS AND ALL THEIR FILES ARE ERASED");
     assert_eq!(erase_question(&used), "ERASE THE 3 PARTITIONS OF DISK 2?");
+    assert!(words_match("ahci 476940 1a2b", used.words) && words_match("  AHCI   476940 1A2B ", used.words));
+    assert!(!words_match("AHCI 476940", used.words) && !words_match("AHCI 476940 1A2C", used.words) && !words_match("", used.words));
     let live = Disk { number: 0, bus: 2, model: "", mib: 1024, signature: "0BADC0DE", partitions: 1, words: "USB 1024 0BAD", refusal: 1 };
     assert_eq!(line(&live), "   0  USB  1024 MIB  MBR 0BADC0DE, 1 PARTITION  REFUSED: THE MEDIUM THIS LIVE SYSTEM BOOTED FROM");
     assert_eq!((refusal(0), refusal(3), refusal(9)), (None, Some("PAST 2 TIB, WHERE A GPT IS NEEDED (NOT MADE YET)"), Some("REFUSED FOR A REASON THIS SHELL DOES NOT KNOW")));
