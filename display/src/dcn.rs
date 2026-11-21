@@ -270,6 +270,7 @@ pub mod field {
     pub const DIG_SYMCLK_BE_ON: Field = f(8, 1);
     pub const HUBP_BLANK_EN: Field = f(0, 1);
     pub const HUBP_TTU_DISABLE: Field = f(12, 1);
+    pub const HUBP_VTG_SEL: Field = f(4, 4); // the timing generator the HUBP follows
     pub const SURFACE_PIXEL_FORMAT: Field = f(0, 7);
     pub const ROTATION_ANGLE: Field = f(8, 2);
     pub const PITCH: Field = f(0, 14);
@@ -288,7 +289,8 @@ pub mod field {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Table {
     /// `setpixelclock` 1.7: the PHY's PLL for a TMDS pixel clock, for one timing generator.
-    SetPixelClock { pixclk_100hz: u32, pll_id: u8, encoder_id: u8, encoder_mode: u8, crtc_id: u8, deep_color: u8 },
+    /// `misc` is `set_pixel_clock_parameter_v1_7`'s miscinfo (0x01 forces the PLL to be programmed, as its power-down does).
+    SetPixelClock { pixclk_100hz: u32, pll_id: u8, encoder_id: u8, encoder_mode: u8, crtc_id: u8, deep_color: u8, misc: u8 },
     /// `digxencodercontrol` 1.5, stream setup: the DIG front end for the signal.
     DigEncoderStreamSetup { dig: u8, mode: u8, lanes: u8, pclk_10khz: u32, bpc: u8 },
     /// `dig1transmittercontrol` 1.6: a PHY (UNIPHY A-E) on or off.
@@ -323,9 +325,9 @@ impl Table {
     pub fn parameters(&self) -> ([u8; 32], usize) {
         let mut p = [0u8; 32];
         match *self {
-            Table::SetPixelClock { pixclk_100hz, pll_id, encoder_id, encoder_mode, crtc_id, deep_color } => {
+            Table::SetPixelClock { pixclk_100hz, pll_id, encoder_id, encoder_mode, crtc_id, deep_color, misc } => {
                 p[0..4].copy_from_slice(&pixclk_100hz.to_le_bytes());
-                p[4] = pll_id; p[5] = encoder_id; p[6] = encoder_mode; p[7] = 0; p[8] = crtc_id; p[9] = deep_color;
+                p[4] = pll_id; p[5] = encoder_id; p[6] = encoder_mode; p[7] = misc; p[8] = crtc_id; p[9] = deep_color;
                 (p, 16)
             }
             Table::DigEncoderStreamSetup { dig, mode, lanes, pclk_10khz, bpc } => {
@@ -355,7 +357,14 @@ pub enum Step {
     Call(Table),
     /// Wait for OTG `otg`'s frame counter to move `frames` times, for at most `timeout_us`: the generator runs.
     Frames { otg: u8, frames: u32, timeout_us: u32 },
+    /// Stage `n` (1 to `STAGES`) of first light begins here: the steps up to the next marker are one stage.
+    Begin(u8),
 }
+
+/// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
+pub const STAGES: u8 = 8;
+pub const STAGE_NAMES: [&str; STAGES as usize] =
+    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY"];
 
 /// The pipe a plan drives: its timing generator, OPP and DIG front end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,6 +419,8 @@ impl Default for Plan { fn default() -> Self { Plan { steps: [None; MAX_STEPS], 
 
 impl Plan {
     pub fn steps(&self) -> impl Iterator<Item = Step> + '_ { self.steps[..self.len].iter().flatten().copied() }
+    /// The `i`-th step.
+    pub fn get(&self, i: usize) -> Option<Step> { self.steps[..self.len].get(i).copied().flatten() }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
     fn push(&mut self, step: Step) -> Result<(), PlanError> {
@@ -474,22 +485,26 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     let mut plan = Plan::default();
 
     // The timing generator's clocks (optc1_enable_optc_clock).
+    plan.push(Step::Begin(1))?;
     plan.update(reg(OptcInputClockControl, t)?, &[(OPTC_INPUT_CLK_EN, 1), (OPTC_INPUT_CLK_GATE_DIS, 1)])?;
     plan.wait(reg(OptcInputClockControl, t)?, OPTC_INPUT_CLK_ON, 1, 1000)?;
     plan.update(reg(OtgClockControl, t)?, &[(OTG_CLOCK_EN, 1), (OTG_CLOCK_GATE_DIS, 1)])?;
     plan.wait(reg(OtgClockControl, t)?, OTG_CLOCK_ON, 1, 1000)?;
 
     // The pixel clock: the PHY's PLL through the VBIOS, then 8-bit colour on its resync (dce112_program_pix_clk).
+    plan.push(Step::Begin(2))?;
     plan.push(Step::Call(Table::SetPixelClock {
         pixclk_100hz: timing.pixel_khz * 10, pll_id: COMBOPHY_PLL0 + output.phy, encoder_id: output.encoder_id,
-        encoder_mode: mode, crtc_id: t, deep_color: 0,
+        encoder_mode: mode, crtc_id: t, deep_color: 0, misc: 0,
     }))?;
     plan.update(reg(PhypllPixclkResyncCntl, output.phy)?, &[(PHYPLL_DEEP_COLOR_CNTL, 0)])?;
 
     // The timing (optc1_program_timing), the generator stopped.
+    plan.push(Step::Begin(3))?;
     write_timing(&mut plan, t, &otg)?;
 
     // The OPP's clock and its pattern generator, before the generator starts (opp2_set_disp_pattern_generator).
+    plan.push(Step::Begin(4))?;
     plan.update(reg(OppPipeControl, o)?, &[(OPP_PIPE_CLOCK_EN, 1)])?;
     plan.update(reg(DpgDimensions, o)?, &[(DPG_ACTIVE_WIDTH, timing.h_active as u32), (DPG_ACTIVE_HEIGHT, timing.v_active as u32)])?;
     plan.update(reg(DpgOffsetSegment, o)?, &[(WHOLE, 0)])?;
@@ -497,6 +512,7 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     plan.update(reg(DpgControl, o)?, &[(DPG_EN, 1), (DPG_MODE, dpg_mode), (DPG_DYNAMIC_RANGE, 0), (DPG_BIT_DEPTH, 1), (DPG_VRES, res), (DPG_HRES, res)])?;
 
     // The generator started on its OPP (optc2_enable_crtc) and seen counting frames.
+    plan.push(Step::Begin(5))?;
     plan.update(reg(OptcDataSourceSelect, t)?, &[(OPTC_SEG0_SRC_SEL, o as u32)])?;
     plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 1)])?;
     plan.update(reg(OtgControl, t)?, &[(OTG_DISABLE_POINT_CNTL, 3), (OTG_MASTER_EN, 1)])?;
@@ -504,11 +520,14 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     plan.push(Step::Frames { otg: t, frames: 2, timeout_us: 200_000 })?;
 
     // The DIG front end on that generator, RGB 8 bits (enc1_stream_encoder_dvi_set_stream_attribute).
+    plan.push(Step::Begin(6))?;
     plan.push(Step::Call(Table::DigEncoderStreamSetup { dig: d, mode, lanes: 4, pclk_10khz: timing.pixel_khz / 10, bpc: PANEL_8BIT_PER_COLOR }))?;
     plan.update(reg(DigFeCntl, d)?, &[(DIG_SOURCE_SELECT, t as u32), (TMDS_PIXEL_ENCODING, 0), (TMDS_COLOR_FORMAT, 0)])?;
 
     // The back end's mode and front end (dcn10_link_encoder_setup, connect_dig_be_to_fe), then the PHY.
+    plan.push(Step::Begin(7))?;
     plan.update(reg(DigBeCntl, output.phy)?, &[(DIG_MODE, mode as u32), (DIG_FE_SOURCE_SELECT, 1 << d)])?;
+    plan.push(Step::Begin(8))?;
     plan.push(Step::Call(Table::DigTransmitter {
         phy: output.phy, action: TRANSMITTER_ENABLE, mode, lanes: 4, symclk_10khz: timing.pixel_khz / 10,
         hpd_sel: output.hpd + 1, dig_fe_sel: 1 << d, connector_id: output.connector_id,
