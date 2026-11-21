@@ -270,6 +270,10 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let c_id = hex(&sign::id(&c.public_key()));
     let v = expect("a paired registration", &register(&mut c, Joining::Pair { code: code.clone() }).map_err(io)?, 201, None)?;
     if text(&v, &["state"]) != Some("approved") { return Err("a device paired by a code is not approved".into()); }
+    let v = expect("B's devices", &b.call("GET", "/hub/v1/devices", b"").map_err(io)?, 200, None)?;
+    let listed: Vec<(String, bool)> = v.get("devices").and_then(Value::as_array).map(|l| l.iter()
+        .filter_map(|d| Some((text(d, &["device"])?.to_string(), d.get("this")?.as_bool()?))).collect()).unwrap_or_default();
+    if listed != [(b_id.clone(), true), (c_id.clone(), false)] { return Err(format!("B's devices are not B's and C's: {listed:?}")); }
     let mut c2 = s.device()?;
     expect("a code used twice", &register(&mut c2, Joining::Pair { code }).map_err(io)?, 403, Some("pair_code"))?;
     let browser_code = pair(&mut c)?;

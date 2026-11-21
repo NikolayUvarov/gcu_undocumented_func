@@ -33,6 +33,7 @@ cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/
 cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)
 cargo test --quiet --features test-hooks --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" --lib --test hooks # its test hooks (110-NET-0068)
 cargo test --quiet --manifest-path tools/mindhub/Cargo.toml --target-dir "$OUT/httpd-target" # MIND Hub's separate server: its state, journal, API, pages and the conformance suite, on loopback and TLS (100003-APP-0146)
+cargo test --quiet --manifest-path improve/host/Cargo.toml --target-dir "$OUT/httpd-target" # improve on a host: every command against a hub on loopback (100003-APP-0150)
 # The multi-device firmware's logic: frames between the boards, credits, control commands, the LED (800-LNK-0005).
 cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/tests/host_test.c devices/rp2-link/src/bridge.c devices/rp2-link/src/control.c devices/rp2-link/src/led.c
 "$OUT/rp2-link-tests"

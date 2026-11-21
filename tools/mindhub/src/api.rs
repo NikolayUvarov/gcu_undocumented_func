@@ -281,6 +281,19 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
     // A banned user's, a rejected or revoked key's every call is refused, naming why.
     let user = s.hub.access(&device)?.1.user;
     match (m, seg.as_slice()) {
+        ("GET", ["devices"]) => {
+            // The user's devices, for `improve devices` and `improve revoke` (4.4).
+            let mut w = begin();
+            w.key("devices").begin_array();
+            for id in &s.hub.user(user).expect("a device's user").devices {
+                let d = s.hub.device(id).expect("a user's device");
+                w.begin_object().field_str("device", &hex(&d.id)).field_str("name", &d.name).field_str("kind", d.kind.name()).field_str("platform", &d.platform)
+                    .field_str("version", &d.version).field_str("state", d.state.name()).field_int("registered_ms", d.at as i64).field_bool("paired", d.paired)
+                    .field_bool("this", d.id == device).end_object();
+            }
+            w.end_array().end_object();
+            ok(200, w)
+        }
         ("GET", ["devices", "me"]) => {
             let mut w = begin();
             write_device(&mut w, &s.hub, s.hub.device(&device).unwrap(), now, false);
