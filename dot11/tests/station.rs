@@ -336,13 +336,57 @@ fn group_rekey_and_rate_control() {
     air.hear(&broadcast).unwrap();
     assert_eq!(air.delivered.len(), 1);
 
-    // Two unacknowledged frames step the rate down, ten acknowledged ones up again.
+    // Rate control (550-NET-0091): it starts at 24 Mb/s; a frame no try delivered steps it down at once; frames that
+    // each go at their first try climb, through the samples, to the fastest rate both support.
     assert_eq!(air.station.data_rate(), 48);
-    air.station.sent(false);
-    air.station.sent(false);
+    sent(&mut air, |_| (false, 15));
     assert_eq!(air.station.data_rate(), 24); // the next rate both support: 12 Mb/s
-    for _ in 0..10 { air.station.sent(true); }
-    assert_eq!(air.station.data_rate(), 48);
+    for _ in 0..300 { sent(&mut air, |_| (true, 1)); }
+    assert_eq!(air.station.data_rate(), 108);
+}
+
+// One unicast data frame through the station, and what became of it at the rate it went at: acknowledged or not, and
+// after how many tries. The rate it went at.
+fn sent(air: &mut Air, outcome: impl FnOnce(u8) -> (bool, u8)) -> u8 {
+    let mut ethernet = BSSID.to_vec();
+    ethernet.extend_from_slice(&OWN);
+    ethernet.extend_from_slice(&[0x08, 0x00]);
+    ethernet.extend_from_slice(b"a data frame");
+    air.run(|s, _, out, tx| s.send(&ethernet, out, tx)).unwrap();
+    let rate = air.sent.last().unwrap().1;
+    let (acked, attempts) = outcome(rate);
+    air.station.sent(acked, attempts);
+    rate
+}
+
+#[test]
+fn rate_control_takes_the_least_airtime_not_the_fastest_rate() {
+    // The Ryzen's 2.4 GHz channel (213-DRV-0032, 2026-11-21): a try succeeds 70 % of the time at 54 Mb/s, 84 % at 24,
+    // 87 % at 12. The radio tries each frame up to 15 times, so nearly every frame is acknowledged in the end.
+    let mut ap = wpa2();
+    ap.rates = vec![1, 8, 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6C];
+    let mut air = Air::new(ap);
+    air.scan();
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+    let success = |rate: u8| match rate { 108 => 700, 96 => 750, 72 => 800, 48 => 840, 36 => 850, 24 => 860, _ => 870 };
+    let mut x: u64 = 0x5EED;
+    let mut at = std::collections::BTreeMap::new();
+    for n in 0..4000 {
+        let rate = sent(&mut air, |rate| {
+            for attempt in 1..=15u8 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                if (x >> 33) % 1000 < success(rate) { return (true, attempt); }
+            }
+            (false, 15)
+        });
+        if n >= 2000 { *at.entry(rate).or_insert(0) += 1; }
+    }
+    // 36 and 48 Mb/s take the least airtime per delivered frame there; 54 Mb/s, the old choice, more.
+    let (good, fastest) = (at.get(&72).unwrap_or(&0) + at.get(&96).unwrap_or(&0), *at.get(&108).unwrap_or(&0));
+    assert!(good >= 1400 && fastest <= 400, "{at:?}");
+    assert!(dot11::station::airtime_us(96, 192) < dot11::station::airtime_us(108, 179));
 }
 
 #[test]
@@ -365,10 +409,9 @@ fn a_radio_without_ofdm_joins_as_an_802_11b_station() {
     assert_eq!(u16::from_le_bytes([request.0[24], request.0[25]]) & frame::CAPABILITY_SHORT_SLOT, 0);
     // Data goes at 11 Mb/s, steps down to 5.5 and back, and never reaches an OFDM rate.
     assert_eq!(air.station.data_rate(), 22);
-    air.station.sent(false);
-    air.station.sent(false);
+    sent(&mut air, |_| (false, 15));
     assert_eq!(air.station.data_rate(), 11);
-    for _ in 0..30 { air.station.sent(true); }
+    for _ in 0..300 { sent(&mut air, |_| (true, 1)); }
     assert_eq!(air.station.data_rate(), 22);
     let mut ethernet = BSSID.to_vec();
     ethernet.extend_from_slice(&OWN);
