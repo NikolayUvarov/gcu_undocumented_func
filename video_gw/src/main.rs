@@ -5,8 +5,10 @@ extern crate alloc;
 // started for a camera (REQUEST_CAMERA, MC-11.4). A camera has one owner at a time. Every open and close is logged with
 // who asked, and while a stream is open the compositor shows the camera mark (display.wit `camera`), which no program
 // can hide. The cameras: a USB video class camera through usb_host (mind::uvc; its YUY2 frames scaled to the size asked
-// for), then the synthetic test pattern of mind::video when the boot disk asks for it with `video/synthetic`. Every USB
-// camera is listed, by its handle's order, and one is streamed at a time: `open` of another switches (158-DRV-0072).
+// for), then the synthetic test pattern of mind::video when the boot disk asks for it with `video/synthetic` (two when
+// it begins with `2`). Every USB camera is listed, by its handle's order (158-DRV-0072), and each has a stream of its
+// own: two programs show two cameras at once, and a program's `open` of another camera switches it (158-DRV-0082).
+mod choices;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -17,6 +19,7 @@ use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
 use mind::usb::{Host, Interface, BULK_MAX, CONTROL_MAX};
 use mind::{uvc, video};
+use choices::Key;
 
 const RECEIVED_CAP: usize = 9;
 const DISPLAY: Endpoint = Endpoint(SLOT_DEV0); // the compositor's client, for the camera mark
@@ -30,6 +33,11 @@ const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and lat
 const LISTED: usize = 4; // video.wit's list of cameras, the test pattern among them
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
+// While two bulk cameras stream, a pump is one transfer of at most this many bytes, the cameras in turn, and the loop
+// waits SHARED_MS at most for a request: each camera waits one such transfer of the other's, not a whole frame, so
+// neither's buffer overflows (158-DRV-0082).
+const SHARED_BULK: usize = 16 * 1024;
+const SHARED_MS: u32 = 1;
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name and what is offered.
@@ -40,9 +48,18 @@ struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16
 struct Live {
     camera: u32, size: uvc::FrameSize, assembler: uvc::Assembler, bulk: Option<uvc::Bulk>, endpoint: u8, setting: u8, interval_ns: u64,
     packets: u64, bytes: u64, damaged: u64, header: [u8; 12], header_len: usize, given: u32, good_ns: u64, opened_ns: u64,
+    // Its camera went (or usb_host restarted): no more packets are asked for, and its reader gets not-found.
+    gone: bool,
+    // A bulk stream's pumps, and the time its transfers took in all and at most, for the log.
+    pumps: u64, waited_ns: u64, longest_ns: u64,
 }
 
-enum Source { Pattern, Camera(Live) }
+// The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
+enum Source { Pattern(u8), Camera(Live) }
+
+impl Source {
+    fn gone(&self) -> bool { matches!(self, Source::Camera(live) if live.gone) }
+}
 
 struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64, sequence: u32, frame: Pages, last: Option<idl::Frame>, source: Source }
 
@@ -50,20 +67,7 @@ struct Usb { host: Option<Host>, cameras: Vec<Camera>, looked: usize }
 
 impl Stream {
     fn period(&self) -> u64 { 1_000_000_000 / self.rate as u64 }
-
-    // The next frame of the pattern: due at start + (n - 1) / rate; a reader that fell behind gets the latest due one.
-    fn next_pattern(&mut self) -> idl::Frame {
-        let (sequence, due) = self.due();
-        // One reading of the clock a pass: a second one already past `due` wrapped the difference into a 60 s sleep.
-        loop {
-            let now = mind::time::monotonic_ns();
-            if now >= due { break; }
-            let _ = mind::time::sleep(((due - now) / 1_000_000) as usize + 1);
-        }
-        video::fill(sequence, self.width, self.height, self.pixels());
-        self.sequence = sequence;
-        idl::Frame { sequence, timestamp_us: due / 1000, width: self.width as u16, height: self.height as u16, bytes: 0 }
-    }
+    fn key(&self) -> Key { match &self.source { Source::Pattern(n) => Key::Pattern(*n), Source::Camera(live) => Key::Camera(live.camera) } }
 
     fn due(&self) -> (u32, u64) {
         let latest = ((mind::time::monotonic_ns() - self.start_ns) / self.period()) as u32 + 1;
@@ -76,10 +80,11 @@ impl Stream {
     }
 }
 
-// The camera's packets into its frames; Ok(bytes taken), Err once the camera or usb_host is gone.
-fn pump(host: &mut Host, live: &mut Live) -> mind::Result<usize> {
+// The camera's packets into its frames; Ok(bytes taken), Err once the camera or usb_host is gone. `shared`: another
+// bulk camera streams too, so a bulk camera's pump is one transfer of SHARED_BULK at most.
+fn pump(host: &mut Host, live: &mut Live, shared: bool) -> mind::Result<usize> {
     let mut good = false;
-    let written = if live.bulk.is_some() { pump_bulk(host, live, &mut good)? } else {
+    let written = if live.bulk.is_some() { pump_bulk(host, live, &mut good, shared)? } else {
         host.isochronous(live.camera, live.endpoint, |packet, damaged| {
             live.packets += 1; live.bytes += packet.len() as u64;
             if damaged { live.damaged += 1; }
@@ -94,17 +99,23 @@ fn pump(host: &mut Host, live: &mut Live) -> mind::Result<usize> {
     Ok(written)
 }
 
-// A bulk camera's transfers (158-DRV-0072): until a frame ends, or for BULK_ROUND_NS. usb_host waits for each, and the
-// camera streams from the commit on, so a transfer seldom waits longer than the gap between two frames. A transfer that
-// times out or fails (usb_host resets the endpoint) drops its payload; Err only when the camera or usb_host is gone.
-fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool) -> mind::Result<usize> {
+// A bulk camera's transfers (158-DRV-0072): until a frame ends, or for BULK_ROUND_NS; one of SHARED_BULK at most when
+// `shared`. usb_host waits for each, and the camera streams from the commit on at its sensor's pace, so a transfer waits
+// for its bytes to be made, up to a frame's time for a whole frame. A transfer that times out or fails (usb_host resets
+// the endpoint) drops its payload; Err only when the camera or usb_host is gone.
+fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool, shared: bool) -> mind::Result<usize> {
     let started = mind::time::monotonic_ns();
-    let limit = BULK_MAX.min(host.buffer().len());
+    let limit = if shared { SHARED_BULK } else { BULK_MAX }.min(host.buffer().len());
     let mut taken = 0;
-    let Live { bulk: Some(bulk), assembler, camera, endpoint, packets, bytes, damaged, header, header_len, .. } = live else { return Ok(0) };
+    let Live { bulk: Some(bulk), assembler, camera, endpoint, packets, bytes, damaged, header, header_len, pumps, waited_ns, longest_ns, .. } = live else { return Ok(0) };
+    *pumps += 1;
     loop {
         let asked = bulk.next(limit);
-        match host.bulk(*camera, *endpoint, 0, asked) {
+        let before = mind::time::monotonic_ns();
+        let result = host.bulk(*camera, *endpoint, 0, asked);
+        let took = mind::time::monotonic_ns() - before;
+        (*waited_ns, *longest_ns) = (*waited_ns + took, (*longest_ns).max(took));
+        match result {
             Ok(got) => {
                 *packets += 1; *bytes += got as u64; taken += got;
                 let data = &host.buffer()[..got];
@@ -114,9 +125,16 @@ fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool) -> mind::Result<
             Err(mind::Error::Other(ERR_TIMEOUT)) | Err(mind::Error::Invalid) => { bulk.failed(assembler); *damaged += 1; break; }
             Err(e) => return Err(e),
         }
-        if *good || mind::time::monotonic_ns() - started > BULK_ROUND_NS { break; }
+        if shared || *good || mind::time::monotonic_ns() - started > BULK_ROUND_NS { break; }
     }
     Ok(taken)
+}
+
+// A bulk stream's pumps and transfer times, for the log (empty for an isochronous one).
+fn timing(live: &Live) -> String {
+    if live.bulk.is_none() { return String::new(); }
+    format!("[VIDEO]   {} PUMPS, {} TRANSFERS IN {} MS OF {} MS OPEN, THE LONGEST {} MS", live.pumps, live.packets, live.waited_ns / 1_000_000,
+        (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_ns / 1_000_000)
 }
 
 // What a camera stream got, for the log.
@@ -241,79 +259,149 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     };
     let now = mind::time::monotonic_ns();
     Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, true), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
-        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now })
+        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, pumps: 0, waited_ns: 0, longest_ns: 0 })
 }
 
 // The camera's stream stopped, with what it got: an isochronous camera back to setting 0; a bulk one's endpoint
-// cleared of its halt, as Linux stops a camera of one setting.
+// cleared of its halt, as Linux stops a camera of one setting. A camera gone is not asked.
 fn stop(usb: &mut Usb, live: &Live) -> String {
-    if let Some(host) = usb.host.as_mut() {
+    if let Some(host) = usb.host.as_mut().filter(|_| !live.gone) {
         if live.bulk.is_some() {
             if let Err(e) = host.control(live.camera, 0x02, 1, 0, live.endpoint as u16, 0) { mind::println!("[VIDEO] THE BULK ENDPOINT'S CLEAR-HALT FAILED ({:?})", e); }
         } else if let Err(e) = host.select(live.camera, 0) { usb.lost(if host_gone(e) { None } else { Some(live.camera) }); }
     }
+    let timed = timing(live);
+    if !timed.is_empty() { mind::println!("{}", timed); }
     report(live)
 }
 
-// The next frame of the camera's stream into the stream's pixels: when it is due and a newer picture came, or half a
-// camera frame later than the camera's next one was expected. Err(NotFound) without a good frame for FIRST_MS, or when
-// the camera is gone.
-fn next_camera(stream: &mut Stream, usb: &mut Usb) -> Result<idl::Frame, idl::Error> {
-    let (sequence, due) = stream.due();
-    let Source::Camera(live) = &mut stream.source else { return Err(idl::Error::NotOpen) };
-    let Some(name) = usb.camera(live.camera).map(|c| c.name) else { return Err(idl::Error::NotFound) };
-    let Some(host) = usb.host.as_mut() else { return Err(idl::Error::NotFound) };
+// Every camera stream's packets are taken, but `except`'s and those whose camera went: between requests, so
+// usb_host's queue does not fill, and while one reader waits for its frame, so the other cameras' streams go on
+// (158-DRV-0082). True when a camera stream is open.
+fn pump_all(streams: &mut [Stream], except: Option<usize>, usb: &mut Usb) -> bool {
+    let (mut any, mut failed, shared) = (false, None, shared(streams));
+    for (i, s) in streams.iter_mut().enumerate() {
+        let Source::Camera(live) = &mut s.source else { continue };
+        any = true;
+        if Some(i) == except || live.gone { continue; }
+        let Some(host) = usb.host.as_mut() else { continue };
+        if let Err(e) = pump(host, live, shared) { mind::println!("[VIDEO] PID {}'S CAMERA STOPPED ANSWERING ({:?}): {}", s.owner, e, report(live)); failed = Some((e, live.camera)); break; }
+    }
+    if let Some((e, handle)) = failed { lost(streams, usb, e, handle); }
+    any
+}
+
+// Whether two bulk cameras or more stream: then each takes its turn a transfer at a time.
+fn shared(streams: &[Stream]) -> bool {
+    streams.iter().filter(|s| matches!(&s.source, Source::Camera(live) if live.bulk.is_some() && !live.gone)).count() >= 2
+}
+
+// A camera stream's packets could not be taken: its camera went, or with usb_host restarted every one. Their streams
+// stay their owners' until closed, and take no more packets.
+fn lost(streams: &mut [Stream], usb: &mut Usb, e: mind::Error, handle: u32) {
+    let all = host_gone(e);
+    usb.lost(if all { None } else { Some(handle) });
+    for s in streams.iter_mut() { if let Source::Camera(live) = &mut s.source { if all || live.camera == handle { live.gone = true; } } }
+}
+
+// The next frame of pattern stream `at`: due at start + (n - 1) / rate; a reader that fell behind gets the latest due
+// one. The cameras' streams are pumped while it is not due yet.
+fn next_pattern(streams: &mut [Stream], at: usize, usb: &mut Usb) -> idl::Frame {
+    let (sequence, due) = streams[at].due();
+    // One reading of the clock a pass: a second one already past `due` wrapped the difference into a 60 s sleep.
+    loop {
+        let now = mind::time::monotonic_ns();
+        if now >= due { break; }
+        let left = ((due - now) / 1_000_000) as u32 + 1;
+        let cameras = pump_all(streams, Some(at), usb);
+        let _ = mind::time::sleep(if cameras { left.min(PUMP_MS) } else { left } as usize);
+    }
+    let s = &mut streams[at];
+    let Source::Pattern(n) = s.source else { return idl::Frame::default() };
+    let (width, height) = (s.width, s.height);
+    video::fill(choices::pattern_frame(n, sequence, s.rate), width, height, s.pixels());
+    s.sequence = sequence;
+    idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 }
+}
+
+// The next frame of camera stream `at` into its pixels: when it is due and a newer picture came, or half a camera
+// frame later than the camera's next one was expected; the other cameras' streams are pumped meanwhile. Err(NotFound)
+// without a good frame for FIRST_MS, or when the camera is gone.
+fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::Frame, idl::Error> {
+    let (sequence, due) = streams[at].due();
+    let Source::Camera(live) = &streams[at].source else { return Err(idl::Error::NotOpen) };
+    let handle = live.camera;
+    let Some(name) = usb.camera(handle).map(|c| c.name).filter(|_| !live.gone) else { return Err(idl::Error::NotFound) };
     let camera = &name;
     loop {
-        let taken = match pump(host, live) { Ok(n) => n, Err(e) => { mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera, e, report(live)); usb.lost(if host_gone(e) { None } else { Some(live.camera) }); return Err(idl::Error::NotFound) } };
+        let shared = shared(streams);
+        let Some(host) = usb.host.as_mut() else { return Err(idl::Error::NotFound) };
+        let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
+        let taken = match pump(host, live, shared) {
+            Ok(n) => n,
+            Err(e) => {
+                mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera, e, report(live));
+                lost(streams, usb, e, handle);
+                return Err(idl::Error::NotFound);
+            }
+        };
         let now = mind::time::monotonic_ns();
         let fresh = live.assembler.good > live.given;
         if now >= due && live.assembler.good > 0 && (fresh || now >= due.max(live.good_ns) + live.interval_ns * 3 / 2) { break; }
         if now - live.good_ns.max(live.opened_ns) > FIRST_MS * 1_000_000 {
             mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
+            let timed = timing(live);
+            if !timed.is_empty() { mind::println!("{}", timed); }
             live.good_ns = now; // the next read waits as long again
             return Err(idl::Error::NotFound);
         }
-        if taken == 0 { let _ = mind::time::sleep(1); }
+        pump_all(streams, Some(at), usb);
+        if streams[at].source.gone() { return Err(idl::Error::NotFound); }
+        if taken == 0 && !shared { let _ = mind::time::sleep(1); }
     }
-    live.given = live.assembler.good;
-    let (width, height, size) = (stream.width, stream.height, (live.size.width as usize, live.size.height as usize));
+    let stream = &mut streams[at];
+    let (width, height) = (stream.width, stream.height);
     let pixels = unsafe { core::slice::from_raw_parts_mut(stream.frame.as_mut_slice().as_mut_ptr() as *mut u32, width * height) };
-    let Source::Camera(live) = &stream.source else { return Err(idl::Error::NotOpen) };
-    video::yuy2_scaled(live.assembler.ready(), size.0, size.1, pixels, width, height);
+    let Source::Camera(live) = &mut stream.source else { return Err(idl::Error::NotOpen) };
+    live.given = live.assembler.good;
+    video::yuy2_scaled(live.assembler.ready(), live.size.width as usize, live.size.height as usize, pixels, width, height);
     stream.sequence = sequence;
     Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })
 }
 
-fn synthetic() -> bool { mind::fs::File::open("video/synthetic").is_ok() }
+// How many test patterns `video/synthetic` on the boot disk asks for: one, or two when its text begins with "2".
+fn synthetic() -> usize {
+    let first = mind::fs::File::open("video/synthetic").ok().map(|mut file| {
+        let mut first = [0u8; 1];
+        matches!(file.read(&mut first), Ok(1)).then_some(first[0])
+    });
+    choices::patterns(first)
+}
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let test_source = synthetic();
+    let patterns = synthetic();
     let host = if mind::dev::cap_info(SLOT_DEV1).0 == CAP_KIND_ENDPOINT { Host::with_buffer(USB, USB_BUFFER).ok() } else { None };
     let mut usb = Usb { host, cameras: Vec::new(), looked: 0 };
     usb.look();
-    if test_source { mind::println!("[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk"); }
-    if usb.cameras.is_empty() && !test_source { mind::println!("[VIDEO] NO CAMERA{}", if usb.host.is_none() { " (NO USB)" } else { " ON USB NOW" }); }
-    let mut stream: Option<Stream> = None;
+    if patterns > 0 { mind::println!("[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk{}", if patterns > 1 { ", TWO PATTERNS" } else { "" }); }
+    if usb.cameras.is_empty() && patterns == 0 { mind::println!("[VIDEO] NO CAMERA{}", if usb.host.is_none() { " (NO USB)" } else { " ON USB NOW" }); }
+    // A stream for each camera that has an owner (158-DRV-0082): two programs show two cameras at once.
+    let mut streams: Vec<Stream> = Vec::new();
     let mut marked = 0usize;
     loop {
         // The mark is lit while a stream is open; a stream whose owner ended is closed.
-        if stream.as_ref().is_some_and(|s| !mind::process::alive(s.owner)) {
-            let s = stream.take().unwrap();
+        while let Some(i) = streams.iter().position(|s| !mind::process::alive(s.owner)) {
+            let s = streams.swap_remove(i);
             let got = if let Source::Camera(live) = &s.source { stop(&mut usb, live) } else { String::new() };
             mind::println!("[VIDEO] PID {} ENDED: STREAM CLOSED AFTER {} FRAMES {}", s.owner, s.sequence, got);
         }
-        if stream.is_some() && mind::time::uptime_ms().wrapping_sub(marked) >= MARK_MS {
+        if !streams.is_empty() && mind::time::uptime_ms().wrapping_sub(marked) >= MARK_MS {
             let _ = display::camera(DISPLAY);
             marked = mind::time::uptime_ms();
         }
-        // A camera's packets are taken between requests too, so usb_host's queue does not fill.
-        let live = matches!(stream.as_ref().map(|s| &s.source), Some(Source::Camera(_)));
-        if let (true, Some(s)) = (live, stream.as_mut()) {
-            if let (Source::Camera(l), Some(host)) = (&mut s.source, usb.host.as_mut()) { if let Err(e) = pump(host, l) { usb.lost(if host_gone(e) { None } else { Some(l.camera) }); } }
-        }
-        let wait = if live { PUMP_MS } else if stream.is_some() { MARK_MS as u32 } else { 0 };
+        let live = pump_all(&mut streams, None, &mut usb);
+        let wait = if shared(&streams) { SHARED_MS } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) {
             Ok(request) => request,
             Err(mind::Error::Other(ERR_TIMEOUT)) => continue,
@@ -321,43 +409,54 @@ fn main(_info: &'static BootInfo) {
         };
         let sender = request.sender;
         let (request, call) = match idl::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
-        let mine = stream.as_ref().is_some_and(|s| s.owner == sender);
+        let mine = streams.iter().position(|s| s.owner == sender);
         let _ = match request {
             idl::Request::Cameras => {
                 usb.look();
                 let mut list: [idl::Camera; LISTED] = Default::default();
                 let mut count = 0;
-                for c in usb.cameras.iter().take(LISTED - test_source as usize) { list[count] = idl::Camera { name: c.name, width: c.offered.0, height: c.offered.1, rate: c.offered.2, synthetic: false }; count += 1; }
-                if test_source { list[count] = idl::Camera { name: Text::new("test pattern").unwrap_or_default(), width: video::MAX_WIDTH as u16, height: video::MAX_HEIGHT as u16, rate: video::MAX_RATE, synthetic: true }; count += 1; }
+                for c in usb.cameras.iter().take(choices::real(usb.cameras.len(), patterns, LISTED)) { list[count] = idl::Camera { name: c.name, width: c.offered.0, height: c.offered.1, rate: c.offered.2, synthetic: false }; count += 1; }
+                for n in 0..patterns {
+                    let name = if n == 0 { "test pattern" } else { "test pattern 2" };
+                    list[count] = idl::Camera { name: Text::new(name).unwrap_or_default(), width: video::MAX_WIDTH as u16, height: video::MAX_HEIGHT as u16, rate: video::MAX_RATE, synthetic: true }; count += 1;
+                }
                 idl::reply_cameras(call, &list[..count])
             }
             idl::Request::Open { camera, width, height, rate } => {
                 usb.look();
-                // The cameras in the order `cameras` lists them: the USB ones, then the pattern.
-                let real = usb.cameras.len().min(LISTED - test_source as usize);
-                let pattern = test_source && camera as usize == real;
-                let result = if camera as usize >= real && !pattern { Err(idl::Error::NotFound) }
-                    else if stream.as_ref().is_some_and(|s| s.owner != sender) { Err(idl::Error::Busy) }
-                    else if pattern && !video::supported(width as usize, height as usize, rate) { Err(idl::Error::Invalid) }
-                    else if !pattern && !((16..=1280).contains(&width) && (16..=1024).contains(&height) && (1..=60).contains(&rate)) { Err(idl::Error::Invalid) }
+                // The cameras in the order `cameras` lists them: the USB ones, then the patterns. Busy while another
+                // task owns this camera (video.wit); another camera may stream beside it.
+                let handles: Vec<u32> = usb.cameras.iter().map(|c| c.streaming).collect();
+                let key = choices::key(camera, &handles, patterns, LISTED);
+                let held: Vec<(u64, Key)> = streams.iter().filter(|s| !s.source.gone()).map(|s| (s.owner, s.key())).collect();
+                let admitted = choices::admit(&held, sender, key).map_err(|refused| match refused { choices::Refused::NotFound => idl::Error::NotFound, choices::Refused::Busy => idl::Error::Busy });
+                let result = if let Err(e) = admitted { Err(e) }
+                    else if matches!(key, Some(Key::Pattern(_))) && !video::supported(width as usize, height as usize, rate) { Err(idl::Error::Invalid) }
+                    else if matches!(key, Some(Key::Camera(_))) && !((16..=1280).contains(&width) && (16..=1024).contains(&height) && (1..=60).contains(&rate)) { Err(idl::Error::Invalid) }
                     else {
-                        // An earlier stream of the same owner is closed first.
-                        if let Some(Stream { source: Source::Camera(live), .. }) = stream.take() { let _ = stop(&mut usb, &live); }
+                        // An earlier stream of the same owner is closed first (`held` and `streams` differ by the gone ones).
+                        if let Some(i) = mine { if let Source::Camera(live) = &streams.swap_remove(i).source { let _ = stop(&mut usb, live); } }
                         // The camera's place may have changed if one was lost while the earlier stream stopped.
-                        let source = if pattern { Ok(Source::Pattern) } else {
-                            match (usb.host.as_mut(), usb.cameras.get(camera as usize)) {
+                        let source = match key {
+                            Some(Key::Pattern(n)) => Ok(Source::Pattern(n)),
+                            Some(Key::Camera(handle)) => match (usb.host.as_mut(), usb.cameras.iter().find(|c| c.streaming == handle)) {
                                 (Some(host), Some(c)) => start(host, c, width, height, rate).map(Source::Camera),
                                 _ => Err(idl::Error::NotFound),
-                            }
+                            },
+                            None => Err(idl::Error::NotFound),
                         };
                         match (source, Pages::new(width as usize * height as usize * 4)) {
                             (Err(e), _) => Err(e),
                             (Ok(Source::Camera(live)), None) => { let _ = stop(&mut usb, &live); Err(idl::Error::NoMemory) }
                             (Ok(_), None) => Err(idl::Error::NoMemory),
                             (Ok(source), Some(frame)) => {
-                                let what = match &source { Source::Pattern => String::from("test pattern"), Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} YUY2, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }) };
-                                mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S", sender, what, width, height, rate);
-                                stream = Some(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source });
+                                let what = match &source {
+                                    Source::Pattern(0) => String::from("test pattern"),
+                                    Source::Pattern(_) => String::from("test pattern 2"),
+                                    Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} YUY2, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
+                                };
+                                mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) });
+                                streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source });
                                 let _ = display::camera(DISPLAY);
                                 marked = mind::time::uptime_ms();
                                 Ok(())
@@ -367,12 +466,13 @@ fn main(_info: &'static BootInfo) {
                 idl::reply_open(call, result)
             }
             idl::Request::Read { capacity, pixels } => {
-                let result = match stream.as_mut().filter(|_| mine) {
+                let result = match mine {
                     None => Err(idl::Error::NotOpen),
-                    Some(s) => match Mapping::new(pixels) {
+                    Some(i) => match Mapping::new(pixels) {
                         Err(_) => Err(idl::Error::Invalid),
                         Ok(mut out) => {
-                            let next = match s.source { Source::Pattern => Ok(s.next_pattern()), Source::Camera(_) => next_camera(s, &mut usb) };
+                            let next = if matches!(streams[i].source, Source::Pattern(_)) { Ok(next_pattern(&mut streams, i, &mut usb)) } else { next_camera(&mut streams, i, &mut usb) };
+                            let s = &mut streams[i];
                             next.map(|mut frame| {
                                 let bytes = (capacity as usize).min(out.len()).min(s.width * s.height * 4);
                                 out.as_mut_slice()[..bytes].copy_from_slice(&s.frame.as_mut_slice()[..bytes]);
@@ -386,12 +486,12 @@ fn main(_info: &'static BootInfo) {
                 idl::reply_read(call, result)
             }
             idl::Request::Frame => {
-                let last = stream.as_ref().filter(|_| mine).ok_or(idl::Error::NotOpen).and_then(|s| s.last.ok_or(idl::Error::NotOpen));
+                let last = mine.ok_or(idl::Error::NotOpen).and_then(|i| streams[i].last.ok_or(idl::Error::NotOpen));
                 idl::reply_frame(call, last.as_ref().map_err(|e| *e))
             }
             idl::Request::Close => {
-                let result = if mine {
-                    let s = stream.take().unwrap();
+                let result = if let Some(i) = mine {
+                    let s = streams.swap_remove(i);
                     let got = if let Source::Camera(live) = &s.source { stop(&mut usb, live) } else { String::new() };
                     mind::println!("[VIDEO] PID {} CLOSED AFTER {} FRAMES {}", sender, s.sequence, got);
                     Ok(())

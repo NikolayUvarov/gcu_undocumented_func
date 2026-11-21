@@ -1,6 +1,6 @@
 # 158-DRV-0082 — `video_gw`: a stream for each camera, so two cameras show at once
 
-**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-21: the gateway's change written and run on the bench, not committed) · **Blocked by:** the `cameras` suite needs APP's `camera -c` ([158-APP-0147](158-APP-0147-switching-between-cameras-in-camera-and-wm.md)) in `main` · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: the gateway's change committed with host cases and the `cameras` suite; two bulk cameras at once on the Ryzen being fixed) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -33,6 +33,30 @@
 - [ ] On the Ryzen two windows show the two cameras at once for five minutes, with the frame counts recorded; the maintainer saw both pictures move. This holds for that machine and those cameras (MC-12.1).
 - [ ] One program switches between the cameras while the other window stays live.
 - [ ] `idl/video.wit` is unchanged.
+
+## Progress (2026-11-21)
+
+**The gateway's change, reviewed and committed** on `claude/158-DRV-0082-two-cameras-and-their-modes`:
+- **The choices that need no device** are in `video_gw/src/choices.rs`: which camera a number names, whether a program may open it beside the streams held, how many patterns `video/synthetic` asks for. Host cases: `tests/video_gw_host.rs` (6).
+- **Fixed against the bench diff:**
+  - a stream whose camera went is marked so: it takes no more packets, holds its camera for nobody, and is closed without asking the device;
+  - a pattern's reader waits for its frame while the cameras' streams are pumped, rather than in one sleep of up to a second.
+
+**Two bulk cameras at once on the Ryzen failed** with the bench diff (release 202611211156, the maintainer at the keyboard, 2026-11-21, log `S/rz-cam-user1.txt`):
+- **One program switching** between the cameras worked: for example camera 1 for 61 s, `618 FRAMES`, the camera's `1756 GOOD FRAMES, 63 BROKEN`.
+- **Two programs at once did not.** Camera 0 streamed; camera 1, opened beside it, got `NO GOOD FRAME FOR 5000 MS: 0 GOOD FRAMES, 2 BROKEN (THE LAST 65524 BYTES OF 153600), 12 PACKETS` twice, and camera 0's picture jerked.
+- **Why, as the code reads:**
+  - every bulk read is one blocking call to `usb_host`, which queues one transfer and waits for it;
+  - the camera streams from its commit on at its sensor's pace, and `pump_bulk` read a camera until a whole frame ended (about 33 ms);
+  - meanwhile the other camera's endpoint had no transfer, so nothing was read from it and its buffer overflowed; its frames came cut (65524 bytes, one payload of three).
+- **The change:** while two bulk cameras stream, a pump is one transfer of 16 KiB at most, the cameras in turn, and the loop waits 1 ms at most for a request. Each camera then waits one 16 KiB transfer of the other's, not a frame. The close line of a bulk stream now gives its pumps and its transfers' time (`… PUMPS, … TRANSFERS IN … MS OF … MS OPEN, THE LONGEST … MS`), to see where the time goes.
+- **Not run on the Ryzen yet.**
+
+**The `cameras` suite** (`tests/qemu_smoke.py`, in the gate's group `x86: keys, shell, tools`):
+- **Through a test program of DRV's,** `tests/video_stub` (`videostub CAMERA SECONDS [WxH] [RATE]`, built by `scripts/x86_fixtures.sh`), since `camera -c` (158-APP-0147) is not in `main`: two patterns listed; the first read for 8 s (81 frames) while the second is read for 3 s (28 frames), each its own pattern (the second's counter 300 ahead); the first busy for a third program; camera 2 not found. Passed on LEG9.
+- **Through `camera -c`** when the tree has it (the bench diff's checks: a recording of one, a still of the other, the first busy); until then the suite says it skipped that part.
+- **What the gate cannot show:** two real streams starving each other. QEMU 8.2 has no USB camera device (`-device help` lists none), and the patterns move no USB transfer. Only the Ryzen's two cameras show it.
+
 
 ## Related
 

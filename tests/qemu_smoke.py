@@ -8224,6 +8224,90 @@ def sysmon_name_check(vm):
           "the directory removed ends the scope until sysmon starts again with a new one", flush=True)
 
 
+def cameras_suite(args):
+    """158-DRV-0082: the video gateway holds a stream for each camera. With two test patterns (video/synthetic begins
+    with "2"), tests/video_stub reads the first for 8 s while another reads the second for 3 s, each its own pattern (its
+    counter half a minute ahead); the camera a program holds is busy for a third, and a number past the two is not
+    found. With APP's `camera -c` (158-APP-0147) in the tree, the same through `camera`."""
+    if not raw_tools():
+        print("SKIP: cameras suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    assert args.video_elf, "the cameras suite needs tests/video_stub's build (scripts/x86_fixtures.sh)"
+    with tempfile.TemporaryDirectory(prefix="smoke-cameras-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"video/synthetic": b"2 test patterns stand in for two cameras\n",
+                                                        "videostub.elf": Path(args.video_elf).read_bytes()})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            require(vm.service_logs("video_gw", "SYNTHETIC SOURCE"), "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk, TWO PATTERNS")
+            require(vm.command("videostub 2 1", timeout=30), "VIDEO STUB: OPEN CAMERA 2 320X240 AT 10/S: NotFound (2 CAMERAS LISTED)")
+            # The first pattern is read for 8 s in the background.
+            started = re.search(r"PID=(\d+) NAME=videostub BACKGROUND", vm.command("run videostub 0 8 &"))
+            assert started, vm.log[-1500:]
+            log = ""
+            for _ in range(40):
+                log += vm.service_logs("video_gw")
+                if "OPENED test pattern 320x240 AT 10/S" in log:
+                    break
+                time.sleep(.25)
+            require(log, "OPENED test pattern 320x240 AT 10/S")
+            # Meanwhile the second for 3 s beside it, and the first is busy for another program.
+            second = vm.command("videostub 1 3", timeout=30)
+            read = re.search(r"VIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, 320X240, THE COUNTER 300 AHEAD\n", second.replace("\r", ""))
+            assert read and int(read[1]) >= 25, second
+            require(vm.command("videostub 0 1", timeout=30), "VIDEO STUB: OPEN CAMERA 0 320X240 AT 10/S: Busy (2 CAMERAS LISTED)")
+            # The first ends by itself, its frames on the rate and its own pattern's.
+            first = vm.program_logs(started[1], "FRAMES IN", tries=120)
+            got = re.search(r"VIDEO STUB: CAMERA 0: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, 320X240, THE COUNTER 0 AHEAD", first)
+            assert got and int(got[1]) >= 76 and int(got[3]) - int(got[2]) + 1 - int(got[1]) <= 3, first
+            for _ in range(40):
+                log += vm.service_logs("video_gw")
+                if len(re.findall(r"\[VIDEO\] PID \d+ CLOSED AFTER \d+ FRAMES", log)) >= 2:
+                    break
+                time.sleep(.25)
+            assert re.search(r"\[VIDEO\] PID \d+ OPENED test pattern 2 320x240 AT 10/S, BESIDE 1 MORE", log), log
+            closed = [int(n) for n in re.findall(r"\[VIDEO\] PID \d+ CLOSED AFTER (\d+) FRAMES", log)]
+            assert len(closed) == 2 and max(closed) >= 76, (closed, log)
+            programs = cameras_programs_check(vm)
+        finally:
+            vm.close()
+    print(f"PASS: cameras: two test patterns listed; one read for 8 s ({got[1]} frames) while the other was read for 3 s ({read[1]} frames), "
+          f"each its own pattern; the camera a program holds is busy for another, a third camera not found{programs} (158-DRV-0082)", flush=True)
+
+
+def cameras_programs_check(vm):
+    """The two patterns through APP's `camera -c` (158-APP-0147), when the tree has it: one recorded for 8 s while a
+    still is taken of the other, and the camera the first holds is busy for a third. Returns what the summary adds."""
+    if "-c " not in vm.command("camera --help", timeout=30):
+        print("SKIP: cameras through `camera -c`: this tree's camera opens the first camera alone (158-APP-0147)", flush=True)
+        return ""
+    vm.command("mkdir data")  # the stills and the recording go there
+    require(vm.command("camera -c 2 -s data/none.bmp", timeout=30), "camera: camera 2: the video gateway lists 2 cameras, numbers 0 to 1")
+    started = re.search(r"PID=(\d+) NAME=camera BACKGROUND", vm.command("run camera -c 0 -r 10 -t 8 data/first.avi &"))
+    assert started, vm.log[-1500:]
+    log = ""
+    for _ in range(40):
+        log += vm.service_logs("video_gw")
+        if re.search(r"PID \d+ OPENED test pattern 320x240 AT 10/S", log):
+            break
+        time.sleep(.25)
+    taken = vm.command("camera -c 1 -s data/second.bmp", timeout=30)
+    assert re.search(r"\[CAMERA\] STILL data/second.bmp: 320X240, FRAME \d+, \d+ BYTES", taken), taken
+    busy = vm.command("camera -c 0 -s data/third.bmp", timeout=30)
+    assert "STILL" not in busy and re.search(r"(?i)busy|in use|another program", busy), busy
+    # The recording ends by itself: 80 frames of camera time, and the gateway's count of what its stream gave.
+    recorded = vm.program_logs(started[1], "[CAMERA] VIDEO", tries=120)
+    assert re.search(r"\[CAMERA\] VIDEO data/first.avi: 80 FRAMES \([1-9]\d* PICTURES\)", recorded), recorded
+    for _ in range(40):
+        log += vm.service_logs("video_gw")
+        if re.search(r"PID \d+ CLOSED AFTER (8\d|79|7[6-8]) FRAMES", log):
+            break
+        time.sleep(.25)
+    assert re.search(r"PID \d+ CLOSED AFTER (8\d|79|7[6-8]) FRAMES", log), log
+    listed = vm.command("ls data")
+    assert "first.avi" in listed.lower() and "second.bmp" in listed.lower() and "third.bmp" not in listed.lower(), listed
+    return "; through camera -c, 8 s recorded beside a still of the other"
+
+
 def vfs_suite(args):
     """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
     (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
@@ -19647,6 +19731,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
+    parser.add_argument("--video-elf", help="test-only ELF built from tests/video_stub (two cameras at once in the cameras suite, 158-DRV-0082); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
@@ -19694,6 +19779,9 @@ def main():
     # The audio suite's levels stub (000-DRV-0057): x86 only, where the audio suites run.
     levels = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-levels-target/x86_64-unknown-none/release/levels_stub"
     args.levels_elf = args.levels_elf or (str(levels) if args.arch == "x86_64" and levels.exists() else None)
+    # The cameras suite's stub (158-DRV-0082): x86, where the suite runs.
+    stub = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-video-target/x86_64-unknown-none/release/video_stub"
+    args.video_elf = args.video_elf or (str(stub) if args.arch == "x86_64" and stub.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -19777,6 +19865,9 @@ def main():
             continue
         if suite == "usbaudio":
             usbaudio_suite(args)
+            continue
+        if suite == "cameras":
+            cameras_suite(args)
             continue
         if suite == "link":
             link_suite(args)
