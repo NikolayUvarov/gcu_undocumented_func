@@ -122,13 +122,15 @@ its parameters logged before it runs and each of its writes as it is made, withi
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
 stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
 
-`tests/display_light_host.rs`, 16 cases on a register model: the pipe chosen from step 1's values, and refused when they
+`tests/display_light_host.rs`, 17 cases on a register model: the pipe chosen from step 1's values, and refused when they
 cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
 route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
 one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
 the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; its status
 fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build that undoes
-what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; a build of 0 that only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
+what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; the HUBP that follows step 3's OTG refused
+unless blanked, read after stages 5 to 8, its statuses free to move, its leaving blank failing the stage; a build of 0
+that only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
 
 **What a person must see, stage by stage,** in the order they are let go (each a new boot; step 1's seven batches are
@@ -396,6 +398,53 @@ values agree from run to run. Nothing was written, and the command register read
   machine hangs, the hang procedure applies, as for step 1's reads.
 - Stage 2 should come in a release of its own, because it runs the first VBIOS table on the hardware.
 - The decision is the owner session's. This build keeps `STAGES_ALLOWED` 0 and `UNDO_AFTER_STAGES` false.
+
+**The attached HUBP, checked since.** `assess` now lists the powered HUBPs that are not the firmware's and whose
+`HUBP_VTG_SEL` names step 3's OTG: on the Ryzen, HUBP1.
+- It refuses `HUBPn FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED` when one is not blanked.
+- Their `DCHUBP_CNTL` is read at the start and after stages 5 to 8, through the same watch and status masks as the
+  firmware's pipe. A change beyond the statuses fails the stage (`THE ATTACHED HUBP'S ... CHANGED`), which is undone
+  with every stage before it.
+- The log names it (`S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES 5 TO
+  8`) and says `Sn THE ATTACHED HUBPS UNCHANGED, BLANKED (1 REGISTERS)` after each of those stages.
+- Nothing writes it. It is in place before stage 5 is asked for. It has not run on the Ryzen: stage 1's release
+  predates it.
+
+## Step 3's stage 1 on the Ryzen (2026-11-21 20:05 UTC, the owner session's word for stage 1 only)
+
+Release 202611211959 (the owner's bench tree at 5c59b11a1, with this branch at 260aee691; `BATCHES_ALLOWED` 7,
+`STAGES_ALLOWED` 1, `UNDO_AFTER_STAGES` true), slot A confirmed 20:05:15. The whole boot log has 270 `[DISPLAY]` lines,
+none dropped:
+- Step 1 as in run 7 (`STEP 1 DONE: 7 OF 7 BATCHES READ, 147 REGISTERS, NOTHING WRITTEN`), then step 3 assessed from it:
+  - `S0 THE FIRMWARE'S PIPE (AS STEP 1 FOUND): OTG0 OPP0 DIG E FRONT END, PHY E, HUBPS 1000; NEVER WRITTEN, READ AFTER
+    EACH STAGE (30 REGISTERS)`;
+  - `S0 STEP 3'S PIPE: OTG1 OPP1 DIG A FRONT END, PHY A (HDMI-A-1), HPD 1; ...`;
+  - `S0 THIS BUILD UNDOES THE STAGES IT RAN, LAST FIRST, BEFORE IT STOPS`.
+- `S1 OTG CLOCKS: STAGE 1 OF 8 NEXT; ITS WRITES:` with its four `S1 WILL` lines and `S1 UNDO: ITS WRITES RESTORED, LAST
+  FIRST`. Then, 1 s later:
+  - `S1 WROTE ODM1_OPTC_INPUT_CLOCK_CONTROL AT 13E7C = 00000003 (WAS 00000000)`;
+  - `S1 ODM1_OPTC_INPUT_CLOCK_CONTROL AT 13E7C SHOWED ITS STATUS IN 1 US`;
+  - `S1 WROTE OTG1_OTG_CLOCK_CONTROL AT 14318 = 00000003 (WAS 00000000)`;
+  - `S1 OTG1_OTG_CLOCK_CONTROL AT 14318 SHOWED ITS STATUS IN 5 US`;
+  - `S1 OTG CLOCKS DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`.
+- After the 3 s pause:
+  - `STEP 3 RAN 1 OF 8 STAGES (2 WRITES); UNDOING STAGES 1 TO 1 AS THIS BUILD ASKS`;
+  - `U1 RESTORED OTG1_OTG_CLOCK_CONTROL AT 14318 = 00000000`, then `U1 RESTORED ODM1_OPTC_INPUT_CLOCK_CONTROL AT 13E7C =
+    00000000`;
+  - `U1 OTG CLOCKS UNDONE: 2 WRITES RESTORED`;
+  - `STEP 3 UNDONE AFTER STAGE 1 OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED`.
+- Stages 2 to 8 `NOT RUN (THIS BUILD MAY RUN 1)`. Then `147 REGISTERS READ BY STEP 1, 2 WRITES BY STEP 3` (the count
+  leaves out the two restores) and `COMMAND 0006 AFTER STEP 1`.
+- The machine kept answering: its logs were taken through the server after the run.
+
+So OTG1's and ODM1's clocks came on within microseconds of being asked for, and went back off with the undo.
+- **DP-2, from the registers only.** Nobody watched the monitors. The firmware's 30 registers read the same before
+  the stage, after it and after the undo, the status fields aside: OTG0's timing, control and clocks, ODM0, OTG0's
+  pixel rate, DIG E's front and back end, PHYPLL E, and HUBP0's surface, format, pitch and control. So by its
+  registers DP-2's pipe did not change. That it kept its picture is inferred from them, not seen.
+- HDMI-A-1 was not driven: no PHY, DIG or VBIOS table was touched.
+- This is evidence for this machine, this boot and this build (MC-12.1). Every boot of this release runs stage 1 and its
+  undo again.
 
 ## Related
 
