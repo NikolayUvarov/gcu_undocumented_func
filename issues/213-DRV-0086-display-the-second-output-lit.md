@@ -57,6 +57,59 @@ not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command t
 writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core
 (step 1, with KRN's grant).
 
+## Progress: step 1, ready to run (2026-11-21)
+
+On `claude/213-DRV-0086-display-reads-the-engine`, built on KRN's
+[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md) and
+[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md) (the `display` boot image; `init`'s grant of two windows
+of BAR 5, the engine's registers [0, 0x1B000) in slot 2 and the SMU mailbox's page [0x58000, 0x59000) in slot 3, BAR 0
+[0x1000000, 0x2400000) in slot 5 and a read-only copy of the ACPI VFCT table in slot 4; the command register left at the
+firmware's 0006; ABI 37, handoff 38) with the survey branch merged in. `display/src/main.rs` replaces KRN's stub:
+
+- It logs each slot and the VBIOS image's identity as the stub did (KRN's task closes on those lines), then runs step 1
+  only on the Radeon `1002:1638` with an engine window of at least 0x1B000 bytes, and ends with `NO REGISTER READ OR
+  WRITTEN` when it read none (`n REGISTERS READ, NONE WRITTEN` otherwise) and the command register after. Step 1 reads
+  neither the mailbox nor BAR 0 nor the VBIOS copy beyond its header.
+- **`BATCHES_ALLOWED`, set to 0:** how many of the seven batches this build may read. At 0 it maps nothing and reads
+  nothing; it logs each batch and every register it would read (156 lines of step 1, paced 20 ms: about 3 s). It is raised one run at a time,
+  on the owner session's word.
+- `display/src/batches.rs`: the seven batches of the survey's proposal (hwdocs/cezanne-display.md), registers Display
+  Core itself reads: 1 HPD (10), 2 the OTGs' state (76), 3 the power domains (8), 4 the HUBPs batch 3 shows powered
+  (5 each), 5 the DIG front and back ends of the board's PHYs (13), 6 the aperture (6), 7 the clocks (14). Each batch is
+  named in the log, then 1 s passes, then each register is read and its value logged at once, so that a hang names its
+  register; 3 s between batches; a summary decoded after each (the OTGs' timings, the domains, the surfaces, the DIG
+  wiring, the aperture as GPU addresses). The bus it reads through has no write, and a `Reg` can name no MSI-X byte.
+- `tests/display_batches_host.rs`, 9 cases: the batches as proposed and inside the engine; a build of 0 reads nothing
+  and names every batch; a build of n reads exactly batches 1 to n; each batch named and paused before its first read;
+  the state Linux's Display Core dumped on the Ryzen decodes as it printed it (OTG 0 3440x1440 in 3600x1500, OTG 1
+  2560x1600 in 2720x1646, OTGs 2 and 3 off); batch 4 only for the HUBPs batch 3 shows powered; an unmapped register not
+  read; every line within a log record; every register of the map at the header's offset.
+
+Tested on LEG9 only (the build and the host cases). It has not run on the Ryzen: it needs the stick rewritten with an
+ABI 37 release that holds KRN's image; the owner session says when. What to look for in the first run's log: KRN's
+`[INIT] display: RADEON 1002:1638 (DEVICE n); COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND
+0x58000+0x1000` and its VBIOS line; then `[DISPLAY] PCI 1002:1638 ... 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU
+MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT ... AN IMAGE FOR 1002:1638 ...
+ROM SIGNATURE 55AA`, `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven `NOT READ` batches with their registers, `STEP 1 DONE:
+0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`, `NO REGISTER READ OR WRITTEN` and `COMMAND 0006 AFTER STEP 1`;
+DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
+below 0x1B000 (the highest is `RDPCSTX0_RDPCSTX_PHY_FUSE3` at 0x17848, which tables 12 and 76 write), so the engine's
+window needs no widening for them.
+
+## Progress: the ATOM interpreter, host-only (2026-11-21)
+
+`display/src/atom.rs` runs ATOM command tables, bounded (each table's index, offset and length checked before it
+runs; every fetch and jump inside the table; data reads inside the image; work, parameter and scratch indices inside
+their spaces; registers only through `Reg::new` in direct mode; no PCI, system, indirect, PLL or MC access; at most
+1,000,000 instructions, 8 nested calls, 5 s of delays). `tests/display_atom_host.rs`: 10 cases on synthetic images
+(the opcodes, each bound) and one on the Ryzen's VBIOS, which skips with a line unless `MIND_AMD_VBIOS` names it.
+
+With the image, on LEG9, tables 12, 4 and 76 run with first light's parameters to their end against a register model
+that answers four statuses the tables wait for (PHY A's SRAM init done, the lanes' acknowledges, MPLLB on, the symbol
+clocks on). 111, 5 and 23 writes, all on PHY A's path and OTG 1's pixel clock, none on the firmware's pipe 0 or PHY E,
+none to the SMU or DISPCLK (hwdocs/cezanne-display.md, "What first light's VBIOS tables write"). Not run on the
+machine; the answers are assumptions about the hardware.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
