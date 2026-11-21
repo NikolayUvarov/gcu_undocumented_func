@@ -1,6 +1,6 @@
 # The Wi-Fi station: what joins by itself
 
-**Version:** 0.4 (2026-11-20) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues-done/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done) (the network a client joined, the access point a key joins) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Version:** 0.5 (2026-11-21) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues-done/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done) (the network a client joined, the access point a key joins) and [550-NET-0090](../../issues/550-NET-0090-the-station-on-5-ghz.md) (5 GHz first, a rejoin on a radar channel) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 `wlan` is the 802.11 station, a boot service that runs when a radio does (`bcm_wifi`, or `wlansim` in the tests). A program joins a network through its `idl/wifi.wit` client (the `wifi` tool). The station also joins a network by itself, as this page describes. It is a boot service, so every release, including one put through the link, brings this behaviour with it. A script at the volume's root does not.
 
@@ -8,6 +8,7 @@
 
 - **At start, and after a network is lost.** A lost network means its beacons are gone, or it sent a deauthentication.
   - The station first joins the lost network again once, 3 s after the loss (`dot11::station`).
+  - On a channel where it may only listen (radar rules, NO-IR), that rejoin first waits up to 1 s for the network's beacon there, sending nothing. Without the beacon it gives up having sent nothing, as the access point may have left the channel after radar (550-NET-0090).
   - If that fails, a search begins.
 - **A remembered network, or the one a client joined this boot.**
   - A remembered network is one `keystore` keeps a key for (550-NET-0024).
@@ -18,7 +19,12 @@
 - **The key.**
   - For the network a client joined, the PMK `wlan` holds since that join.
   - Otherwise the key `keystore` keeps, as `wifi join <name>` with no passphrase uses it. The station never holds a remembered network's PMK (MC-11.9).
+- **Which of its access points** (550-NET-0090). A 5 GHz access point of the network goes first when its signal is −70 dBm or stronger; otherwise the strongest, whatever its band. The same holds for `wifi join`.
 - **The access point** (801-NET-0084). A key, held or kept, joins a WPA2 access point of the name alone, and no key an open one alone. An open access point that takes a WPA2 network's name is never joined in its place, however strong. A client's passphrase, or a network `keystore` keeps, means WPA2.
+
+## While the link is down
+
+When the station's link goes down with a lease, `netstack` holds the card's address and its TCP connections for 30 s (801-NET-0089), as it does for any card. A radio driver's restart takes 2 to 5 s on the Ryzen (213-DRV-0032). If the station joins again within that time and DHCP gives the same address and gateway, the connections go on. Otherwise they are aborted, as before. `wifi leave` is held the same way: the stack sees only the link.
 
 ## What the log says
 
