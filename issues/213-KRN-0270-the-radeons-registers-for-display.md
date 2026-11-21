@@ -47,6 +47,18 @@ The maintainer asked the same day that the Ryzen's work go first, as the machine
 
 **Not covered:** any register read or write, which are DRV's (213-DRV-0086); memory to scan out from; the compositor's part.
 
+## Progress (2026-11-21)
+
+**DRV's facts** (`KRN/2026-11-21T1503Z-DRV-re-the-radeons-grant-its-bars-and-a-hang-on-register-reads.md`, from the Ryzen's Linux):
+- **BAR 5:** memory, 32-bit, not prefetchable, 512 KiB, at fcb00000. It holds the device's MSI-X table and pending bits, at 0x42000 and 0x43000.
+- **The command register:** 0x0407 with `amdgpu` bound (I/O, memory, bus master; INTx off). The firmware's own value is to be read from `init`'s line.
+- **The other regions:** BAR 0, 256 MiB prefetchable at d0000000; BAR 2, 2 MiB; BAR 4, I/O ports.
+
+**What follows from them:**
+- **The MSI-X table is in the grant.** docs/profile/README.md's MC-1.5 row names `display` as the exception to "drivers are not granted the BAR with their MSI-X table". MSI-X is not enabled for the device, and `display` cannot write the configuration space.
+- **The TCB.** docs/profile/tcb.md lists `display` among the drivers in the TCB of memory isolation. It holds no DMA region, but its registers can aim the GPU's engines at any memory, on a device the firmware left mastering the bus.
+- **A read can hang the machine.** A read of about 3700 of its registers under Linux hung the Ryzen (13:28 UTC). The stub reads none: it reads the configuration space only.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done), [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done) (the last image added).
