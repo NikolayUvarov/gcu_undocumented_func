@@ -85,3 +85,20 @@ fn one_channel_and_the_other_silent() {
         assert_eq!(named, both.iter().step_by(2).copied().collect::<Vec<_>>(), "{:?}: the tone as on both", channel);
     }
 }
+
+#[test]
+fn the_opening_of_also_sprach_zarathustra() {
+    // 551-APP-0149: the trumpets' C, G and C an octave apart, the chord's third falling from E to E flat, then the
+    // timpani's C and G; each note within what `beep` takes as arguments, and 2710 ms in all.
+    use notes::{opening_ms, OPENING_SAMPLES, OPENING_TONES};
+    let hz: Vec<u32> = OPENING_TONES.iter().map(|n| n.hz).collect();
+    assert_eq!(hz, [262, 392, 523]);
+    assert!((hz[2] as i32 - 2 * hz[0] as i32).abs() <= 1 && ((hz[1] * 2 / 3) as i32 - hz[0] as i32).abs() <= 1, "a fifth, then the octave");
+    assert_eq!((OPENING_SAMPLES[0].hz, OPENING_SAMPLES[1].hz), (659, 622), "E, then E flat");
+    let timpani: Vec<u32> = OPENING_SAMPLES[2..].iter().map(|n| n.hz).filter(|&h| h != 0).collect();
+    assert_eq!(timpani, [131, 98, 131, 98, 131]);
+    let mut text = String::new();
+    for n in OPENING_TONES.iter().chain(OPENING_SAMPLES.iter()) { text += &format!("{} {} ", n.hz, n.ms); }
+    assert_eq!(notes(&text).unwrap().len(), OPENING_TONES.len() + OPENING_SAMPLES.len(), "beep takes each as an argument too");
+    assert_eq!(opening_ms(), 2710);
+}
