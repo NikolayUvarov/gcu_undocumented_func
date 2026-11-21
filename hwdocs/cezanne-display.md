@@ -163,6 +163,17 @@ Not known, and needed by the route: which OTG, OPP, HUBP and DIG front end the G
 says nothing of the firmware's), its HUBP surface address, `DCN_VM_FB_LOCATION_*`, the pixel clock source it chose
 (PHY E's PLL), DISPCLK, which pipes are powered, the HDMI connector's HPD sense under MIND Core, and whether the GOP
 left the DMCUB running. **Two ways to close it:**
+
+Closed by way 1 except for the DMCUB, which step 1 does not read (213-DRV-0086 step 1, runs 1 to 7, 2026-11-21).
+- **The pipe:** OTG0 from OPP0, DIG front end E into PHY E's back end (DP, `DIG_MODE` 0, HPD 4), HUBP0 at
+  0xF4_0000_0000.
+- **Clocks:** the pixel clock from OTG0's DP DTO, not a PHY PLL; DISPCLK and DPPCLK at divider id 0x14, settled.
+- **Power:** all four pipes' HUBP and DPP powered, HUBP1 to HUBP3 blanked on their own idle OTGs.
+- **Aperture:** `DCN_VM_FB_LOCATION` 0xF4_0000_0000 to 0xF4_1FFF_FFFF, `DCN_VM_FB_OFFSET` 0x8_1000_0000.
+- **HPD:** sensed on HPD 1 (HDMI-A-1) and HPD 4 (DP-2).
+
+The issue has each value.
+
 1. **A read under MIND Core**, by `display` with KRN's grant of BAR 5 (213-DRV-0086 step 1), in the batches proposed
    below, each sent to the log before the next. Preferred: it is the very state MIND Core inherits.
 2. **Linux started once without `amdgpu`** (for example `modprobe.blacklist=amdgpu`), so that the GOP's state stays,
@@ -296,11 +307,12 @@ needs from those (the PHY's state, the PLLs' lock) come from the VBIOS tables' o
 - System RAM instead would need the GART (VM context 0's page table, which `amdgpu` keeps in the carve-out) or the AGP
   window set up in the memory hub that the graphics engine shares: the reason to prefer the carve-out.
 - Confidence: medium. The facts are from Linux's source and boot lines and the GOP's own framebuffer at BAR 0's base;
-  the firmware's `DCN_VM_FB_LOCATION_*` and its HUBP address are not read yet (batch 6, batch 4).
+  the firmware's `DCN_VM_FB_LOCATION_*` (0xF4_0000_0000, 512 MiB) and its HUBP address (0xF4_0000_0000, BAR 0's offset 0)
+  were read under MIND Core since (213-DRV-0086 step 1, batches 6 and 4) and agree.
 - **The frame pool keeps out of it:** MIND Core's hardware report (hw0054, release 202611211819) lists the firmware's
   memory map ending with a reserved region 0x8_0E30_0000 to 0x8_2FFF_FFFF (541 MiB) below `TOP_MEM2` 0x8_3000_0000,
   room for the 512 MiB carve-out from 0x8_1000_0000; the frame pool (31,982 MiB) takes only conventional memory.
-  Its exact start is batch 6's `DCN_VM_FB_OFFSET`, not read yet.
+  Its exact start, batch 6's `DCN_VM_FB_OFFSET`, reads 0x810: system address 0x8_1000_0000 (213-DRV-0086, run 7).
 
 ## What first light's VBIOS tables write (213-DRV-0086, on LEG9 against a model)
 

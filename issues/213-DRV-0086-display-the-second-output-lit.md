@@ -122,13 +122,13 @@ its parameters logged before it runs and each of its writes as it is made, withi
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
 stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
 
-`tests/display_light_host.rs`, 15 cases on a register model: the pipe chosen from step 1's values, and refused when they
+`tests/display_light_host.rs`, 16 cases on a register model: the pipe chosen from step 1's values, and refused when they
 cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
 route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
 one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
 the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; its status
-fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build of 0 that
-only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
+fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build that undoes
+what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; a build of 0 that only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
 
 **What a person must see, stage by stage,** in the order they are let go (each a new boot; step 1's seven batches are
@@ -156,8 +156,8 @@ running, the next boot refuses with `2 TIMING GENERATORS RUN, NOT ONE` (safe, bu
 the firmware's memory map ends with a **reserved** region 0x8_0E30_0000 to 0x8_2FFF_FFFF (541 MiB) below `TOP_MEM2`
 0x8_3000_0000, the top of RAM, where a UMA carve-out sits: room for the 512 MiB carve-out from 0x8_1000_0000 with
 29 MiB more below it. The frame pool, 31,982 MiB, is the conventional memory (31,987 MiB) less the kernel's own, so the
-carve-out is not handed out. Confidence high that it is reserved; its exact start is batch 6's `DCN_VM_FB_OFFSET`
-(expected 0x810, in 16 MiB units).
+carve-out is not handed out. Confidence high that it is reserved. Its exact start, batch 6's `DCN_VM_FB_OFFSET`, reads
+0x810 (in 16 MiB units): 0x8_1000_0000, inside that reserved region (run 7, below).
 
 ## Run 0 on the Ryzen (2026-11-21 18:26 UTC)
 
@@ -293,6 +293,109 @@ It still refuses until all seven batches are read on one boot. Five findings:
   Confidence: medium. Linux's state is no guide to the firmware's clocks, and the survey left the source open.
 - Either batch's values only describe what step 3 inherits. Step 3 stops on its own refusals if they differ, for
   example `2 TIMING GENERATORS RUN, NOT ONE`.
+
+**Run 7** (`BATCHES_ALLOWED` 7): release 202611211944, slot B confirmed 19:48 UTC, with the country chosen beforehand
+(the owner session's). The boot log taken right after the confirmation ended at 32.9 s, not yet written further, so
+it was taken again whole: 260 `[DISPLAY]` lines, none dropped.
+- B1 to B5: the same values as run 5.
+- B6, 6 registers: `B6 APERTURE: FB F400000000..F41F000000 (TOP'S LAST 16 MIB), FB OFFSET 810000000, AGP 0..0 BASE
+  0`, from `DCN_VM_FB_LOCATION_BASE` 0000F400, `_TOP` 0000F41F, `DCN_VM_FB_OFFSET` 00000810 and the three AGP
+  registers 0.
+  - The carve-out's GPU address is 0xF4_0000_0000 for 512 MiB, at system address **0x8_1000_0000**, as expected.
+  - The AGP registers are all 0, not the closed window guessed. The header gives only their widths (24 bits, 16 MiB
+    units). Whether 0..0 is an empty window or a 16 MiB one at GPU address 0 is not settled here. The firmware's
+    surface does not use it.
+- B7, 14 registers:
+  - `B7 OTG0 PIXEL RATE: SOURCE 0, DP_DTO 1, PHYPLL SOURCE 0, PLL SOURCE 0`. OTGs 1 to 3: `DP_DTO 0`, each
+    `OTGn_PIXEL_RATE_CNTL` 0000C000, which is `OTGn_DIO_FIFO_ERROR` 3, a status, in the three idle OTGs.
+  - `B7 PHYPLLA` to `PHYPLLE`: `PIXCLK_ENABLE 0, DEEP COLOR 0`. Every resync register reads 0, PHY E's too: the DP
+    output takes its clock from the DTO, not a PHY PLL resync.
+  - `B7 DENTIST: DISPCLK WDIVIDER 20, RDIVIDER 20`. `DENTIST_DISPCLK_CNTL` reads 141F1414, so the DISPCLK and DPPCLK
+    write dividers are both 0x14 and both changes done (`CHG_DONE`, `DPPCLK_CHG_DONE`). The frequency needs the
+    DENTIST VCO, which is not read.
+- `STEP 1 DONE: 7 OF 7 BATCHES READ, 147 REGISTERS, NOTHING WRITTEN`, then step 3 assessed from step 1 itself:
+  - `S0 THE FIRMWARE'S PIPE (AS STEP 1 FOUND): OTG0 OPP0 DIG E FRONT END, PHY E, HUBPS 1000; NEVER WRITTEN, READ
+    AFTER EACH STAGE (30 REGISTERS)`;
+  - `S0 STEP 3'S PIPE: OTG1 OPP1 DIG A FRONT END, PHY A (HDMI-A-1), HPD 1; MODE 1920x1080 AT 148.5 MHZ IN DVI
+    SIGNALLING (CTA VIC 16)`;
+  - `STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN`, `147 REGISTERS READ, NONE WRITTEN`, `COMMAND 0006 AFTER
+    STEP 1`.
+
+**Step 1 as a whole.** Four runs on the Ryzen (1, 3, 5 and 7) read the engine's state without a hang. The register
+values agree from run to run. Nothing was written, and the command register read 0006 after each.
+- **What the survey expected and the reads confirm:**
+  - one OTG runs, OTG0 from OPP0, at DP-2's preferred 2560x1600;
+  - DIG front end E feeds PHY E's back end, the only one enabled, in DP mode on HPD 4;
+  - HUBP0 scans the carve-out's base, 0xF4_0000_0000;
+  - the carve-out is 512 MiB at 0x8_1000_0000;
+  - HDMI-A-1's monitor is sensed on HPD 1;
+  - OTG1, OPP1, DIG front end A and PHY A are free.
+
+  Step 3's assessment from the reads equals `EXPECTED`, the pipe its host cases were written for.
+- **What the survey did not expect:**
+  - all four pipes are powered, with HUBP1 to HUBP3 blanked and each attached to its own idle OTG;
+  - the `DIG_MODE` encoding is ATOM's (DP = 0), not that of Linux's `dcn10_get_dig_mode`;
+  - HUBP0's pitch field reads 0xA00 against the GOP's stride of 2560 (the convention is open);
+  - the AGP registers read 0;
+  - the idle OTGs show `DIO_FIFO_ERROR` 3;
+  - every back end's symbol clock is on.
+- **One fix to step 3 came of it:** the watch masks whole status fields (run 5, finding 5).
+- These values are evidence for this machine, this firmware and these boots only (MC-12.1, 12.9). The values on a
+  cold boot, after a firmware update or with other monitors are not known.
+
+**What it means for step 3's plan.** No stage's writes change.
+- **None of the eight stages writes a power domain, a HUBP, a DPP or an MPCC.** OTG1, OPP1 and the DIG and PHY
+  blocks are not in the HUBP and DPP domains that batch 3 reads. So the pipes left powered take nothing away from the
+  plan and add no stage.
+- What they change is around the plan:
+  1. **HUBP1 is attached to OTG1.** When stage 5 starts OTG1, HUBP1 follows its timing, powered but blanked
+     (`HUBP_BLANK_EN` 1, in blank), with surface address 0 and pitch field 0. Step 3 never unblanks it, and stage 4's
+     test pattern in OPP1 replaces whatever the MPC passes. Display Core blanks and power-gates such a pipe at its
+     start; step 3 does not, and it must not unblank HUBP1 at address 0. A HUBP1 that left blank on its own would
+     not be seen today, because HUBP1 is outside the watch. Reading HUBP1's `DCHUBP_CNTL` after stages 5 to 8 would
+     show it; that is not made.
+  2. **The watch now masks the status fields**, so a good stage is not undone because HUBP0's request statuses
+     moved.
+  3. The firmware's `OTG0_PIXEL_RATE_CNTL` holds two status fields (`DIO_FIFO_ERROR`, `DIO_ERROR_COUNT`), which read
+     0. They stay watched: an error on DP-2's output during a stage is the change that stage must not cause.
+- **By stage:**
+  - Stage 1 (OTG1's and ODM1's clocks) stands as written: OTG1 reads clock off and no timing.
+  - Stage 2 (table 12, PHY A's PLL; PHYPLL A's resync to 8-bit colour) stands. OTG1 has no DTO, and the resync reads
+    0 already. OTG1's DIO FIFO error bits are kept by any read-modify-write.
+  - Stage 3 (the timing) stands. Every OTG1 timing register reads 0 and `OTG_MASTER_EN` is 0.
+  - Stage 4 (OPP1's clock, the pattern) stands. OPP1's registers are not among step 1's, so the WROTE lines are the
+    first to show their values.
+  - Stage 5 (OTG1 started on OPP1) stands, with point 1 above. ODM1's source select already names OPP1 (0000F100).
+  - Stages 6 to 8 (DIG A's front end, back end and PHY A, by tables 4 and 76) stand. DIG A's front end reads 0 with
+    its clock off, and its back end 00010000.
+
+**Recommendation for stage 1.** Run it, alone, in one release: `BATCHES_ALLOWED` 7, `STAGES_ALLOWED` 1.
+- Preferably with `UNDO_AFTER_STAGES` true, so that the same boot also undoes it.
+- **What it writes:** two read-modify-writes (`ODM1_OPTC_INPUT_CLOCK_CONTROL` bits 0 to 1, `OTG1_OTG_CLOCK_CONTROL`
+  bits 0 to 1) and two bounded waits (1 ms each), on an OTG that runs nothing and drives no output. It runs no VBIOS
+  table and touches no PHY or DIG. Its 30 watched registers are read before and after.
+- **What a person sees:** nothing on either monitor.
+- **The log lines that show it went through:**
+  - `S1 OTG CLOCKS: STAGE 1 OF 8 NEXT; ITS WRITES:` and its `S1 WILL` lines;
+  - `S1 WROTE ODM1_OPTC_INPUT_CLOCK_CONTROL ... (WAS ...)` and `S1 ... SHOWED ITS STATUS IN n US`, then the same for
+    `OTG1_OTG_CLOCK_CONTROL`;
+  - `S1 OTG CLOCKS DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`;
+  - with the undo: `STEP 3 RAN 1 OF 8 STAGES (2 WRITES); UNDOING STAGES 1 TO 1`, two `U1 RESTORED` lines,
+    `U1 OTG CLOCKS UNDONE: 2 WRITES RESTORED` and `STEP 3 UNDONE AFTER STAGE 1 OF 8 ...; THE FIRMWARE'S PIPE
+    UNCHANGED`;
+  - without the undo: `STEP 3 STOPPED AFTER STAGE 1 OF 8 AS THIS BUILD ALLOWS; 2 WRITES MADE ARE LEFT IN PLACE`.
+- **Why the undo:**
+  - it shows the undo path on the hardware with the smallest stage, before any later stage depends on it;
+  - it leaves nothing across a boot, which is still unknown ground;
+  - its restore order (OTG clock first, then the input clock) is the order in which Display Core turns them off, in
+    `optc1_enable_optc_clock` as recalled (not among the files at hand).
+- **Without the undo,** OTG1's and ODM1's clocks stay on until the next boot. That boot's batch 2 shows whether the
+  firmware cleared OTG1's (`OTG_CLOCK_CONTROL`; ODM1's input clock is not among step 1's reads). It does not make
+  OTG1 count as running: the assessment reads `OTG_CURRENT_MASTER_EN_STATE`.
+- **If a wait times out,** the stage is undone and the log says `STEP 3 FAILED AT STAGE 1 AND WAS UNDONE`. If the
+  machine hangs, the hang procedure applies, as for step 1's reads.
+- Stage 2 should come in a release of its own, because it runs the first VBIOS table on the hardware.
+- The decision is the owner session's. This build keeps `STAGES_ALLOWED` 0 and `UNDO_AFTER_STAGES` false.
 
 ## Related
 
