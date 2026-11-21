@@ -516,8 +516,9 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
 }
 
 /// Undoes stage `n`: its off call, if it has one, then every register it wrote put back, last first, so the second
-/// pipe's and PHY A's registers are as before step 3 (PHY A was off). What a table wrote through the PHY's own control
-/// register bus (`RDPCS_TX_CR_ADDR`/`_DATA`) is not reached by a restore: the undo says how many such writes there were.
+/// pipe's and PHY A's registers are as before step 3 (PHY A was off). The PHY's own control register bus
+/// (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a write to its data register is a write into the PHY, so putting it
+/// back would write stale values into the PHY. What the stage set inside the PHY stays; the undo says how much.
 fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, out: &mut dyn Out) {
     if let Some(t) = light.off_call(n) {
         let mut scratch = Journal::default();
@@ -525,20 +526,24 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
             out.line(format_args!("U{} TABLE {} STOPPED ({}); RESTORING STAGE {}'S WRITES ANYWAY", n, t.index(), why, n));
         }
     }
-    let cr_bus = (seg2(0x2934 + 0xD8 * light.choice.output.phy as u32), seg2(0x2936 + 0xD8 * light.choice.output.phy as u32));
-    let (mut restored, mut through_bus) = (0, 0);
+    let p = light.choice.output.phy as u32;
+    let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
+    let (mut restored, mut addresses, mut data) = (0, 0, 0);
     let mut i = journal.len;
     while i > 0 {
         i -= 1;
         let Some((w, old, stage)) = journal.items[i] else { continue };
         if stage != n { continue; }
-        if (cr_bus.0..cr_bus.1).contains(&w.reg().offset()) { through_bus += 1; }
+        let o = w.reg().offset();
+        if o == cr_addr { addresses += 1; continue; }
+        if o == cr_data { data += 1; continue; }
         e.write(w, old);
         restored += 1;
         out.line(format_args!("U{} RESTORED {} = {:08X}", n, Name(w.reg()), old));
     }
-    if through_bus > 0 {
-        out.line(format_args!("U{} {} WRITES WENT THROUGH PHY {}'S CONTROL REGISTER BUS: WHAT THEY SET INSIDE THE PHY IS NOT RESTORED", n, through_bus, LETTERS[light.choice.output.phy as usize]));
+    if addresses + data > 0 {
+        out.line(format_args!("U{} PHY {}'S CONTROL REGISTER BUS LEFT AS IT IS: {} ADDRESS AND {} DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS",
+            n, LETTERS[p as usize], addresses, data));
     }
     out.line(format_args!("U{} {} UNDONE: {} WRITES RESTORED", n, STAGE_NAMES[n as usize - 1], restored));
 }

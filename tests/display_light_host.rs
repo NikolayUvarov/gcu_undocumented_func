@@ -211,6 +211,8 @@ fn wait_bit(byte: u32, bit: u32, at: u16) -> Vec<u8> {
 }
 const PHY_A_CNTL0: u32 = (0x34C0 + 0x2940) * 4; // RDPCSTX0_RDPCSTX_PHY_CNTL0
 const PHY_E_CNTL0: u32 = (0x34C0 + 0x2940 + 4 * 0xD8) * 4; // RDPCSTX4_RDPCSTX_PHY_CNTL0
+const PHY_A_CR_ADDR: u32 = (0x34C0 + 0x2934) * 4; // RDPCSTX0_RDPCS_TX_CR_ADDR
+const PHY_A_CR_DATA: u32 = (0x34C0 + 0x2935) * 4; // RDPCSTX0_RDPCS_TX_CR_DATA
 
 fn tables(t12: Vec<u8>, t76: Vec<u8>) -> Vec<u8> {
     image(&[(12, t12), (4, [mov(seg(2, 0x206B), 0x1F), vec![EOT]].concat()), (76, t76)])
@@ -309,6 +311,25 @@ fn a_stage_that_fails_is_undone_with_every_stage_before_it() {
     restored_but(&e, &before, &[]);
     assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 5 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED")));
     for n in 6..=STAGES { assert!(!log.iter().any(|x| made(x, n)), "stage {} ran after stage 5 failed", n); }
+}
+
+#[test]
+fn the_undo_leaves_the_phys_control_register_bus_as_it_is() {
+    // Table 12 writes PHY A's internal register 0x1234 through the bus; stage 5 then fails. Putting the bus registers
+    // back would write a stale value into the PHY: the undo leaves them, says so, and restores everything else.
+    let img = tables([mov(seg(1, 0xA0), 1), mov(PHY_A_CR_ADDR, 0x1234), mov(PHY_A_CR_DATA, 0x5678), mov(PHY_A_CNTL0, 0x0020_0001), vec![EOT]].concat(),
+        [mov(seg(2, 0x20B0), 1), vec![EOT]].concat());
+    let mut e = engine();
+    e.frames_move = false;
+    let before = e.regs.clone();
+    let (outcome, log) = run(&img, &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
+    // The only writes to the bus are the tables' own (the stage's, and the synthetic off call's that repeats them).
+    let by_tables = log.iter().filter(|x| x.contains(" T12 WROTE AT 177D0") || x.contains(" T12 WROTE AT 177D4")).count();
+    assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA || w.0 == PHY_A_CR_ADDR).count(), by_tables, "a restore wrote the bus");
+    assert!(log.iter().any(|x| x == "U2 PHY A'S CONTROL REGISTER BUS LEFT AS IT IS: 1 ADDRESS AND 1 DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS"), "{:#?}", log);
+    assert!(log.iter().any(|x| x.starts_with("U2 PIXEL CLOCK UNDONE: 3 WRITES RESTORED")), "{:#?}", log);
+    restored_but(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
 }
 
 #[test]
@@ -553,14 +574,17 @@ fn the_ryzens_own_tables_through_step_3() {
     for (w, _) in writes(&e) { assert!(l.guard().check(Reg::new(w).unwrap()).is_ok(), "{:05X}", w); }
     for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
     for t in [12, 4, 76] { assert!(log.iter().any(|x| x.contains(&format!("TABLE {} DONE", t))), "table {}", t); }
-    // The frame count held still: stage 5 fails, and the undo restores every register stages 1 to 4 wrote, saying how
-    // many of table 12's writes went through PHY A's control register bus, which a restore does not reach.
+    // The frame count held still: stage 5 fails, and the undo restores every register stages 1 to 4 wrote but PHY A's
+    // control register bus, which it leaves as it is (a write to its data register is a write into the PHY), saying how
+    // many of table 12's writes went through it.
     let mut e = answered();
     e.frames_move = false;
     let before = e.regs.clone();
     let (outcome, log) = run(&bytes, &mut e, STAGES);
     assert_eq!(outcome, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
-    restored_but(&e, &before, &[]);
-    assert!(log.iter().any(|x| x.starts_with("U2 ") && x.contains("WENT THROUGH PHY A'S CONTROL REGISTER BUS")), "{:#?}", log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ")).collect::<Vec<_>>());
+    restored_but(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
+    assert!(log.iter().any(|x| x.starts_with("U2 PHY A'S CONTROL REGISTER BUS LEFT AS IT IS: 20 ADDRESS AND 17 DATA WRITES")), "{:#?}", log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ")).collect::<Vec<_>>());
+    let table_data = log.iter().filter(|x| x.starts_with("S2 T12 WROTE AT 177D4")).count();
+    assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA).count(), table_data, "the undo wrote into PHY A");
     for x in log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ") && !x.contains(" WROTE ")) { eprintln!("{}", x); }
 }
