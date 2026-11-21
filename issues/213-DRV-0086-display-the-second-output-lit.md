@@ -57,6 +57,36 @@ not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command t
 writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core
 (step 1, with KRN's grant).
 
+## Progress: step 1, ready to run (2026-11-21)
+
+On `claude/213-DRV-0086-display-reads-the-engine`, built on KRN's
+[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md) (the `display` boot image and `init`'s grant of BAR 5
+in `SLOT_DEV0`, the command register as the firmware left it; ABI 37, handoff 38) with the survey branch merged in.
+`display/src/main.rs` replaces KRN's stub:
+
+- It logs the grant as the stub did (`[DISPLAY] PCI 1002:1638 (DEVICE n), COMMAND xxxx, BAR 5 AT xxxxxxxx, k KIB
+  GRANTED; ...`) and runs step 1 only on the Radeon `1002:1638` with a grant of at least 512 KiB.
+- **`BATCHES_ALLOWED`, set to 0:** how many of the seven batches this build may read. At 0 it maps nothing and reads
+  nothing; it logs each batch and every register it would read (156 lines of step 1, paced 20 ms: about 3 s). It is raised one run at a time,
+  on the owner session's word.
+- `display/src/batches.rs`: the seven batches of the survey's proposal (hwdocs/cezanne-display.md), registers Display
+  Core itself reads: 1 HPD (10), 2 the OTGs' state (76), 3 the power domains (8), 4 the HUBPs batch 3 shows powered
+  (5 each), 5 the DIG front and back ends of the board's PHYs (13), 6 the aperture (6), 7 the clocks (14). Each batch is
+  named in the log, then 1 s passes, then each register is read and its value logged at once, so that a hang names its
+  register; 3 s between batches; a summary decoded after each (the OTGs' timings, the domains, the surfaces, the DIG
+  wiring, the aperture as GPU addresses). The bus it reads through has no write, and a `Reg` can name no MSI-X byte.
+- `tests/display_batches_host.rs`, 9 cases: the batches as proposed and inside the engine; a build of 0 reads nothing
+  and names every batch; a build of n reads exactly batches 1 to n; each batch named and paused before its first read;
+  the state Linux's Display Core dumped on the Ryzen decodes as it printed it (OTG 0 3440x1440 in 3600x1500, OTG 1
+  2560x1600 in 2720x1646, OTGs 2 and 3 off); batch 4 only for the HUBPs batch 3 shows powered; an unmapped register not
+  read; every line within a log record; every register of the map at the header's offset.
+
+Tested on LEG9 only (the build and the host cases). It has not run on the Ryzen: it needs the stick rewritten with an
+ABI 37 release that holds KRN's image; the owner session says when. What to look for in the first run's log: KRN's
+`[INIT] display: ... COMMAND xxxx BEFORE THE GRANT, xxxx AFTER`, then `[DISPLAY] PCI 1002:1638 ...`, the seven `NOT
+READ` batches with their registers, `STEP 1 DONE: 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN` and the command
+register after; DP-2 keeps its picture.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
