@@ -73,3 +73,26 @@ fn the_second_pattern_runs_half_a_minute_ahead() {
     assert_eq!(pattern_frame(1, 5, 30), 905);
     assert_eq!(pattern_frame(1, u32::MAX, 30), 899, "it wraps");
 }
+
+// 158-DRV-0083: which modes the gateway offers.
+#[test]
+fn a_yuy2_mode_is_offered_within_opens_sizes_and_rates_and_what_the_settings_carry() {
+    let vga30 = 640 * 480 * 2 * 30;
+    assert!(offered(true, 640, 480, 30, vga30, None), "a bulk camera's YUY2 mode");
+    assert!(offered(true, 640, 480, 30, vga30, Some(24_480_000)), "carried by 3 × 1024 bytes a microframe");
+    assert!(!offered(true, 640, 480, 30, vga30, Some(928_000)), "beyond a setting of 128 bytes");
+    assert!(!offered(false, 640, 480, 30, vga30, None), "MJPEG is not decoded yet");
+    assert!(!offered(true, 1920, 1080, 5, 1920 * 1080 * 2 * 5, None), "wider than open takes");
+    assert!(offered(true, 1280, 1024, 5, 1280 * 1024 * 2 * 5, None), "the largest open takes");
+    assert!(!offered(true, 320, 240, 0, 0, None), "less than one a second");
+    assert!(!offered(true, 160, 120, 120, 160 * 120 * 2 * 120, None), "faster than open takes");
+    assert!(opens(16, 16, 1) && !opens(15, 16, 1) && !opens(16, 1025, 1) && !opens(16, 16, 61));
+}
+
+#[test]
+fn a_test_pattern_has_three_modes_the_pattern_draws() {
+    assert_eq!(PATTERN_MODES.len(), 3, "two at least, for a program that steps through them");
+    for &(w, h, rate) in &PATTERN_MODES {
+        assert!(w % 32 == 0 && (64..=640).contains(&w) && (32..=480).contains(&h) && (1..=30).contains(&rate), "{w}x{h} at {rate}/s");
+    }
+}

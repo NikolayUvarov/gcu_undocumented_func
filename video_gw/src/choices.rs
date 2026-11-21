@@ -39,3 +39,21 @@ pub fn patterns(first: Option<Option<u8>>) -> usize {
 /// streams of the two differ in their counters.
 pub fn pattern_frame(n: u8, sequence: u32, rate: u8) -> u32 { if n == 0 { sequence } else { sequence.wrapping_add(30 * rate as u32) } }
 
+/// The frame sizes and rates `open` takes for a USB camera (158-DRV-0083): what a frame's pages and the conversion
+/// were sized for.
+pub const WIDTHS: core::ops::RangeInclusive<u16> = 16..=1280;
+pub const HEIGHTS: core::ops::RangeInclusive<u16> = 16..=1024;
+pub const RATES: core::ops::RangeInclusive<u32> = 1..=60;
+
+/// Whether `open` takes a USB camera at `width` × `height` and `rate`.
+pub fn opens(width: u16, height: u16, rate: u32) -> bool { WIDTHS.contains(&width) && HEIGHTS.contains(&height) && RATES.contains(&rate) }
+
+/// Whether the gateway offers a camera's mode: YUY2 (it decodes no other encoding yet, 158-DRV-0084), within what
+/// `open` takes, and carried by the camera's streaming settings, which move `capacity` bytes a second at most (None:
+/// a bulk camera, whose payloads take the bus as it comes).
+pub fn offered(yuy2: bool, width: u16, height: u16, rate: u32, bytes_per_second: u64, capacity: Option<u64>) -> bool {
+    yuy2 && opens(width, height, rate) && capacity.is_none_or(|c| bytes_per_second <= c)
+}
+
+/// The modes a test pattern lists (any width a multiple of 32 up to 640 is drawn; these are for the tests).
+pub const PATTERN_MODES: [(u16, u16, u8); 3] = [(640, 480, 30), (320, 240, 10), (160, 120, 5)];

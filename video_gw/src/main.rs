@@ -31,6 +31,8 @@ const LOOK_MS: usize = 2000; // a missing camera is looked for again at most thi
 const WIDEST: u16 = 640; // the size a camera is offered at: its largest YUY2 frame up to this width
 const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and later for the next one
 const LISTED: usize = 4; // video.wit's list of cameras, the test pattern among them
+const LISTED_MODES: usize = 256; // video.wit 1.1's list of a camera's modes
+const NO_MODE: u16 = 0xFFFF; // `opened`'s index for a pattern drawn at a size none of its modes has
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
 // While two bulk cameras stream, a pump is one transfer of at most this many bytes, the cameras in turn, and the loop
@@ -40,8 +42,8 @@ const SHARED_BULK: usize = 16 * 1024;
 const SHARED_MS: u32 = 1;
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
-// name and what is offered.
-struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8) }
+// name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
+struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)> }
 
 // A camera's open stream: the camera (its streaming handle), the frame size it sends, the frames assembled from its
 // packets (or bulk transfers), and counts for the log.
@@ -61,7 +63,8 @@ impl Source {
     fn gone(&self) -> bool { matches!(self, Source::Camera(live) if live.gone) }
 }
 
-struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64, sequence: u32, frame: Pages, last: Option<idl::Frame>, source: Source }
+// `opened`: what `opened` answers its owner (video.wit 1.1).
+struct Stream { owner: u64, width: usize, height: usize, rate: u8, start_ns: u64, sequence: u32, frame: Pages, last: Option<idl::Frame>, source: Source, opened: idl::Opened }
 
 struct Usb { host: Option<Host>, cameras: Vec<Camera>, looked: usize }
 
@@ -168,7 +171,9 @@ impl Usb {
                 info.vendor, info.product, name, described.version >> 8, described.version & 0xFF, described.control, described.streaming, described.endpoint,
                 if described.bulk { "BULK" } else { "ISOCHRONOUS" }, offered.0, offered.1, offered.2);
             log_formats(&described);
-            self.cameras.push(Camera { streaming, info: described, name, offered });
+            let modes = camera_modes(&described, info.speed);
+            log_modes(&modes);
+            self.cameras.push(Camera { streaming, info: described, name, offered, modes });
             self.cameras.sort_by_key(|c| c.streaming);
             let order: Vec<String> = self.cameras.iter().enumerate().map(|(n, c)| format!("{} \"{}\"", n, c.name)).collect();
             mind::println!("[VIDEO] CAMERAS: {}", order.join(", "));
@@ -218,19 +223,64 @@ fn product(host: &mut Host, control: u32) -> Option<Text<24>> {
     Text::new(name.trim_end_matches(['?', ' ']))
 }
 
-// Every format's frame sizes and highest rates, and the streaming settings, a line each (log records are short).
+// Every format's frame sizes and their rates (each listed interval's, 158-DRV-0083), and the streaming settings, a line
+// each (log records are short).
 fn log_formats(camera: &uvc::Camera) {
     for &(index, encoding) in &camera.formats {
         let mut line = format!("[VIDEO]   FORMAT {} {}:", index, match encoding { uvc::Encoding::Yuy2 => String::from("YUY2"), uvc::Encoding::Mjpeg => String::from("MJPEG"), uvc::Encoding::Other(f) => format!("{:02X?}", f) });
         for f in camera.frames.iter().filter(|f| f.format == index) {
-            if line.len() > 140 { mind::println!("{}", line); line = String::from("[VIDEO]    "); }
-            line += &format!(" {}X{} ({}/S)", f.width, f.height, f.max_rate());
+            let rates: Vec<String> = f.listed().iter().map(|&i| format!("{}", 10_000_000u32.checked_div(i).unwrap_or(0))).collect();
+            let size = format!(" {}X{} ({}/S)", f.width, f.height, rates.join(","));
+            if line.len() + size.len() > 150 { mind::println!("{}", line); line = String::from("[VIDEO]    "); }
+            line += &size;
         }
         mind::println!("{}", line);
     }
     let mut line = String::from("[VIDEO]   SETTINGS (BYTES A MICROFRAME):");
     for a in &camera.alternates { line += &format!(" {}={}", a.setting, a.bytes()); }
     mind::println!("{}", line);
+}
+
+// A camera's modes as `modes` lists them (video.wit 1.1, 158-DRV-0083): the descriptors' order, the first LISTED_MODES,
+// each offered or not by choices::offered against what its streaming settings carry at the device's `speed`.
+fn camera_modes(camera: &uvc::Camera, speed: u8) -> Vec<(uvc::Mode, idl::Mode)> {
+    let capacity = camera.capacity(speed);
+    camera.modes().into_iter().take(LISTED_MODES).map(|m| {
+        let encoding = match m.encoding { uvc::Encoding::Yuy2 => idl::Encoding::Yuy2, uvc::Encoding::Mjpeg => idl::Encoding::Mjpeg, uvc::Encoding::Other(_) => idl::Encoding::Uncompressed };
+        let offered = choices::offered(m.encoding == uvc::Encoding::Yuy2, m.width, m.height, m.rate(), m.bytes_per_second(), capacity);
+        (m, idl::Mode { encoding, width: m.width, height: m.height, rate: m.rate().min(255) as u8, interval: m.interval, offered })
+    }).collect()
+}
+
+// How many modes a camera has and offers, and why the others are not: a line for the log.
+fn log_modes(modes: &[(uvc::Mode, idl::Mode)]) {
+    let count = |f: &dyn Fn(&idl::Mode) -> bool| modes.iter().filter(|(_, m)| f(m)).count();
+    let yuy2 = |m: &idl::Mode| m.encoding == idl::Encoding::Yuy2;
+    mind::println!("[VIDEO]   MODES: {}, {} OFFERED; NOT: {} YUY2 BEYOND {}X{} AT {}/S OR THE SETTINGS, {} MJPEG (NOT DECODED YET), {} OTHER", modes.len(),
+        count(&|m| m.offered), count(&|m| yuy2(m) && !m.offered), choices::WIDTHS.end(), choices::HEIGHTS.end(), choices::RATES.end(),
+        count(&|m| m.encoding == idl::Encoding::Mjpeg), count(&|m| m.encoding == idl::Encoding::Uncompressed));
+}
+
+// The modes a test pattern lists (video.wit 1.1): drawn by the gateway, each offered.
+fn pattern_modes() -> Vec<idl::Mode> {
+    choices::PATTERN_MODES.iter().map(|&(width, height, rate)| idl::Mode { encoding: idl::Encoding::Synthetic, width, height, rate, interval: 10_000_000 / rate as u32, offered: true }).collect()
+}
+
+// What `opened` says of a camera stream: the listed mode of the frame size it streams whose interval is nearest the
+// committed one, and whether its frames are scaled to the size asked for.
+fn camera_opened(number: u8, camera: &Camera, live: &Live, width: u16, height: u16) -> idl::Opened {
+    let committed = (live.interval_ns / 100) as u32;
+    let found = camera.modes.iter().enumerate().filter(|(_, (m, _))| m.format == live.size.format && m.frame == live.size.frame)
+        .min_by_key(|(_, (m, _))| m.interval.abs_diff(committed));
+    let (index, mode) = found.map_or((NO_MODE, idl::Mode::default()), |(i, (_, m))| (i as u16, *m));
+    idl::Opened { camera: number, index, mode, scaled: (width, height) != (live.size.width, live.size.height) }
+}
+
+// What `opened` says of a pattern stream: its listed mode of that size and rate, or NO_MODE for another one it draws.
+fn pattern_opened(number: u8, width: u16, height: u16, rate: u8) -> idl::Opened {
+    let index = choices::PATTERN_MODES.iter().position(|&m| m == (width, height, rate)).map_or(NO_MODE, |i| i as u16);
+    let mode = idl::Mode { encoding: idl::Encoding::Synthetic, width, height, rate, interval: 10_000_000 / rate.max(1) as u32, offered: true };
+    idl::Opened { camera: number, index, mode, scaled: false }
 }
 
 // Probes and commits the frame size nearest `width` × `height` at `rate`, and selects the setting that carries it.
@@ -432,7 +482,7 @@ fn main(_info: &'static BootInfo) {
                 let admitted = choices::admit(&held, sender, key).map_err(|refused| match refused { choices::Refused::NotFound => idl::Error::NotFound, choices::Refused::Busy => idl::Error::Busy });
                 let result = if let Err(e) = admitted { Err(e) }
                     else if matches!(key, Some(Key::Pattern(_))) && !video::supported(width as usize, height as usize, rate) { Err(idl::Error::Invalid) }
-                    else if matches!(key, Some(Key::Camera(_))) && !((16..=1280).contains(&width) && (16..=1024).contains(&height) && (1..=60).contains(&rate)) { Err(idl::Error::Invalid) }
+                    else if matches!(key, Some(Key::Camera(_))) && !choices::opens(width, height, rate as u32) { Err(idl::Error::Invalid) }
                     else {
                         // An earlier stream of the same owner is closed first (`held` and `streams` differ by the gone ones).
                         if let Some(i) = mine { if let Source::Camera(live) = &streams.swap_remove(i).source { let _ = stop(&mut usb, live); } }
@@ -455,8 +505,13 @@ fn main(_info: &'static BootInfo) {
                                     Source::Pattern(_) => String::from("test pattern 2"),
                                     Source::Camera(l) => format!("CAMERA {} \"{}\" (ITS {}X{} YUY2, {})", camera, usb.camera(l.camera).map_or("", |c| c.name.as_str()), l.size.width, l.size.height, if l.bulk.is_some() { String::from("BULK") } else { format!("SETTING {}", l.setting) }),
                                 };
-                                mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) });
-                                streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source });
+                                let opened = match &source {
+                                    Source::Pattern(_) => pattern_opened(camera, width, height, rate),
+                                    Source::Camera(l) => usb.camera(l.camera).map_or_else(Default::default, |c| camera_opened(camera, c, l, width, height)),
+                                };
+                                mind::println!("[VIDEO] PID {} OPENED {} {}x{} AT {}/S{}; MODE {}", sender, what, width, height, rate, if streams.is_empty() { String::new() } else { format!(", BESIDE {} MORE", streams.len()) },
+                                    if opened.index == NO_MODE { String::from("NONE LISTED") } else { format!("{}{}", opened.index, if opened.scaled { ", SCALED" } else { "" }) });
+                                streams.push(Stream { owner: sender, width: width as usize, height: height as usize, rate, start_ns: mind::time::monotonic_ns(), sequence: 0, frame, last: None, source, opened });
                                 let _ = display::camera(DISPLAY);
                                 marked = mind::time::uptime_ms();
                                 Ok(())
@@ -488,6 +543,20 @@ fn main(_info: &'static BootInfo) {
             idl::Request::Frame => {
                 let last = mine.ok_or(idl::Error::NotOpen).and_then(|i| streams[i].last.ok_or(idl::Error::NotOpen));
                 idl::reply_frame(call, last.as_ref().map_err(|e| *e))
+            }
+            idl::Request::Modes { camera } => {
+                usb.look();
+                let handles: Vec<u32> = usb.cameras.iter().map(|c| c.streaming).collect();
+                let listed: Result<Vec<idl::Mode>, idl::Error> = match choices::key(camera, &handles, patterns, LISTED) {
+                    Some(Key::Pattern(_)) => Ok(pattern_modes()),
+                    Some(Key::Camera(handle)) => usb.camera(handle).map(|c| c.modes.iter().map(|(_, m)| *m).collect()).ok_or(idl::Error::NotFound),
+                    None => Err(idl::Error::NotFound),
+                };
+                idl::reply_modes(call, listed.as_deref().map_err(|e| *e))
+            }
+            idl::Request::Opened => {
+                let opened = mine.map(|i| streams[i].opened).ok_or(idl::Error::NotOpen);
+                idl::reply_opened(call, opened.as_ref().map_err(|e| *e))
             }
             idl::Request::Close => {
                 let result = if let Some(i) = mine {

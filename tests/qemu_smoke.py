@@ -8228,7 +8228,8 @@ def cameras_suite(args):
     """158-DRV-0082: the video gateway holds a stream for each camera. With two test patterns (video/synthetic begins
     with "2"), tests/video_stub reads the first for 8 s while another reads the second for 3 s, each its own pattern (its
     counter half a minute ahead); the camera a program holds is busy for a third, and a number past the two is not
-    found. With APP's `camera -c` (158-APP-0147) in the tree, the same through `camera`."""
+    found. 158-DRV-0083 (video.wit 1.1): a pattern's three modes listed, each opened in turn with frames of its size,
+    and `opened` names the mode. With APP's `camera -c` (158-APP-0147) in the tree, the same through `camera`."""
     if not raw_tools():
         print("SKIP: cameras suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
@@ -8267,11 +8268,36 @@ def cameras_suite(args):
             assert re.search(r"\[VIDEO\] PID \d+ OPENED test pattern 2 320x240 AT 10/S, BESIDE 1 MORE", log), log
             closed = [int(n) for n in re.findall(r"\[VIDEO\] PID \d+ CLOSED AFTER (\d+) FRAMES", log)]
             assert len(closed) == 2 and max(closed) >= 76, (closed, log)
+            stepped = cameras_modes_check(vm)
             programs = cameras_programs_check(vm)
         finally:
             vm.close()
     print(f"PASS: cameras: two test patterns listed; one read for 8 s ({got[1]} frames) while the other was read for 3 s ({read[1]} frames), "
-          f"each its own pattern; the camera a program holds is busy for another, a third camera not found{programs} (158-DRV-0082)", flush=True)
+          f"each its own pattern; the camera a program holds is busy for another, a third camera not found{programs} (158-DRV-0082); "
+          f"a pattern's 3 modes listed and each opened in turn ({stepped}), `opened` naming the mode (158-DRV-0083)", flush=True)
+
+
+def cameras_modes_check(vm):
+    """158-DRV-0083: video.wit 1.1's `modes` and `opened` on the second pattern, through tests/video_stub: its three
+    modes listed and offered, each opened in turn for 2 s with frames of its size and its own pattern, and a size none
+    of them has drawn as asked. Returns the frames each mode gave, for the summary."""
+    text = vm.command("videostub modes 1", timeout=30).replace("\r", "")
+    listed = re.findall(r"VIDEO STUB: MODE (\d+): SYNTHETIC (\d+)X(\d+) AT (\d+)/S \(INTERVAL (\d+)\), OFFERED\n", text)
+    assert [m[1:4] for m in listed] == [("640", "480", "30"), ("320", "240", "10"), ("160", "120", "5")], text
+    require(text, "VIDEO STUB: CAMERA 1: 3 MODES, 3 OFFERED")
+    require(vm.command("videostub modes 2", timeout=30), "VIDEO STUB: MODES OF CAMERA 2: NotFound")
+    text = re.sub(r"\[PID \d+\] ", "", vm.command("videostub step 1 2", timeout=60).replace("\r", ""))  # the shell names a foreground program's lines
+    frames = []
+    for (index, width, height, rate) in [("0", "640", "480", "30"), ("1", "320", "240", "10"), ("2", "160", "120", "5")]:
+        require(text, f'VIDEO STUB: OPENED CAMERA 1 "test pattern 2" {width}X{height} AT {rate}/S: MODE {index}, SYNTHETIC {width}X{height} AT {rate}/S\n')
+        got = re.search(rf"VIDEO STUB: MODE {index}: {width}X{height} AT {rate}/S\nVIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE \d+\.\.\d+, FIRST AFTER \d+ MS, "
+                        rf"{width}X{height}, THE COUNTER {30 * int(rate)} AHEAD\n", text)
+        assert got and int(got[1]) >= 2 * int(rate) * 8 // 10, (index, text)
+        frames.append(f"{width}x{height}: {got[1]}")
+    require(text, "VIDEO STUB: CAMERA 1: 3 OFFERED MODES OPENED, 0 REFUSED")
+    # A size none of the modes has: the pattern draws it, and `opened` names no mode.
+    require(vm.command("videostub 1 1 256x192 10", timeout=30).replace("\r", ""), 'VIDEO STUB: OPENED CAMERA 1 "test pattern 2" 256X192 AT 10/S: MODE 65535, SYNTHETIC 256X192 AT 10/S\n')
+    return ", ".join(frames)
 
 
 def cameras_programs_check(vm):
