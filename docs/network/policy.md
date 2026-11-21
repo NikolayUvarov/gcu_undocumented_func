@@ -119,7 +119,7 @@ A program that reaches a host the user names only when it runs (`get URL`, a mai
 
 - **`card N off`** takes card `N` out of use without touching its cable, so the traffic can be moved between a wired card and the station in software:
   - no flow goes through it, and the default route moves to another card;
-  - its address is dropped, and its TCP connections are aborted, as at its link going down;
+  - its address is dropped, and its TCP connections are aborted at once, as at its link going down for longer than 30 s or with no lease (801-NET-0089);
   - the stack sends nothing through it, DHCP included. Its driver keeps the link, and the stack still asks it whether the link is up.
 - **Removing the line** puts the card back. DHCP runs on it again, and it takes its flows back.
 - **The broker tells the stack** the cards out of use as it tells the preferred card: at start, after each change and every 10 seconds (`idl/socket.wit` 2.11 `withdraw`, for the policy's badge and the operator's). A card that appears while its line stands starts out of use.
