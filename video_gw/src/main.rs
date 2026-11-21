@@ -41,7 +41,8 @@ const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken th
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
-struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)> }
+// `stopped_ns`: when its last stream stopped (0: none yet); a bulk camera is opened again STOPPED_MS after it at the soonest.
+struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, stopped_ns: u64 }
 
 // A camera's open stream: the camera (its streaming handle), the frame size it sends, the frames assembled from its
 // packets (or bulk transfers), and counts for the log.
@@ -179,7 +180,7 @@ impl Usb {
             log_formats(&described);
             let modes = camera_modes(&described, info.speed);
             log_modes(&modes);
-            self.cameras.push(Camera { streaming, info: described, name, offered, modes });
+            self.cameras.push(Camera { streaming, info: described, name, offered, modes, stopped_ns: 0 });
             self.cameras.sort_by_key(|c| c.streaming);
             let order: Vec<String> = self.cameras.iter().enumerate().map(|(n, c)| format!("{} \"{}\"", n, c.name)).collect();
             mind::println!("[VIDEO] CAMERAS: {}", order.join(", "));
@@ -305,6 +306,10 @@ fn pattern_opened(number: u8, width: u16, height: u16, rate: u8) -> idl::Opened 
 // Probes and commits the frame size nearest `width` × `height` at `rate`, and selects the setting that carries it.
 fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) -> Result<Live, idl::Error> {
     let info = &camera.info;
+    // A bulk camera stopped a moment ago is given STOPPED_MS to stop: the infrared one kept its old frame size once when
+    // committed 20 ms after (the Ryzen's, 158-DRV-0083). Only a change of mode waits; a close does not.
+    let since = mind::time::monotonic_ns().saturating_sub(camera.stopped_ns) / 1_000_000;
+    if info.bulk && camera.stopped_ns != 0 && since < STOPPED_MS as u64 { let _ = mind::time::sleep(STOPPED_MS - since as usize); }
     let Some(size) = info.choose(width, height).cloned() else { mind::println!("[VIDEO] \"{}\" HAS NO YUY2 FORMAT (MJPEG IS NOT DECODED YET)", camera.name); return Err(idl::Error::Invalid) };
     let interval = size.interval(10_000_000 / rate as u32);
     let probe = uvc::Probe::new(info.version, size.format, size.frame, interval);
@@ -346,8 +351,7 @@ fn stop(usb: &mut Usb, live: &Live) -> String {
             // Its one setting selected again resets the interface: a camera kept its stream's frame size after the
             // clear-halt alone, and the next commit's size never came (the Ryzen's, 158-DRV-0083).
             if let Err(e) = host.select(live.camera, 0) { mind::println!("[VIDEO] SETTING 0 OF THE BULK CAMERA FAILED ({:?})", e); }
-            // The camera is given STOPPED_MS to stop: the infrared one kept its old frame size once when committed 20 ms after.
-            let _ = mind::time::sleep(STOPPED_MS);
+            if let Some(c) = usb.cameras.iter_mut().find(|c| c.streaming == live.camera) { c.stopped_ns = mind::time::monotonic_ns(); }
         } else if let Err(e) = host.select(live.camera, 0) { usb.lost(if host_gone(e) { None } else { Some(live.camera) }); }
     }
     mind::println!("{}", timing(live));

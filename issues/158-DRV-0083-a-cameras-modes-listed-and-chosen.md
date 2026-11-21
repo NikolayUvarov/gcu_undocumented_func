@@ -77,12 +77,49 @@ The maintainer (2026-11-21): switching must be possible from inside the applicat
 - checks that `opened` names each mode, and gives 65535 for 256×192;
 - checks that `modes` of camera 2 is not found.
 
+**On the Ryzen (2026-11-21, 15:04-15:51 UTC), with the `usb_host` of 158-DRV-0082's bulk streams):**
+- **The lists:**
+  - camera 0 (`0471:A6CA`): `MODES: 26, 10 OFFERED; NOT: 3 YUY2 BEYOND 1280X1024 …, 13 MJPEG`;
+  - camera 1 (`0471:A6CD`): `MODES: 24, 11 OFFERED; NOT: 1 YUY2 …, 12 MJPEG`;
+  - each frame size has one interval;
+  - their descriptors (1126 and 948 bytes) are in `tests/data/uvc-0471-a6ca.hex` and `-a6cd.hex`, and the host cases check the 13 and 12 YUY2 modes and the 10 and 11 offered;
+  - **not compared with Linux's `v4l2-ctl --list-formats-ext`:** a Linux session needs the owner session's word.
+- **Each offered mode of camera 0 opened in turn, 4 s each** (`videostub step 0 4`, c687acf56's gateway): every one delivered frames of its size. Good frames in about 3.7 s of stream, and broken ones:
+
+  | mode | good | broken | longest gap |
+  |---|---|---|---|
+  | 640×480 at 25 | 63 | 6 | 6 ms |
+  | 1280×1024 at 5 | 17 | 0 | 5 ms |
+  | 1280×960 at 9 | 29 | 21 | 5 ms |
+  | 1280×720 at 10 | 33 | 19 | 5 ms |
+  | 1024×768 at 15 | 48 | 4 | 15 ms |
+  | 800×600 at 20 | 56 | 9 | 4 ms |
+  | 640×360 at 30 | 56 | 5 | 7 ms |
+  | 352×288 at 30 | 57 | 3 | 6 ms |
+  | 320×240 at 30 | 58 | 0 | 5 ms |
+  | 160×120 at 30 | 58 | 0 | 4 ms |
+
+  - **Rates:** camera 0 gives about 16 good frames a second in its 30-a-second modes in this room's light, as it did alone.
+  - **Large frames** broke before they were converted in bands: 1280×720 had 12 good and 32 broken, the longest gap 55 ms.
+- **Camera 1** (the infrared one):
+  - 640×480 at 30: 112 to 113 good frames in 4 s, 0 or 1 broken;
+  - 1280×1024 at 5: 16 good, 1 broken;
+  - 1280×960 at 5: no good frame in 5 s, the camera's data slower than its rate;
+  - 1280×720 at 10 (an earlier build): every frame 348 bytes short, which is 29 payload headers' bytes, and its payload headers carried the error bit (`0xCD`);
+  - its other modes were not reached on this run, nor compared.
+- **A change of mode:**
+  - from one stream's close to the next stream's first frame takes 0.6 to 0.95 s on camera 0, of which the gateway's open to first frame is 0.2 to 0.73 s (more for larger frames);
+  - the clear-halt alone did not stop a bulk camera's stream: camera 0 kept sending 640×480 frames after 1280×1024 was committed. Selecting setting 0 at the close cured that;
+  - camera 1 still kept its old size once when committed 20 ms after the close; it now waits 250 ms after its last close before it is committed again.
+- **Not established:**
+  - the tolerance asked for by the third criterion;
+  - camera 1's modes as a whole;
+  - why camera 1's high modes break.
+
 **Not done yet:**
 - **On the Ryzen:**
-  - each camera's list against Linux's (`v4l2-ctl --list-formats-ext`), and its descriptors' bytes for host cases;
-  - each offered mode opened and its frames counted;
-  - the gap of a change of mode.
-  The machine was in another track's hands, then hung in Linux, when this was written.
+  - each camera's list against Linux's (`v4l2-ctl --list-formats-ext`), which needs a Linux session;
+  - camera 1's offered modes all opened and counted with the last build.
 - **The programs' keys:** 158-APP-0152 (APP, on `claude/wizardly-franklin-kec1a9`) waits for this branch.
 
 
