@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -1289,7 +1289,7 @@ def normal_suite(vm):
         assert re.search(r"\[INIT\] PLATFORM POWER POLICY FOR WLAN: ABSENT \([1-9]\d* AML TABLES READ WHOLE, NONE NAMES WRDS, RWRD, RWSI, RWGS OR RTAG\)", log), log[-1500:]
     if vm.arch != "aarch64":
         # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
-        for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
+        for name in ("bcm_wifi", "rtl8168", "rtw89_wifi", "display"):
             assert name not in services, services
             require(log, f"[INIT] {name} NOT STARTED: NO DEVICE")
     # 750-KRN-0192: the kernel names whose screen is in front, as the compositor logs it: first the shell's, app2's (held
@@ -7563,7 +7563,7 @@ MODES_EFFECTOR_FILES = {"netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
                         "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY}
 
 
-SAFE_LIST = ("bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci")
+SAFE_LIST = ("bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi", "rtw88_wifi", "bt_hci", "display")
 SETTLED = "[INIT] EVERY START OF THE SAFE START'S LIST SETTLED: A RUN CUT NOW LEAVES NOTHING OUT"
 
 

@@ -55,17 +55,17 @@ fn version_read_needs_only_the_old_record() {
 // (110-NET-0070).
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!(BOOT_HANDOFF_VERSION, 36);
+    assert_eq!(BOOT_HANDOFF_VERSION, 38);
     // A handoff is numbered above every ABI when it changes; an ABI change alone leaves it (ABI 26, 750-KRN-0192; ABI 29,
     // 100000-KRN-0222). It stays above every ABI a loader wrote in its place before the handoff existed (ABI 18 and older,
     // 351-KRN-0166). Handoffs 33, 34 and 35 came at ABI 32 (110-NET-0070, 112-NET-0072, 000-KRN-0235), as handoff 30 at ABI 29 (100000-KRN-0221), and ABIs 33 (801-KRN-0246), 34 (000-KRN-0217) and 35 (801-KRN-0261) left it. Handoff 36 came at ABI 35, with ABI 36
-    // (352-KRN-0268: BootInfo's live volume): the next change of the
+    // (352-KRN-0268: BootInfo's live volume), and handoff 38 at ABI 37 (213-KRN-0270: `display`): the next change of the
     // handoff takes a number above ABI_VERSION.
     assert!(BOOT_HANDOFF_VERSION > 18, "a handoff is above every ABI an older loader wrote in its place");
-    const ABI_AT_THE_HANDOFF: u32 = 35;
+    const ABI_AT_THE_HANDOFF: u32 = 37;
     assert!(BOOT_HANDOFF_VERSION > ABI_AT_THE_HANDOFF && ABI_VERSION >= ABI_AT_THE_HANDOFF, "a handoff that changed was numbered above every ABI then");
-    assert_eq!(BOOT_IMAGES, 52, "a change of the boot images is a change of the handoff");
-    assert_eq!(size_of::<BootInfo>(), 1208, "a change of BootInfo is a change of the handoff");
+    assert_eq!(BOOT_IMAGES, 53, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1224, "a change of BootInfo is a change of the handoff");
     // httpd serves through tls and parse, so it starts after both (110-NET-0070); it comes after effector, as the
     // gateway's lists of services hold the first 48 units alone (requests-EFF.md).
     let at = BOOT_SERVICES.iter().position(|&name| name == "httpd").unwrap();
@@ -75,7 +75,10 @@ fn the_handoff_takes_only_its_own_loader() {
     let at = BOOT_SERVICES.iter().position(|&name| name == "sshd").unwrap();
     assert_eq!((BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("clipboard", "sshd.elf"));
     let at = BOOT_SERVICES.iter().position(|&name| name == "clipboard").unwrap();
-    assert_eq!((BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("shell", "clipboard.elf"));
+    assert_eq!((BOOT_SERVICES[at + 1], BOOT_FILES[at]), ("display", "clipboard.elf"));
+    // display, the Radeon's display engine (213-KRN-0270), last before the shell: it needs no other service.
+    let shown = BOOT_SERVICES.iter().position(|&name| name == "display").unwrap();
+    assert_eq!((BOOT_SERVICES[shown + 1], BOOT_FILES[shown]), ("shell", "display.elf"));
     assert!(BOOT_SERVICES.iter().position(|&name| name == "effector").unwrap() < 48, "the gateway's lists hold the effector session");
     assert!(at > BOOT_SERVICES.iter().position(|&name| name == "parse").unwrap() && at > BOOT_SERVICES.iter().position(|&name| name == "netpolicy").unwrap());
     // uart_serial serves the link's line on a board's UART, so it starts before link (100000-KRN-0221).
