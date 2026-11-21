@@ -500,10 +500,11 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
                     let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
                     (live.dropped, live.torn) = (live.dropped + 1, true);
                     if live.why.is_empty() { live.why = why; mind::println!("[VIDEO] \"{}\": A MOTION JPEG FRAME DROPPED: {}", camera, why.to_uppercase()); }
-                    continue;
                 }
             }
         }
+        // Frames dropped one after another still end the wait FIRST_MS after the last one shown.
+        let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
         let shown = if live.mjpeg { live.decoded_ns } else { live.good_ns };
         if now - shown.max(live.opened_ns) > FIRST_MS * 1_000_000 {
             mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
