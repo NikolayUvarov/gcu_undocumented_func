@@ -36,7 +36,7 @@ Later, the same intake takes the machines' own problem reports of [263](../../is
 | Where | Client | Identity (section 4) |
 |---|---|---|
 | A MIND machine: a PC, a board, a phone | `improve`, a program: commands in the console, then a window in `wm`, then the phone's screen | its own Ed25519 key, a secret of its own in `keystore` (000-NET-0045) |
-| Any computer: Linux, macOS, Windows | `improve`, a host program built from the same crate | its own Ed25519 key in the user's config directory, mode 0600 |
+| Any computer: Linux, macOS, Windows | `improve`, a host program built from the same crate ([improve.md](improve.md); Linux and macOS built) | its own Ed25519 key in the user's config directory, mode 0600 |
 | Any browser, a phone's included | the hub's web pages | a session, opened by a pairing code from a device of the same user (4.4) |
 
 **The commands,** the same in both programs:
@@ -335,6 +335,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | `POST devices` | register: the key, the name, the kind, the platform, a display name or a pairing code, optionally a contact, optionally the proof of work |
 | `GET challenge` | a challenge, unsigned, to sign the first call with, and the proof of work a registration needs now |
 | `GET devices/me` | the state, the admin's messages, the user, the trust, the quotas left, the next challenge |
+| `GET devices` | the user's devices, the asking one marked |
 | `POST devices/me/version` | the release the device runs, which moves its user's delivered requests to `awaiting-check` (6.3) |
 | `POST devices/me/messages` | an answer to the admin's question during registration |
 | `POST devices/pair`, `DELETE devices/{id}` | a pairing code; revoking a device |
@@ -383,7 +384,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | 2+ | 100003-APP-0148 (done) | what stage 2 left: a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself, the flag on a request for a credential; `hub-api 2` |
 | 3 | numbered when it starts | the hub's updates: the release tree through `httpd`'s library, the packages, the channels by band, the delivery link |
 | 4 | numbered when it starts | `improve` on MIND Core, the console; QEMU against the separate hub |
-| 5 | numbered when it starts | `improve` on a host, and the web pages for browsers |
+| 5 | 100003-APP-0150 (done) | `improve` on a host ([improve.md](improve.md)); the web pages for browsers, made with stage 2 |
 | 6 | numbered when it starts | the shell's notice and `wm`'s window; the phone's screen with `MOB` |
 | 7 | numbered when it starts | the native hub on MIND Core |
 | 8 | at the maintainer's word | the agents' rule in AGENTS.md (7.3); the intake agent named |
