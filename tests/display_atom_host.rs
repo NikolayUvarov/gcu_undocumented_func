@@ -339,11 +339,13 @@ fn name(offset: u32) -> String {
 
 #[test]
 fn the_ryzens_tables_for_first_light() {
+    // The skip is written past the harness's capture, so that a run of the host tests shows it.
+    let skip = |why: String| { use std::io::Write; let _ = writeln!(std::io::stderr(), "the_ryzens_tables_for_first_light SKIPPED: {}", why); };
     let Ok(path) = std::env::var("MIND_AMD_VBIOS") else {
-        println!("SKIPPED: MIND_AMD_VBIOS is not set; set it to the Ryzen's VBIOS image (113-CEZANNE-021, 55296 bytes, not in the repository) to run tables 12, 4 and 76");
+        skip("MIND_AMD_VBIOS is not set; set it to the Ryzen's VBIOS image (113-CEZANNE-021, 55296 bytes, not in the repository) to run tables 12, 4 and 76".into());
         return;
     };
-    let Ok(bytes) = std::fs::read(&path) else { println!("SKIPPED: MIND_AMD_VBIOS names {}, which cannot be read", path); return };
+    let Ok(bytes) = std::fs::read(&path) else { skip(format!("MIND_AMD_VBIOS names {}, which cannot be read", path)); return };
     assert_eq!(bytes.len(), 55296, "not the Ryzen's image");
     assert!(bytes.windows(15).any(|w| w == b"113-CEZANNE-021"), "not the Ryzen's image");
     let image = Image::new(&bytes).unwrap();
