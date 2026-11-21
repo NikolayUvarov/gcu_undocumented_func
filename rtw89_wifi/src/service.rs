@@ -79,9 +79,9 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // 213-DRV-0087: on a listen-only channel, the access point admitted for and when its beacon was last heard.
     listen:Option<([u8;6],u64)>,
 }
-/// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this
-/// (the station's own silence); after it, and before the beacon comes back, nothing is sent there.
-pub(crate) const LISTEN_BEACON_MS:u64=QUIET_MS;
+/// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this, half
+/// the station's own silence; after it, and before the beacon comes back, nothing is sent there.
+pub(crate) const LISTEN_BEACON_MS:u64=QUIET_MS/2;
 /// When each SNAPSHOT register first changed in data mode: (ms from the start, value, a send pending).
 #[derive(Clone,Copy)]
 pub(crate) struct Changes(pub [Option<(u64,u32,bool)>;data_mode::SNAPSHOT.len()]);
