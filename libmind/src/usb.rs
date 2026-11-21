@@ -46,6 +46,8 @@ pub const BUFFER: usize = 68 * 1024;
 /// The largest control transfer and bulk transfer.
 pub const CONTROL_MAX: usize = 4096;
 pub const BULK_MAX: usize = 64 * 1024;
+/// The bytes of each transfer usb_host keeps queued on a bulk IN endpoint that `bulk-stream` polls (usb.wit 1.6): a page.
+pub const BULK_STREAM_BYTES: usize = 4096;
 
 pub const MAX_ENDPOINTS: usize = 4;
 
@@ -195,6 +197,12 @@ impl Host {
             at += 2 + packet.len();
         }
         Ok(written)
+    }
+    /// Keeps bulk IN endpoint `address` polled (`on`), its transfers then taken by `isochronous`, or stops it (usb.wit 1.6,
+    /// 158-DRV-0082).
+    pub fn bulk_stream(&mut self, handle: u32, address: u8, on: bool) -> Result<()> {
+        let r = usb::bulk_stream(self.endpoint, handle, address, on);
+        self.check(r)
     }
     /// Packets for an isochronous OUT endpoint, at `offset` in the buffer as two length bytes each and the packet
     /// (usb.wit 1.5, 000-DRV-0073); the bytes usb_host took.

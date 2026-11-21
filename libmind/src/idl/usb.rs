@@ -19,6 +19,11 @@
 //! 1.5 (000-DRV-0073): `mind::usb::BADGE_AUDIO` names `audio_gw`, which claims audio class interfaces (class 1). On
 //! xHCI a selected setting's isochronous endpoints stream both ways: `isochronous` takes an IN endpoint's packets, as on
 //! EHCI, and the new `isochronous-out` gives an OUT endpoint its packets.
+//!
+//! 1.6 (158-DRV-0082): `bulk-stream` keeps a bulk IN endpoint polled on xHCI: usb_host keeps transfers of a page
+//! (`mind::usb::BULK_STREAM_BYTES`) queued on it, and `isochronous` gives them in order, so a client reads several
+//! devices that stream at once (two bulk cameras) without waiting on one while the other's buffer overflows. The calls
+//! of 1.5 are unchanged; a 1.5 host rejects the new call.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -28,7 +33,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:usb";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -121,6 +126,9 @@ pub fn select(endpoint: Endpoint, handle: u32, alternate: u8) -> Result<()> {
 /// written at `offset` in the buffer, at most `length` bytes: each as two length bytes, low first (bit 15 set when
 /// the controller reported an error for it), and the packet; empty packets are left out. Returns the bytes written.
 /// Packets that do not fit wait for the next call; while usb_host's queue is full, new ones are dropped (and counted).
+/// 1.6: or the transfers of a bulk IN endpoint that `bulk-stream` keeps polled, each as one such packet: an empty
+/// one too, since it ends a payload; bit 15 for one that ended in error, after which the endpoint is reset and
+/// polled again.
 pub fn isochronous(endpoint: Endpoint, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
     let words = [9 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48, ((offset) as usize) << 0 | ((length) as usize) << 32];
     let reply = wire::call(endpoint, words, None)?;
@@ -142,6 +150,17 @@ pub fn isochronous_out(endpoint: Endpoint, handle: u32, address: u8, offset: u32
     Ok(wire::field(&reply, 0, 16, 32) as u32)
 }
 
+/// 1.6 (158-DRV-0082): with `on`, keeps the claimed interface's bulk IN endpoint `address` polled, its transfers
+/// taken by `isochronous`, and `bulk` refused on it meanwhile; without, stops it and gives what was queued back to
+/// the controller. Errors as for `control`; invalid, no such endpoint or EHCI (which keeps no such stream);
+/// no-memory, no room for the transfers on this controller.
+pub fn bulk_stream(endpoint: Endpoint, handle: u32, address: u8, on: bool) -> Result<()> {
+    let words = [11 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48 | ((on) as usize) << 56, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_error(&reply)?;
+    wire::check_reply(&reply, [0, 0], false).map(drop)
+}
+
 /// A request to the `usb` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -155,6 +174,7 @@ pub enum Request {
     Select { handle: u32, alternate: u8 },
     Isochronous { handle: u32, address: u8, offset: u32, length: u32 },
     IsochronousOut { handle: u32, address: u8, offset: u32, length: u32 },
+    BulkStream { handle: u32, address: u8, on: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -204,6 +224,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::IsochronousOut { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8, offset: wire::field(&words, 1, 0, 32) as u32, length: wire::field(&words, 1, 32, 32) as u32 }, Call::words(request, cap)))
         }
+        11 => {
+            wire::body(request, cap, [0x1ffffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::BulkStream { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8, on: wire::field(&words, 0, 56, 1) != 0 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -247,4 +271,8 @@ pub fn reply_isochronous(call: Call, value: Result<u32>) -> Result<()> {
 pub fn reply_isochronous_out(call: Call, value: Result<u32>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_bulk_stream(call: Call, value: Result<()>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [0, 0])
 }

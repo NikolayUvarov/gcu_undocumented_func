@@ -111,6 +111,10 @@ mod idl {
     pub mod sample;
     #[path = "../../libmind/src/idl/update.rs"]
     pub mod update;
+    #[path = "../../libmind/src/idl/video.rs"]
+    pub mod video;
+    #[path = "../../tests/idl/video_1_0.rs"]
+    pub mod video_1_0;
 }
 
 use idl::codec::{Text, Wire, Writer};
@@ -316,4 +320,64 @@ fn servers_reject_malformed_requests() {
     let n = w.len();
     assert_eq!(&out[..n], &[2, 0, b'a', b'b', 2]);
     assert!(idl::codec::encode_bytes::<1>(b"ab", &mut Writer::new(&mut out)).is_none());
+}
+
+// 158-DRV-0083: video.wit 1.1 beside 1.0 (tests/idl/video_1_0.rs, the bindings 1.0 had). A 1.1 gateway serves a 1.0
+// program's calls, whose wire did not change; a 1.0 gateway rejects 1.1's `modes` and `opened` as invalid.
+fn video_mode(width: u16, height: u16, rate: u8) -> idl::video::Mode {
+    idl::video::Mode { encoding: idl::video::Encoding::Yuy2, width, height, rate, interval: 10_000_000 / rate as u32, offered: true }
+}
+
+fn video_gateway_1_1(request: &ipc::Received) {
+    use idl::video::{self, Request};
+    let _ = match video::decode(request, ipc::SERVER_SLOT) {
+        Ok((Request::Cameras, call)) => video::reply_cameras(call, &[video::Camera { name: Text::new("GDZS-DC004-EFVT-V").unwrap(), width: 640, height: 480, rate: 25, synthetic: false }]),
+        Ok((Request::Open { camera, width, height, rate }, call)) => video::reply_open(call, if (camera, width, height, rate) == (0, 320, 240, 30) { Ok(()) } else { Err(video::Error::Busy) }),
+        Ok((Request::Close, call)) => video::reply_close(call, Ok(())),
+        Ok((Request::Frame, call)) => video::reply_frame(call, Ok(&video::Frame { sequence: 7, timestamp_us: 99, width: 320, height: 240, bytes: 307_200 })),
+        Ok((Request::Modes { camera }, call)) => {
+            let modes = [video_mode(640, 480, 25), video_mode(320, 240, 30)];
+            video::reply_modes(call, if camera == 0 { Ok(&modes) } else { Err(video::Error::NotFound) })
+        }
+        Ok((Request::Opened, call)) => video::reply_opened(call, Ok(&video::Opened { camera: 0, index: 1, mode: video_mode(320, 240, 30), scaled: false })),
+        Ok((Request::Read { .. }, _)) => unreachable!("no read is asked"),
+        Err(reason) => wire::reject(reason),
+    };
+}
+
+fn video_gateway_1_0(request: &ipc::Received) {
+    use idl::video_1_0::{self as video, Request};
+    let _ = match video::decode(request, ipc::SERVER_SLOT) {
+        Ok((Request::Cameras, call)) => video::reply_cameras(call, &[]),
+        Ok((_, call)) => video::reply_close(call, Ok(())),
+        Err(reason) => wire::reject(reason),
+    };
+}
+
+#[test]
+fn a_video_1_0_program_works_with_a_1_1_gateway() {
+    use idl::video_1_0 as old;
+    let endpoint = serve(video_gateway_1_1);
+    let cameras = old::cameras(endpoint).unwrap();
+    assert_eq!((cameras.len(), cameras.as_slice()[0].name.as_str(), cameras.as_slice()[0].rate), (1, "GDZS-DC004-EFVT-V", 25));
+    assert_eq!(old::open(endpoint, 0, 320, 240, 30), Ok(Ok(())));
+    assert_eq!(old::open(endpoint, 0, 640, 480, 30), Ok(Err(old::Error::Busy)));
+    assert_eq!(old::frame(endpoint).unwrap().unwrap().sequence, 7);
+    assert_eq!(old::close(endpoint), Ok(Ok(())));
+    assert_eq!((old::VERSION, idl::video::VERSION), ((1, 0, 0), (1, 1, 0)), "the same major version: the same wire for 1.0's calls");
+}
+
+#[test]
+fn video_1_1_lists_the_modes_and_the_one_open_and_a_1_0_gateway_refuses_them() {
+    use idl::video;
+    let endpoint = serve(video_gateway_1_1);
+    let modes = video::modes(endpoint, 0).unwrap().unwrap();
+    assert_eq!(modes.as_slice(), &[video_mode(640, 480, 25), video_mode(320, 240, 30)]);
+    assert_eq!(video::modes(endpoint, 3).unwrap().unwrap_err(), video::Error::NotFound);
+    let opened = video::opened(endpoint).unwrap().unwrap();
+    assert_eq!((opened.index, opened.mode, opened.scaled), (1, modes.as_slice()[1], false));
+    let endpoint = serve(video_gateway_1_0);
+    assert_eq!(video::modes(endpoint, 0).map(|_| ()), Err(sys::Error::Invalid), "1.0 has no method 6");
+    assert_eq!(video::opened(endpoint).map(|_| ()), Err(sys::Error::Invalid), "nor 7");
+    assert_eq!(video::cameras(endpoint).map(|c| c.len()), Ok(0), "1.0's own calls still answered");
 }

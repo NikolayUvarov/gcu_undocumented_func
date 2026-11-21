@@ -66,7 +66,13 @@ pub fn yuy2_to_rgb(source: &[u8], out: &mut [u32]) -> usize {
 /// A YUY2 picture of `width` × `height` into `out_width` × `out_height` pixels, each the nearest one (a camera's frame
 /// size to the size a program asked for); pixels the source lacks are black.
 pub fn yuy2_scaled(source: &[u8], width: usize, height: usize, out: &mut [u32], out_width: usize, out_height: usize) {
-    for (y, row) in out.chunks_exact_mut(out_width).take(out_height).enumerate() {
+    yuy2_scaled_rows(source, width, height, out, out_width, out_height, 0..out_height);
+}
+
+/// The same for the output rows `rows` alone, the others left as they are: a large frame converted in bands, with other
+/// work between them (158-DRV-0083).
+pub fn yuy2_scaled_rows(source: &[u8], width: usize, height: usize, out: &mut [u32], out_width: usize, out_height: usize, rows: core::ops::Range<usize>) {
+    for (y, row) in out.chunks_exact_mut(out_width).take(out_height).enumerate().skip(rows.start).take(rows.end.saturating_sub(rows.start)) {
         let line = y * height / out_height * width;
         for (x, p) in row.iter_mut().enumerate() {
             let column = x * width / out_width;

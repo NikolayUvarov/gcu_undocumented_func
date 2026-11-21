@@ -256,3 +256,99 @@ fn a_bulk_camera_is_parsed_with_its_endpoint_and_no_settings() {
     assert!(cam.alternates.is_empty());
     assert_eq!(cam.choose(640, 480).map(|f| (f.width, f.height)), Some((640, 480)));
 }
+
+// 158-DRV-0083: a camera's modes and what its settings carry.
+#[test]
+fn every_frame_size_at_each_interval_is_a_mode_in_the_descriptors_order() {
+    let camera = parse(&camera_descriptor()).unwrap();
+    let modes: Vec<_> = camera.modes().iter().map(|m| (m.format, m.frame, m.encoding, m.width, m.height, m.interval, m.rate())).collect();
+    assert_eq!(modes, vec![
+        (1, 1, Encoding::Yuy2, 640, 480, 333_333, 30), (1, 1, Encoding::Yuy2, 640, 480, 666_666, 15),
+        (1, 2, Encoding::Yuy2, 320, 240, 333_333, 30), (1, 2, Encoding::Yuy2, 320, 240, 2_000_000, 5), // a range: its ends
+        (2, 1, Encoding::Mjpeg, 1280, 720, 333_333, 30),
+    ]);
+    assert_eq!(camera.modes(), parse(&camera_descriptor()).unwrap().modes(), "the same descriptors, the same list");
+    assert_eq!(camera.modes()[0].bytes_per_second(), 640 * 480 * 2 * 10_000_000 / 333_333);
+    assert_eq!(camera.modes()[4].bytes_per_second(), 1280 * 720 * 2 * 10_000_000 / 333_333, "MJPEG: the frame descriptor's most");
+}
+
+#[test]
+fn a_slow_mode_and_a_range_of_one_interval() {
+    let mut f = parse(&camera_descriptor()).unwrap().frames[1].clone();
+    f.intervals = vec![400_000, 400_000];
+    assert_eq!(f.listed(), vec![400_000], "a range with no width is one mode");
+    let slow = Mode { format: 1, frame: 1, encoding: Encoding::Yuy2, width: 160, height: 120, interval: 20_000_000, max_bytes: 0 };
+    assert_eq!(slow.rate(), 0, "one frame in 2 s: less than one a second");
+    assert_eq!(Mode { interval: 0, ..slow }.rate(), 0);
+}
+
+#[test]
+fn the_settings_carry_bytes_a_second_by_the_speed_and_a_bulk_camera_is_not_bounded() {
+    let camera = parse(&camera_descriptor()).unwrap();
+    // The largest setting moves 3 × 1024 bytes a microframe at high speed, a payload header aside.
+    assert_eq!(camera.capacity(3), Some((3072 - 12) * 8000));
+    assert_eq!(camera.capacity(1), Some((3072 - 12) * 1000), "full speed: a frame a millisecond");
+    assert_eq!(camera.capacity(4), None, "SuperSpeed's bursts are not read");
+    let mut c = camera_descriptor();
+    let bulk = c.windows(9).position(|w| w == interface(1, 0, 0, 2).as_slice()).unwrap();
+    c[bulk + 4] = 1;
+    let tail = c.split_off(bulk + 9);
+    c.extend(endpoint(0x82, 2, 512, 0)); c.extend(tail);
+    assert_eq!(parse(&c).unwrap().capacity(3), None);
+    let mut slow = camera.clone();
+    slow.alternates.retain(|a| a.setting == 1);
+    slow.alternates[0].interval = 4;
+    assert_eq!(slow.capacity(3), Some((128 - 12) * 1000), "every 8 microframes: 1000 a second");
+}
+
+#[test]
+fn a_camera_with_motion_jpeg_alone_has_its_modes_but_no_yuy2() {
+    let mut c = vec![9, 2, 0, 0, 2, 1, 0, 0x80, 0xFA];
+    c.extend(interface(0, 0, 1, 1));
+    c.extend([13, 0x24, 1, 0x00, 0x01, 13, 0, 0x80, 0x8D, 0x5B, 0, 1, 1]);
+    c.extend(interface(1, 0, 0, 2));
+    c.extend([14, 0x24, 1, 1, 0, 0, 0x81, 0, 0, 0, 0, 0, 0, 0]);
+    c.extend([0x0B, 0x24, 6, 1, 2, 1, 1, 0, 0, 0, 0]); // MJPEG format, two frames
+    c.extend(frame(7, 1, 1920, 1080, 333_333, &[333_333, 666_666], None));
+    c.extend(frame(7, 2, 640, 480, 333_333, &[333_333], None));
+    for (alternate, packet) in [(1u8, 0x1400u16)] { c.extend(interface(1, alternate, 1, 2)); c.extend(endpoint(0x81, 5, packet, 1)); }
+    let len = c.len() as u16; c[2..4].copy_from_slice(&le16(len));
+    let camera = parse(&c).expect("a camera");
+    let modes: Vec<_> = camera.modes().iter().map(|m| (m.encoding, m.width, m.height, m.rate())).collect();
+    assert_eq!(modes, vec![(Encoding::Mjpeg, 1920, 1080, 30), (Encoding::Mjpeg, 1920, 1080, 15), (Encoding::Mjpeg, 640, 480, 30)]);
+    assert_eq!(camera.choose(640, 480), None, "nothing the gateway converts");
+}
+
+// 158-DRV-0083: the Ryzen's two cameras, from the configuration descriptors video_gw logged on 2026-11-21
+// (tests/data/uvc-0471-*.hex): each frame size has one interval, so a mode a frame size; YUY2 and MJPEG alike.
+fn ryzen_camera(name: &str) -> Camera {
+    let path = std::path::Path::new(file!()).parent().unwrap().join(format!("data/uvc-{name}.hex"));
+    let hex = std::fs::read_to_string(path).unwrap();
+    let bytes: Vec<u8> = (0..hex.trim().len()).step_by(2).map(|i| u8::from_str_radix(&hex.trim()[i..i + 2], 16).unwrap()).collect();
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]) as usize, bytes.len(), "wTotalLength: the whole descriptor");
+    parse(&bytes).expect("a camera")
+}
+
+fn yuy2_modes(camera: &Camera) -> Vec<(u16, u16, u32)> {
+    camera.modes().iter().filter(|m| m.encoding == Encoding::Yuy2).map(|m| (m.width, m.height, m.rate())).collect()
+}
+
+#[test]
+fn the_ryzens_visible_light_camera_has_its_thirteen_yuy2_modes() {
+    let camera = ryzen_camera("0471-a6ca");
+    assert!(camera.bulk && camera.alternates.is_empty() && camera.endpoint == 0x81 && camera.version == 0x0100);
+    assert_eq!(camera.formats, vec![(1, Encoding::Mjpeg), (2, Encoding::Yuy2)]);
+    assert_eq!(yuy2_modes(&camera), vec![(640, 480, 25), (1920, 1080, 3), (1600, 1200, 5), (1280, 1024, 5), (1280, 960, 9), (1280, 720, 10), (1024, 768, 15),
+        (800, 600, 20), (2048, 1536, 3), (640, 360, 30), (352, 288, 30), (320, 240, 30), (160, 120, 30)]);
+    assert_eq!(camera.modes().len(), 26, "13 MJPEG modes as well");
+    assert_eq!(camera.capacity(3), None, "bulk: not bounded by a setting");
+}
+
+#[test]
+fn the_ryzens_infrared_camera_has_its_twelve_yuy2_modes() {
+    let camera = ryzen_camera("0471-a6cd");
+    assert!(camera.bulk && camera.alternates.is_empty() && camera.endpoint == 0x81);
+    assert_eq!(yuy2_modes(&camera), vec![(640, 480, 30), (1920, 1080, 5), (1280, 1024, 5), (1280, 960, 5), (1280, 720, 10), (1024, 768, 10), (960, 720, 15),
+        (800, 600, 20), (640, 360, 30), (432, 240, 30), (352, 288, 30), (320, 240, 30)]);
+    assert_eq!(camera.modes().len(), 24);
+}
