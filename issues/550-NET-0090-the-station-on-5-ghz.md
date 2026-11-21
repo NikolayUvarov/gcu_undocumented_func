@@ -24,13 +24,20 @@ DRV starts [213-DRV-0087](213-DRV-0087-rtl8852be-on-5-ghz.md): the Ryzen's RTL88
 
 ## Acceptance criteria
 
-- [ ] Host (`dot11/tests/station.rs`):
+- [x] Host (`dot11/tests/station.rs`):
   - of one network on channels 8 and 100, the 5 GHz access point is taken above the floor, the strongest below it, and the strongest of several 5 GHz ones;
   - on a listen-only channel, a rejoin sends nothing before the beacon, joins after it, and fails with nothing sent without it;
   - on a sendable channel, a rejoin is as before.
-- [ ] The `net` suite's Wi-Fi checks with `wlansim`, on both architectures, in the gate.
+- [x] The `net` suite's Wi-Fi checks with `wlansim`, on both architectures, in the gate.
 - [ ] **On the Ryzen, with 213-DRV-0087:** the station joins CoolNet2 on channel 100 when both are heard (MC-12.1: that machine and that access point).
-- [ ] docs/network/station.md says which access point is joined, and the rejoin's rule.
+- [x] docs/network/station.md says which access point is joined, and the rejoin's rule.
+
+
+## Landed (2026-11-21)
+
+In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26df.md` on `internal-dev-messages`). The gate passed every group on both architectures, among them x86's and aarch64's network groups with `wlansim` and the host tests. So a stick written from main carries it, and no `fast-test` build is needed.
+
+**Left:** the Ryzen joining CoolNet2 on channel 100 (DRV, with 213-DRV-0087).
 
 ## Related
 

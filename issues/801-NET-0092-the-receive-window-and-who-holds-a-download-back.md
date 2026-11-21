@@ -22,11 +22,18 @@ The data waited in `netstack`'s 64 KiB queue (801-NET-0088), and it is not known
 
 ## Acceptance criteria
 
-- [ ] QEMU, x86 and aarch64, the `download` checks: the 30 MiB download (8 MiB on aarch64) is whole, and its connections' lines add up to it.
-- [ ] The gate's groups on both architectures.
+- [x] QEMU, x86 and aarch64, the `download` checks: the 30 MiB download (8 MiB on aarch64) is whole, and its connections' lines add up to it.
+- [x] The gate's groups on both architectures.
 - [ ] **On the Ryzen** (DRV, MC-12.1): 6 MB from the LAN as on 2026-11-21, with the sender's `TCP_INFO` and the stack's line. This says which side held the download back.
 
 **Not covered:** a reader that is slow (a matter for `get` or the volume, then); HT and 5 GHz, which change the link's own rate (550-NET-0090, 213-DRV-0087).
+
+
+## Landed (2026-11-21)
+
+In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26df.md` on `internal-dev-messages`). The gate passed every group on both architectures, among them x86's and aarch64's network groups with `wlansim` and the host tests. So a stick written from main carries it, and no `fast-test` build is needed.
+
+**Left:** the Ryzen's 6 MB from the LAN with the sender's `TCP_INFO` and the stack's line (DRV).
 
 ## Related
 

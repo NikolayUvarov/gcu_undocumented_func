@@ -36,13 +36,20 @@ The 200 µs and the 1000 µs are assumptions, to be set from DRV's runs.
 
 ## Acceptance criteria
 
-- [ ] Host (`dot11/tests/station.rs`):
+- [x] Host (`dot11/tests/station.rs`):
   - frames that each go at the first try climb to 54 Mb/s;
   - one that no try delivered steps the rate down at once;
   - an 802.11b station stays on its four rates;
   - with the Ryzen's figures (70 % a try at 54 Mb/s, 84 % at 24), 36 and 48 Mb/s carry most frames and 54 Mb/s at most a fifth, over four seeds.
-- [ ] The `net` suite's Wi-Fi checks with `wlansim`, on both architectures, in the gate.
+- [x] The `net` suite's Wi-Fi checks with `wlansim`, on both architectures, in the gate.
 - [ ] **On the Ryzen** (DRV, MC-12.1): the rate `wifi status` shows, and the throughput of 6 MB from the LAN, against the figures of 2026-11-21.
+
+
+## Landed (2026-11-21)
+
+In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26df.md` on `internal-dev-messages`). The gate passed every group on both architectures, among them x86's and aarch64's network groups with `wlansim` and the host tests. So a stick written from main carries it, and no `fast-test` build is needed.
+
+**Left:** the rate and throughput on the Ryzen against the figures of 2026-11-21 (DRV).
 
 ## Related
 

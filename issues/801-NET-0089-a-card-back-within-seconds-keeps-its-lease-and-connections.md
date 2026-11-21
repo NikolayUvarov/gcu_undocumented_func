@@ -27,18 +27,25 @@ The stack drops a card's address and aborts its TCP connections the moment its l
 
 ## Acceptance criteria
 
-- [ ] **QEMU, x86 and aarch64, the `net` suite's two cards:**
+- [x] **QEMU, x86 and aarch64, the `net` suite's two cards:**
   - a link down 3 s keeps card 0's lease, and the connection `netcheck hold` keeps goes on: every byte it sent reaches the host, those sent while the link was down included;
   - down past 30 s, the address goes and the connection is aborted;
   - the default route moves to the other card while the link is down and comes back with it;
   - DHCP's name check (000-NET-0050) passes with the held lease asked for again.
-- [ ] The `net` groups pass on both architectures in the gate, and the Wi-Fi checks with `wlansim`.
-- [ ] docs/network (EN) say what the stack does when a link goes down.
+- [x] The `net` groups pass on both architectures in the gate, and the Wi-Fi checks with `wlansim`.
+- [x] docs/network (EN) say what the stack does when a link goes down.
 
 **Not covered:**
 - a radio driver's restart on the Ryzen (213-DRV-0032), which DRV can run once this lands;
 - a peer that gives up on its side during the hold (its own timers);
 - `wifi leave` holds the lease too: the stack sees only the link.
+
+
+## Landed (2026-11-21)
+
+In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26df.md` on `internal-dev-messages`). The gate passed every group on both architectures, among them x86's and aarch64's network groups with `wlansim` and the host tests. So a stick written from main carries it, and no `fast-test` build is needed.
+
+**Left:** a card's link going down and coming back on a real machine (the Ryzen's Wi-Fi restart, DRV).
 
 ## Related
 
