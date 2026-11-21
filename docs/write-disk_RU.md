@@ -1,6 +1,6 @@
 # Запись MIND Core на диск и загрузка ПК
 
-**Версия:** 1.8 (2026-11-17): переключение на GPT-диске рядом с разделами самого Linux и на aarch64 (000-KRN-0257); 1.7 (2026-11-05): `rm`, `mv` и `mkdir` сразу попадают на диск (000-KRN-0212); 1.6 (2026-11-05): `logs` читает отметку загрузчика (000-KRN-0211); 1.5 (2026-10-28): раздел хранилища, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): одна загрузка MIND Core из Linux (раздел 10) · **Задачи:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (ПК с Intel с SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (скрипт записи), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (первый запуск), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) и [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (раздел журналов), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (одна загрузка из Linux) · **English version:** [write-disk.md](write-disk.md) (основной текст; этот перевод держится в согласии с ним)
+**Версия:** 1.9 (2026-11-21): установочный ISO, его первый шаг (352-UPD-0047, раздел 12); 1.8 (2026-11-17): переключение на GPT-диске рядом с разделами самого Linux и на aarch64 (000-KRN-0257); 1.7 (2026-11-05): `rm`, `mv` и `mkdir` сразу попадают на диск (000-KRN-0212); 1.6 (2026-11-05): `logs` читает отметку загрузчика (000-KRN-0211); 1.5 (2026-10-28): раздел хранилища, `MIND STORE` (307-STO-0020); 1.4 (2026-10-20): одна загрузка MIND Core из Linux (раздел 10) · **Задачи:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (ПК с Intel с SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (скрипт записи), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (первый запуск), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) и [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (раздел журналов), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (одна загрузка из Linux) · **English version:** [write-disk.md](write-disk.md) (основной текст; этот перевод держится в согласии с ним)
 
 > **Ни одна физическая машина x86 пока не входит в доказательства работы MIND Core.** Всё ниже следует из скриптов и из QEMU, где тот же образ загружается с USB, SATA (AHCI) и NVMe. Первый настоящий запуск — задача [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md). В разделе 8 — что известно как рискованное на реальном ПК, в разделе 9 — что прислать.
 
@@ -332,3 +332,28 @@ powershell -ExecutionPolicy Bypass -File scripts\boot_switch.ps1 logs C:\mind-ru
 - `logs` не копирует эти две папки Windows.
 
 **Проверено** на модели прошивки и дисков тестом `tests/boot_switch_ps1_test.ps1` (Windows PowerShell 5.1 или PowerShell 7: `powershell -ExecutionPolicy Bypass -File tests\boot_switch_ps1_test.ps1`). Сами вызовы прошивки на настоящей машине ещё не выполнялись.
+
+## 12. Установочный ISO (первый шаг, только QEMU)
+
+`scripts/make_iso.py` делает гибридный ISO сборки ([352-UPD-0047](../issues/352-UPD-0047-an-installer-iso.md)):
+
+```bash
+python3 scripts/make_iso.py                 # dist/mind-core-x86_64.iso; --slots кладёт сборку в слот A, как make_usb_image.py --slots
+```
+
+**Что в нём:**
+- том ISO 9660, в каталоге El Torito которого одна запись EFI — загрузочный том: образ FAT16 с теми же файлами, что в USB-образе, под тем же подписанным манифестом;
+- MBR, единственная запись которой, системный раздел EFI, — тот же образ на 1 МиБ.
+
+Все даты в нём — дата сборки (`SOURCE_DATE_EPOCH` или коммита), поэтому одна и та же сборка даёт те же байты. Нужны `mkfs.fat` и mtools.
+
+**Что показано, только в QEMU (x86, OVMF)** (набор `iso`):
+- записанный как USB-диск, он загружается до оболочки, и его программы запускаются с его тома;
+- как IDE CD-ROM: загрузчик читает ядро и службы с тома El Torito и проверяет их по манифесту.
+
+**Что пока не работает:**
+- **с диска работающая система не может читать собственный том:** ни один драйвер не обслуживает привод CD, поэтому такие программы, как `ls`, не находятся. Том в памяти — следующий шаг задачи;
+- **установщик на диск** — это [352-UPD-0048](../issues/352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md);
+- **aarch64** и **настоящий ПК** не пробовались.
+
+Флешку с ISO записывают `dd` или скриптами записи USB, как и `.img`. Прошивка берёт запись El Torito и с диска, поэтому загрузчик не называет раздел, и система монтирует том, на котором лежит проверенный ею манифест.
