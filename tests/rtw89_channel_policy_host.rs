@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path="../rtw89_wifi/src/io.rs"]mod io;
 #[path="../rtw89_wifi/src/registers.rs"]mod registers;
 #[path="../rtw89_wifi/src/power.rs"]mod power;
@@ -98,4 +99,29 @@ fn constraints_combine_without_wrapping_or_assuming_missing_platform_inputs(){
     for sentinel in [0,127]{assert_eq!(constrained_mac(78,9,Some(sentinel),63,63),Ok(39));}
     assert_eq!(constrained_mac(-128,-1,Some(80),63,63),Err(Error::PowerRange));
     for(sar,tpe)in[(64,63),(63,-65)]{assert_eq!(constrained_mac(0,0,None,sar,tpe),Err(Error::PowerRange));}
+}
+
+// 213-DRV-0087: the 5 GHz tables decode at Linux's channel slots, rtw8852b_table.c's values read by hand.
+#[test]
+fn five_gigahertz_tables_decode_at_linux_channel_slots(){
+    let ofdm=|group,channel|default_limit_5g(0,1,1,false,group,channel).unwrap();
+    assert_eq!([ofdm(Group::WORLDWIDE,100).quarter_dbm,ofdm(Group::FCC,100).quarter_dbm,ofdm(Group::ETSI,100).quarter_dbm],[52,76,58]);
+    assert_eq!(ofdm(Group::WORLDWIDE,36).quarter_dbm,42,"[0][0][1][0][WW][0]");
+    assert!(!ofdm(Group::UK,100).used_worldwide||ofdm(Group::UK,100).worldwide.value==52);
+    for channel in [0,1,13,14,34,38,65,99,145,178]{assert_eq!(default_limit_5g(0,1,1,false,Group::FCC,channel).unwrap_err(),Error::Index,"{channel}");}
+    assert_eq!(default_limit_5g(4,1,1,false,Group::FCC,100).unwrap_err(),Error::Index);
+    assert_eq!(default_ru_5g(0,1,Group::WORLDWIDE,36).unwrap().quarter_dbm,24,"[0][0][WW][0]");
+    assert_eq!(default_ru_5g(0,1,Group::WORLDWIDE,48).unwrap().quarter_dbm,12,"[0][0][WW][6] is channel 48");
+    // By rate: OFDM 6-54 Mb/s and 1SS MCS as on 2.4 GHz; CCK there is the 2.4 GHz table's, as Linux reads it.
+    let rate=|section,index|default_byrate_5g(1,section,index).unwrap().value;
+    assert_eq!((0..8).map(|i|rate(1,i)).collect::<Vec<_>>(),[80,80,80,80,80,80,76,72]);
+    assert_eq!((8..12).map(|i|rate(2,i)).collect::<Vec<_>>(),[64,60,56,52]);
+    assert_eq!(rate(0,0),default_byrate_2g(1,0,0).unwrap().value);
+    assert_eq!(default_byrate_5g(2,0,0).unwrap_err(),Error::Index);
+    assert_eq!((default_shape_5g(1,Group::FCC).unwrap().value,default_shape_5g(1,Group::ETSI).unwrap().value),(3,0));
+    assert!(!default_shape_5g(0,Group::FCC).unwrap().explicit,"no CCK shape on 5 GHz");
+    assert_eq!(default_ru_shape_5g(Group::FCC).value,3);
+    for(rows,end)in[(power_tables::LIMIT_5G,40704),(power_tables::RU_5G,8480),(power_tables::BYRATE_5G,120),(power_tables::SHAPE_5G,32),(power_tables::SHAPE_RU_5G,16)]{
+        assert!(rows.windows(2).all(|w|w[0].0<w[1].0)&&rows.last().unwrap().0<end);
+    }
 }

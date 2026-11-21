@@ -1,6 +1,6 @@
 //! Bounded wlanhw 2.0 adapter for one actually admitted channel; native construction remains separate.
 
-use crate::{btc_session::{DeviceIo,data_mode::{self,DataSession}},country::{Limits,Refusal},frames,receive_service::Event,rx,rxdesc,tx};
+use crate::{band,btc_session::{DeviceIo,data_mode::{self,DataSession}},country::{Limits,Refusal},frames,receive_service::Event,rx,rxdesc,tx};
 use mind::{dev,idl::{codec::List,wire,wlanhw},ipc::Endpoint,sys,time};
 
 const RECEIVE:[usize;2]=[9,10];
@@ -76,7 +76,12 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     heard:(u64,u64),quiet:(u32,u32),unacked:(u32,u64,bool),
     // When the data mode's checks were last made (CHECK_MS).
     checked:Option<u64>,
+    // 213-DRV-0087: on a listen-only channel, the access point admitted for and when its beacon was last heard.
+    listen:Option<([u8;6],u64)>,
 }
+/// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this
+/// (the station's own silence); after it, and before the beacon comes back, nothing is sent there.
+pub(crate) const LISTEN_BEACON_MS:u64=QUIET_MS;
 /// When each SNAPSHOT register first changed in data mode: (ms from the start, value, a send pending).
 #[derive(Clone,Copy)]
 pub(crate) struct Changes(pub [Option<(u64,u32,bool)>;data_mode::SNAPSHOT.len()]);
@@ -107,10 +112,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
-            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None})
+            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
+    /// The channel is listen-only and was admitted for `bssid`, whose beacon was heard at `heard_ms` (213-DRV-0087).
+    pub(crate) fn listening_to(mut self,bssid:[u8;6],heard_ms:u64)->Self{self.listen=Some((bssid,heard_ms));self}
     #[cfg(test)]
     pub(crate) fn take_event(&mut self)->Option<Event>{self.event.take()}
     #[cfg(test)]
@@ -123,9 +130,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn keep_late(mut self,on:bool)->Self{self.late=on;self}
     fn info(&mut self)->wlanhw::Info{
         let mut channels=List::default();channels.push(self.data().channel());
-        // Its own channels: 1 to 13 on 2.4 GHz at 20 MHz, its library's scope (wlanhw.wit 2.0, 550-NET-0059).
-        let mut supported=List::default();for ch in 1..=13{supported.push(ch);}
-        wlanhw::Info{mac:packed(self.data().mac()),bands:mind::network::BAND_2GHZ|mind::network::BAND_2GHZ_OFDM,
+        // Its own channels: 1 to 13 on 2.4 GHz and the 5 GHz ones at 20 MHz (wlanhw.wit 2.0, 550-NET-0059, 213-DRV-0087).
+        let mut supported=List::default();for ch in band::SUPPORTED{supported.push(ch);}
+        let bands=mind::network::BAND_2GHZ|mind::network::BAND_2GHZ_OFDM|mind::network::BAND_5GHZ;
+        wlanhw::Info{mac:packed(self.data().mac()),bands,
             channels,supported,frame_max:frames::FRAME_MAX as u16,channel:self.data().channel()}
     }
     // A new country keeps the channel if it still lets the radio send there at no less EIRP than it was admitted under.
@@ -135,7 +143,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         *settings=settings.saturating_add(1);
         match Limits::accept(code,*settings,limits.iter().map(|l|(l.channel,l.eirp,l.listen))){
             Ok(taken)=>{
-                let kept=taken.applied(channel).is_some_and(|a|!a.listen&&a.eirp_half_dbm>=*eirp);
+                // A listen-only channel admitted for an access point heard there stays so while the country keeps it.
+                let listening=self.listen.is_some();
+                let kept=taken.applied(channel).is_some_and(|a|(!a.listen||listening)&&a.eirp_half_dbm>=*eirp);
                 self.event=Some(Event::DataCountry{code:taken.code(),channel,kept,enforced:self.strict});
                 if kept||!self.strict{Ok(())}else{Err(wlanhw::Error::Failed)}
             }
@@ -159,6 +169,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let Some(record)=data.packet()else{break};
             if record.metadata().channel!=rx::Channel::Rxq||record.metadata().packet.kind!=rxdesc::TYPE_WIFI{return Err(Fatal::RetainedControl)}
             let frame=frames::from_packet(record.metadata().packet,record.buffer()).map_err(Fatal::Frame)?;
+            if let Some((bssid,heard))=self.listen.as_mut(){
+                let m=frame.mpdu();
+                if m.len()>=24&&matches!(m[0],0x80|0x50)&&m[16..22]==*bssid{*heard=time::monotonic_ns()/1_000_000;}
+            }
             let at=(self.frames.head+self.frames.count)%FRAMES;
             let length=frame.write(data.channel(),data.current_filter().all_beacons(),&mut self.frames.bytes[at]).map_err(Fatal::Frame)?;
             self.frames.lengths[at]=length;self.frames.count+=1;data.consume_packet();
@@ -283,6 +297,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             },
             wlanhw::Request::Send{frame,rate,attempts}=>{
                 if self.refused{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
+                // 5 GHz is OFDM alone: 6 to 54 Mb/s (wlanhw.wit `bands` bit 1).
+                if self.data().channel()>14&&rate<12{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Invalid));return}
+                if let Some((bssid,heard))=self.listen{
+                    let probe=frame.first().is_some_and(|c|c&0xfc==0x40);let to=frame.get(4..10).is_some_and(|r|r==bssid);
+                    if probe||!to||now.saturating_sub(heard)>LISTEN_BEACON_MS{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
+                }
                 if self.pending.is_some(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
                 let Some(deadline)=now.checked_add(u64::from(COMMAND_US/1000)-FRAME_MARGIN_MS)else{
                     let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));self.fail(Fatal::Clock);return};

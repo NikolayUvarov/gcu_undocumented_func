@@ -15,7 +15,8 @@ fn service_info_advertises_only_the_actual_admitted_2g20_channel(){run(0,true,tr
     ipc::reset();let mut service=Service::new(data).unwrap();let id=ipc::buffer(1,&[]);assert!(service.step());
     let(words,bytes)=ipc::response(id).unwrap();assert_eq!(words[0]&255,0);let mut r=Reader::new(&bytes[..words[0]>>16]);
     let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());assert_eq!(info.mac,0x020304050607);
-    assert_eq!(info.bands,5);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
+    // bands 7 since 213-DRV-0087: 2.4 GHz, its OFDM, and 5 GHz; the radio's own channels include the 5 GHz ones.
+    assert_eq!(info.bands,7);assert_eq!(info.supported.len(),41);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
     assert_eq!(ipc::dropped(id),1);let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
 

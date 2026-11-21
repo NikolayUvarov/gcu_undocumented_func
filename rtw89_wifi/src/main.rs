@@ -285,6 +285,9 @@ fn served(event: receive_service::Event) {
         receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
             mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 5 S MORE (DEBUG)",
                 count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
+        receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
+            mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
+                channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),
         receive_service::Event::DataCountry { code: [b'0', b'0'], channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY 00 IN DATA MODE: CHANNEL {} KEPT AT THE POWER IT WAS ADMITTED AT (AN UNKNOWN COUNTRY'S 75 % CAP IS SET AT ADMISSION)", channel),
         receive_service::Event::DataCountry { code, channel, kept: true, .. } =>

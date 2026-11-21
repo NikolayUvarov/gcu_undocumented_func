@@ -48,6 +48,13 @@ class PowerTables(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tables.body(bad, "x")
 
+    def test_index_type_widens_only_past_sixteen_bits(self):
+        self.assertEqual(tables.index_type((2, 2, 3, 2, 16, 14)), "u16")
+        self.assertEqual(tables.index_type((5, 2, 16, 53)), "u16")
+        self.assertEqual(tables.index_type((4, 2, 3, 2, 16, 53)), "u16", "the 5 GHz limits fit: 40704 slots")
+        self.assertEqual(tables.index_type((1 << 16,)), "u16")
+        self.assertEqual(tables.index_type((1 << 16, 2)), "u32")
+
     def test_both_sources_must_match_pins_before_parsing(self):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             tables.extract(b"not pinned", b"not pinned")

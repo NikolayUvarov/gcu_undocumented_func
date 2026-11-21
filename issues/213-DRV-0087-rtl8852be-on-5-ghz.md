@@ -47,6 +47,41 @@ The 2.4 GHz channel is crowded, and its antenna is shared with Bluetooth. The 5 
 - [ ] The Ryzen still joins on channel 8 with the same build, and its rate there is recorded.
 - [ ] The issue says what was not done: other channel widths, HT and VHT, other machines.
 
+## The data model (2026-11-21)
+
+- **The band is the channel's.** A channel number names its band and centre: 1 to 13 are 2.4 GHz (2407 + 5n MHz); the 28 channels of Linux's `rtw89_channels_5ghz`, 36 to 177, are 5 GHz (5000 + 5n MHz). No separate band field travels beside a channel. `rtw89_wifi/src/band.rs` holds the list, `band`, `subband`, `center_mhz` and `channel_at`.
+- **Sub-bands** are Linux's `rtw89_subband` for this chip: 2.4 GHz; 5 GHz low (36-64), middle (100-144), high (149-177). Each gives the board's gain-compensation index, its OFDM gain-offset index and the BB gain table's band.
+- **The initial PHY stays on 2.4 GHz.** The DM prefix, DACK, RX DCK and the path tail run once at start on channel 1, as today. A 5 GHz channel is set from there by the channel stage, as Linux's `set_channel` does after its own 2.4 GHz start. So `prefix.band` is the start's band; a tuned channel's band is its own.
+- **The country's 5 GHz rules** come from the radio's own copy of the catalogue: the one rule that holds the whole 20 MHz channel. DFS and NO-IR make a channel listen-only. A WMM rule (the driver does not set the channel-access limits it asks for), NO-INDOOR or NO-OUTDOOR (the environment is unknown), NO-OFDM and point-to-point rules leave it out. Each country's 5 GHz power group is `COUNTRY_REGD`'s second column.
+- **A listen-only channel** (radar or NO-IR): the receive-only service keeps the access points whose beacon or probe response it received there since the tune. A `send` there admits the channel only if it is not a probe request and goes to one of them; that evidence travels with the admission, so the calibration's own bursts too come only after a beacon was heard. In data mode a send there goes to that access point alone, while its beacon was heard within the last 10 s (the station's own silence), never a probe request.
+- **5 GHz is OFDM alone:** `info.bands` is 7 (2.4 GHz, its OFDM, 5 GHz); the data service refuses a rate under 12 (6 Mb/s) on 5 GHz with `invalid`.
+
+## What the catalogue allows on the bench (2026-11-21)
+
+The station takes its country from the access points when none is chosen: on the Ryzen that is **RU** (announced by 4 of the 8 that named one, the log of 2026-11-21). Read from the pinned catalogue, and the driver's host cases agree:
+
+| Country | 5 GHz under the driver's and the station's rules |
+|---|---|
+| RU | none: every 5 GHz rule is NO-OUTDOOR, and channel 100 is outside them |
+| UZ | 36-48 may be sent on (20 dBm); 52-64 listen-only (DFS); 100 is outside the rules (they end at 5330 MHz) |
+| 00 | 36-165 listen-only (NO-IR or DFS) |
+| US | 36-48 and 149-165 sendable; 52-144 listen-only (DFS) |
+
+So on this bench the station never joins channel 100 lawfully: under RU and UZ it is outside the rules. A join on 5 GHz needs a person's decision: the access point's 5 GHz network on a channel the country allows (UZ: 36 to 48), and that country chosen for the station if it is not the one announced. Receiving on channel 100 needs nothing: listening is allowed everywhere.
+
+## Progress
+
+**2026-11-21, the channel setting, the tables and the rules (commit of this section):**
+- `band.rs`, as above; `dack::Band` and `phy::tail::Subband` are its types now.
+- **The 5 GHz power tables:** `scripts/hardware/rtw89_power_tables.py` extracts `rtw89_8852b_txpwr_lmt_5g` (all four bandwidths), `txpwr_lmt_ru_5g`, the 5 GHz transmit shapes and by-rate rows from the same pinned `rtw8852b_table.c`, `--check` reproduces `power_tables.rs`; `channel_policy.rs` decodes them at Linux's channel slots (`rtw89_channel_to_idx`), CCK's by-rate from the 2.4 GHz table as Linux reads it.
+- **The power image** (`channel_power.rs`) of a 5 GHz channel: the 5 GHz tables, no CCK DFIR (50 writes, not 58); the 75 % cap of an unknown country leaves CCK out there.
+- **The channel stage** (`phy/channel.rs`) sets a 5 GHz channel as `rtw8852bx_set_channel_bb`, `__rtw8852bx_set_channel_mac`, `rtw8852b_bb_reset_en` and `_ch_setting` do; the table of differences is in [the channel-stage notes](../hwdocs/rtl8852be-channel-stage.md#5-ghz-at-20-mhz-213-drv-0087). A 2.4 GHz tune after a 5 GHz one puts the tail's BTG share back.
+- **The services:** `info` lists the 41 channels and bands 7; `set-channel` takes the 5 GHz ones; the passive tune and the listen take their centres; received 5 GHz frames carry their channel.
+
+**Host cases:** the country's 5 GHz rules (UZ, US, 00, RU, DE); the 5 GHz tables at Linux's slots; the 5 GHz power image and its maximum; a passive tune to channel 100 and back to 6 with each band's registers read back; nothing admitted on a radar channel before its access point's beacon, a probe request never, and a tune forgetting what was heard; a receive-only listen on channel 100. All 39 `rtw89_*_host.rs` files pass. Changed by design, not by the 2.4 GHz path: the info cases now see 41 channels and bands 7, the world rules count 38 channels (25 of them 5 GHz), and the listen case's refused frequencies no longer include 5180 MHz.
+
+**Not done yet:** the calibrations' 5 GHz branches (IQK, TSSI, DPK), the coexistence on 5 GHz, the Linux reference, anything on the Ryzen.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver; its section of 2026-11-21 has the measurements and the method), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (the platform's power policy).
