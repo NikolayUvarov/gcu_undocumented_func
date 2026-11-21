@@ -91,14 +91,17 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // 213-DRV-0090: the data mode's count of the joined BSS's beacons when it last moved, then, and the counts then;
     // whether one was heard since the filter; the hole open since it; the holes so far and the longest; the sends
     // answered and acknowledged; minutes logged; a line that waits for the event slot.
-    beacons:(u64,u64,Marks),heard_bss:bool,hole:Option<Hole>,holes:(u32,u64),sent:(u64,u64),minutes:u32,later:Option<Event>,
+    // The same for every Wi-Fi frame, the holes' measure while no beacon of the BSS reaches the host.
+    beacons:(u64,u64,Marks),heard_bss:bool,frames_seen:(u64,u64,Marks),hole:Option<Hole>,holes:(u32,u64),sent:(u64,u64),minutes:u32,
+    later:Option<Event>,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
 struct Marks{wifi:u64,kept:u64,ppdu:u64,pressure:u64,sent:u64,acked:u64}
-// An open hole: its number, its last beacon's time, the counts when it was seen, and its first beacon after.
+// An open hole: its number, its last beacon's (or frame's) time, the counts when it was seen, the first after, and
+// whether beacons measure it.
 #[derive(Clone,Copy)]
-struct Hole{n:u32,since:u64,marks:Marks,back:Option<u64>}
+struct Hole{n:u32,since:u64,marks:Marks,back:Option<u64>,by_beacons:bool}
 /// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this, half
 /// the station's own silence; after it, and before the beacon comes back, nothing is sent there.
 pub(crate) const LISTEN_BEACON_MS:u64=QUIET_MS/2;
@@ -133,7 +136,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
-            beacons:(0,start_ms,Marks::default()),heard_bss:false,hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None})
+            beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -287,37 +290,45 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         self.signals_at=(now,signals);
         let probe=(self.minutes%PROBE_MINUTES==0).then(||self.data().probe());self.minutes=self.minutes.saturating_add(1);
         let(c,channel)=(self.data().counts(),self.data().channel());
+        let bssid=self.data().filter().map_or([0;6],|f|f.bssid());
         let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
-            ppdu:c.ppdu_reports,beacons:c.beacons,sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
+            ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
         if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
     }
     // The counts now, for a hole's lines.
     fn marks(&mut self)->Marks{
         let c=self.data().counts();Marks{wifi:c.wifi,kept:self.kept,ppdu:c.ppdu_reports,pressure:c.pressure,sent:self.sent.0,acked:self.sent.1}
     }
-    // 213-DRV-0090: a hole opens when the joined BSS, heard once, sends no beacon for HOLE_MS, and closes with its next one.
+    // 213-DRV-0090: a hole opens when the joined BSS, heard once, sends no beacon for HOLE_MS, and closes with its next one;
+    // while none of its beacons reaches the host, when no Wi-Fi frame at all comes for HOLE_MS, closed by the next.
     // Each end is logged with the counts since the other and, for the first HOLES_PROBED, the registers then. A line
-    // that finds the event slot taken waits a step; a hole's length is told from its beacons, not from the lines.
+    // that finds the event slot taken waits a step; a hole's length is told from its beacons or frames, not the lines.
     fn holes(&mut self,now:u64){
         if self.event.is_none(){self.event=self.later.take();}
-        let beacons=self.data().counts().beacons;
-        if beacons!=self.beacons.0{
-            self.beacons=(beacons,now,self.marks());self.heard_bss=true;if let Some(hole)=self.hole.as_mut(){hole.back.get_or_insert(now);}
+        let c=self.data().counts();
+        if c.beacons!=self.beacons.0{
+            self.beacons=(c.beacons,now,self.marks());self.heard_bss=true;
+            if let Some(hole)=self.hole.as_mut().filter(|h|h.by_beacons){hole.back.get_or_insert(now);}
+        }
+        if c.wifi!=self.frames_seen.0{
+            self.frames_seen=(c.wifi,now,self.marks());
+            if let Some(hole)=self.hole.as_mut().filter(|h|!h.by_beacons){hole.back.get_or_insert(now);}
         }
         let joined=self.data().filter().is_some_and(|f|!f.all_beacons()&&f.bssid()!=[0;6]);
-        if !joined||!self.heard_bss{self.hole=None;return}
+        if !joined||!self.heard_bss&&self.frames_seen.0==0{self.hole=None;return}
         if self.event.is_some(){return}
         let d=|a:u64,b:u64|a.saturating_sub(b);
+        let(by_beacons,last)=if self.heard_bss{(true,self.beacons)}else{(false,self.frames_seen)};
         match self.hole{
-            None if now.saturating_sub(self.beacons.1)>=HOLE_MS=>{
-                let n=self.holes.0.saturating_add(1);self.holes.0=n;let(was,mark,since)=(self.beacons.2,self.marks(),self.beacons.1);
+            None if now.saturating_sub(last.1)>=HOLE_MS=>{
+                let n=self.holes.0.saturating_add(1);self.holes.0=n;let(was,mark,since)=(last.2,self.marks(),last.1);
                 let probe=(n<=HOLES_PROBED).then(||self.data().probe());let bssid=self.data().current_filter().bssid();
-                self.event=Some(Event::Hole{n,channel:self.data().channel(),bssid,ms:now.saturating_sub(since),wifi:d(mark.wifi,was.wifi),
+                self.event=Some(Event::Hole{n,channel:self.data().channel(),bssid,by_beacons,ms:now.saturating_sub(since),wifi:d(mark.wifi,was.wifi),
                     kept:d(mark.kept,was.kept),ppdu:d(mark.ppdu,was.ppdu),pressure:d(mark.pressure,was.pressure),sent:d(mark.sent,was.sent),
                     acked:d(mark.acked,was.acked),pending:self.pending.is_some(),probe});
-                self.hole=Some(Hole{n,since,marks:mark,back:None});
+                self.hole=Some(Hole{n,since,marks:mark,back:None,by_beacons});
             }
-            Some(Hole{n,since,marks:was,back:Some(back)})=>{
+            Some(Hole{n,since,marks:was,back:Some(back),..})=>{
                 let mark=self.marks();let probe=(n<=HOLES_PROBED).then(||self.data().probe());let ms=back.saturating_sub(since);
                 self.holes.1=self.holes.1.max(ms);
                 self.event=Some(Event::HoleEnded{n,ms,wifi:d(mark.wifi,was.wifi),kept:d(mark.kept,was.kept),ppdu:d(mark.ppdu,was.ppdu),
