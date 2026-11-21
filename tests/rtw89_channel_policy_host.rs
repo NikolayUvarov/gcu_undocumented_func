@@ -125,3 +125,21 @@ fn five_gigahertz_tables_decode_at_linux_channel_slots(){
         assert!(rows.windows(2).all(|w|w[0].0<w[1].0)&&rows.last().unwrap().0<end);
     }
 }
+
+// 213-DRV-0087: Linux's own `txpwr_table` on the Ryzen (ETSI, joined on channel 100 at 80 MHz centred on 106,
+// 2026-11-21; whole dBm, rounded down): the width-independent rows are the same as these decoders give.
+#[test]
+fn linux_txpwr_table_on_channel_100_agrees_with_the_5_ghz_decoders(){
+    let dbm=|quarter:i8|i32::from(quarter).div_euclid(4);
+    let byrate:Vec<i32>=(0..8).map(|i|dbm(default_byrate_5g(1,1,i).unwrap().value)).collect();assert_eq!(byrate,[20,20,20,20,20,20,19,18]);
+    let mcs:Vec<i32>=(0..12).map(|i|dbm(default_byrate_5g(1,2,i).unwrap().value)).collect();assert_eq!(mcs,[20,20,20,20,20,19,18,17,16,15,14,13]);
+    let mcs2:Vec<i32>=(0..12).map(|i|dbm(default_byrate_5g(2,2,i).unwrap().value)).collect();assert_eq!(mcs2,[20,20,20,20,20,19,18,17,16,15,14,13]);
+    assert_eq!((0..4).map(|i|dbm(default_byrate_5g(1,0,i).unwrap().value)).collect::<Vec<_>>(),[20;4],"CCK from the 2.4 GHz table");
+    let limit=|ntx,rs,bf,ch|dbm(default_limit_5g(0,ntx,rs,bf,Group::ETSI,ch).unwrap().quarter_dbm);
+    assert_eq!((limit(1,1,false,100),limit(1,1,true,100)),(14,0),"OFDM_1TX on the primary channel");
+    for ch in [100,104,108,112]{assert_eq!((limit(1,2,false,ch),limit(1,2,true,ch)),(15,0),"MCS_1TX_20M at {ch}");
+        assert_eq!((limit(2,2,false,ch),limit(2,2,true,ch)),(12,9),"MCS_2TX_20M at {ch}");}
+    assert_eq!((limit(2,1,false,100),limit(1,0,false,100),limit(2,0,false,100)),(11,0,0),"OFDM_2TX; no CCK limit on 5 GHz");
+    // 102, the 40 MHz rows' centre, is no 20 MHz channel of the radio's: its slot is refused, not guessed.
+    assert_eq!(default_limit_5g(1,1,2,false,Group::ETSI,102).unwrap_err(),Error::Index);
+}

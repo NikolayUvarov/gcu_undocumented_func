@@ -88,7 +88,21 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **2026-11-21, a line for the bench:** the receive-only service logs the first 16 access points it hears on 5 GHz channels in a run (`[RTW89] HEARD <BSSID> ON 5 GHZ CHANNEL n`), from the same beacons its listen-only rule keeps; host case in the radar-channel case.
 
-**Not done yet:** the coexistence on 5 GHz (role, policy, antenna), anything on the Ryzen.
+**2026-11-21, the Linux reference on channel 100** (taken by the owner session: `rtw89` on Linux 7.0.0-43, BSSID `A0:36:BC:11:F8:8C`, VHT 80 MHz centred on 106, beacon −67 dBm, 6 MB in 0.30 s, ETSI power group):
+- **Little of it could be read.** Linux had the chip in power save (`btc_info`: `power_save:1`), so its `mac_reg_dump` read `0xEAEAEAEA` for the MAC pages 0x8000 and 0xC000 and most of the baseband, and its `rf_reg_dump` `0xFFFFFFFF`. Readable were TSSI path B's block (0x7600-0x78F0) and the calibration results (0x8000-0x82FF).
+- **What agrees:** 0x7600 = `3F2D2721` and 0x7604 = `80010101`, `tssi_align_b_5g2_all_defs`'s values, the table this TSSI takes for 100-144; both paths' IQK enable 0x8124/0x8224 = `505` (TX and RX calibrated); DPK's RF mode in 0x8078 = `50220`; and the coexistence there: link mode 5G, policy OFF_EQ0, antenna W5G, AFH off (`en:0/ch:0/bw:32`).
+- **Linux's `txpwr_table` agrees with the 5 GHz decoders** on every width-independent row: by rate (OFDM 20/19/18 dBm, MCS 20 to 13, CCK from the 2.4 GHz table), OFDM_1TX 14, OFDM_2TX 11, MCS_1TX_20M 15 and MCS_2TX_20M 12/9 (beamformed) on 100-112, CCK limits 0. A host case says so.
+- **Not checked against Linux,** for want of a readable dump or because Linux ran 80 MHz: every channel-stage register (band select, SCO, gain tables and offsets, CCK off, channel index, RF18, the MAC's rate check), the 20 MHz limits' writes, TSSI path A and the DE, IQK's and DPK's 5 GHz settings at 20 MHz (Linux's DPK ran MDPD order 0, as it should at 80 MHz).
+
+**2026-11-21, on the Ryzen: 5 GHz heard** (`rtw89_wifi` of bf441efca put in with `replace`, release 202611211156, MIND Core on Wi-Fi alone):
+- A station whose radio comes back after more than 10 s of silence starts anew with a scan that only listens, on every channel the radio lists. For that, the build was started 15 s late (a bench-only sleep, not committed).
+- **The scan:** 40 passive tunes, the longest 4.3 ms, none failed. Heard on 5 GHz, each logged once: `A0:36:BC:11:F8:8C` (CoolNet2) **on channel 100**, and seven others on 36, 44, 48, 52, 60 and 157.
+- **Then, as the catalogue says:** the access points announced RU (5 of 13), under which no 5 GHz channel is left; the station joined CoolNet2 on channel 8 with the same build (`DATAPATH ADMITTED ON CHANNEL 8`, `JOINED (TRY 1)`, DHCP).
+- **6 MB from the LAN on channel 8,** the sender's figures: this build 159, 242 and 215 KB/s; the release's driver right after it, same minutes, 184, 262 and 277 KB/s. Three runs each on a crowded channel: no difference is shown either way, and none is claimed. The 2.4 GHz data path is the same code in both.
+- The signal the driver reports for a frame is 0 (not measured) on both bands: the 8-byte header's byte 2 was never filled by this driver. So NET's "strongest wins" picks by the scan's order here, not by signal.
+- **Not done there:** nothing was sent on 5 GHz. Under RU the station does not go there, and channel 100 is outside RU's and UZ's rules (see above).
+
+**Not done yet:** the coexistence on 5 GHz (role, policy, antenna); a transmission, a calibration and a join on 5 GHz on the Ryzen, which wait for a lawful channel and country (above).
 
 ## Related
 
