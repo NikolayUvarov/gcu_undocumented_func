@@ -51,4 +51,4 @@ It holds for the DEXP's Intel xHCI and this device (MC-12.1). It did not make th
 
 ## Related
 
-[000-DRV-0077](../issues/000-DRV-0077-a-new-connection-debounced-before-its-reset.md) (the attach debounce), [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone), [000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering).
+[000-DRV-0077](000-DRV-0077-a-new-connection-debounced-before-its-reset.done) (the attach debounce), [000-DRV-0073](../issues/000-DRV-0073-usb-audio-class-speakerphone.md) (the speakerphone), [000-DRV-0075](000-DRV-0075-a-controller-that-stops-answering.done) (a controller that stops answering).
