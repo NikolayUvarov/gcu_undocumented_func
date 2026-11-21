@@ -81,6 +81,12 @@
   - QEMU 8.2 has no USB camera (`-device help` lists none);
   - the bulk stream of `usb_host` is not reached by any QEMU device, and is evidence on the Ryzen alone;
   - the suites `usb`, `ehci`, `usbaudio` and `link` passed with the new `usb_host` (LEG9).
+- **Tests run on LEG9 on the branch's last code** (15a7d674d):
+  - **`cameras`** passed; its `camera -c` part was skipped there.
+  - **On a local tree with APP's branch merged** (`claude/wizardly-franklin-kec1a9`, never pushed), `cameras` passed whole: the two patterns through the stub, then through `camera -c`, with 8 s recorded beside a still of the other and the first camera busy for a third.
+  - **`bench`, `wm` and `vfs`** passed (33 checks); their camera checks run on the test pattern.
+  - **`host_tests.sh`** ran up to its OpenSSH tests, every test before them passing. The OpenSSH tests failed for want of the unpacked `sshd`, which was lost with `/tmp`, and the steps after them did not run.
+  - **The host tests this work touches** passed by themselves: `uvc` 19, `video_gw` 9, `video` 6, `idl` 10, `idl_fuzz` 3, `usb_hub`, `iso_ring`, and `tests/idl_test.py`.
 
 **The `cameras` suite** (`tests/qemu_smoke.py`, in the gate's group `x86: keys, shell, tools`):
 - **Through a test program of DRV's,** `tests/video_stub` (`videostub CAMERA SECONDS [WxH] [RATE]`, built by `scripts/x86_fixtures.sh`), since `camera -c` (158-APP-0147) is not in `main`: two patterns listed; the first read for 8 s (81 frames) while the second is read for 3 s (28 frames), each its own pattern (the second's counter 300 ahead); the first busy for a third program; camera 2 not found. Passed on LEG9.
