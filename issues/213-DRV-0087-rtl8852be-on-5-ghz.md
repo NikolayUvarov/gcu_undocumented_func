@@ -44,7 +44,7 @@ The 2.4 GHz channel is crowded, and its antenna is shared with Bluetooth. The 5 
 
 - [x] Host cases cover the 5 GHz channel setting, the policy and its limits, and that nothing is sent on a radar channel before a beacon is heard there. The generators reproduce the tables.
 - [ ] On the Ryzen the scan lists the network on channel 100, the station joins it, and 6 MB arrive at a recorded rate. This holds for that machine, that access point and that channel (MC-12.1).
-- [ ] The Ryzen still joins on channel 8 with the same build, and its rate there is recorded.
+- [x] The Ryzen still joins on channel 8 with the same build, and its rate there is recorded (90699adaa: 289 to 303 KB/s; one run, one machine, MC-12.1).
 - [x] The issue says what was not done: other channel widths, HT and VHT, other machines.
 
 ## The data model (2026-11-21)
@@ -111,6 +111,8 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **Not done yet:** a transmission, a calibration and a join on 5 GHz on the Ryzen, which wait for a lawful channel and country (above); the coexistence's TDMA policies for a busy Wi-Fi beside a busy Bluetooth (not ported on 2.4 GHz either, 213-DRV-0052).
 
+**2026-11-21, 15:53-15:58 UTC, the branch's head on channel 8** (90699adaa's `rtw89_wifi`, no bench delay, `replace`d into release 202611211156): the station applied RU, scanned the 13 channels and joined CoolNet2 on channel 8 (`DATAPATH ADMITTED ON CHANNEL 8`, DHCP); 6 MB from the LAN three times at 289, 292 and 303 KB/s, the sender's figures. The release's driver was put back after it.
+
 ## Where it stands (2026-11-21, evening)
 
 | Part | State | Host cases | On the Ryzen |
@@ -124,7 +126,7 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 | IQK, TSSI, DPK on 5 GHz | written | `rtw89_iqk_cases`, `rtw89_tssi_cases`, `rtw89_dpk_cases`, `rtw89_tssi_tables_test.py`, `--check` | not run: nothing may be sent on 5 GHz here |
 | Coexistence on 5 GHz | written | `rtw89_btc_codec_cases`, `rtw89_btc_runtime_cases` (the whole admission on channel 100 in the models) | not run |
 | A join and a download on 5 GHz | blocked by the country and the access point's channel (above) | — | — |
-| 2.4 GHz with the same code | unchanged path | every 2.4 GHz case as before | joined channel 8; 159/242/215 KB/s against the release's 184/262/277 in the same minutes |
+| 2.4 GHz with the same code | unchanged path | every 2.4 GHz case as before | joined channel 8; 159/242/215 KB/s against the release's 184/262/277 in the same minutes; the head's build (90699adaa, no bench delay) 289/292/303 KB/s at 15:54-15:57 UTC |
 
 **What a person must do for a 5 GHz join here:** choose the Ryzen's country if it is not RU (`wifi set-country XX`, which the station keeps), and put CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). As long as the driver reports no signal, the station joins the first CoolNet2 it heard, the 2.4 GHz one: for that run a driver build whose `supported` leaves 2.4 GHz out is needed (a bench build, not committed).
 
