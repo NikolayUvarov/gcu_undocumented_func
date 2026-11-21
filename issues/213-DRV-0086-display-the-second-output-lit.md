@@ -501,12 +501,12 @@ release (`STAGES_ALLOWED` 0) followed.
   path would then be to ask it, as Linux does.
 - If it is held in reset, the host tables are the only way, and the GOP must itself have used them or its own code.
 
-Batch 8 (0ba209bf1) reads 31 registers, all in segment 2 (base 0x34C0), so bytes 0xD668 and 0x19CE0 to 0x19D9C, inside
+Batch 8 (0ba209bf1) reads 31 registers, all in segment 2 (base 0x34C0), so bytes 0xD628 and 0x19CE0 to 0x19D9C, inside
 the granted [0, 0x1B000) (`dcn_2_1_0_offset.h`; fields from `dcn_2_1_0_sh_mask.h`):
 
 | Register | Dword | Byte | What it tells |
 |---|---|---|---|
-| `CC_DC_PIPE_DIS` | 0xCA | 0x0D668 | `DC_DMCUB_ENABLE` (bit 16): the board has a DMCUB (`dmub_dcn20_is_supported`) |
+| `CC_DC_PIPE_DIS` | 0xCA | 0x0D628 | `DC_DMCUB_ENABLE` (bit 16): the board has a DMCUB (`dmub_dcn20_is_supported`) |
 | `DMCUB_CNTL` | 0x32A0 | 0x19D80 | `DMCUB_ENABLE` (16), `DMCUB_SOFT_RESET` (17), `DMCUB_PWAIT_MODE_STATUS` (20): enabled, held in reset, waiting (`dmub_dcn20_is_hw_init`, `_reset`) |
 | `DMCUB_SEC_CNTL` | 0x3278 | 0x19CE0 | `DMCUB_SEC_RESET` (16) and `DMCUB_SEC_RESET_STATUS` (21) |
 | `DMCUB_SCRATCH0`..`15` | 0x328D..0x329C | 0x19D34..0x19D70 | 0: the firmware's boot status; 7: its answer to a GPINT; 10: read by `dmub_dcn21_is_phy_init` |
@@ -526,6 +526,28 @@ the granted [0, 0x1B000) (`dcn_2_1_0_offset.h`; fields from `dcn_2_1_0_sh_mask.h
   shows it enabled and out of reset.
 - Host cases: the registers and offsets against the header; a running DMCUB (enabled, counting, a ring set up) and
   one held in reset; the refusal, and its absence when held in reset.
+
+**Batch 8 on the Ryzen** (2026-11-21 20:38 UTC, the owner session's word, reads only).
+- The first release, 202611212032, ended before any restart (`failed | io`). The one retry, 202611212034 (S/rz37 at
+  648ae51f7, `BATCHES_ALLOWED` 8, `STAGES_ALLOWED` 0), was confirmed on slot A. 296 `[DISPLAY]` lines, none dropped.
+- **The DMCUB is on the board and held in reset:**
+  - `CC_DC_PIPE_DIS` 00010000 (`DC_DMCUB_ENABLE` 1);
+  - `DMCUB_CNTL` 00020000 (`DMCUB_ENABLE` 0, `DMCUB_SOFT_RESET` 1);
+  - `DMCUB_SEC_CNTL` 00000900 (memory unit id 9, no secure reset);
+  - `DMCUB_TIMER_CURRENT` 0 at both reads;
+  - all sixteen scratch registers 0 (no boot status);
+  - every inbox and outbox pointer, the inbox's base and size, and both GPINT registers 0.
+- The summary lines: `B8 DMCUB: ON THE BOARD 1, ENABLED 0, SOFT RESET 1, PWAIT 0; SECURE RESET 0, ITS STATUS 0;
+  TIMER STILL (00000000)`, the scratch and mailbox lines all zero. Then `STEP 1 DONE: 8 OF 8 BATCHES READ, 178
+  REGISTERS, NOTHING WRITTEN`, `178 REGISTERS READ, NONE WRITTEN`, `COMMAND 0006 AFTER STEP 1`.
+- With all eight batches read, step 3's assessment found the expected pipes and HUBP1 attached and blanked, and did
+  not refuse.
+- So the firmware leaves the DMCUB in reset, never started, with nothing in its mailboxes. MIND Core inherits it so.
+  - Nothing runs on it that could own PHY A or the pixel clocks, and nothing can be asked.
+  - The GOP lit DP-2 without it.
+  - Short of loading the DMCUB's firmware, which is proprietary and loaded by the PSP under Linux, the VBIOS tables
+    run from the host are the only way to light HDMI-A-1. On this engine that is Linux's own fallback path.
+- These values are for this machine, this firmware and this boot (MC-12.1).
 
 ## The watched run, for the maintainer (planned for 2026-11-22)
 
