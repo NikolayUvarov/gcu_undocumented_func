@@ -73,12 +73,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // sets BOOT_WATCHDOG_RESTARTED in the tasks' BootInfo.boot_flags when the platform's watchdog restarted the last run (000-KRN-0217).
 // ABI 35: it sets BOOT_LAST_RUN_FAULTED when the last run of the same slot ended in a fault of its own, recorded in a
 // firmware variable (801-KRN-0261). ABI 36: PLATFORM_BOOT_VOLUME gives the boot volume the loader read into memory, and
-// `ramdisk#2` serves it, read-only (352-KRN-0268).
+// `ramdisk#2` serves it, read-only (352-KRN-0268). ABI 37 moves SLOT_DYNAMIC to 47 for SLOT_INSTALL, the shell's client of the
+// installer on a live boot (352-KRN-0269).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 36;
+pub const ABI_VERSION: u32 = 37;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -340,7 +341,7 @@ pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
-pub const CAP_SLOTS: usize = 110; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246)
+pub const CAP_SLOTS: usize = 111; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246; 352-KRN-0269)
 pub const CAP_SLOTS_MAX: usize = 4096;
 // Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
 pub const DERIVE_DEPTH_MAX: usize = 64;
@@ -472,8 +473,11 @@ pub const SLOT_PASSPHRASE: usize = 44;
 // action. Its endpoint is kept across the gateway's starts, so it answers ERR_PEER while no mode runs it. The shell's
 // alone, never lent (ABI 33, 801-KRN-0246).
 pub const SLOT_EFFECTOR: usize = 45;
+// vfs_server's installer (idl/install.wit), a client badged mind::fs::BADGE_INSTALL that init mints on a live boot alone:
+// the shell's alone, for its `install` command, never lent (ABI 37, 352-KRN-0269).
+pub const SLOT_INSTALL: usize = 46;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 46;
+pub const SLOT_DYNAMIC: usize = 47;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
 pub const LAUNCH_SLOTS: [usize; 23] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,

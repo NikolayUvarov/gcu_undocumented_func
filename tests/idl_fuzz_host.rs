@@ -85,6 +85,7 @@ mod idl {
     #[path = "../../libmind/src/idl/effector.rs"] pub mod effector;
     #[path = "../../libmind/src/idl/gpio.rs"] pub mod gpio;
     #[path = "../../libmind/src/idl/init.rs"] pub mod init;
+    #[path = "../../libmind/src/idl/install.rs"] pub mod install;
     #[path = "../../libmind/src/idl/keyboard.rs"] pub mod keyboard;
     #[path = "../../libmind/src/idl/keystore.rs"] pub mod keystore;
     #[path = "../../libmind/src/idl/loader.rs"] pub mod loader;
@@ -355,7 +356,7 @@ fn scribble() {
 #[test]
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
-        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(clipboard), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
+        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(clipboard), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(install), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(nn), borrowed!(parse), owned!(rtc),
         borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), borrowed!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
@@ -428,6 +429,7 @@ types! {
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState Planned Configuration StopReason AgentStep FaultKind Fault Unfinished;
+    install: Bus Refusal Error Disk Layout;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork KeyState;
     loader: Error Program Needs HelperKind;
