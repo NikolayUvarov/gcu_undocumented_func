@@ -84,7 +84,9 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **2026-11-21, TSSI on 5 GHz:** `scripts/hardware/rtw89_tssi_tables.py` also extracts `rtw8852b_tssi_sys_{a,b}_defs_5g`, `slope_{a,b}_defs_5g`, the six `align_{a,b}_5g{1,2,3}_all_defs` and the three sub-band rows of `_txpwr_track_delta_swingidx_5g{a,b}_{n,p}` from the same pinned files (`--check` reproduces `tssi_tables.rs`). `phy/tssi.rs` takes RR_TXPOW's TXA on 5 GHz, the band's system and slope tables, the sub-band's alignment and thermal tables, the sub-band's gain offset and no BTG in the PMAC samples, leaves CCK's CCA disabled after a PMAC stop on 5 GHz (`rtw8852bx_bb_set_pmac_tx`), and writes the DE from Linux's OFDM, trim and CCK groups (`_tssi_get_ofdm_group` with its averaged extra groups, `_tssi_get_trim_group`); its notices carry the band. Host cases: the groups of every channel against Linux's tables (the 2.4 GHz ones as before), the 5 GHz thermal rows, and the engine on channel 100 with TXA, the 5 GHz system and alignment values, no BTG and CCA kept off. The 2.4 GHz TSSI cases pass unchanged.
 
-**Not done yet:** DPK on 5 GHz, the coexistence on 5 GHz, anything on the Ryzen.
+**2026-11-21, DPK on 5 GHz:** `dpk.rs` takes `_dpk_rf_setting`'s 5 GHz branch (RR_RXA2's SWATT, RR_RXA_LNA 0x920FC, RR_XALNA2 0x2C0, RR_IQGEN 0x38800, all three in the RF backup Linux restores) and `_dpk_idl_mpa`'s MDPD order 2 for a 5 GHz channel under 80 MHz; its notices carry the band. No external PA is assumed on either band, as before (`_dpk_bypass_check`'s ePA flags are not read). Host case: channel 100 with those RF values, order 2 on both paths, the BB, KIP and RF backups restored; channels 14, 34 and 178 refused before any write. The 2.4 GHz DPK cases pass unchanged.
+
+**Not done yet:** the coexistence on 5 GHz (role, policy, antenna), anything on the Ryzen.
 
 ## Related
 
