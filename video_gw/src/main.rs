@@ -33,7 +33,9 @@ const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and lat
 const LISTED: usize = 4; // video.wit's list of cameras, the test pattern among them
 const LISTED_MODES: usize = 256; // video.wit 1.1's list of a camera's modes
 const DESCRIBED: usize = 72; // a configuration descriptor's bytes a log line
-const NO_MODE: u16 = 0xFFFF; // `opened`'s index for a pattern drawn at a size none of its modes has
+const NO_MODE: u16 = 0xFFFF;
+const BAND_ROWS: usize = 64; // a frame's rows converted between two pumps
+const STOPPED_MS: usize = 250; // a bulk camera's time to stop after its interface is reset // `opened`'s index for a pattern drawn at a size none of its modes has
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
 
@@ -51,6 +53,8 @@ struct Live {
     // A bulk camera's endpoint kept polled by usb_host (usb.wit 1.6), its transfers taken without waiting; else read
     // by waiting transfers (EHCI). Its pumps, and the longest time between two, for the log (158-DRV-0082).
     streamed: bool, pumps: u64, pumped_ns: u64, longest_gap_ns: u64,
+    // The frame being converted for its reader: a copy, since a pump meanwhile may end the next one (158-DRV-0083).
+    copy: Vec<u8>,
 }
 
 // The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
@@ -329,7 +333,7 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     };
     let now = mind::time::monotonic_ns();
     Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, true), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
-        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0 })
+        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new() })
 }
 
 // The camera's stream stopped, with what it got: an isochronous camera back to setting 0; a bulk one's endpoint
@@ -339,6 +343,11 @@ fn stop(usb: &mut Usb, live: &Live) -> String {
         if live.bulk.is_some() {
             if live.streamed { if let Err(e) = host.bulk_stream(live.camera, live.endpoint, false) { mind::println!("[VIDEO] THE BULK STREAM DID NOT STOP ({:?})", e); } }
             if let Err(e) = host.control(live.camera, 0x02, 1, 0, live.endpoint as u16, 0) { mind::println!("[VIDEO] THE BULK ENDPOINT'S CLEAR-HALT FAILED ({:?})", e); }
+            // Its one setting selected again resets the interface: a camera kept its stream's frame size after the
+            // clear-halt alone, and the next commit's size never came (the Ryzen's, 158-DRV-0083).
+            if let Err(e) = host.select(live.camera, 0) { mind::println!("[VIDEO] SETTING 0 OF THE BULK CAMERA FAILED ({:?})", e); }
+            // The camera is given STOPPED_MS to stop: the infrared one kept its old frame size once when committed 20 ms after.
+            let _ = mind::time::sleep(STOPPED_MS);
         } else if let Err(e) = host.select(live.camera, 0) { usb.lost(if host_gone(e) { None } else { Some(live.camera) }); }
     }
     mind::println!("{}", timing(live));
@@ -422,12 +431,22 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
         if streams[at].source.gone() { return Err(idl::Error::NotFound); }
         if taken == 0 { let _ = mind::time::sleep(1); }
     }
-    let stream = &mut streams[at];
-    let (width, height) = (stream.width, stream.height);
-    let pixels = unsafe { core::slice::from_raw_parts_mut(stream.frame.as_mut_slice().as_mut_ptr() as *mut u32, width * height) };
-    let Source::Camera(live) = &mut stream.source else { return Err(idl::Error::NotOpen) };
+    // The frame converted in bands of BAND_ROWS, every camera's stream pumped between two, so a large frame's
+    // conversion does not outlast usb_host's queue for them (158-DRV-0083).
+    let (width, height) = (streams[at].width, streams[at].height);
+    let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
     live.given = live.assembler.good;
-    video::yuy2_scaled(live.assembler.ready(), live.size.width as usize, live.size.height as usize, pixels, width, height);
+    let (size, mut copy) = ((live.size.width as usize, live.size.height as usize), core::mem::take(&mut live.copy));
+    copy.clear();
+    copy.extend_from_slice(live.assembler.ready());
+    for band in (0..height).step_by(BAND_ROWS) {
+        let frame = &mut streams[at].frame;
+        let pixels = unsafe { core::slice::from_raw_parts_mut(frame.as_mut_slice().as_mut_ptr() as *mut u32, width * height) };
+        video::yuy2_scaled_rows(&copy, size.0, size.1, pixels, width, height, band..(band + BAND_ROWS).min(height));
+        pump_all(streams, None, usb);
+    }
+    let stream = &mut streams[at];
+    if let Source::Camera(live) = &mut stream.source { live.copy = copy; }
     stream.sequence = sequence;
     Ok(idl::Frame { sequence, timestamp_us: due / 1000, width: width as u16, height: height as u16, bytes: 0 })
 }

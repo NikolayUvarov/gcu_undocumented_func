@@ -69,3 +69,18 @@ fn yuy2_scaled_to_the_size_asked_for() {
     yuy2_scaled(&source[..4], 4, 2, &mut beyond, 2, 2);
     assert_eq!(beyond[2..], [0, 0], "rows the source lacks are black");
 }
+
+// 158-DRV-0083: a frame converted in bands, other work between them, is the frame converted whole.
+#[test]
+fn a_yuy2_picture_converted_in_bands_is_the_one_converted_whole() {
+    let (w, h, ow, oh) = (64, 48, 40, 30);
+    let source: Vec<u8> = (0..w * h * 2).map(|i| (i * 7 % 251) as u8).collect();
+    let mut whole = vec![0u32; ow * oh];
+    yuy2_scaled(&source, w, h, &mut whole, ow, oh);
+    let mut banded = vec![0xDEAD_BEEFu32; ow * oh];
+    for start in (0..oh).step_by(7) { yuy2_scaled_rows(&source, w, h, &mut banded, ow, oh, start..(start + 7).min(oh)); }
+    assert_eq!(banded, whole);
+    let mut one = vec![1u32; ow * oh];
+    yuy2_scaled_rows(&source, w, h, &mut one, ow, oh, 3..4);
+    assert!(one[..3 * ow].iter().all(|&p| p == 1) && one[3 * ow..4 * ow] == whole[3 * ow..4 * ow] && one[4 * ow..].iter().all(|&p| p == 1), "only the rows asked for");
+}

@@ -318,3 +318,37 @@ fn a_camera_with_motion_jpeg_alone_has_its_modes_but_no_yuy2() {
     assert_eq!(modes, vec![(Encoding::Mjpeg, 1920, 1080, 30), (Encoding::Mjpeg, 1920, 1080, 15), (Encoding::Mjpeg, 640, 480, 30)]);
     assert_eq!(camera.choose(640, 480), None, "nothing the gateway converts");
 }
+
+// 158-DRV-0083: the Ryzen's two cameras, from the configuration descriptors video_gw logged on 2026-11-21
+// (tests/data/uvc-0471-*.hex): each frame size has one interval, so a mode a frame size; YUY2 and MJPEG alike.
+fn ryzen_camera(name: &str) -> Camera {
+    let path = std::path::Path::new(file!()).parent().unwrap().join(format!("data/uvc-{name}.hex"));
+    let hex = std::fs::read_to_string(path).unwrap();
+    let bytes: Vec<u8> = (0..hex.trim().len()).step_by(2).map(|i| u8::from_str_radix(&hex.trim()[i..i + 2], 16).unwrap()).collect();
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]) as usize, bytes.len(), "wTotalLength: the whole descriptor");
+    parse(&bytes).expect("a camera")
+}
+
+fn yuy2_modes(camera: &Camera) -> Vec<(u16, u16, u32)> {
+    camera.modes().iter().filter(|m| m.encoding == Encoding::Yuy2).map(|m| (m.width, m.height, m.rate())).collect()
+}
+
+#[test]
+fn the_ryzens_visible_light_camera_has_its_thirteen_yuy2_modes() {
+    let camera = ryzen_camera("0471-a6ca");
+    assert!(camera.bulk && camera.alternates.is_empty() && camera.endpoint == 0x81 && camera.version == 0x0100);
+    assert_eq!(camera.formats, vec![(1, Encoding::Mjpeg), (2, Encoding::Yuy2)]);
+    assert_eq!(yuy2_modes(&camera), vec![(640, 480, 25), (1920, 1080, 3), (1600, 1200, 5), (1280, 1024, 5), (1280, 960, 9), (1280, 720, 10), (1024, 768, 15),
+        (800, 600, 20), (2048, 1536, 3), (640, 360, 30), (352, 288, 30), (320, 240, 30), (160, 120, 30)]);
+    assert_eq!(camera.modes().len(), 26, "13 MJPEG modes as well");
+    assert_eq!(camera.capacity(3), None, "bulk: not bounded by a setting");
+}
+
+#[test]
+fn the_ryzens_infrared_camera_has_its_twelve_yuy2_modes() {
+    let camera = ryzen_camera("0471-a6cd");
+    assert!(camera.bulk && camera.alternates.is_empty() && camera.endpoint == 0x81);
+    assert_eq!(yuy2_modes(&camera), vec![(640, 480, 30), (1920, 1080, 5), (1280, 1024, 5), (1280, 960, 5), (1280, 720, 10), (1024, 768, 10), (960, 720, 15),
+        (800, 600, 20), (640, 360, 30), (432, 240, 30), (352, 288, 30), (320, 240, 30)]);
+    assert_eq!(camera.modes().len(), 24);
+}

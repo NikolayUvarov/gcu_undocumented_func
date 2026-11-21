@@ -46,11 +46,22 @@ impl core::fmt::Display for Counter {
 // What a stream gave: frames, the first and last numbers, the time to the first, and whether every frame had the size.
 struct Got { frames: u32, first: u32, last: u32, first_ms: u64, elapsed_ms: u64, sized: bool, counter: Counter }
 
-// Camera `camera` opened at `width` × `height` and `rate`, read for `seconds` and closed. Err: the open's refusal.
-fn stream(camera: u8, seconds: u32, width: u16, height: u16, rate: u8, synthetic: bool, name: &str) -> Result<Got, idl::Error> {
-    let bytes = width as usize * height as usize * 4;
-    let Some(pages) = Pages::new(bytes) else { fail(format_args!("NO MEMORY FOR A FRAME")) };
+// The frame buffer the gateway writes into: shared once, lent for each read. One for the largest frame of a run, since
+// a shared buffer stays the program's until it ends.
+struct Buffer { pages: Pages, cap: usize }
+
+fn buffer(bytes: usize) -> Buffer {
+    let Some(pages) = Pages::new(bytes) else { fail(format_args!("NO MEMORY FOR A FRAME OF {} BYTES", bytes)) };
     let Ok(cap) = pages.share() else { fail(format_args!("THE FRAME BUFFER CANNOT BE SHARED")) };
+    Buffer { pages, cap }
+}
+
+// Camera `camera` opened at `width` × `height` and `rate`, read for `seconds` into `into` and closed. Err: the open's
+// refusal.
+#[allow(clippy::too_many_arguments)]
+fn stream(camera: u8, seconds: u32, width: u16, height: u16, rate: u8, synthetic: bool, name: &str, into: &Buffer) -> Result<Got, idl::Error> {
+    let bytes = width as usize * height as usize * 4;
+    let (pages, cap) = (&into.pages, into.cap);
     let started = mind::time::monotonic_ns();
     match idl::open(CAMERA, camera, width, height, rate) {
         Ok(Ok(())) => {}
@@ -124,8 +135,11 @@ fn main(_info: &'static BootInfo) {
             let (Some(camera), Some(seconds)) = (words.next().and_then(|w| w.parse::<u8>().ok()), words.next().and_then(|w| w.parse::<u32>().ok())) else { fail(format_args!("{}", USAGE)) };
             let listed = cameras.as_slice().get(camera as usize).copied().unwrap_or_default();
             let (mut opened, mut refused) = (0, 0);
-            for (i, m) in modes(camera).as_slice().iter().enumerate().filter(|(_, m)| m.offered) {
-                match stream(camera, seconds, m.width, m.height, m.rate, listed.synthetic, listed.name.as_str()) {
+            let list = modes(camera);
+            let largest = list.as_slice().iter().filter(|m| m.offered).map(|m| m.width as usize * m.height as usize * 4).max().unwrap_or(0);
+            let into = buffer(largest.max(4096));
+            for (i, m) in list.as_slice().iter().enumerate().filter(|(_, m)| m.offered) {
+                match stream(camera, seconds, m.width, m.height, m.rate, listed.synthetic, listed.name.as_str(), &into) {
                     Ok(got) => { opened += 1; mind::println!("VIDEO STUB: MODE {}: {}X{} AT {}/S", i, m.width, m.height, m.rate); said(camera, m.width, m.height, &got) }
                     Err(e) => { refused += 1; mind::println!("VIDEO STUB: MODE {}: {}X{} AT {}/S REFUSED: {:?}", i, m.width, m.height, m.rate, e) }
                 }
@@ -136,7 +150,8 @@ fn main(_info: &'static BootInfo) {
             let Some((camera, seconds, width, height, rate)) = options(args) else { fail(format_args!("{}", USAGE)) };
             let listed = cameras.as_slice().get(camera as usize).copied();
             let name = listed.map(|c| c.name).unwrap_or_default();
-            match stream(camera, seconds, width, height, rate, listed.is_some_and(|c| c.synthetic), name.as_str()) {
+            let into = buffer(width as usize * height as usize * 4);
+            match stream(camera, seconds, width, height, rate, listed.is_some_and(|c| c.synthetic), name.as_str(), &into) {
                 Ok(got) => said(camera, width, height, &got),
                 Err(e) => fail(format_args!("OPEN CAMERA {} {}X{} AT {}/S: {:?} ({} CAMERAS LISTED)", camera, width, height, rate, e, cameras.len())),
             }

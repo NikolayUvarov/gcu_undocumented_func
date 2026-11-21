@@ -1,7 +1,11 @@
 //! Host tests of video_gw/src/choices.rs (158-DRV-0082): which camera a number names, a stream for each camera with one
 //! owner each, and the test patterns the boot disk asks for.
+extern crate alloc;
 #[path = "../video_gw/src/choices.rs"]
 mod choices;
+#[path = "../libmind/src/uvc.rs"]
+#[allow(dead_code)]
+mod uvc;
 use choices::*;
 
 const LISTED: usize = 4; // video.wit's list of cameras
@@ -94,5 +98,23 @@ fn a_test_pattern_has_three_modes_the_pattern_draws() {
     assert_eq!(PATTERN_MODES.len(), 3, "two at least, for a program that steps through them");
     for &(w, h, rate) in &PATTERN_MODES {
         assert!(w % 32 == 0 && (64..=640).contains(&w) && (32..=480).contains(&h) && (1..=30).contains(&rate), "{w}x{h} at {rate}/s");
+    }
+}
+
+// The Ryzen's two cameras (tests/data/uvc-0471-*.hex, logged by video_gw on 2026-11-21): the YUY2 modes open takes are
+// offered, those wider than 1280 or taller than 1024 are not, and MJPEG is not yet.
+#[test]
+fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
+    for (name, offered_sizes) in [
+        ("0471-a6ca", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (800, 600), (640, 360), (352, 288), (320, 240), (160, 120)]),
+        ("0471-a6cd", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (960, 720), (800, 600), (640, 360), (432, 240), (352, 288), (320, 240)]),
+    ] {
+        let hex = std::fs::read_to_string(std::path::Path::new(file!()).parent().unwrap().join(format!("data/uvc-{name}.hex"))).unwrap();
+        let bytes: Vec<u8> = (0..hex.trim().len()).step_by(2).map(|i| u8::from_str_radix(&hex.trim()[i..i + 2], 16).unwrap()).collect();
+        let camera = uvc::parse(&bytes).unwrap();
+        let capacity = camera.capacity(3);
+        let offered_now: Vec<(u16, u16)> = camera.modes().iter()
+            .filter(|m| offered(m.encoding == uvc::Encoding::Yuy2, m.width, m.height, m.rate(), m.bytes_per_second(), capacity)).map(|m| (m.width, m.height)).collect();
+        assert_eq!(offered_now, offered_sizes, "{name}");
     }
 }
