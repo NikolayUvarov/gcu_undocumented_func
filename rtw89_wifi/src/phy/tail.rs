@@ -3,17 +3,11 @@
 //! Private post-RXDCK initial power reference, board trim and receive-path configuration.
 
 use super::{Phy,PhyIo,State,RegisterPhase,PHY_BASE,guard,rf_read,rf_write_masked,disable_bb_rf,dm};
-use crate::{board::Board,calibration::{self,Calibration},dack::Band,io::{self,Fault,FaultKind,RegisterIo,TimedIo},phycap::Capabilities};
+use crate::{board::Board,calibration::{self,Calibration},io::{self,Fault,FaultKind,RegisterIo,TimedIo},phycap::Capabilities};
 
 const BUDGET_US:u64=100_000;
 
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum Subband{Ghz2,Ghz5Low,Ghz5Middle,Ghz5High}
-impl Subband{
-    fn band(self)->Band{if self==Self::Ghz2{Band::Ghz2}else{Band::Ghz5}}
-    fn comp(self)->usize{match self{Self::Ghz2=>0,Self::Ghz5Low=>1,Self::Ghz5Middle=>3,Self::Ghz5High=>4}}
-    fn gain(self)->usize{match self{Self::Ghz2=>1,Self::Ghz5Low=>2,Self::Ghz5Middle=>3,Self::Ghz5High=>4}}
-}
+pub(crate) use crate::band::Subband;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum Stage{Guard,PowerReference,ThermalTrim,PaTrim,ReceivePath,GainOffset,Btg,PowerReset,RadioMode,Streams,MacMode,Verify}
 #[derive(Debug)]

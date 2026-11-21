@@ -9,12 +9,13 @@ struct Device{
     stuck:Option<usize>,fail_command:Option<usize>,flag_command:Option<usize>,bad_lok:usize,
     writes:usize,fail_write:Option<usize>,fail_notice:Option<usize>,fail_scheduler:Option<usize>,
     late_notice:Option<usize>,late_read:Option<usize>,late_read_after:usize,reads:usize,fail_cleanup:bool,
+    bands:Vec<u8>,
 }
 impl Device{
     fn new()->Self{
         let mut d=Self{memory:vec![0;0x20000],rf:[[0;256];2],xtal:[0;256],readback:0,now:1000,frozen:false,
             events:Vec::new(),commands:Vec::new(),notices:Vec::new(),scheduler:0,stuck:None,fail_command:None,flag_command:None,bad_lok:0,
-            writes:0,fail_write:None,fail_notice:None,fail_scheduler:None,late_notice:None,late_read:None,late_read_after:0,reads:0,fail_cleanup:false};
+            writes:0,fail_write:None,fail_notice:None,fail_scheduler:None,late_notice:None,late_read:None,late_read_after:0,reads:0,fail_cleanup:false,bands:Vec::new()};
         d.put(2,1,3);d.put(0x2f0,4,1<<17);d.put(0x8040,1,15);d.xtal[0x80]=0xc7;d.xtal[0x81]=0xc7;
         for path in 0..2{for(i,at)in RF_BACKUP.iter().enumerate(){if at&0x10000==0{d.rf[path][*at as usize]=0x30000+(i as u32)*4+1;}
             else{d.put(0x1e000+path*0x1000+((*at&255)as usize)*4,4,0x12341);}}
@@ -75,7 +76,8 @@ impl PhyIo for Device{
 }
 impl dack::DackIo for Device{
     fn btc_rfk(&mut self,notice:BtcNotice,timeout:u32)->io::Result<()>{
-        assert_eq!(notice.calibration,Calibration::Iqk);assert_eq!(notice,super::notice(notice.state));
+        let band=if notice.phy_map>>6==1{Band::Ghz5}else{Band::Ghz2};self.bands.push(notice.phy_map>>6);
+        assert_eq!(notice.calibration,Calibration::Iqk);assert_eq!(notice,super::notice(band,notice.state));
         self.notices.push(notice.state);self.events.push(Event::Notice(notice.state));let index=self.notices.len();
         if self.late_notice==Some(index){self.now+=u64::from(timeout);}
         if self.fail_notice==Some(index){return Err(bad(0x30,index as u32));}Ok(())
@@ -172,4 +174,27 @@ fn completed_identity_and_calibration_authority_cannot_cross_attempts_or_engines
     assert!(done.matches(3,5,6,7));for args in [(4,5,6,7),(3,6,6,7),(3,5,7,7),(3,5,6,8),(0,5,6,7)]{assert!(!done.matches(args.0,args.1,args.2,args.3));}
     let mut passive=tuned;passive.access=Access::PassiveOnly;assert!(!authority.matches(&passive,CalibrationEngine::Iqk));
     assert!(CalibrationTransmit::modeled(&passive,CalibrationEngine::Iqk).is_none());
+}
+
+// 213-DRV-0087: channel 100, the 5 GHz branches of _iqk_txk_setting, _lok_res_table, _txk_group_sel and _rxk_group_sel.
+#[test]
+fn a_5_ghz_channel_takes_the_a_band_tables_and_says_its_band(){
+    let mut d=Device::new();for p in 0..2{d.rf[p][0x18]=0x11164;}let before=d.rf;let start=d.now;
+    let results=engine(&mut d,100,start).unwrap();assert!(results.iter().all(|r|!r.failed()));
+    assert_eq!(d.commands.len(),26);assert!(d.bands.iter().all(|b|*b==1),"every notice names 5 GHz: {:?}",d.bands);
+    assert_eq!(d.get(0x19fe4,4),0x64016401,"band 1, 20 MHz, channel 100 for both paths");
+    let rf=|p:u8,reg:u32,mask:u32|->Vec<u32>{d.events.iter().filter_map(|e|if let Event::Rf(q,r,m,v)=e{(*q==p&&*r==reg&&*m==mask).then_some(*v>>mask.trailing_zeros())}else{None}).collect()};
+    for p in 0..2{
+        assert_eq!(rf(p,0x33,RF_MASK),[1],"the LOK table's 5 GHz entry");assert_eq!(rf(p,0x33,255),[0x80]);
+        assert_eq!(rf(p,0x85,3),[0]);assert_eq!(rf(p,0x60,7),[1]);assert!(rf(p,0x90,0x300).is_empty()&&rf(p,0x51,1<<19).is_empty());
+        assert_eq!(rf(p,0x11,0x70),[4,3,3,6,6],"LOK's GR1, then the 5 GHz track ranges");
+        assert_eq!(rf(p,0,0x3ff0),[0x190,0x198,0x350,0x352]);assert_eq!(rf(p,0x8c,0x7f),[0x0f,0x0f,0x3f,0x7f]);
+        assert_eq!(rf(p,0x8c,0x180),[3,1,0,0]);assert!(rf(p,0x83,0x1fc00).is_empty());
+        assert_eq!(rf(p,0x20,1<<7),[1,0]);assert!(rf(p,0x20,1<<8).is_empty());
+    }
+    let iqp:Vec<u32>=d.events.iter().filter_map(|e|if let Event::Write(0x181cc,v)=e{Some(*v)}else{None}).collect();
+    assert_eq!(iqp,[9,0x24,9,0x24,0x12,0x12,0x12,0x1b],"LOK's, then the 5 GHz ITQT");
+    for p in 0..2{for at in RF_BACKUP{if at<256{assert_eq!(d.rf[p][at as usize],before[p][at as usize]);}}}
+    // RF18 must still be the channel stage's: a 2.4 GHz value refuses before any calibration.
+    let mut d=Device::new();let start=d.now;assert!(engine(&mut d,100,start).is_err());assert!(d.commands.is_empty());d.off();
 }

@@ -8,9 +8,7 @@ use crate::phy::{self, PhyIo, PHY_BASE};
 
 const TOTAL_US:u64=400_000;
 const RF_MASK:u32=0xfffff;
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
-#[repr(u8)]
-pub enum Band { Ghz2=0, Ghz5=1 }
+pub use crate::band::Band;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u8)]
 pub enum Calibration { Iqk=0, Dpk=2, Dack=4, Rxdck=5 }
