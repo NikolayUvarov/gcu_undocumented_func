@@ -58,6 +58,12 @@
   - once the two streams run together, a single transfer of a few KiB takes about 200 ms, against 10 ms alone, whatever its size;
   - so the cameras do not merely overflow between short turns: each stalls while the other's transfer holds the gateway (and `usb_host`, which waits for each transfer before it answers), and then starts again late.
 - **The cure:** keep transfers queued on both endpoints at once, as Linux's `uvcvideo` keeps several URBs per stream. `usb_host` then reads both cameras while the gateway does other work: a bulk IN stream, through a new call of `usb.wit` (1.6), drained as an isochronous one is. That is the next commit.
+- **The bulk IN stream** (`usb.wit` 1.6, `usb_host/src/xhci.rs`):
+  - **`bulk-stream(handle, address, on)`** keeps a claimed interface's bulk IN endpoint polled on xHCI. Up to 32 transfers of a page (`mind::usb::BULK_STREAM_BYTES`) stay queued on the endpoint's own ring, as many as leave 12 pages of the controller's pool free, 8 at least.
+  - **`isochronous` gives them** in order: an empty one too, since it ends a payload; bit 15 for one that ended in error, after which the endpoint is reset on both sides and polled again.
+  - **`bulk` is refused** on the endpoint while the stream runs. The stream ends with `on` false, with the interface's release, or with the slot; the endpoint's ring then goes back to it.
+  - **EHCI keeps no such stream** (invalid).
+- **The gateway with it:** a bulk camera's endpoint is kept polled from its commit to its close, and its transfers are taken without waiting. Where usb_host refuses (EHCI), the gateway reads by waiting transfers as before and says so. The turn-taking of 16 KiB is gone. A stream's close line now gives its pumps and the longest gap between two (`… PUMPS IN … MS, THE LONGEST GAP … MS, BULK KEPT POLLED BY USB_HOST`): usb_host's queue for the camera must outlast that gap.
 
 **The `cameras` suite** (`tests/qemu_smoke.py`, in the gate's group `x86: keys, shell, tools`):
 - **Through a test program of DRV's,** `tests/video_stub` (`videostub CAMERA SECONDS [WxH] [RATE]`, built by `scripts/x86_fixtures.sh`), since `camera -c` (158-APP-0147) is not in `main`: two patterns listed; the first read for 8 s (81 frames) while the second is read for 3 s (28 frames), each its own pattern (the second's counter 300 ahead); the first busy for a third program; camera 2 not found. Passed on LEG9.

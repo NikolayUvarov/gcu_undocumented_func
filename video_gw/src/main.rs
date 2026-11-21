@@ -17,7 +17,7 @@ use mind::idl::codec::Text;
 use mind::idl::{display, video as idl, wire};
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
-use mind::usb::{Host, Interface, BULK_MAX, CONTROL_MAX};
+use mind::usb::{Host, Interface, BULK_MAX, BULK_STREAM_BYTES, CONTROL_MAX};
 use mind::{uvc, video};
 use choices::Key;
 
@@ -35,11 +35,6 @@ const LISTED_MODES: usize = 256; // video.wit 1.1's list of a camera's modes
 const NO_MODE: u16 = 0xFFFF; // `opened`'s index for a pattern drawn at a size none of its modes has
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
-// While two bulk cameras stream, a pump is one transfer of at most this many bytes, the cameras in turn, and the loop
-// waits SHARED_MS at most for a request: each camera waits one such transfer of the other's, not a whole frame, so
-// neither's buffer overflows (158-DRV-0082).
-const SHARED_BULK: usize = 16 * 1024;
-const SHARED_MS: u32 = 1;
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
@@ -52,8 +47,9 @@ struct Live {
     packets: u64, bytes: u64, damaged: u64, header: [u8; 12], header_len: usize, given: u32, good_ns: u64, opened_ns: u64,
     // Its camera went (or usb_host restarted): no more packets are asked for, and its reader gets not-found.
     gone: bool,
-    // A bulk stream's pumps, and the time its transfers took in all and at most, for the log.
-    pumps: u64, waited_ns: u64, longest_ns: u64,
+    // A bulk camera's endpoint kept polled by usb_host (usb.wit 1.6), its transfers taken without waiting; else read
+    // by waiting transfers (EHCI). Its pumps, and the longest time between two, for the log (158-DRV-0082).
+    streamed: bool, pumps: u64, pumped_ns: u64, longest_gap_ns: u64,
 }
 
 // The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
@@ -83,11 +79,22 @@ impl Stream {
     }
 }
 
-// The camera's packets into its frames; Ok(bytes taken), Err once the camera or usb_host is gone. `shared`: another
-// bulk camera streams too, so a bulk camera's pump is one transfer of SHARED_BULK at most.
-fn pump(host: &mut Host, live: &mut Live, shared: bool) -> mind::Result<usize> {
+// The camera's packets into its frames; Ok(bytes taken), Err once the camera or usb_host is gone.
+fn pump(host: &mut Host, live: &mut Live) -> mind::Result<usize> {
     let mut good = false;
-    let written = if live.bulk.is_some() { pump_bulk(host, live, &mut good, shared)? } else {
+    let now = mind::time::monotonic_ns();
+    if live.pumped_ns != 0 { live.longest_gap_ns = live.longest_gap_ns.max(now - live.pumped_ns); }
+    (live.pumps, live.pumped_ns) = (live.pumps + 1, now);
+    let written = if live.bulk.is_some() && !live.streamed { pump_bulk(host, live, &mut good)? } else if let Some(bulk) = live.bulk.as_mut() {
+        // The transfers usb_host took since the last pump, a page each at most, in order (158-DRV-0082).
+        let Live { assembler, packets, bytes, damaged, header, header_len, .. } = live;
+        host.isochronous(live.camera, live.endpoint, |data, failed| {
+            *packets += 1; *bytes += data.len() as u64;
+            if failed { *damaged += 1; bulk.failed(assembler); return; }
+            if *header_len == 0 && data.len() >= 2 { *header_len = data.len().min(12); header[..*header_len].copy_from_slice(&data[..*header_len]); }
+            if bulk.transfer(assembler, data, BULK_STREAM_BYTES) == Some(true) { good = true; }
+        })?
+    } else {
         host.isochronous(live.camera, live.endpoint, |packet, damaged| {
             live.packets += 1; live.bytes += packet.len() as u64;
             if damaged { live.damaged += 1; }
@@ -102,23 +109,18 @@ fn pump(host: &mut Host, live: &mut Live, shared: bool) -> mind::Result<usize> {
     Ok(written)
 }
 
-// A bulk camera's transfers (158-DRV-0072): until a frame ends, or for BULK_ROUND_NS; one of SHARED_BULK at most when
-// `shared`. usb_host waits for each, and the camera streams from the commit on at its sensor's pace, so a transfer waits
-// for its bytes to be made, up to a frame's time for a whole frame. A transfer that times out or fails (usb_host resets
-// the endpoint) drops its payload; Err only when the camera or usb_host is gone.
-fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool, shared: bool) -> mind::Result<usize> {
+// A bulk camera's transfers where usb_host keeps none queued (EHCI, 158-DRV-0072): until a frame ends, or for
+// BULK_ROUND_NS. usb_host waits for each, and the camera streams from the commit on at its sensor's pace, so a transfer
+// waits for its bytes to be made; a second camera beside it starves (158-DRV-0082). A transfer that times out or fails
+// (usb_host resets the endpoint) drops its payload; Err only when the camera or usb_host is gone.
+fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool) -> mind::Result<usize> {
     let started = mind::time::monotonic_ns();
-    let limit = if shared { SHARED_BULK } else { BULK_MAX }.min(host.buffer().len());
+    let limit = BULK_MAX.min(host.buffer().len());
     let mut taken = 0;
-    let Live { bulk: Some(bulk), assembler, camera, endpoint, packets, bytes, damaged, header, header_len, pumps, waited_ns, longest_ns, .. } = live else { return Ok(0) };
-    *pumps += 1;
+    let Live { bulk: Some(bulk), assembler, camera, endpoint, packets, bytes, damaged, header, header_len, .. } = live else { return Ok(0) };
     loop {
         let asked = bulk.next(limit);
-        let before = mind::time::monotonic_ns();
-        let result = host.bulk(*camera, *endpoint, 0, asked);
-        let took = mind::time::monotonic_ns() - before;
-        (*waited_ns, *longest_ns) = (*waited_ns + took, (*longest_ns).max(took));
-        match result {
+        match host.bulk(*camera, *endpoint, 0, asked) {
             Ok(got) => {
                 *packets += 1; *bytes += got as u64; taken += got;
                 let data = &host.buffer()[..got];
@@ -128,16 +130,15 @@ fn pump_bulk(host: &mut Host, live: &mut Live, good: &mut bool, shared: bool) ->
             Err(mind::Error::Other(ERR_TIMEOUT)) | Err(mind::Error::Invalid) => { bulk.failed(assembler); *damaged += 1; break; }
             Err(e) => return Err(e),
         }
-        if shared || *good || mind::time::monotonic_ns() - started > BULK_ROUND_NS { break; }
+        if *good || mind::time::monotonic_ns() - started > BULK_ROUND_NS { break; }
     }
     Ok(taken)
 }
 
-// A bulk stream's pumps and transfer times, for the log (empty for an isochronous one).
+// A stream's pumps and the longest time between two, for the log: usb_host's queue for it must outlast that.
 fn timing(live: &Live) -> String {
-    if live.bulk.is_none() { return String::new(); }
-    format!("[VIDEO]   {} PUMPS, {} TRANSFERS IN {} MS OF {} MS OPEN, THE LONGEST {} MS", live.pumps, live.packets, live.waited_ns / 1_000_000,
-        (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_ns / 1_000_000)
+    format!("[VIDEO]   {} PUMPS IN {} MS, THE LONGEST GAP {} MS{}", live.pumps, (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.longest_gap_ns / 1_000_000,
+        if live.bulk.is_none() { "" } else if live.streamed { ", BULK KEPT POLLED BY USB_HOST" } else { ", BULK READ BY WAITING TRANSFERS" })
 }
 
 // What a camera stream got, for the log.
@@ -301,7 +302,12 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     // The camera may have chosen another frame size of the format: its answer counts.
     let size = info.frames.iter().find(|f| f.format == answer.format() && f.frame == answer.frame() && f.encoding == uvc::Encoding::Yuy2).cloned().unwrap_or(size);
     let bytes = size.exact_bytes().unwrap_or(size.max_bytes as usize);
-    // A bulk camera has no setting to choose: it streams from the commit on, in payloads of up to its committed size.
+    // A bulk camera has no setting to choose: it streams from the commit on, in payloads of up to its committed size,
+    // and usb_host keeps its endpoint polled where it can (usb.wit 1.6), so other cameras' streams do not starve it.
+    let streamed = info.bulk && match host.bulk_stream(camera.streaming, info.endpoint, true) {
+        Ok(()) => true,
+        Err(e) => { mind::println!("[VIDEO] \"{}\": NOT KEPT POLLED BY USB_HOST ({:?}): READ BY WAITING TRANSFERS, A CAMERA BESIDE IT MAY STARVE", camera.name, e); false }
+    };
     let (endpoint, setting, bulk) = if info.bulk { (info.endpoint, 0, Some(uvc::Bulk::new(answer.max_payload()))) } else {
         let Some(alternate) = info.alternate(answer.max_payload()) else { mind::println!("[VIDEO] \"{}\": NO ISOCHRONOUS SETTING", camera.name); return Err(idl::Error::Invalid) };
         host.select(camera.streaming, alternate.setting).map_err(|e| failed("SETTING", e))?;
@@ -309,7 +315,7 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     };
     let now = mind::time::monotonic_ns();
     Ok(Live { camera: camera.streaming, assembler: uvc::Assembler::new(bytes, true), bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
-        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, pumps: 0, waited_ns: 0, longest_ns: 0 })
+        packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0 })
 }
 
 // The camera's stream stopped, with what it got: an isochronous camera back to setting 0; a bulk one's endpoint
@@ -317,11 +323,11 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
 fn stop(usb: &mut Usb, live: &Live) -> String {
     if let Some(host) = usb.host.as_mut().filter(|_| !live.gone) {
         if live.bulk.is_some() {
+            if live.streamed { if let Err(e) = host.bulk_stream(live.camera, live.endpoint, false) { mind::println!("[VIDEO] THE BULK STREAM DID NOT STOP ({:?})", e); } }
             if let Err(e) = host.control(live.camera, 0x02, 1, 0, live.endpoint as u16, 0) { mind::println!("[VIDEO] THE BULK ENDPOINT'S CLEAR-HALT FAILED ({:?})", e); }
         } else if let Err(e) = host.select(live.camera, 0) { usb.lost(if host_gone(e) { None } else { Some(live.camera) }); }
     }
-    let timed = timing(live);
-    if !timed.is_empty() { mind::println!("{}", timed); }
+    mind::println!("{}", timing(live));
     report(live)
 }
 
@@ -329,21 +335,16 @@ fn stop(usb: &mut Usb, live: &Live) -> String {
 // usb_host's queue does not fill, and while one reader waits for its frame, so the other cameras' streams go on
 // (158-DRV-0082). True when a camera stream is open.
 fn pump_all(streams: &mut [Stream], except: Option<usize>, usb: &mut Usb) -> bool {
-    let (mut any, mut failed, shared) = (false, None, shared(streams));
+    let (mut any, mut failed) = (false, None);
     for (i, s) in streams.iter_mut().enumerate() {
         let Source::Camera(live) = &mut s.source else { continue };
         any = true;
         if Some(i) == except || live.gone { continue; }
         let Some(host) = usb.host.as_mut() else { continue };
-        if let Err(e) = pump(host, live, shared) { mind::println!("[VIDEO] PID {}'S CAMERA STOPPED ANSWERING ({:?}): {}", s.owner, e, report(live)); failed = Some((e, live.camera)); break; }
+        if let Err(e) = pump(host, live) { mind::println!("[VIDEO] PID {}'S CAMERA STOPPED ANSWERING ({:?}): {}", s.owner, e, report(live)); failed = Some((e, live.camera)); break; }
     }
     if let Some((e, handle)) = failed { lost(streams, usb, e, handle); }
     any
-}
-
-// Whether two bulk cameras or more stream: then each takes its turn a transfer at a time.
-fn shared(streams: &[Stream]) -> bool {
-    streams.iter().filter(|s| matches!(&s.source, Source::Camera(live) if live.bulk.is_some() && !live.gone)).count() >= 2
 }
 
 // A camera stream's packets could not be taken: its camera went, or with usb_host restarted every one. Their streams
@@ -384,10 +385,9 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
     let Some(name) = usb.camera(handle).map(|c| c.name).filter(|_| !live.gone) else { return Err(idl::Error::NotFound) };
     let camera = &name;
     loop {
-        let shared = shared(streams);
         let Some(host) = usb.host.as_mut() else { return Err(idl::Error::NotFound) };
         let Source::Camera(live) = &mut streams[at].source else { return Err(idl::Error::NotOpen) };
-        let taken = match pump(host, live, shared) {
+        let taken = match pump(host, live) {
             Ok(n) => n,
             Err(e) => {
                 mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera, e, report(live));
@@ -400,14 +400,13 @@ fn next_camera(streams: &mut [Stream], at: usize, usb: &mut Usb) -> Result<idl::
         if now >= due && live.assembler.good > 0 && (fresh || now >= due.max(live.good_ns) + live.interval_ns * 3 / 2) { break; }
         if now - live.good_ns.max(live.opened_ns) > FIRST_MS * 1_000_000 {
             mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera, FIRST_MS, report(live));
-            let timed = timing(live);
-            if !timed.is_empty() { mind::println!("{}", timed); }
+            mind::println!("{}", timing(live));
             live.good_ns = now; // the next read waits as long again
             return Err(idl::Error::NotFound);
         }
         pump_all(streams, Some(at), usb);
         if streams[at].source.gone() { return Err(idl::Error::NotFound); }
-        if taken == 0 && !shared { let _ = mind::time::sleep(1); }
+        if taken == 0 { let _ = mind::time::sleep(1); }
     }
     let stream = &mut streams[at];
     let (width, height) = (stream.width, stream.height);
@@ -451,7 +450,7 @@ fn main(_info: &'static BootInfo) {
             marked = mind::time::uptime_ms();
         }
         let live = pump_all(&mut streams, None, &mut usb);
-        let wait = if shared(&streams) { SHARED_MS } else if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
+        let wait = if live { PUMP_MS } else if !streams.is_empty() { MARK_MS as u32 } else { 0 };
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) {
             Ok(request) => request,
             Err(mind::Error::Other(ERR_TIMEOUT)) => continue,

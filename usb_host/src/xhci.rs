@@ -55,8 +55,10 @@ pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
-/// An isochronous stream's TDs: each one TRB, one service interval's packet, in a buffer of its own.
-pub const STREAM_TDS: usize = 32; const STREAM_PAGES: usize = 4; const MAX_STREAMS: usize = 4;
+/// An isochronous stream's TDs: each one TRB, one service interval's packet, in a buffer of its own, in ISO_PAGES pages.
+/// A bulk stream's (158-DRV-0082): each a page, as many as leave POOL_KEPT pages of the pool free, BULK_LEAST at least.
+pub const STREAM_TDS: usize = 32; const STREAM_PAGES: usize = 32; const ISO_PAGES: usize = 4; const MAX_STREAMS: usize = 4;
+const POOL_KEPT: usize = 12; const BULK_LEAST: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done (IN): the bytes received, and an error
@@ -66,8 +68,10 @@ enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done 
 /// packet it is given on the ring while a TD is free; a TD is free again once the controller sent it. Each TD starts as
 /// soon as possible after the one before (SIA), so a ring that ran dry (a missed packet, under- or overrun) starts
 /// again with the next TD. The streams of an interface end with its setting.
+/// A bulk IN stream (158-DRV-0082, `bulk`) keeps its TDs on the endpoint's own ring, a page each, and gives them in order,
+/// an empty one too; one that ended in error halts the endpoint (`halted`) until the owner's next take resets it.
 pub struct Stream {
-    pub slot: u8, pub dci: u8, pub interface: u8, input: bool, ring: Ring, packet: usize, size: usize, pages: [usize; STREAM_PAGES],
+    pub slot: u8, pub dci: u8, pub interface: u8, input: bool, pub bulk: bool, halted: bool, ring: Ring, packet: usize, size: usize, pages: [usize; STREAM_PAGES],
     tds: usize, state: [Td; STREAM_TDS], next: usize, oldest: usize,
     /// TDs the controller missed, times its ring ran dry, packets that came with an error.
     missed: u32, dry: u32, damaged: u32, moved: u64, reported: bool,
@@ -411,32 +415,77 @@ impl Xhci {
         let bytes = (packet & 0x7FF) as usize * ((packet >> 11 & 3) as usize + 1);
         let size = bytes.max(64).next_power_of_two().min(PAGE);
         if bytes > PAGE { return None; }
-        let tds = (STREAM_PAGES * PAGE / size).min(STREAM_TDS);
+        let tds = (ISO_PAGES * PAGE / size).min(STREAM_TDS);
         let ring = self.ring(false)?;
         let mut pages = [0usize; STREAM_PAGES];
         for n in 0..(tds * size).div_ceil(PAGE) {
             match self.alloc() { Some(page) => pages[n] = page, None => { pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p)); self.release(ring.page); return None } }
         }
         let now = mind::time::uptime_ms() as u64;
-        self.streams[at] = Some(Stream { slot, dci, interface, input, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
+        self.streams[at] = Some(Stream { slot, dci, interface, input, bulk: false, halted: false, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
             missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15) });
         Some(ring)
+    }
+    /// A bulk IN stream on endpoint `dci` of `slot` (158-DRV-0082), on `ring`, the endpoint's own, which its context
+    /// already names: its TDs of a page each go on it at once. The TDs it got, or None without room.
+    pub fn new_bulk_stream(&mut self, slot: u8, dci: u8, interface: u8, ring: Ring) -> Option<usize> {
+        let at = self.streams.iter().position(Option::is_none)?;
+        let tds = (self.free.count_ones() as usize).saturating_sub(POOL_KEPT).min(STREAM_TDS);
+        if tds < BULK_LEAST { return None; }
+        let mut pages = [0usize; STREAM_PAGES];
+        for n in 0..tds {
+            match self.alloc() { Some(page) => pages[n] = page, None => { pages[..n].iter().for_each(|&p| self.release(p)); return None } }
+        }
+        let now = mind::time::uptime_ms() as u64;
+        self.streams[at] = Some(Stream { slot, dci, interface, input: true, bulk: true, halted: false, ring, packet: PAGE, size: PAGE, pages, tds, state: [Td::Free; STREAM_TDS],
+            next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 });
+        self.take_stream(at, &mut []);
+        Some(tds)
+    }
+    /// Ends the bulk stream of endpoint `dci` of `slot`: the endpoint stopped (reset if it halted), its dequeue pointer
+    /// at its ring's next TRB, the TDs' pages back to the pool. Its ring, for the endpoint's later transfers.
+    pub fn end_bulk_stream(&mut self, slot: u8, dci: u8) -> Option<Ring> {
+        let at = self.stream(slot, dci).filter(|&at| self.streams[at].as_ref().is_some_and(|t| t.bulk))?;
+        let t = self.streams[at].take()?;
+        self.restart(slot, dci, &t.ring, t.halted);
+        t.pages[..t.tds].iter().for_each(|&p| self.release(p));
+        mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK STREAM ENDED: {} BYTES, {} WITH ERRORS", Tag(self.number), slot, dci, t.moved, t.damaged);
+        Some(t.ring)
+    }
+    /// Whether bulk stream `index` halted on an error: its owner then clears the device's halt and calls `recover_bulk`.
+    pub fn bulk_halted(&self, index: usize) -> bool { self.streams[index].as_ref().is_some_and(|t| t.bulk && t.halted) }
+    /// Bulk stream `index` after an error: the endpoint reset, its dequeue pointer past what is on its ring, and the TDs
+    /// still there free again; the next take puts them back.
+    pub fn recover_bulk(&mut self, index: usize) {
+        let Some(t) = self.streams[index].as_ref().filter(|t| t.bulk && t.halted) else { return };
+        let (slot, dci, ring) = (t.slot, t.dci, t.ring);
+        self.recover(slot, dci, &ring);
+        let Some(t) = self.streams[index].as_mut() else { return };
+        for k in 0..t.tds { if matches!(t.state[k], Td::Armed(_)) { t.state[k] = Td::Free; } }
+        t.next = t.oldest;
+        t.halted = false;
     }
     /// The stream of endpoint `dci` of `slot`.
     pub fn stream(&self, slot: u8, dci: u8) -> Option<usize> { self.streams.iter().position(|t| t.as_ref().is_some_and(|t| t.slot == slot && t.dci == dci)) }
     /// The DCIs (a bit each) of the streams of `slot`'s interface `interface`, or of all its interfaces.
+    /// A bulk stream (158-DRV-0082) is not among them: its endpoint is the interface's own, configured with it.
     pub fn streams_of(&self, slot: u8, interface: Option<u8>) -> u32 {
-        self.streams.iter().flatten().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i)).fold(0, |m, t| m | 1 << t.dci)
+        self.streams.iter().flatten().filter(|t| t.slot == slot && !t.bulk && interface.is_none_or(|i| t.interface == i)).fold(0, |m, t| m | 1 << t.dci)
+    }
+    /// The DCIs (a bit each) of the bulk streams of `slot`'s interface `interface` (158-DRV-0082).
+    pub fn bulk_streams_of(&self, slot: u8, interface: u8) -> u32 {
+        self.streams.iter().flatten().filter(|t| t.slot == slot && t.bulk && t.interface == interface).fold(0, |m, t| m | 1 << t.dci)
     }
     /// Ends the streams of `slot`'s interface `interface` (all with None): their pages back to the pool. The endpoints
     /// themselves are dropped by the caller's Configure Endpoint, or with the slot.
     pub fn end_streams(&mut self, slot: u8, interface: Option<u8>) {
         for at in 0..MAX_STREAMS {
-            let Some(t) = self.streams[at].as_ref().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i)) else { continue };
-            let (ring, pages) = (t.ring.page, t.pages);
+            // A bulk stream ends by end_bulk_stream, which keeps its ring, the endpoint's own; here only with its slot.
+            let Some(t) = self.streams[at].as_ref().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i) && (interface.is_none() || !t.bulk)) else { continue };
+            let (ring, pages, bulk) = (if t.bulk { 0 } else { t.ring.page }, t.pages, t.bulk);
             mind::println!("[USB] {}SLOT {} ENDPOINT {}: STREAM ENDED: {} {}, {} MISSED, {} TIMES DRY, {} WITH ERRORS", Tag(self.number), t.slot, t.dci,
                 t.moved, if t.input { "BYTES" } else { "PACKETS SENT" }, t.missed, t.dry, t.damaged);
-            self.release(ring);
+            if !bulk { self.release(ring); }
             pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p));
             self.streams[at] = None;
         }
@@ -451,9 +500,20 @@ impl Xhci {
         if !matches!(code, SUCCESS | SHORT_PACKET) && code < 64 && t.codes & 1 << code == 0 {
             t.codes |= 1 << code;
             let (slot, dci, usbsts) = (t.slot, t.dci, self.mmio.read32(self.op + 4));
-            mind::println!("[USB] {}SLOT {} ENDPOINT {}: AN ISOCHRONOUS TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, code, usbsts);
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: {} TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, if t.bulk { "A BULK" } else { "AN ISOCHRONOUS" }, code, usbsts);
         }
         let Some(t) = self.streams[index].as_mut() else { return };
+        // A bulk TD: its bytes, or an error that halted the endpoint (the TDs after it wait until it is reset).
+        if t.bulk {
+            let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
+            t.ended_ms = mind::time::uptime_ms() as u64;
+            if matches!(code, SUCCESS | SHORT_PACKET) {
+                let got = t.packet.saturating_sub((status & 0xFF_FFFF) as usize);
+                t.moved += got as u64;
+                t.state[k] = Td::Done(got as u16, false);
+            } else { t.damaged += 1; t.halted = true; t.state[k] = Td::Done(0, true); }
+            return;
+        }
         // A ring that ran dry starts again from the controller's frame with its next TD.
         if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; t.uframe = None; return; }
         if code == MISSED_SERVICE { t.uframe = None; }
@@ -478,6 +538,11 @@ impl Xhci {
         let Some(t) = self.streams[index].as_mut() else { return };
         let (buffer, input) = (t.buffer(k), t.input);
         let address = self.dma.physical(buffer);
+        // A bulk TD: a Normal TRB of a page, ended early by a short packet.
+        if t.bulk {
+            t.state[k] = Td::Armed(Self::enqueue(&mut self.dma, &mut t.ring, address, length as u32, TYPE_NORMAL << 10 | IOC | ISP));
+            return;
+        }
         // Its frame: the one after the TD before, or a little ahead of the controller; one that fell behind starts anew.
         let uframe = match t.uframe {
             Some(u) if (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= 16 => u,
@@ -504,7 +569,8 @@ impl Xhci {
             let Some(t) = self.streams[index].as_mut() else { return written };
             let Td::Done(length, damaged) = t.state[t.oldest] else { break };
             let length = length as usize;
-            if length > 0 {
+            // A bulk stream's empty transfer is given too: it ends a payload.
+            if length > 0 || t.bulk {
                 if written + 2 + length > out.len() { break; }
                 let head = length as u16 | if damaged { 0x8000 } else { 0 };
                 out[written..written + 2].copy_from_slice(&head.to_le_bytes());
@@ -520,7 +586,7 @@ impl Xhci {
         loop {
             let Some(t) = self.streams[index].as_ref() else { break };
             let (k, packet) = (t.next, t.packet);
-            if !t.input || t.state[k] != Td::Free { break; }
+            if !t.input || t.halted || t.state[k] != Td::Free { break; }
             self.queue_td(index, k, packet);
             if let Some(t) = self.streams[index].as_mut() { t.next = (k + 1) % t.tds; }
             queued = true;
