@@ -32,6 +32,7 @@ const WIDEST: u16 = 640; // the size a camera is offered at: its largest YUY2 fr
 const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and later for the next one
 const LISTED: usize = 4; // video.wit's list of cameras, the test pattern among them
 const LISTED_MODES: usize = 256; // video.wit 1.1's list of a camera's modes
+const DESCRIBED: usize = 72; // a configuration descriptor's bytes a log line
 const NO_MODE: u16 = 0xFFFF; // `opened`'s index for a pattern drawn at a size none of its modes has
 const CLAIMED: usize = 16; // the interfaces one look claims: a camera has a control and a streaming one, some more
 const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken this long at most a pump
@@ -204,9 +205,22 @@ fn describe(host: &mut Host, control: u32, info: &Interface) -> Option<uvc::Came
         host.control(control, 0x80, 6, 0x0200, 0, total).ok()
     });
     let Some(got) = read else { mind::println!("[VIDEO] VIDEO CLASS DEVICE {:04X}:{:04X}: ITS DESCRIPTORS CANNOT BE READ", info.vendor, info.product); return None };
+    log_descriptors(&host.buffer()[..got]);
     let camera = uvc::parse(&host.buffer()[..got]);
     if camera.is_none() { mind::println!("[VIDEO] VIDEO CLASS DEVICE {:04X}:{:04X}: NO CONTROL AND STREAMING INTERFACES WITH A FRAME SIZE IN {} BYTES OF DESCRIPTORS", info.vendor, info.product, got); }
     camera
+}
+
+// A camera's configuration descriptor in hex, DESCRIBED bytes a line and a little apart (a burst of lines is dropped):
+// the host cases of its modes are made from them (158-DRV-0083).
+fn log_descriptors(bytes: &[u8]) {
+    let lines = bytes.len().div_ceil(DESCRIBED);
+    for (n, chunk) in bytes.chunks(DESCRIBED).enumerate() {
+        let mut line = String::with_capacity(2 * DESCRIBED);
+        for b in chunk { line += &format!("{:02X}", b); }
+        mind::println!("[VIDEO]   DESCRIPTORS {}/{}: {}", n + 1, lines, line);
+        let _ = mind::time::sleep(2);
+    }
 }
 
 // The device's product string (the first 24 characters, ASCII).

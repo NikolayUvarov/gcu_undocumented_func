@@ -67,7 +67,8 @@ The maintainer (2026-11-21): switching must be possible from inside the applicat
 - **A mode is offered** (`choices::offered`) when it is YUY2, within what `open` takes (16 to 1280 × 16 to 1024, 1 to 60 a second), and carried by the streaming settings. MJPEG is never offered until [158-DRV-0084](158-DRV-0084-mjpeg-frames-decoded.md). Host cases are in `tests/video_gw_host.rs`.
 - **What it logs:**
   - at start, each frame size with every listed rate (`640X480 (25,20,15,10,5/S)`), and a line `MODES: n, m OFFERED; NOT: …` with the reasons counted;
-  - each `OPENED` line ends with the mode's index (`; MODE 22`, `, SCALED`).
+  - each `OPENED` line ends with the mode's index (`; MODE 22`, `, SCALED`);
+  - each camera's configuration descriptor in hex (`DESCRIPTORS n/m: …`, 72 bytes a line), from which the host cases of a real camera's modes are made.
 - **The test patterns list three modes:** 640×480 at 30, 320×240 at 10, 160×120 at 5.
 
 **`tests/video_stub`** also takes `videostub modes CAMERA` and `videostub step CAMERA SECONDS`, which opens each offered mode in turn. **The `cameras` suite** (passed on LEG9):
