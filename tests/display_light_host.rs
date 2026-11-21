@@ -39,7 +39,7 @@ fn found() -> Store {
         s.set(R::DigBeCntl, p, if p == 4 { (1 << 4) << 8 } else { 0 });
         s.set(R::DigBeEnCntl, p, if p == 4 { 0x101 } else { 0 });
     }
-    s.set_batches(5);
+    s.set_batches(7);
     s
 }
 
@@ -66,6 +66,7 @@ fn the_pipe_is_chosen_from_what_step_1_found() {
 #[test]
 fn step_3_refuses_what_it_cannot_tell() {
     let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found(); change(&mut s); assess(&s).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(6)), Refusal::NotRead { batch: 7 });
     assert_eq!(refuse(&|s| s.set_batches(4)), Refusal::NotRead { batch: 5 });
     assert_eq!(refuse(&|s| s.set_batches(0)), Refusal::NotRead { batch: 1 });
     assert_eq!(refuse(&|s| s.set(R::OtgControl, 2, 0x0001_0001)), Refusal::RunningOtgs(2));

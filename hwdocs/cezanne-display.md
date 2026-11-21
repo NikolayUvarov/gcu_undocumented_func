@@ -362,7 +362,8 @@ lets go one at a time: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1
 squares, 5 the OTG started and its frame count seen to move, 6 the DIG front end (table 4), 7 the back end in DVI
 mode, 8 the PHY (table 76) and the `DIG_START` pulse.
 
-- **The pipe** is chosen from step 1's values (batches 1 to 5 needed): the one timing generator running and its OPP,
+- **The pipe** is chosen from step 1's values (all seven batches read on the same boot, so that step 3 touches no
+  register step 1 has not read): the one timing generator running and its OPP,
   the one enabled back end among PHYs A, B, D, E and its front end, the HUBPs following that generator, HPD 1's sense;
   then the lowest free OTG with its own OPP, and the lowest free front end that is not the firmware's back end's.
 - **The guard** lets a write through only to the chosen pipe's blocks (OTG, ODM, VTG, OPP_PIPE, DPG, the two DIG

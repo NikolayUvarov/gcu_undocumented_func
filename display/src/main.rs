@@ -18,7 +18,7 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
 /// How many of step 3's eight stages this build may run. 0 makes no writer: it logs each stage with every write it would
-/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED of 5 or more.
+/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED at 7.
 const STAGES_ALLOWED: u8 = 0;
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;

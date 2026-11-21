@@ -92,7 +92,7 @@ ABI 37 release that holds KRN's image; the owner session says when. What to look
 MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT ... AN IMAGE FOR 1002:1638 ...
 ROM SIGNATURE 55AA`, `STEP 1 MAY READ 0 OF 7 BATCHES`, the seven `NOT READ` batches with their registers, `STEP 1 DONE:
 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN`, `NO REGISTER READ OR WRITTEN` and `COMMAND 0006 AFTER STEP 1`;
-Step 3 then logs `STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: STEP 1'S BATCH 1 WAS NOT READ (STEP 3 NEEDS BATCHES 1 TO 5)` and its eight stages `NOT RUN` with every write they would make (64 lines, the longest 161 bytes), ending `STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN`. DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
+Step 3 then logs `STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: STEP 1'S BATCH 1 WAS NOT READ (STEP 3 NEEDS ALL SEVEN)` and its eight stages `NOT RUN` with every write they would make (64 lines, the longest 161 bytes), ending `STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN`. DP-2 keeps its picture. Every register of the seven batches and every one tables 12, 4 and 76 wrote on the model lies
 below 0x1B000 (the highest is `RDPCSTX0_RDPCSTX_PHY_FUSE3` at 0x17848, which tables 12 and 76 write), so the engine's
 window needs no widening for them.
 
@@ -114,7 +114,8 @@ machine; the answers are assumptions about the hardware.
 
 `display/src/light.rs` runs first light in eight stages; `STAGES_ALLOWED = 0` in `main.rs`, so this build makes no
 writer at all and only logs each stage with every write it would make (hwdocs/cezanne-display.md, "Step 3 as code").
-A stage runs only on what step 1 found (`BATCHES_ALLOWED` of 5 or more), logs every write it will make before the first,
+A stage runs only on what step 1 found on the same boot (`BATCHES_ALLOWED` at 7: step 3 touches no register step 1 has
+not read), logs every write it will make before the first,
 makes them through the guard (never the firmware's pipe, never off the route), runs its VBIOS tables with each table and
 its parameters logged before it runs and each of its writes as it is made, within 1,000,000 instructions and 500 ms of
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
@@ -128,7 +129,7 @@ the time limit and undone; more writes than the undo holds; the firmware's pipe 
 only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
 
-**What a person must see, stage by stage,** in the order they are let go (each a new boot; step 1's batches 1 to 5 are
+**What a person must see, stage by stage,** in the order they are let go (each a new boot; step 1's seven batches are
 read on that boot first). Throughout, **DP-2 keeps MIND Core's screen with no flicker, blank or loss of signal**: if it
 does any of these, that is the stage's failure whatever the log says, and the run stops there.
 
