@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -305,21 +306,27 @@ class Releases(unittest.TestCase):
 
     @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy")), "needs mkfs.fat and mtools")
     def test_every_download_of_a_release(self):
-        # 352-UPD-0050: the ISO in slots with the channel and key file, the bundle, the record and the signed list; the
-        # same date gives the same files. The USB image (qemu-img) is left out here.
+        # 352-UPD-0050: the ISO and the USB image around one boot volume in slots with the channel and key file, the
+        # bundle, the record and the signed list; the same date gives the same files, the USB image among them.
         import make_iso
         built = volume(self.dir / "built", b"\x7fELF kernel 4", 4)
         files = lambda arch: {p.relative_to(built).as_posix(): p.read_bytes() for p in built.rglob("*") if p.is_file()}  # noqa: E731
         when = int(NOW.timestamp())
-        make = lambda out: release.artifacts(4, out, ["x86_64"], when=when, volumes={"x86_64": built}, payloads=files, qemu_img=False)  # noqa: E731
+        make = lambda out: release.artifacts(4, out, ["x86_64"], when=when, volumes={"x86_64": built}, payloads=files)  # noqa: E731
         names = make(self.dir / "out")
-        self.assertEqual(names, ["KEYS", "RELEASE.json", "SHA256SUMS", "SHA256SUMS.sig", "mind-core-4-x86_64-update.zip", "mind-core-4-x86_64.iso"])
+        self.assertEqual(names, ["KEYS", "RELEASE.json", "SHA256SUMS", "SHA256SUMS.sig", "mind-core-4-x86_64-update.zip", "mind-core-4-x86_64.img", "mind-core-4-x86_64.iso"])
         self.assertIsNone(release.verify_sums(self.dir / "out", now=NOW))
         lba, _ = make_iso.check_iso(self.dir / "out/mind-core-4-x86_64.iso")
         env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
         listing = subprocess.run(["mdir", "-b", "-i", f"{self.dir / 'out/mind-core-4-x86_64.iso'}@@{lba * make_iso.BLOCK}", "::MIND/A"], capture_output=True, text=True, env=env).stdout
         for name in ("CHANNEL", "KEYS", "MANIFEST", "kernel.elf"):
             self.assertIn(f"::/MIND/A/{name}", listing)
+        # The USB image's ESP is the ISO's boot volume, byte for byte, and its log and store partitions follow it.
+        iso, img = (self.dir / "out/mind-core-4-x86_64.iso").read_bytes(), (self.dir / "out/mind-core-4-x86_64.img").read_bytes()
+        start, length = struct.unpack_from("<II", img, 454)
+        self.assertEqual((img[450], start), (0xEF, 2048))
+        self.assertEqual(img[start * 512:(start + length) * 512], iso[lba * make_iso.BLOCK:lba * make_iso.BLOCK + length * 512])
+        self.assertEqual((img[466], img[482]), (0x0E, 0x7F))
         record = json.loads((self.dir / "out/RELEASE.json").read_text())
         self.assertEqual((record["version"], record["arches"], record["test_keys"]), (4, ["x86_64"], True))
         with zipfile.ZipFile(self.dir / "out/mind-core-4-x86_64-update.zip") as archive:

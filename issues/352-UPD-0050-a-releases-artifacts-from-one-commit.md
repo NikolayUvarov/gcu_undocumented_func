@@ -74,10 +74,24 @@ The files' provenance in each line, plan step 3's last point, is left: `SHA256SU
 - **A real run** in this session's container, on a copy of the x86 build signed as version 5: the ISO, the USB image, the bundle, `RELEASE.json` and the list, in 3 s; `verify-sums` VERIFIED.
 - **Twice on the same commit:** the ISO, the bundle and `RELEASE.json` gave the same SHA-256. The USB image did not: QEMU's `vvfat` builds its FAT from the files' times, and the log volume carries the time of the run. That is step 4's to fix or name.
 
+**Plan steps 2 and 4, for the ISO and the USB image** (2026-11-21):
+- `make_usb_image.py`'s `pack_volume` makes the USB image around the FAT image `make_iso.boot_volume` made: an MBR whose ESP entry holds it at 1 MiB, then the log and the store's partitions.
+- `MIND LOG`'s dates are the build's, and the disk's signature comes from the volume's hash.
+- `artifacts` builds one boot volume for each architecture and puts it into both the ISO and the USB image. QEMU's `vvfat` is no longer used there, and `qemu-img` is not needed.
+
+**Tested:** `tests/release_test.py` 18 of 18. The artifacts test now makes the USB image too:
+- its ESP is the ISO's FAT image, byte for byte;
+- its log and store partitions follow it;
+- two runs with the same date give the same `SHA256SUMS`, the USB image's line among them.
+
+**A real run** in this session's container, on a copy of an x86 build signed as version 6:
+- `artifacts` ran twice and gave the same ISO, USB image, bundle and `RELEASE.json`, so the same `SHA256SUMS`; `verify-sums` VERIFIED;
+- the USB image, booted in QEMU (OVMF, a USB disk, the image read-only), reached the shell: `BOOT: RECORD MIND\BOOT0 SEQUENCE 1: SLOT A, CONFIRMED`, the manifest verified, `BOOT: VOLUME MBR PARTITION 1 AT LBA 2048`;
+- the image's SHA-256 was the same after the boot.
+
 **Left:**
-- the board images (352-UPD-0049);
-- step 2: the boot volume shared, one FAT image for the ISO, the USB image and the cards;
-- step 4: the USB image reproducible;
+- the board images (352-UPD-0049), and the cards' share of the boot volume;
+- step 4's check of the bundle and the ISO on a second build of the commit, as 350-UPD-0001's;
 - steps 5 and 6.
 
 ## Related

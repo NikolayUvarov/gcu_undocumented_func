@@ -897,10 +897,10 @@ def build_date():
     return int(out.stdout.strip())
 
 
-def artifacts(version, out, arches, channel="stable", when=None, volumes=None, payloads=None, qemu_img=None):
+def artifacts(version, out, arches, channel="stable", when=None, volumes=None, payloads=None):
     """Every download of release `version` into `out`, which must not exist (352-UPD-0050): for each of `arches`, the
-    installer ISO and the USB image, both in slots with the release's channel and key file in slot A, and the update
-    bundle; RELEASE.json, what they were made of; then SHA256SUMS, its signature and KEYS. The channel is published to a
+    installer ISO and the USB image, both around one boot volume in slots with the release's channel and key file in slot
+    A, and the update bundle; RELEASE.json, what they were made of; then SHA256SUMS, its signature and KEYS. The channel is published to a
     server of its own in a temporary directory, never to a real one. `volumes` and `payloads` (an arch's files by name)
     stand in for the built tree in tests. Returns the names written."""
     import make_iso, make_usb_image
@@ -921,9 +921,9 @@ def artifacts(version, out, arches, channel="stable", when=None, volumes=None, p
             volume = work / f"{arch}.fat"
             make_iso.boot_volume(files, volume, when)
             make_iso.write_iso(volume, out / f"mind-core-{version}-{arch}.iso", when, arch)
+            # The same FAT volume as the ISO's, so both hold the same boot volume and the same date gives the same bytes.
+            make_usb_image.pack_volume(volume, out / f"mind-core-{version}-{arch}.img", files, when)
             volume.unlink()
-            if qemu_img is not False:
-                make_usb_image.pack(files, out / f"mind-core-{version}-{arch}.img", qemu_img or make_usb_image.find_qemu_img(None), arch)
             bundle(server, out / f"mind-core-{version}-{arch}-update.zip", channel, [arch], now=now)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=sm.ROOT, capture_output=True, text=True).stdout.strip()
     record = {"version": version, "channel": channel, "commit": commit, "date": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
