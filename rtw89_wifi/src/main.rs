@@ -326,6 +326,12 @@ fn served(event: receive_service::Event) {
             if let Some(probe) = before { pieces("LINK BEFORE", &probe); }
             if let Some(probe) = after { pieces("LINK AFTER", &probe); }
         }
+        receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
+            mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
+                channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
+        receive_service::Event::Unreadable { count, register, value, reads, waited_us, ser_before, ser_after, recovered } =>
+            mind::println!("[RTW89] CHECK MET {} {}: {:X} READ {:08X}, READABLE AGAIN AFTER {} READS IN {} US; SER_DBG_INFO {:08X} -> {:08X} (213-DRV-0091)",
+                if recovered { "A FIRMWARE RECOVERY" } else { "AN UNREADABLE CMAC" }, count, register, value, reads, waited_us, ser_before, ser_after),
         receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
                 channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),

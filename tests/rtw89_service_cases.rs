@@ -511,3 +511,32 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     assert_eq!(h2c(c,8).len(),joins+1);assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4]);
     drop(service);clean();
 });}
+
+// 213-DRV-0091: a station check that meets an unreadable CMAC window (DEADBEEF, the Ryzen's boot 62 twice in 98 minutes)
+// reads again and goes on, logged; a firmware recovery that begins with it is outlasted first; one that never answers,
+// or answers with a mismatch, still stops the data mode.
+#[test]
+fn service_a_check_that_meets_an_unreadable_cmac_window_reads_again_and_goes_on(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    // The check first: one table's reads answer DEADBEEF, then the window answers.
+    c.borrow_mut().window_dead=8;ipc::advance(20);assert!(service.step());
+    let Some(u)=service.take_unreadable()else{panic!("no unreadable check")};
+    assert_eq!((u.count,u.value,u.recovered),(1,0xdead_beef,false));assert!((1..=8).contains(&u.reads),"{u:?}");
+    assert!((0x40000..0x40020).contains(&u.register),"{u:?}");
+    // The check first, and the firmware's recovery begins with it: outlasted, then the check made again.
+    {let mut c=c.borrow_mut();c.window_dead=8;c.window_dead_ser=true;c.ser_heal=Some(2);}ipc::advance(20);assert!(service.step());
+    let Some(u)=service.take_unreadable()else{panic!("no unreadable check after a recovery")};
+    assert_eq!(u.count,2);assert!(u.recovered,"{u:?}");assert_ne!(u.ser_after,u.ser_before);
+    assert!(service.take_recovery().is_some(),"the recovery counted");
+    // The recovery first: outlasted before the checks, then a dead read is met and read again.
+    {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=Some(2);c.window_dead=8;}ipc::advance(20);assert!(service.step());
+    assert!(service.take_recovery().is_some());
+    let Some(u)=service.take_unreadable()else{panic!("no unreadable check after the recovery")};assert_eq!(u.count,3);
+    // Traffic runs on.
+    c.borrow_mut().incoming.push(packet());let id=ipc::buffer(5,&[]);assert!(service.step());assert_eq!(words(id)[0]&255,0);
+    // No answer at all: the data mode stops on the check, as before.
+    c.borrow_mut().window_dead=1000;ipc::advance(20);assert!(!service.step());
+    let stopped=service.stop();assert!(matches!(stopped.failure,Some(Fatal::Radio(_))),"{:?}",stopped.failure.is_some());
+    let _=Event::Unreadable{count:0,register:0,value:0,reads:0,waited_us:0,ser_before:0,ser_after:0,recovered:false};clean();
+});}

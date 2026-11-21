@@ -190,6 +190,18 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
   - In that build every report was parsed, about 650 a second, before it was compared. The commit after it parses only the kept frame's report. Its effect on the rate is not measured.
 - **The raw lines,** with those NET asked for (the restarts, the country after them), are in the owner session's handoff directory, `wifi/net-lines-37.txt`.
 
+**2026-11-21, boot 57 on the Ryzen (release with 213-DRV-0090's e146cb563, the first 5 GHz join attempts, by accident):**
+- **The country:** none was announced in the first scan, so 00 applied: 11 channels to send on, 27 listen-only, channel 100 among them.
+- **NET's 550-NET-0090 preference,** now that the signal is reported, chose CoolNet2's access point on channel 100 (−63 dBm).
+- **Fourteen tries in 9 minutes, all the same:**
+  - `[RTW89] LISTEN-ONLY CHANNEL 100: NOTHING SENT TO A0:36:BC:11:F8:8C, NO BEACON OF IT HEARD HERE SINCE THE TUNE (0 ACCESS POINTS HEARD)`;
+  - in the same millisecond `[WLAN] JOINING CoolNet2 ON CHANNEL 100`;
+  - 0.9 s later `Failed: NO ANSWER`.
+- **No data mode ever started** (no `DATAPATH ADMITTED`). The station sent its authentication within a millisecond of tuning there, before a beacon could come, and the radio refused it by this task's rule. The scan of the same boot had heard that access point on 100 (`HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL 100`).
+- **The wait for the beacon is the station's** (NET, `NET/2026-11-21T1946Z-…`), as is not reading a refused send as "no answer". The driver's rule stays as it is.
+- **The trial boot ran out without a join and the machine rolled back.** The bench now runs with `wifi country UZ` chosen.
+- **A new line for the first 5 GHz run:** `[RTW89] LISTEN-ONLY CHANNEL n: <bssid> HEARD t MS AFTER THE TUNE, s MS AFTER THE REFUSED SEND`, once a tune, when the receiver of a refused send is heard there. It tells how long the station must wait. The host case is the radar-channel one in `rtw89_receive_service_cases`.
+
 ## What a machine running this driver does differently on 2.4 GHz (against `main`'s driver)
 
 - **Each scan takes about four seconds longer** while the country leaves no 5 GHz channel. On the Ryzen under RU (the logs of 2026-11-21): from `[WLAN] Scanning` to `JOINING CoolNet2 ON CHANNEL 8`, 1.35 s with `main`'s driver, 5.6 and 5.7 s with this one. The cause is in `dot11`: `Station::tick` steps through every channel of the radio's list, and gives a channel the country bars (`Allowed::Nothing`) the passive dwell of 150 ms. This driver refuses the tune (`invalid`), so the radio stays on the last channel it was on. 28 barred 5 GHz channels at 150 ms make the 4.2 s. The fix belongs in `dot11`, not here: a scan should skip a barred channel. It is asked of NET in the handoff file `request-NET-WIFI.md`. Until then, every scan, every first join and every rejoin after a stall is about 4 s slower here.
