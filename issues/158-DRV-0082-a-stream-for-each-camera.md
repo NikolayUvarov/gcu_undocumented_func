@@ -88,7 +88,19 @@
   - **What the maintainer saw** (2026-11-21, the gateway of b712571ac with `usb_host` 13ea6031d): two `camera` windows showed both cameras at once. Pressing `n` in one window froze the other for a moment, then both ran normally. That freeze is this flaw: the gateway held every program while the camera it reopened settled, and while its probe was answered late.
   - **The log says** `STOPPED n MS AFTER ITS CLOSE: CLEAR-HALT a MS, SETTING 0 b MS, A STEP A TURN` and, at a re-open, `PID n WAITS FOR CAMERA c TO SETTLE; THE OTHER PROGRAMS ARE SERVED MEANWHILE`, then `OPENED AGAIN n MS AFTER ITS RESET, w MS AFTER IT WAS ASKED (THE OTHER PROGRAMS SERVED MEANWHILE); ITS PROBE AND COMMIT p MS; IT SETTLES s MS NEXT`.
   - **Tested:** host cases (`tests/video_gw_host.rs`: the steps' order, the settling, what it learns).
-  - **Not yet run on the Ryzen:** the machine moves to a release of ABI 37 first. No QEMU device is a bulk camera, so the gate does not reach this either.
+  - **Run on the Ryzen, 2026-11-21 18:43-19:01 UTC** (release 202611211819, ABI 37, whose `usb_host` is 5046dfbc6's; `video_gw` put in by `replace`, `tests/video_stub` from the console):
+    - **Camera 1 for 60 s at 320×240 beside camera 0** opening each of its offered modes in turn, 2 s each (1698c7b07):
+      - all 30 re-opens of camera 0 waited, deferred (`PID 71 WAITS FOR CAMERA 0 TO SETTLE`), and opened 0.25 to 0.47 s after they were asked;
+      - the settling learned from the first probe, 134 ms late: 250 ms became 384 ms, and every later probe and commit took 6 to 14 ms;
+      - camera 1 got 1529 good frames and 178 broken in 60 s, near what it breaks alone.
+    - **The same with the read gaps logged** (8ca499a80): camera 0's own reads were answered at most 100 to 101 ms apart in its YUY2 and MJPEG modes up to 1024×768.
+    - **The stop's steps:** the clear-halt takes under 1 ms. The reset (setting 0) took 31 to 45 ms in 46 of 50 stops, and 413 to 445 ms in four, each after a Motion JPEG or a failing stream. During those it holds the gateway, since a control transfer waits in `usb_host`.
+    - **A stop by the clear-halt alone** (a test build, not committed): MJPEG to MJPEG and YUY2 to MJPEG changes took effect, but MJPEG 800×600 to YUY2 640×360 did not (no good frame in 5 s, frames of another length). The reset stays.
+  - **What is still open (found on the run):**
+    - **A read that waits for its frame holds the gateway:** while camera 0's YUY2 1280×720 stream gave no good frame, its reader waited the whole 5 s, and camera 1's reads waited with it (`329 READS ANSWERED, AT MOST 5004 MS APART`).
+    - **The cure is to defer reads as opens now are.** A read's lent buffer is minted into a slot of its own, and its answer comes when its frame is ready, so one camera's wait never holds another program. That is the next change.
+    - **YUY2 at 1280×960 and 1280×720 beside a second camera break almost every frame at about 133 KB:** about the 32 pages `usb_host` keeps queued (128 KiB), which the camera fills in a few ms at the bus's rate. MJPEG frames of those sizes (0.1 to 0.2 MB) stream beside another camera.
+    - **The other cases:** more pages need more of `usb_host`'s DMA memory, which `init` grants (KRN). Or the gateway may prefer MJPEG for large sizes beside another stream.
 - **What this `usb_host` does differently for devices that are not cameras:**
   - **The bulk stream:** it is made only when a client calls `bulk-stream`. In the tree only `video_gw` calls it: `rg bulk_stream` finds its two calls and the library's wrapper. A bulk stream takes the controller's pages, but leaves 12 of its 64 free, so a device plugged in meanwhile still gets them, and gives them back at its end.
   - **Unchanged code paths:** without a bulk stream, `streams_of`, `end_streams`, `stream_event`, `take_stream`, `queue_td`, `isochronous` and `release` run as before. Each new branch is taken only for a stream marked bulk. An isochronous stream still takes at most 4 pages (`ISO_PAGES`, the old `STREAM_PAGES`).

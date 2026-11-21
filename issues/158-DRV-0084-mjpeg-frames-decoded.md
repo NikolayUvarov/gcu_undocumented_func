@@ -69,6 +69,27 @@ On USB 2 a camera sends its larger sizes and higher rates as MJPEG alone: uncomp
   - no QEMU device sends MJPEG, so the gateway's MJPEG path is evidence on the Ryzen alone, and not yet that;
   - the `cameras` suite runs the patterns.
 
+**4. On the Ryzen, 2026-11-21 18:43-19:01 UTC** (release 202611211819, ABI 37; `video_gw` by `replace`, `tests/video_stub` from the console):
+- **The lists:**
+  - camera 0 `MODES: 26, 15 OFFERED (5 MJPEG)` and camera 1 `24, 17 OFFERED (6 MJPEG)`, as the host cases say. The MJPEG ones are 1280×1024, 1280×960, 1280×720, 1024×768 and 800×600 (and 960×720 on camera 1), at 25 and 30 a second, where YUY2 gives 5 to 20.
+  - The first run, before `opens_as`, offered every MJPEG mode up to 1280×1024 and opened the ones YUY2 also gives as YUY2 (`640x480 AT 25/S; MODE 13`). That is why the list now leaves them out.
+- **Decode times, camera 0 alone, each MJPEG mode for 2 s** (run 3):
+
+  | mode | decode |
+  |---|---|
+  | 1280×1024 | 16 ms (at most 18) |
+  | 1280×960 | 15 ms |
+  | 1280×720 | 12 ms |
+  | 1024×768 | 10 ms |
+  | 800×600 | 6 ms |
+
+  - 24 frames shown in 1.6 s in each, the camera's 15 a second in that light, with reads at most 62 to 64 ms apart.
+- **The same modes in other runs took 24 to 122 ms a frame on average, and up to 325 ms:** camera 0's 1280×1024 alone in 35 ms, camera 1's 1280×720 alone in 64 ms, and 110 to 122 ms beside camera 1 in the first run. The Wi-Fi driver logged late frames in those seconds (8 in one 15 s run, 2 in run 3). That may explain the spread, but it is not shown.
+- **Both cameras in MJPEG 1280×720 at once, 15 s:**
+  - before b232de0db the gateway ended: `PANIC: memory allocation of 269328 bytes failed`, since each stream reserved the camera's 1.8 MB maximum twice;
+  - with it: camera 0 decoded 193 frames in 24 ms each, camera 1 176 in 30 ms each, 1 dropped each (`A FRAME OF ANOTHER SIZE, OR NO FRAME HEADER`), and reads were at most about 0.5 s apart.
+- **A mode the machine cannot decode at its rate:** none found at 15 frames a second. The cameras' 25 and 30 were not reached in this room's light, whatever the decode time.
+
 **Not done yet:**
 - frames recorded from the Ryzen's cameras and compared with Linux's decoding (criterion 1): the machine runs ABI 35 and `main` 37 until its stick is rewritten;
 - an MJPEG mode of each camera opened there, with its rate and decode time (criterion 3), and a mode the machine cannot decode at its rate offered at the rate it reaches (plan item 4);
