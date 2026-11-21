@@ -11,6 +11,14 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
     // Whole receive buffers, after `incoming`: frames with their PPDU count and rate, and captured reports (213-DRV-0087).
     pub buffers:Vec<Vec<u8>>,
+    // 213-DRV-0091: the next reads of the indirect window that answer DEADBEEF, and whether the first of them begins a
+    // firmware recovery as `ser` does (the Ryzen's boot 62).
+    pub window_dead:usize,pub window_dead_ser:bool,
+    // 213-DRV-0091: the firmware's error codes to come, oldest first: each is posted in HALT_C2H with HALT_C2H_CTRL set
+    // once the CTRL reads clear, as the firmware posts them for Linux's interrupt.
+    pub halt_codes:Vec<u32>,
+    // Writes to HALT_H2C_CTRL or HALT_H2C in the data mode: the host's answers to the firmware (M2, M4).
+    pub halt_h2c_writes:usize,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -87,6 +95,7 @@ impl Device{
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
         let filter_fault=self.control.borrow().filter_fault;
+        if self.active&&(at==0x160||at==0x168){self.control.borrow_mut().halt_h2c_writes+=1;}
         if armed&&self.active&&at==fwcmd::INDEX&&width==2{
             if let Some(raw)=self.control.borrow_mut().command_bt.take(){self.station.base.bt=raw;}
             let ppdu=std::mem::take(&mut self.control.borrow_mut().ppdu_on_command);for n in 0..ppdu{self.raw().inject_packet(0,1,&[n as u8;20]);}
@@ -168,6 +177,10 @@ impl RegisterIo for Device{
                 if n==0{self.raw().put(0xc348,4,0x010f);self.control.borrow_mut().ser_heal=None;}else{self.control.borrow_mut().ser_heal=Some(n-1);}
             }
         }
+        if at==0x164&&self.raw().get(0x164,4)==0&&!self.control.borrow().halt_codes.is_empty(){
+            let code=self.control.borrow_mut().halt_codes.remove(0);self.raw().put(0x16c,4,code);self.raw().put(0x164,4,1);}
+        if self.active&&(0x40000..0x40020).contains(&at)&&self.control.borrow().window_dead>0{
+            let mut c=self.control.borrow_mut();c.window_dead-=1;if std::mem::take(&mut c.window_dead_ser){c.ser=true;}return Ok(0xdead_beef)}
         if self.active&&self.control.borrow().fault==15&&at==fwcmd::DMA_BUSY{return Ok(1<<18)}
         if self.control.borrow().armed&&matches!((self.control.borrow().fault,at),(10,0x200)|(11,0x2f0)|(13,0x10734)){return Ok(0)}
         if self.control.borrow().corrupt&&at==0x1110{return Ok(self.raw().get(at,4)^4096)}self.station.read32(at)}
