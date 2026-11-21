@@ -18,7 +18,7 @@
   - the timpani's C and G (131 and 98 Hz), five strokes of 80 ms.
 - **Not the gateway's tones:** `mind::audio::tone` takes only what the gateway's ring holds at once (0.68 s) and does not wait. A first try played C, G and C that way, and the captured sound held C whole, G cut short and the high C not at all. The gateway's tone path stays checked in the same `audio` suite by `wm`'s Sound page tone (880 Hz, 150 ms).
 - **Its line:** `[BEEP] PLAYED THE OPENING, 2710 MS`.
-- **The suites that hear it** (`tests/qemu_smoke.py`): `audio`, `hda` and `tablet` check each note of the opening in the captured sound. Each note must be stronger than every other note, over 100 ms, since E and E flat lie 37 Hz apart, which 40 ms would not tell. They also check the timpani's low C, and `audio` checks the length. `usbaudio` and `tts` ask only for sound, which holds.
+- **The suites that hear it** (`tests/qemu_smoke.py`): `audio`, `hda` and `tablet` check the opening's notes in the captured sound, in their order: in 40 ms windows every 50 ms, the strongest of the opening's notes. Each of C, G, C, E and E flat holds for 100 ms or more, and the timpani's C and G follow. They check the order, not the times: QEMU's HD Audio stream stalls a moment now and then, some 50 ms in all, which shifts what follows. `audio` also checks the length. `usbaudio` and `tts` ask only for sound, which holds.
 - **Rights:** only five pitches of the work are used, with no score or recording. The work (1896) is in the public domain, as its composer died in 1949. So no line is added to THIRD_PARTY.md, unless the maintainer says otherwise.
 
 ## Acceptance criteria
