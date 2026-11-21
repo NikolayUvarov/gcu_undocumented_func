@@ -38,10 +38,33 @@ fn speakerphone() -> Vec<u8> {
 fn the_speakerphones_settings() {
     let f = parse(&speakerphone()).expect("an audio function");
     assert_eq!(f.control, 0);
-    assert_eq!(f.playback, Some(Setting { interface: 1, alternate: 1, channels: 2, endpoint: 0x01, packet: 196, interval: 1, sync: 1, feedback: Some((0x82, 3)) }));
-    assert_eq!(f.capture, Some(Setting { interface: 2, alternate: 1, channels: 1, endpoint: 0x81, packet: 98, interval: 1, sync: 1, feedback: None }));
+    assert_eq!(f.playback, Some(Setting { interface: 1, alternate: 1, channels: 2, endpoint: 0x01, packet: 196, interval: 1, sync: 1, feedback: Some((0x82, 3)), rated: false }));
+    assert_eq!(f.capture, Some(Setting { interface: 2, alternate: 1, channels: 1, endpoint: 0x81, packet: 98, interval: 1, sync: 1, feedback: None, rated: false }));
     assert_eq!(f.playback.unwrap().frame(), 4);
     assert!(f.capture.unwrap().input());
+}
+
+// An endpoint that takes its sampling frequency by request says so in its class descriptor (bmAttributes bit 0): the
+// gateway then tells it 48 kHz. The DEXP's own USB audio rasped without that (000-DRV-0073).
+#[test]
+fn an_endpoint_that_takes_its_rate_by_request_is_marked() {
+    // The playback endpoint's class descriptor with the bit: playback is marked, capture is not.
+    let mut c = speakerphone();
+    let at = c.windows(3).position(|w| w == [7, 0x25, 1]).unwrap();
+    c[at + 3] = 0x01;
+    let f = parse(&c).unwrap();
+    assert!(f.playback.unwrap().rated);
+    assert!(!f.capture.unwrap().rated);
+    // The bit in a class descriptor that follows the feedback endpoint is not the data endpoint's.
+    let mut c = speakerphone();
+    let feedback = c.windows(4).position(|w| w == [9, 5, 0x82, 0x01]).unwrap();
+    c.splice(feedback + 9..feedback + 9, [7, 0x25, 1, 0x01, 0, 0, 0]);
+    let len = c.len() as u16; c[2..4].copy_from_slice(&le16(len));
+    assert!(!parse(&c).unwrap().playback.unwrap().rated);
+    // Other bits (pitch, packets of the largest size only) are not this one.
+    let mut c = speakerphone();
+    c[at + 3] = 0x82;
+    assert!(!parse(&c).unwrap().playback.unwrap().rated);
 }
 
 #[test]

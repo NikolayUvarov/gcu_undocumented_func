@@ -1,6 +1,6 @@
 # 213-DRV-0078 — A display driver for the Ryzen's Radeon (DCN 2.1): its second monitor lit
 
-**Type:** driver (a new `display` service; `compositor` with `KRN`) · **Owner:** `DRV` · **Priority:** P3 · **Status:** open (2026-11-20) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (a new `display` service; `compositor` with `KRN`) · **Owner:** `DRV` · **Priority:** P2 (the maintainer, 2026-11-21) · **Status:** open (2026-11-20; split on 2026-11-21 into [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md) and [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md)) · **Blocked by:** 213-DRV-0085, 213-DRV-0086 · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -30,6 +30,12 @@ This is a large driver. Nothing of it exists yet, and none of it is promised by 
 
 - [ ] The survey recorded in `hwdocs/` with its sources: the ATOM tables named, the DCN state the firmware leaves, and the DMUB question settled.
 - [ ] On the Ryzen, the HDMI monitor shows MIND Core's screen, and the DP monitor keeps it, both at a stated mode. This holds for that machine and its two monitors (MC-12.1).
+
+## Its tasks (2026-11-21)
+
+- [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md): steps 1 and 2 above, the survey and the DMUB question.
+- [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md): step 3, first light, with the engine's own test pattern before a framebuffer.
+- Step 4, the compositor, is KRN's and is asked of it with the survey's facts.
 
 ## Related
 

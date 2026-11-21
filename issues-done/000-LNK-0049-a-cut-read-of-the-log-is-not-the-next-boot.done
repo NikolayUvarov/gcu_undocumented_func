@@ -1,0 +1,41 @@
+# 000-LNK-0049 — `link_update.py`: a read of the log cut short is not the next boot's, and a confirmation must be this update's — done
+
+**Type:** tools (`scripts/link_update.py`) · **Owner:** `LNK` · **Priority:** P2 · **Status:** done (2026-11-20) · **Blocked by:** — · **Roadmap:** 351-KRN-0141's tool · **Constitution:** MC-12.2, MC-12.3
+
+## Problem
+
+**On the DEXP, 2026-11-20,** `link_update.py` said `CONFIRMED` and left with 0 while the release it had put was only staged. The line it gave was the confirmation of the update before:
+```
+737.740 updater: [UPDATER] FETCH: VERSION 202611202000 STAGED IN SLOT A: 111 FILES, 505632 BYTES FETCHED
+0.138 init: [INIT] LAUNCH: MANIFEST 9fcd932a62d6e719 … SLOT B ON TRIAL
+8.621 updater: [UPDATER] SLOT B ON TRIAL, VERSION 202611201947; …
+26.676 updater: [UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT
+CONFIRMED: 26.676 updater: [UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT
+```
+The release did come up a minute later, in slot A, and was confirmed. The tool had not seen that.
+
+**Why.** As the machine restarted for the trial, a read of the log came back cut short. It began at the boot's start and ended before the last line read. `fresh` took a log that begins young and ends before the last read for the next boot's (800-LNK-0034's rule), so every line of the old boot counted as new, the earlier update's confirmation among them.
+
+A tool that reports a confirmation it has not seen makes a claim without its evidence (MC-12.2).
+
+## Plan
+
+- **A read that is a part of the log as last read whole is not the next boot's.** `within` compares it line by line, its last line allowed to be cut. Such a read gives no new line, and the tool reads again.
+- **A confirmation must be this update's.** `follow` notes the slot the release was staged in (`FETCH: VERSION n STAGED IN SLOT x`) and the version the boot being read runs on trial (`SLOT x ON TRIAL, VERSION n`). A confirmation of another slot, or in a boot that tries another version, is passed over.
+
+## Acceptance criteria
+
+- [x] `tests/link_update_test.py`: `test_a_read_cut_short_is_not_the_next_boot` gives the DEXP's sequence (the staged log, the cut read, a restart, the next boot) and gets the new slot's confirmation. With the script as it was, it returns the old boot's `SLOT B CONFIRMED`.
+- [x] The same test: after a fallback to the slot before, that slot's confirmation is not taken, and the tool ends with no confirmation.
+- [x] The earlier cases of `test_follow` pass unchanged (800-LNK-0034's among them).
+
+## Resolution
+
+`scripts/link_update.py`: `within`, `fresh` with the last whole read, and `follow` with the staged slot and the trial's version. `tests/link_update_test.py` has the new test; it is part of `scripts/host_tests.sh`.
+
+Not tested on a machine: the cut read came once, at a restart, and cannot be asked for.
+
+## Related
+
+- [800-LNK-0034](../issues/800-LNK-0034-link-update-takes-no-old-line-for-new.md): a read that lost its anchor.
+- 000-DRV-0079 (on DRV's branch): the release that was being put.
