@@ -239,7 +239,8 @@ impl Hub {
             let (challenge, _) = self.challenge()?;
             let header = sign::header(&self.key, method.name(), path, body, &challenge).map_err(|e| format!("{e:?}"))?;
             let (status, bytes) = self.exchange(method, path, &[("Content-Type", "application/json"), (sign::HEADER, &header)], body)?;
-            let body = self.tree(&bytes).unwrap_or(Value::Null);
+            // An answer that is not read is said so; a refusal's body that is not JSON (an HTTP layer's 413) is its status.
+            let body = match self.tree(&bytes) { Ok(v) => v, Err(why) if status < 300 => return Err(why), Err(_) => Value::Null };
             if status == 401 && error(&body) == Some("challenge") && attempt == 0 { continue; }
             return Ok(Answer { status, body });
         }
