@@ -2403,3 +2403,66 @@ fn the_hubs_mark_left_of_the_battery() {
     assert!(wm.hub_chip().is_none());
 }
 
+#[test]
+fn the_run_windows_history() {
+    use desk::{runs_read, runs_text, RUNS};
+    // 000-APP-0154: what was entered comes back with ↑, newest first, and ↓ returns to the line being typed.
+    let mut wm = Wm::new(160, 50);
+    let run = |wm: &mut Wm, line: &str| {
+        wm.key(alt_char('r'));
+        for ch in line.chars() { wm.key(chr(ch)); }
+        wm.key(key(KEY_ENTER))
+    };
+    assert_eq!(run(&mut wm, "camera -c 0"), Action::Run("camera -c 0".into()));
+    assert!(wm.runs_changed, "a new line is to be kept");
+    wm.runs_changed = false;
+    assert_eq!(run(&mut wm, "camera -c 1"), Action::Run("camera -c 1".into()));
+    wm.runs_changed = false;
+    assert_eq!(run(&mut wm, "camera -c 1"), Action::Run("camera -c 1".into()));
+    assert!(!wm.runs_changed && wm.runs.len() == 2, "a repeat of the newest is not kept twice");
+    let line = |wm: &Wm| match &wm.mode { Mode::Run(l) => String::from(l.as_str()), _ => String::from("(closed)") };
+    wm.key(alt_char('r'));
+    for ch in "fm".chars() { wm.key(chr(ch)); }
+    wm.key(key(KEY_UP));
+    assert_eq!(line(&wm), "camera -c 1");
+    wm.key(key(KEY_UP));
+    assert_eq!(line(&wm), "camera -c 0");
+    wm.key(key(KEY_UP));
+    assert_eq!(line(&wm), "camera -c 0", "the oldest stays");
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert_eq!(line(&wm), "fm", "the line being typed comes back");
+    // An earlier line edited before it runs.
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_BACKSPACE));
+    assert_eq!(wm.key(chr('5')), Action::Redraw);
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Run("camera -c 5".into()));
+    // Esc leaves it; the next window starts from the newest again.
+    wm.key(alt_char('r'));
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_ESC));
+    assert!(matches!(wm.mode, Mode::Normal));
+    wm.key(alt_char('r'));
+    wm.key(key(KEY_UP));
+    assert_eq!(line(&wm), "camera -c 5");
+    wm.key(key(KEY_ESC));
+    // Kept as a file and read back, the oldest first; a comment, a blank line and a control character left out.
+    let text = runs_text(&wm.runs);
+    assert!(text.starts_with('#') && text.ends_with("camera -c 0\ncamera -c 1\ncamera -c 5\n"), "{text}");
+    let mut back = Wm::new(160, 50);
+    runs_read(&format!("{text}\n  \nbad\u{7}line\n"), &mut back.runs);
+    assert_eq!((back.runs.len(), back.runs.get(0), back.runs.get(2)), (3, Some("camera -c 5"), Some("camera -c 0")));
+    // At most RUNS, the newest kept.
+    let many: String = (0..40).map(|n| format!("prog {n}\n")).collect();
+    runs_read(&many, &mut back.runs);
+    assert_eq!((back.runs.len(), back.runs.get(0), back.runs.get(RUNS - 1)), (RUNS, Some("prog 39"), Some("prog 24")));
+    // The dialog says so once there is a history.
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut none = |_: u32, _: usize, _: usize| None;
+    back.key(alt_char('r'));
+    back.draw(&mut grid, &DARK, &mut none, None);
+    let shown: String = (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>() + "\n").collect();
+    assert!(shown.contains("(↑ ↓: earlier ones)"), "{shown}");
+}

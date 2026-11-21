@@ -16802,6 +16802,18 @@ def wm_suite(vm):
         while extra in state()[2]:
             wait()
         assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        # The Run window's history (000-APP-0154): kept in data/wm-run.txt, and ↑ brings "clock" back to run again.
+        until("[WM] RUN HISTORY: 1 LINES KEPT IN data/wm-run.txt")
+        keys("esc")
+        keys("alt-r", "up", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        again = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={again}")
+        keys("alt-w", text=f"CLOSE {again}")
+        until(f"GONE {again}")
+        while again in state()[2]:
+            wait()
         screen = screen_text(vm)
         vm.serial(enter=False)
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
@@ -16810,7 +16822,8 @@ def wm_suite(vm):
         assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
         print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
               "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
-              "window to the front, Alt+W closes one and the list follows", flush=True)
+              "window to the front, Alt+W closes one and the list follows; the Run window's history brings a line back "
+              "(000-APP-0154)", flush=True)
 
     # The desktop background (000-APP-0047, 000-APP-0050): data/wm.conf says none (the ░ cells as before) or an image
     # (BMP, PNG or JPEG); without it the default, a slowly moving pattern with the time, the date and the CPU load over

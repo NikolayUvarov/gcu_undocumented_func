@@ -5,7 +5,7 @@ use crate::keys::{Code, Key};
 use crate::background::{hours, Config, Power};
 use crate::menu::{self, Menu};
 use crate::settings::{Outcome, Settings};
-use crate::tui::widgets::{message, Edit, InputLine};
+use crate::tui::widgets::{message, Edit, History, InputLine};
 use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
@@ -563,6 +563,10 @@ pub struct Wm {
     pub battery_minutes: bool,
     /// MIND Hub's requests that wait for the user, as `improve` last saw them (100003-APP-0153): a mark left of the battery.
     pub hub: Vec<u64>,
+    /// The lines entered in the Run window, ↑ and ↓ bringing them back (000-APP-0154), and whether one came since they were
+    /// last kept (`RUNS_FILE`).
+    pub runs: alloc::boxed::Box<History<RUNS>>,
+    pub runs_changed: bool,
     /// The time in ms, as the caller last gave it: two presses on a title within `DOUBLE_MS` are a double click.
     pub now: usize,
     /// The screen in pixels and wm's scale in percent, which Settings' screen page shows and changes (000-APP-0061).
@@ -575,8 +579,24 @@ pub struct Wm {
 /// Two presses on the same cell of a title within this many ms are a double click.
 pub const DOUBLE_MS: usize = 400;
 
+/// The Run window's lines kept (000-APP-0154): the file, and how many.
+pub const RUNS_FILE: &str = "data/wm-run.txt";
+pub const RUNS: usize = 16;
+
+/// The Run window's lines as `RUNS_FILE` keeps them: a comment, then one a line, the oldest first.
+pub fn runs_text(runs: &History<RUNS>) -> String {
+    let mut out = String::from("# wm's Run window (Alt+R): the lines entered, the oldest first (000-APP-0154)\n");
+    for age in (0..runs.len()).rev() { if let Some(line) = runs.get(age) { out.push_str(line); out.push('\n'); } }
+    out
+}
+
+/// `RUNS_FILE`'s lines into `runs`, the newest last; a comment, an empty line and a control character are left out.
+pub fn runs_read(text: &str, runs: &mut History<RUNS>) {
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#') && !l.chars().any(char::is_control)) { runs.push(line); }
+}
+
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, offer: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, hub: Vec::new(), now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, offer: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, hub: Vec::new(), runs: alloc::boxed::Box::new(History::new()), runs_changed: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -592,8 +612,17 @@ impl Wm {
         match &mut self.mode {
             Mode::Help => { if matches!(key.code(), Code::Esc | Code::Enter | Code::F(1) | Code::F(10)) || key.alt() { self.mode = Mode::Normal; } return Action::Redraw; }
             Mode::Run(line) => {
+                // ↑ and ↓: the lines entered before, the one being typed kept (000-APP-0154).
+                if self.runs.key(key, line) { return Action::Redraw; }
                 return match line.key(key) {
-                    Edit::Submit => { let command = String::from(line.as_str().trim()); self.mode = Mode::Normal; if command.is_empty() { Action::Redraw } else { Action::Run(command) } }
+                    Edit::Submit => {
+                        let command = String::from(line.as_str().trim());
+                        self.mode = Mode::Normal;
+                        if command.is_empty() { return Action::Redraw; }
+                        if self.runs.get(0) != Some(command.as_str()) { self.runs.push(&command); self.runs_changed = true; }
+                        self.runs.reset();
+                        Action::Run(command)
+                    }
                     Edit::Cancel => { self.mode = Mode::Normal; Action::Redraw }
                     _ => Action::Redraw,
                 };
@@ -663,7 +692,7 @@ impl Wm {
             if focus.is_some() { return Action::Forward; }
             // An empty desktop: Enter runs a program, F1 shows the keys.
             return match key.code() {
-                Code::Enter => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+                Code::Enter => { self.open_run() }
                 Code::F(1) => { self.mode = Mode::Help; Action::Redraw }
                 _ => Action::Redraw,
             };
@@ -684,7 +713,7 @@ impl Wm {
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
             (_, Some('m')) => { self.start_move(); Action::Redraw }
-            (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+            (_, Some('r')) => { self.open_run() }
             (_, Some('p')) => { self.mode = Mode::Menu(Menu::new(0, 1)); Action::Redraw }
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
@@ -867,7 +896,7 @@ impl Wm {
         match item {
             Bar::Programs => { if !matches!(before, Mode::Menu(_)) { self.mode = Mode::Menu(Menu::new(at, 1)); } Action::Redraw }
             Bar::Next => { self.next(false); Action::Redraw }
-            Bar::Run => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+            Bar::Run => { self.open_run() }
             Bar::Move => { self.start_move(); Action::Redraw }
             Bar::Close => self.window_for("Close").map_or(Action::Redraw, Action::Close),
             Bar::Help => { if !matches!(before, Mode::Help) { self.mode = Mode::Help; } Action::Redraw }
@@ -975,6 +1004,9 @@ impl Wm {
         Some(Action::Pointer { id, x, y, buttons, wheel, across })
     }
 
+    // Alt+R, Enter on the desk or the bar's item: the Run window, empty, its history from the newest again.
+    fn open_run(&mut self) -> Action { self.runs.reset(); self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+
     fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS", Mode::More { .. } => "MORE" } }
 
     /// Settings (000-APP-0048), at the page of the background.
@@ -1072,7 +1104,7 @@ impl Wm {
         }
         match &mut self.mode {
             Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); *shown = None; }
-            Mode::Run(line) => { *shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
+            Mode::Run(line) => { *shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", if self.runs.is_empty() { "Program and arguments:" } else { "Program and arguments (↑ ↓: earlier ones):" }, line, 60, theme)); }
             Mode::Menu(open) => { open.draw(&self.programs, grid, theme); *shown = None; }
             Mode::Settings(settings) => { *shown = settings.draw(grid, theme, &self.background); }
             Mode::More { .. } => {

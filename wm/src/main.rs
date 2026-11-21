@@ -632,6 +632,13 @@ fn main(info: &'static BootInfo) {
     manager.wm.desk.background = backdrop.shown();
     manager.wm.background = backdrop.config.clone();
     mind::println!("[WM] BACKGROUND {}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "));
+    // The Run window's lines from the last wm (000-APP-0154).
+    if let Ok(file) = mind::fs::File::open(wm::desk::RUNS_FILE) {
+        let mut text = vec![0u8; file.size().min(wm::desk::RUNS * 260 + 128)];
+        let n = file.read_at(0, &mut text).unwrap_or(0);
+        wm::desk::runs_read(core::str::from_utf8(&text[..n]).unwrap_or(""), &mut manager.wm.runs);
+        mind::println!("[WM] RUN HISTORY: {} LINES FROM data/wm-run.txt", manager.wm.runs.len());
+    }
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     let mut last_pattern = mind::time::uptime_ms();
@@ -736,6 +743,13 @@ fn main(info: &'static BootInfo) {
                 Input::Pointer(p) => p.buttons != buttons || p.wheel != 0 || p.across != 0 || !matches!(action, Action::Redraw | Action::Pointer { .. }),
             };
             buttons = if let Input::Pointer(p) = input { p.buttons } else { buttons };
+            // A line entered in the Run window, kept for the next wm too (000-APP-0154).
+            if manager.wm.runs_changed {
+                manager.wm.runs_changed = false;
+                let text = wm::desk::runs_text(&manager.wm.runs);
+                let kept = mind::fs::File::create(wm::desk::RUNS_FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len());
+                mind::println!("[WM] RUN HISTORY: {} LINES{}", manager.wm.runs.len(), if kept { " KEPT IN data/wm-run.txt" } else { ", NOT KEPT: data/wm-run.txt CANNOT BE WRITTEN" });
+            }
             match action {
                 Action::Forward => { if let Input::Key(event) = input { manager.forward(event.to_word()); } }
                 Action::Redraw => {}
