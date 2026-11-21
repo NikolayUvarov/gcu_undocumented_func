@@ -132,6 +132,42 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **Not done, each a later task:** other channel widths, HT and VHT, aggregation; the signal in the receive header (the PPDU status reports are counted, not parsed); DPK tracking and TSSI tracking on 5 GHz (not on 2.4 GHz either); the coexistence's TDMA policies; other machines than the Ryzen.
 
+## What a machine running this driver does differently on 2.4 GHz (against `main`'s driver)
+
+- **Each scan takes about four seconds longer** while the country leaves no 5 GHz channel. On the Ryzen under RU (the logs of 2026-11-21): from `[WLAN] Scanning` to `JOINING CoolNet2 ON CHANNEL 8`, 1.35 s with `main`'s driver, 5.6 and 5.7 s with this one. The cause is in `dot11`: `Station::tick` steps through every channel of the radio's list, and gives a channel the country bars (`Allowed::Nothing`) the passive dwell of 150 ms. This driver refuses the tune (`invalid`), so the radio stays on the last channel it was on. 28 barred 5 GHz channels at 150 ms make the 4.2 s. The fix belongs in `dot11`, not here: a scan should skip a barred channel. It is asked of NET in the handoff file `request-NET-WIFI.md`. Until then, every scan, every first join and every rejoin after a stall is about 4 s slower here.
+- **The first scan after the station starts anew** (no country yet, so every channel listen-only) visits all 41 channels: 6.3 s on the Ryzen.
+- **With a country that allows 5 GHz channels,** the station can join a 5 GHz network. Of two networks of one name it takes the first it heard: this driver reports no signal (NET's 550-NET-0090 prefers 5 GHz above a signal floor, which needs the signal).
+- **Nothing else on 2.4 GHz changed in what a user sees:** the join, DHCP and the rate on channel 8 were as before on the Ryzen (289 to 303 KB/s with the head of the branch). The data path is the same code. A 2.4 GHz tune after a 5 GHz one writes the BTG share back, as the initial PHY left it.
+
+## The lawful 5 GHz join: the order of the run (ready for the maintainer's choice)
+
+Needs: the Ryzen's country chosen by the maintainer, and CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). Then, under the lease, with a build of this branch on the stick's ABI:
+1. `wifi set-country XX` typed on the console (the station keeps it); the log should show `[WLAN] COUNTRY XX (CHOSEN …)` and `[RTW89] COUNTRY XX: n CHANNELS, m LISTEN ONLY`.
+2. The driver of the run: as long as the station takes the first network heard, a bench build whose `supported` lists the 5 GHz channels alone (not committed). If NET's preference by signal is in and this driver reports the signal by then, the branch's own build.
+3. The scan: `[RTW89] SCAN: …` with no failed tune, `[RTW89] HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL n`.
+4. The calibration: `[RTW89] DATAPATH ADMITTED ON CHANNEL n` with no `ADMISSION` stop. A failure line names the stage (IQK, TSSI, DPK, station, data mode) and its register.
+5. The join: `[WLAN] AUTO-JOIN CoolNet2: JOINED`, `[NETSTACK] DHCP …`.
+6. Three 6 MB downloads, the sender's `TCP_INFO` (`S/srv/putsrv.py`), typed with `get -w --insecure-http -m 60 …`.
+7. The same build with `supported` as committed, on channel 8: the join and three downloads.
+8. The release's driver back.
+
+**If the chosen channel is a radar (DFS) one,** the listen-only rule held on hardware when:
+- no `[RTW89] DATAPATH ADMITTED` line precedes the first `HEARD <the access point> ON 5 GHZ CHANNEL n` of that tune;
+- every `[RTW89] LISTEN-ONLY CHANNEL n: NOTHING SENT TO …` names a send refused before that beacon;
+- no probe request goes out there: the station sends none on a listen-only channel, and the driver refuses one in both of its modes.
+
+## For a second Linux reference on channel 100 (asked by the owner session)
+
+The first was read with the chip in power save. A second wants power save off and traffic running through the whole dump. Registers to read first (MAC addresses as the driver writes them; the baseband at 0x10000 + offset; RF through `rf_reg_dump`):
+- **Width-independent channel setting:** 0xC628; BB 0x0700, 0x0734, 0x2344, 0x4420, 0x4738, 0x4AA4, 0x49C0, 0x49C4, 0x0C6C.
+- **The A-band gain tables and offsets:** BB 0x45DC, 0x4660, 0x4664, 0x4740, 0x4744, 0x4748, 0x4694, 0x4778, 0x49B0, 0x49B4, 0x49B8, 0x4A00, 0x4A04, 0x4A08, 0x4ACC, 0x4AD8.
+- **TSSI on 5 GHz:** BB 0x0304, 0x120C, 0x12C0, 0x4494, 0x5600-0x5650, 0x5800-0x58FC, 0x5C00-0x5C3C, 0x7600-0x7650, 0x7800-0x78FC, 0x7C00-0x7C3C.
+- **Calibration results:** BB 0x8000-0x82FF, 0x9FE0-0x9FEC.
+- **RF, both paths:** 0x00, 0x18, 0x10018, 0x1F, 0x20, 0x60, 0x7F, 0x85, 0x8B, 0x8C, 0x90, 0x97.
+- **Power:** MAC 0xD200-0xD3FF; Linux's `txpwr_table` and `btc_info` as before.
+
+Linux ran VHT 80 MHz there: SCO, the bandwidth fields, RF18's width and the limits differ from this driver's 20 MHz by design.
+
 ## Related
 
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver; its section of 2026-11-21 has the measurements and the method), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (the platform's power policy).
