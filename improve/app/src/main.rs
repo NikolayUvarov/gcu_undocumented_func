@@ -81,7 +81,8 @@ impl Transport for Link {
 impl Drop for Link { fn drop(&mut self) { let _ = tls::close(TLS, self.0); } }
 
 /// The hub, its key, and the connection while there is one.
-struct Hub { config: Config, key: SigningKey, connection: Option<Connection<Link>> }
+// The connection in the heap: its head buffer is 8 KiB, and the stack is 64 KiB (the first run found it full).
+struct Hub { config: Config, key: SigningKey, connection: Option<alloc::boxed::Box<Connection<Link>>> }
 
 /// An answer: its status and its body's tree (Null when the body is not JSON).
 struct Answer { status: u16, body: Value }
@@ -151,6 +152,7 @@ impl Hub {
         }
     }
 
+    #[inline(never)]
     fn connect(&mut self) -> Result<&mut Connection<Link>, String> {
         if self.connection.is_none() {
             let address = self.address()?;
@@ -162,9 +164,9 @@ impl Hub {
                 }
                 Err(e) => return Err(self.why(e)),
             };
-            self.connection = Some(Connection::new(Link(session)));
+            self.connection = Some(alloc::boxed::Box::new(Connection::new(Link(session))));
         }
-        Ok(self.connection.as_mut().unwrap())
+        Ok(self.connection.as_deref_mut().unwrap())
     }
 
     fn why(&self, e: tls::Error) -> String {
@@ -178,6 +180,7 @@ impl Hub {
     }
 
     /// One request and its answer's body, the connection dropped on any failure so that the next one starts anew.
+    #[inline(never)]
     fn exchange(&mut self, method: Method, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<(u16, Vec<u8>), String> {
         let text = format!("https://{}:{}{}", self.config.name, self.config.port, path);
         let url = Url::parse(&text).map_err(|_| format!("{path}: not a path"))?;
@@ -205,33 +208,22 @@ impl Hub {
     }
 
     /// The answer's body as a tree: parsed by `parse`, built and checked by improve/proto (MC-11.11).
+    #[inline(never)]
     fn tree(&self, body: &[u8]) -> Result<Value, String> {
         if body.len() > PARSED_MAX { return Err(format!("the hub's answer is {} bytes, past the {PARSED_MAX} the parse service reads (NET's change)", body.len())); }
         let mut owned: Vec<(FlatKind, Option<u16>, String, String)> = Vec::new();
         let mut start = 0u32;
         loop {
-            let page = match parse::json(PARSER, body, start) {
-                Ok(Ok(page)) => page,
-                Ok(Err(_)) => return Err("the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)".into()),
-                Err(_) => return Err("no parse service".into()),
-            };
-            for v in page.page.as_slice() {
-                let kind = match v.kind {
-                    parse::JsonKind::Object => FlatKind::Object, parse::JsonKind::Array => FlatKind::Array, parse::JsonKind::String => FlatKind::String,
-                    parse::JsonKind::Number => FlatKind::Number, parse::JsonKind::True => FlatKind::True, parse::JsonKind::False => FlatKind::False,
-                    parse::JsonKind::Null => FlatKind::Null,
-                };
-                owned.push((kind, (v.parent != u16::MAX).then_some(v.parent), String::from(v.key.as_str()), String::from(v.text.as_str())));
-            }
-            let got = page.page.as_slice().len() as u32;
+            let (total, got) = page(body, start, &mut owned)?;
             start += got;
-            if start >= page.values || got == 0 { break; }
+            if start >= total || got == 0 { break; }
         }
         let flat: Vec<Flat> = owned.iter().map(|(kind, parent, key, text)| Flat { kind: *kind, parent: *parent, key, text }).collect();
         json::tree(&flat).map_err(|e| format!("the hub's answer is not of the API's form: {e:?}"))
     }
 
     /// A fresh challenge, and the proof of work a registration needs now.
+    #[inline(never)]
     fn challenge(&mut self) -> Result<([u8; 32], u8), String> {
         let (status, body) = self.exchange(Method::Get, "/hub/v1/challenge", &[], &[])?;
         let v = self.tree(&body)?;
@@ -241,6 +233,7 @@ impl Hub {
     }
 
     /// A call signed over a fresh challenge; a challenge gone stale is taken again once.
+    #[inline(never)]
     fn call(&mut self, method: Method, path: &str, body: &[u8]) -> Result<Answer, String> {
         for attempt in 0..2 {
             let (challenge, _) = self.challenge()?;
@@ -258,6 +251,25 @@ impl Hub {
         let a = self.call(method, path, body)?;
         if ok.contains(&a.status) { Ok(a.body) } else { Err(refusal(&a)) }
     }
+}
+
+/// One page of `parse.json`'s answer into `owned`: the page, some 9 KiB, lives in this frame alone.
+#[inline(never)]
+fn page(body: &[u8], start: u32, owned: &mut Vec<(FlatKind, Option<u16>, String, String)>) -> Result<(u32, u32), String> {
+    let page = match parse::json(PARSER, body, start) {
+        Ok(Ok(page)) => page,
+        Ok(Err(_)) => return Err("the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)".into()),
+        Err(_) => return Err("no parse service".into()),
+    };
+    for v in page.page.as_slice() {
+        let kind = match v.kind {
+            parse::JsonKind::Object => FlatKind::Object, parse::JsonKind::Array => FlatKind::Array, parse::JsonKind::String => FlatKind::String,
+            parse::JsonKind::Number => FlatKind::Number, parse::JsonKind::True => FlatKind::True, parse::JsonKind::False => FlatKind::False,
+            parse::JsonKind::Null => FlatKind::Null,
+        };
+        owned.push((kind, (v.parent != u16::MAX).then_some(v.parent), String::from(v.key.as_str()), String::from(v.text.as_str())));
+    }
+    Ok((page.values, page.page.as_slice().len() as u32))
 }
 
 fn error(v: &Value) -> Option<&str> { v.get("error").and_then(Value::as_str) }

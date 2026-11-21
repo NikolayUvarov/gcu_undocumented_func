@@ -10569,6 +10569,7 @@ def hub_check(args, disk):
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
+        (Path(tempfile.gettempdir()) / "mind-core-hub.log").write_text(vm.log)
         hub.terminate()
         hub.wait(timeout=10)
         shutil.rmtree(work, ignore_errors=True)
