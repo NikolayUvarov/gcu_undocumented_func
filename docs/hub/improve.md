@@ -89,12 +89,17 @@ improve reply 1 'Two fans, one stopped' --answer 2
   - The `parse` service reads each answer, and `improve/proto` builds its tree and checks it against the API's forms.
   - Each call is signed over a fresh challenge, read from the body of `GET /hub/v1/challenge`, as `mind::http` hands a program no header of the hub's own.
 - **What leaves the machine is shown first:** `new` prints the request and asks `send it? [y/N]`, and `--yes` answers for a script.
+- **Attachments:** `--attach log|hardware|screenshot|text:FILE` on `new`, on an answer and on a verdict.
+  - The file comes from the user's files the shell lends (`REQUEST_FILES`, `ram:` and `data/` among them).
+  - Each one is shown before it is sent, with its kind, name, size and SHA-256, and its bytes go after its request or message.
+- **`watch [--once]`:** the news since the last look (kept as `seen` in its own directory), at the hub's interval, until Esc.
+- **`export FILE`:** all the hub keeps of the user, written as the hub sent it into a user's file such as `ram:hub.json`. Nothing of it is parsed on the machine, so its length is the answer's bound, 64 KiB.
 - **The version:** `improve version RELEASE` tells the hub the release this machine runs, so that a request a release carries awaits the user's check.
-- **Its check:** the QEMU suite `hub` (in the x86 network group) runs it against `tools/mindhub` on the host, over TLS by the hub's pin. It goes from setup and registration through the admin's approval, a request, the agents' question and its answer, and a wrong pin. `tests/improve_host.rs` tests its words.
+- **Its check:** the QEMU suite `hub` (in the x86 network group) runs it against `tools/mindhub` on the host, over TLS by the hub's pin.
+  - It goes from setup and registration through the admin's approval to a request with a log attached, the agents' question and its answer with a file, `watch`, the export, and a wrong pin.
+  - The admin and intake read the attached bytes back. `tests/improve_host.rs` tests its words.
 - **Not yet:**
   - **Long texts.** A thread with a text past 512 bytes, or an answer past 16 KiB, is named as unread: `parse` reads no longer string or document yet (`issues/requests-NET.md`).
-  - **Attachments:** not yet sent from MIND Core.
-  - **The export:** not on MIND Core yet.
   - **The running release:** not taken from the updater by itself.
   - **Notices:** the shell's notice and `wm`'s mark are stage 6.
 

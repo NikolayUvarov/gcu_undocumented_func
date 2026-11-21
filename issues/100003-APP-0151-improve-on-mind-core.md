@@ -49,9 +49,13 @@ A MIND machine has no client of MIND Hub. The separate hub answers `hub-api 2`, 
   - `tests/improve_host.rs` (3 tests) and `improve/proto`'s tree from `parse`'s values (12 tests);
   - the QEMU suite `hub`, now in the x86 network group: set up, registered, approved by the admin through `mindhub call`, a request filed, the agents' question answered, a wrong pin refused, a text past 512 bytes named as unread.
   - The aarch64 build ran; no aarch64 run in QEMU.
+- **Then** (2026-11-21, the maintainer's «продолжай»):
+  - **Attachments:** `--attach KIND:FILE` on `new`, an answer and a verdict, read from the user's files (`REQUEST_FILES`), shown, then put.
+  - **`watch [--once]`.**
+  - **`export FILE`,** written as it came into a user's file. On the way: libmind's file calls go through the lent client only after `use_endpoint(SLOT_FILE)`, as `get` does.
+  - The `hub` suite checks each, and passes on x86.
 - **Left:**
   - long texts and answers past 16 KiB, once NET's change to `parse` is in `main` (its record in [requests-NET.md](requests-NET.md));
-  - attachments and the export from MIND Core;
   - the running release taken from the updater by itself.
 
 ## Related
