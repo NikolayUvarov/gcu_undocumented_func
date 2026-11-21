@@ -241,7 +241,7 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
 
 ## The shell's `install` command, for 352-UPD-0048 (KRN, 2026-11-21)
 
-- **What KRN gives** ([352-KRN-0269](352-KRN-0269-the-installer-service.md), ABI 37):
+- **What KRN gives** ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), ABI 37):
   - on a live boot alone, the shell gets `vfs_server`'s client badged `mind::fs::BADGE_INSTALL` in `SLOT_INSTALL` 46. `SLOT_INSTALL` is not in `LAUNCH_SLOTS`, and no program gets it;
   - `idl/install.wit` 1.0 holds two calls. `disks` lists each disk with its bus, its model (empty until `block.wit` gives one: requests-DRV.md), its size in MiB, its MBR signature or `EMPTY`, the partitions its MBR lists, the words to type back (such as `VIRTIO 4096 EMPTY` or `AHCI 476940 1A2B`), and a refusal. `install(number, typed, erase)` writes the disk and names the step that failed, if one did.
 - **Asked of APP:** a shell command `install`, there only where `SLOT_INSTALL` holds an endpoint. Without arguments it lists the disks with their refusals. `install N` then:
