@@ -55,6 +55,28 @@ impl FrameSize {
     }
     /// The bytes of one frame when the encoding fixes them (YUY2: two a pixel).
     pub fn exact_bytes(&self) -> Option<usize> { (self.encoding == Encoding::Yuy2).then_some(self.width as usize * self.height as usize * 2) }
+    /// Its intervals as a camera's modes list them (158-DRV-0083): a list as given; a continuous range, its shortest and
+    /// its longest (one when they are the same).
+    pub fn listed(&self) -> Vec<u32> {
+        if self.step == 0 { return self.intervals.clone(); }
+        let (shortest, longest) = (self.intervals[0], self.intervals[1].max(self.intervals[0]));
+        if shortest == longest { alloc::vec![shortest] } else { alloc::vec![shortest, longest] }
+    }
+}
+
+/// One mode of a camera (158-DRV-0083): a frame size of a format at one of its frame intervals (100 ns units), with
+/// the indexes the probe names it by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mode { pub format: u8, pub frame: u8, pub encoding: Encoding, pub width: u16, pub height: u16, pub interval: u32, pub max_bytes: u32 }
+
+impl Mode {
+    /// Its frames a second: 10^7 / interval rounded down, 0 for less than one a second.
+    pub fn rate(&self) -> u32 { 10_000_000u32.checked_div(self.interval).unwrap_or(0) }
+    /// The bytes a second its frames take: YUY2's two a pixel, another encoding's up to its frame descriptor's most.
+    pub fn bytes_per_second(&self) -> u64 {
+        let frame = if self.encoding == Encoding::Yuy2 { self.width as u64 * self.height as u64 * 2 } else { self.max_bytes as u64 };
+        (frame * 10_000_000).checked_div(self.interval as u64).unwrap_or(u64::MAX)
+    }
 }
 
 /// An alternate setting of the streaming interface with its isochronous IN endpoint: its address, wMaxPacketSize as the
@@ -138,6 +160,24 @@ pub fn parse(config: &[u8]) -> Option<Camera> {
 
 impl Camera {
     fn yuy2(&self) -> impl Iterator<Item = &FrameSize> + Clone { self.frames.iter().filter(|f| f.encoding == Encoding::Yuy2) }
+
+    /// Every mode (158-DRV-0083), in the order of the descriptors: each frame size of each format at each interval it
+    /// lists. The same descriptors give the same list.
+    pub fn modes(&self) -> Vec<Mode> {
+        self.frames.iter().flat_map(|f| f.listed().into_iter().map(move |interval| Mode {
+            format: f.format, frame: f.frame, encoding: f.encoding, width: f.width, height: f.height, interval, max_bytes: f.max_bytes,
+        })).collect()
+    }
+
+    /// The most bytes a second its isochronous settings carry at `speed` (usb_host's: 1 full, 2 low, 3 high, 4 super),
+    /// a payload header of 12 bytes an interval aside: an interval is a frame of 1 ms at full speed, a microframe of
+    /// 125 µs at high, 2^(bInterval - 1) of them. None for a bulk camera, whose payloads take the bus as it comes, and
+    /// above high speed, where the bursts of the SuperSpeed companion descriptor are not read.
+    pub fn capacity(&self, speed: u8) -> Option<u64> {
+        if self.bulk || speed >= 4 { return None; }
+        let a_second: u64 = if speed == 3 { 8000 } else { 1000 };
+        Some(self.alternates.iter().map(|a| a.bytes().saturating_sub(12) as u64 * (a_second >> (a.interval.clamp(1, 16) - 1))).max().unwrap_or(0))
+    }
 
     /// The frame size to stream for a picture of `width` × `height`: of the YUY2 ones (what the gateway converts), the
     /// smallest that holds it, else the largest.
