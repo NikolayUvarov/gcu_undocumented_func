@@ -122,11 +122,12 @@ its parameters logged before it runs and each of its writes as it is made, withi
 the table's own time (the log's time not counted), and reads the firmware's pipe after; a failure undoes it and every
 stage before it and says what it undid. The mode is CTA 1080p60 (VIC 16, which HDMI-A-1's EDID lists), in DVI.
 
-`tests/display_light_host.rs`, 14 cases on a register model: the pipe chosen from step 1's values, and refused when they
+`tests/display_light_host.rs`, 15 cases on a register model: the pipe chosen from step 1's values, and refused when they
 cannot tell it; the guard against every block of the firmware's pipe and off the route; the eight stages in the
 route's order, never the firmware's pipe; a build stopping after its allowed stage; a stage that fails undone with every
 one before it; a table writing the firmware's PHY refused and everything undone; a status that never comes ending by
-the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; a build of 0 that
+the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; its status
+fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build of 0 that
 only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
 
@@ -213,16 +214,85 @@ dropped.
 - `STEP 1 DONE: 3 OF 7 BATCHES READ, 94 REGISTERS, NOTHING WRITTEN`, `94 REGISTERS READ, NONE WRITTEN`,
   `COMMAND 0006 AFTER STEP 1`.
 
-Two findings; neither stops the next run:
-1. **The firmware leaves all four pipes powered**, not only the one it drives. So batch 4 reads the HUBP registers of
-   all four pipes (20), each in a domain batch 3 shows on. Step 3 counts a HUBP as the firmware's when it is powered
-   and its `HUBP_VTG_SEL` names OTG0. A powered HUBP that still names OTG0 is then refused for writes too: more is
-   refused, nothing more is written. Step 3 writes no HUBP, so its plan does not change. Batch 4 will show the HUBPs'
-   `HUBP_VTG_SEL`.
-2. **`OPTC_INPUT_GLOBAL_CONTROL` reads 80000000 in ODM1 to ODM3 and 00000000 in ODM0** (bit 31 set in the three
-   unused ODMs). The field at bit 31 is not decoded here: the Linux files in hand read only `OPTC_UNDERFLOW_CLEAR` of
-   this register. Step 3 writes `OPTC_INPUT_CLOCK_CONTROL`, not this register, and reads ODM0's copy after every stage
-   (it reads 0).
+Two findings; neither stops the next run. The fields are decoded with Linux's `dcn_2_1_0_sh_mask.h`:
+1. **The firmware leaves all four pipes powered**, not only the one it drives. The header names bit 28 of `PG_STATUS`
+   `DOMAINn_DESIRED_PWR_STATE`; the power state proper (`PGFSM_PWR_STATUS`, bits 31:30) is 0, on, in each. So batch 4
+   reads the HUBP registers of all four pipes (20), each in a domain batch 3 shows on. Step 3 counts a HUBP as the
+   firmware's when it is powered and its `HUBP_VTG_SEL` names OTG0. Run 5 shows that only HUBP0 does (below), so the
+   firmware's HUBPs are as expected: `HUBPS 1000`.
+2. **`OPTC_INPUT_GLOBAL_CONTROL` reads 80000000 in ODM1 to ODM3 and 00000000 in ODM0.** Bit 31 is
+   `OPTC_DOUBLE_BUFFER_PENDING`: an update is waiting in each ODM whose OTG never runs. It is a status that moves by
+   itself, so step 3's watch now leaves it out of ODM0's copy (below). Step 3 writes `OPTC_INPUT_CLOCK_CONTROL`, not
+   this register.
+
+**Run 5** (`BATCHES_ALLOWED` 5): release 202611211919 booted slot B on trial. `display` read batches 1 to 5, and all
+its lines are in the cable's log taken at 554 s of that boot (250 `[DISPLAY]` lines). The trial was not confirmed:
+Wi-Fi never joined, so the server never heard the machine, the trial ran out at 600 s, and the machine restarted into
+Linux at 19:35 UTC. `rz-release.sh` printed `LINUX AGAIN: MIND CORE DID NOT STAY UP`. The owner session started MIND
+Core again on slot A, which is run 3's release. The failed join is the Wi-Fi agent's (the boot's first scan heard no
+country); nothing in it is `display`'s.
+- B1 to B3 the same values as run 3.
+- B4, 20 registers:
+  - `B4 HUBP0: SURFACE 00F4_00000000, FORMAT 8, PITCH 2561, ROTATION 0, BLANK 0, TTU_DISABLE 0`, with `DCHUBP_CNTL`
+    000F0002: `HUBP_VTG_SEL` 0 (OTG0), not blanked, the XRQ's no-outstanding-request field F. The firmware's surface is
+    at GPU address 0xF4_0000_0000, the carve-out's base (the survey's 0xF4_0000_0000 + X for BAR 0 offset X, at X = 0:
+    the GOP's framebuffer at BAR 0's base), format 8 (32-bit ARGB, as under Linux).
+  - HUBP1 to HUBP3: `SURFACE 0000_00000000, FORMAT 8, PITCH 1, ROTATION 0, BLANK 1`, with `DCHUBP_CNTL` 000F001B,
+    000F002B and 000F003B. Each is blanked and in blank, and `HUBP_VTG_SEL` names its own OTG (1, 2, 3), none of which
+    runs. So the firmware's HUBP is HUBP0 alone.
+- B5, 13 registers:
+  - `B5 DIGE FE: FROM OTG 0, SYMCLK_FE_ON 1`; DIG A to D front ends 00000000, clock off.
+  - `B5 DIGE BE: ENABLED 1, MODE 0, FROM FE MASK 16, SYMCLK_BE_ON 1`: `DIG_BE_CNTL` 30001000, so front end E, mode 0,
+    `DIG_HPD_SELECT` 3 (HPD 4, DP-2's).
+  - DIG A, B and D back ends: `ENABLED 0, MODE 1, FROM FE MASK 0, SYMCLK_BE_ON 1` (00010000, 00000100).
+- `STEP 1 DONE: 5 OF 7 BATCHES READ, 127 REGISTERS, NOTHING WRITTEN`, `127 REGISTERS READ, NONE WRITTEN`,
+  `COMMAND 0006 AFTER STEP 1`.
+
+So, from batches 1 to 5, step 3's assessment finds what `EXPECTED` holds:
+- the firmware's OTG0 from OPP0, DIG front end E into PHY E's enabled back end, HUBP0;
+- HPD 1 sensed;
+- step 3's pipe OTG1, OPP1, DIG front end A into PHY A.
+
+It still refuses until all seven batches are read on one boot. Five findings:
+1. **The two mode encodings.** The firmware's DP back end reads `DIG_MODE` 0, the ATOM tables' encoding of DP
+   (`atom_encode_mode_def`). The idle back ends read 1. Linux's `dcn10_get_dig_mode` decodes 1 as DP and 0 as none,
+   which this running DP output contradicts. The ATOM encoding is the one that matches here. Step 3 writes 2 (DVI),
+   which both encodings give the same meaning.
+2. **The pitch convention.** HUBP0's `PITCH` field holds 0xA00 (2560). The decoder adds one, after Display Core's
+   convention that the field holds the pitch less one, so it prints 2561 against the GOP's stride of 2560. Either the
+   GOP writes the stride as it is, or that convention does not hold for this surface. This is open, and step 4 (a
+   framebuffer) must settle it. Step 3 writes no HUBP.
+3. **HUBP1 is attached to step 3's OTG1.** It is powered and blanked, and `HUBP_VTG_SEL` names OTG1, with surface 0
+   and pitch field 0. When stage 5 starts OTG1, that blanked HUBP is attached to it. Step 3 neither writes it nor
+   unblanks it, and the test pattern (stage 4) replaces the pixels in OPP1.
+4. **Every back end's `SYMCLK_BE_ON` is 1**, the disabled ones too, while only front end E's clock is on.
+5. **The watch's status masks.** HUBP0's XRQ field reads F, four bits wide, where step 3's watch masked only bit 16.
+   A change in bits 17 to 19, or of `OPTC_DOUBLE_BUFFER_PENDING`, would have been taken for a change of the
+   firmware's pipe, and the stage undone. The watch now masks whole status fields by the header's masks, and a host
+   case shows that these fields moving fail no stage while `HUBP_VTG_SEL` changing does. This errs to the safe side
+   either way: only stage 3 onward would have been undone, and nothing was ever written.
+
+**What batches 6 and 7 are expected to show** (run 7):
+- B6, the aperture:
+  - `DCN_VM_FB_LOCATION_BASE` 0xF4_0000_0000, which Linux read from the memory hub and HUBP0's surface address agrees
+    with;
+  - `_TOP` 0xF4_1F00_0000 (its last 16 MiB of 512 MiB);
+  - `DCN_VM_FB_OFFSET` 0x8_1000_0000, the carve-out's system address: 512 MiB below `TOP_MEM2` 0x8_3000_0000, inside
+    the firmware's reserved region 0x8_0E30_0000 to 0x8_2FFF_FFFF;
+  - the AGP window is not used by the GOP's surface and is not predicted (likely closed, bottom above top).
+
+  Confidence: high for the base, medium for the offset.
+- B7, the clocks:
+  - OTG0's pixel rate from the DP DTO (`DP_DTO_ENABLE` 1), as a DP output takes it;
+  - OTGs 1 to 3 with no DTO;
+  - PHYPLL E's resync with `PHYPLL_PIXCLK_ENABLE` whatever DP needs and deep colour 0;
+  - PHYPLLs A, B and D off;
+  - `DENTIST_DISPCLK_CNTL` with equal write and read dividers (a settled DISPCLK) for at least 2560x1600's 268.5 MHz
+    pixel clock.
+
+  Confidence: medium. Linux's state is no guide to the firmware's clocks, and the survey left the source open.
+- Either batch's values only describe what step 3 inherits. Step 3 stops on its own refusals if they differ, for
+  example `2 TIMING GENERATORS RUN, NOT ONE`.
 
 ## Related
 
