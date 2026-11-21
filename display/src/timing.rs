@@ -154,3 +154,26 @@ impl Otg {
         })
     }
 }
+
+/// A CTA-861 video format by its VIC, for the few a first light may choose (CTA-861-G, table 1 and its timings): the
+/// 60 Hz and 50 Hz progressive ones a monitor of this machine lists. None for any other.
+pub fn cta(vic: u8) -> Option<Timing> {
+    let t = |pixel_khz, ha, hf, hs, hb, va, vf, vs, vb, positive| Timing {
+        pixel_khz, h_active: ha, h_front: hf, h_sync: hs, h_back: hb, v_active: va, v_front: vf, v_sync: vs, v_back: vb,
+        h_sync_positive: positive, v_sync_positive: positive, interlaced: false,
+    };
+    Some(match vic {
+        1 => t(25_175, 640, 16, 96, 48, 480, 10, 2, 33, false),
+        4 => t(74_250, 1280, 110, 40, 220, 720, 5, 5, 20, true),
+        16 => t(148_500, 1920, 88, 44, 148, 1080, 4, 5, 36, true),
+        19 => t(74_250, 1280, 440, 40, 220, 720, 5, 5, 20, true),
+        31 => t(148_500, 1920, 528, 44, 148, 1080, 4, 5, 36, true),
+        _ => return None,
+    })
+}
+
+/// First light's mode for a sink that lists `vics`: CTA 1080p60 (VIC 16) where it is listed, else 720p60 (VIC 4), else
+/// 640x480 (VIC 1, which every CTA sink must take); all within one DVI link.
+pub fn first_light_mode(vics: &[u8]) -> Timing {
+    [16, 4].into_iter().find(|v| vics.contains(v)).and_then(cta).unwrap_or(cta(1).unwrap_or(CEA_1080P60))
+}
