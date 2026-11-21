@@ -42,14 +42,18 @@ const FRAME_MAX: usize = 1514;
 const SOCKETS: usize = 32; // all clients together
 const PER_CLIENT: usize = 8;
 const TCP_BUFFER: usize = 8192;
-// A connection a client opens receives into 64 KiB: 8 KiB a round trip held the DEXP's downloads to about 54 KB/s (801-NET-0088).
-const TCP_RECEIVE: usize = 64 * 1024;
+// A connection a client opens receives into 128 KiB, a window scaled past 64 KiB: 8 KiB a round trip held the DEXP's downloads
+// to about 54 KB/s (801-NET-0088), and the Ryzen's sender waited on a 19 to 65 KB window a third of the time (801-NET-0092).
+const TCP_RECEIVE: usize = 128 * 1024;
+// A closed connection that received this much says how fast, and how often its client found the queue full (801-NET-0092).
+const SUMMED: u64 = 1 << 20;
 // A client that reads and gets nothing for this long has its connection named in the log, once (801-NET-0088).
 const STALL_MS: u64 = 5000;
 const UDP_PACKETS: usize = 8;
 const UDP_BUFFER: usize = 8192;
 const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
+const HOLD_MS: u64 = 30_000; // a lease held through a link down this long at most, while its connections wait (801-NET-0089)
 // QEMU's own MAC prefix (52:54:00), its default for a card: that setup is for such a card alone, never a real one on a real
 // network (000-NET-0054: the Ryzen's RTL8168 showed 10.0.2.15 for 11 s before its lease).
 const QEMU_OUI: u64 = 0x52_54_00;
@@ -236,7 +240,9 @@ enum Kind { Udp, Tcp, Listen }
 
 // A client's socket: its interface (`link`) and its handle in that interface's socket set.
 #[derive(Clone, Copy)]
-struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64, got: u64, waiting: u64, stalled: bool }
+struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64, got: u64, waiting: u64, stalled: bool,
+              // When it was opened, the client's reads that got bytes, and those that found the receive queue full (801-NET-0092).
+              opened: u64, reads: u32, full: u32 }
 
 // An echo's data: 1 to 16 bytes repeated over it (socket.wit 2.6); `MINDCORE` by default, as `ping` sends.
 #[derive(Clone, Copy)]
@@ -264,7 +270,13 @@ struct Link {
     up: bool, checked: u64,
     // Out of use (socket.wit 2.11): no route, no address, nothing sent, DHCP included; its link is still watched.
     off: bool,
+    // Since when its link went down with a lease: the address and connections stay until a lease says the same (801-NET-0089).
+    held: Option<u64>,
 }
+
+// What the first lease after a held link-down said, and when the link went down (801-NET-0089).
+#[derive(Clone, Copy)]
+enum Back { Same(u64), Other(u64) }
 
 struct Stack {
     links: [Option<Link>; CARDS], tried: [u64; CARDS], turn: turn::Turn<CARDS>,
@@ -306,7 +318,7 @@ impl Link {
         let ring = match card.ring.as_ref() { Some(shared) if shared.answered => " (FRAME RING)", Some(_) => " (FRAME RING LENT, NO ANSWER YET)", None => "" };
         mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, ring, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
-                    up: info.link, checked: now_ms(), off: false })
+                    up: info.link, checked: now_ms(), off: false, held: None })
     }
 
     fn configure(&mut self, address: Ipv4Cidr, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool) {
@@ -323,9 +335,10 @@ impl Link {
         }
     }
 
-    // Runs the interface and applies DHCP results; nothing while the card is out of use.
-    fn poll(&mut self) {
-        if self.off { return; }
+    // Runs the interface and applies DHCP results; nothing while the card is out of use. A lease that ends a hold says
+    // whether the network is the one it had.
+    fn poll(&mut self) -> Option<Back> {
+        if self.off { return None; }
         let deadline = self.card.deadline;
         poll::interface(&mut self.iface, &mut self.card, &mut self.sockets, instant(), || deadline.remaining(now_ms()).is_some());
         self.card.kick();
@@ -334,14 +347,20 @@ impl Link {
             dhcpv4::Event::Deconfigured => None,
         });
         match event {
-            Some(Some((address, router, dns))) => self.configure(address, router, dns, true),
-            Some(None) => { self.address = None; self.leased = false; }
+            Some(Some((address, router, dns))) => {
+                let back = self.held.take().map(|since| if Some(address) == self.address && router == self.gateway { Back::Same(since) } else { Back::Other(since) });
+                self.configure(address, router, dns, true);
+                return back;
+            }
+            // Held: the old address stays until the new lease says whether it is still the card's.
+            Some(None) => if self.held.is_none() { self.address = None; self.leased = false; },
             // QEMU user networking's static setup, for the first card only (another card's network is unknown), if QEMU's.
             None => if self.card.index == 0 && (self.mac >> 24) & 0xFF_FFFF == QEMU_OUI && self.up && self.address.is_none()
                 && now_ms() - self.started > FALLBACK_MS {
                 self.configure(Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24), Some(Ipv4Address::new(10, 0, 2, 2)), Some(Ipv4Address::new(10, 0, 2, 3)), false);
             },
         }
+        None
     }
 
     // DHCP from the start: the link came up, or the card came back in use.
@@ -433,11 +452,18 @@ impl Stack {
         let off = self.off & 1 << index != 0;
         let Some(link) = self.links[index].as_mut() else { return 0 };
         link.off = off;
+        link.held = None;
         link.address = None;
         link.gateway = None;
         link.leased = false;
         link.iface.update_ip_addrs(|addrs| addrs.clear());
         link.iface.routes_mut().remove_default_ipv4_route();
+        self.abort(index)
+    }
+
+    // Aborts card `index`'s open TCP connections; how many.
+    fn abort(&mut self, index: usize) -> usize {
+        let Some(link) = self.links[index].as_mut() else { return 0 };
         let mut aborted = 0;
         for slot in self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp)) {
             let tcp = link.sockets.get_mut::<tcp::Socket>(slot.handle);
@@ -446,10 +472,26 @@ impl Stack {
         aborted
     }
 
-    // Asks card `index` once a second whether its link is up (550-NET-0023). Down: its address and routes go, so new flows
-    // take another card, and its TCP connections are aborted so their owners learn at once. Up again: DHCP starts over.
+    // Card `index`'s open TCP connections.
+    fn connections(&mut self, index: usize) -> usize {
+        let Some(link) = self.links[index].as_mut() else { return 0 };
+        self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp))
+            .filter(|s| link.sockets.get_mut::<tcp::Socket>(s.handle).state() != tcp::State::Closed).count()
+    }
+
+    // Asks card `index` once a second whether its link is up (550-NET-0023). Down with a lease: its address and TCP
+    // connections are held for HOLD_MS, as a radio driver's restart takes seconds (801-NET-0089); new flows take another
+    // card meanwhile. Up again: DHCP starts over, and a lease of the same address and gateway keeps them. Down with no
+    // lease, or held past HOLD_MS: its address and routes go, and its connections are aborted so their owners learn at once.
     fn watch_link(&mut self, index: usize, now: u64) {
         let Some(link) = self.links[index].as_mut() else { return };
+        if link.held.is_some_and(|since| now.saturating_sub(since) >= HOLD_MS) {
+            let up = link.up;
+            let aborted = self.take_out(index);
+            mind::println!("[NETSTACK] CARD {} {} AFTER {} S: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index,
+                           if up { "HAS NO LEASE OF ITS ADDRESS" } else { "LINK STILL DOWN" }, HOLD_MS / 1000, aborted);
+            return;
+        }
         if now - link.checked < 1000 || link.card.deadline.remaining(now).is_none() { return; }
         link.checked = now;
         let up = match link.card.deadline.call(|| net::info(link.card.endpoint)) {
@@ -462,14 +504,37 @@ impl Stack {
         link.up = up;
         if up {
             if link.off { return mind::println!("[NETSTACK] CARD {} LINK UP, OUT OF USE", index); }
-            mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index);
+            match (link.held, link.address) {
+                (Some(_), Some(cidr)) => { let [a, b, c, d] = text(cidr.address()); mind::println!("[NETSTACK] CARD {} LINK UP, ASKING DHCP WHETHER {}.{}.{}.{} IS STILL ITS ADDRESS", index, a, b, c, d) }
+                _ => mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index),
+            }
             link.restart(now);
             // A name changed since the last read goes out with the new lease (000-NET-0050).
             if self.name.refresh(now) { self.apply_name(); }
             return;
         }
+        if link.held.is_some() { return mind::println!("[NETSTACK] CARD {} LINK DOWN AGAIN, STILL HELD", index); }
+        if link.leased {
+            link.held = Some(now);
+            let held = self.connections(index);
+            return mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS AND {} CONNECTIONS HELD FOR {} S", index, held, HOLD_MS / 1000);
+        }
         let aborted = self.take_out(index);
         mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index, aborted);
+    }
+
+    // The first lease after a held link-down: the same address and gateway keep the connections; another network ends them.
+    fn back(&mut self, index: usize, back: Back, now: u64) {
+        match back {
+            Back::Same(since) => {
+                let kept = self.connections(index);
+                mind::println!("[NETSTACK] CARD {} BACK ON ITS NETWORK AFTER {} MS: ADDRESS AND {} CONNECTIONS KEPT", index, now.saturating_sub(since), kept);
+            }
+            Back::Other(since) => {
+                let aborted = self.abort(index);
+                mind::println!("[NETSTACK] CARD {} BACK AFTER {} MS ON ANOTHER ADDRESS OR GATEWAY: {} CONNECTIONS ABORTED", index, now.saturating_sub(since), aborted);
+            }
+        }
     }
 
     // The name's option into every card's DHCP client: the next DISCOVER, REQUEST or renewal carries it.
@@ -500,7 +565,7 @@ impl Stack {
             if let Some(link) = self.links[index].as_mut() { link.card.deadline = deadline; }
             // Check link state before a busy receive queue can consume the remaining turn.
             self.watch_link(index, now_ms());
-            if let Some(link) = self.links[index].as_mut() { link.poll(); }
+            if let Some(back) = self.links[index].as_mut().and_then(|link| link.poll()) { self.back(index, back, now_ms()); }
             self.turn.finish(now_ms());
         }
         let default = self.route(0);
@@ -599,7 +664,8 @@ impl Stack {
         let free = self.slots.iter().position(Option::is_none);
         let (false, Some(index)) = (full, free) else { self.link(link).sockets.remove(handle); return Err(Error::Limit) };
         self.generations[index] = (self.generations[index] + 1) & 0xFF_FFFF;
-        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0, got: 0, waiting: 0, stalled: false });
+        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0, got: 0, waiting: 0, stalled: false,
+                                       opened: now_ms(), reads: 0, full: 0 });
         Ok(index)
     }
     fn free(&mut self, index: usize) {
@@ -607,7 +673,16 @@ impl Stack {
         let Some(link) = self.links[slot.link].as_mut() else { return };
         match slot.kind {
             Kind::Udp => { link.sockets.remove(slot.handle); }
-            Kind::Tcp => { link.sockets.get_mut::<tcp::Socket>(slot.handle).close(); self.closing.push((slot.link, slot.handle, now_ms())); }
+            Kind::Tcp => {
+                // A download's summary: a queue often full means its client read slower than the network brought it.
+                if slot.received >= SUMMED {
+                    let ms = now_ms().saturating_sub(slot.opened).max(1);
+                    mind::println!("[NETSTACK] TCP SOCKET {} CLOSED: {} KIB IN {} MS, {} KIB/S; ITS QUEUE FULL AT {} OF {} READS", index + 1, slot.received >> 10, ms,
+                                   slot.received * 1000 / ms >> 10, slot.full, slot.reads);
+                }
+                link.sockets.get_mut::<tcp::Socket>(slot.handle).close();
+                self.closing.push((slot.link, slot.handle, now_ms()));
+            }
             Kind::Listen => {
                 let Some(listener) = self.listeners[index].take() else { return };
                 for handle in listener.listening { link.sockets.remove(handle); }
@@ -897,11 +972,13 @@ impl Stack {
                 let mut buffer = [0u8; 4096];
                 let result = self.slot(id, owner, Kind::Tcp).and_then(|(index, slot)| {
                     let socket = self.link(slot.link).sockets.get_mut::<tcp::Socket>(slot.handle);
+                    let full = socket.recv_queue() == socket.recv_capacity();
                     let result = if socket.can_recv() {
                         let want = (length as usize).clamp(1, buffer.len());
                         socket.recv_slice(&mut buffer[..want]).map_err(|_| Error::Closed)
                     } else if !socket.may_recv() { Err(Error::Closed) } else { Err(Error::Again) };
                     self.watch(index, &result);
+                    if let (Ok(n), Some(slot)) = (&result, self.slots[index].as_mut()) { if *n > 0 { slot.reads += 1; slot.full += full as u32; } }
                     result
                 });
                 if let Ok(n) = result { moved.1 = n; }

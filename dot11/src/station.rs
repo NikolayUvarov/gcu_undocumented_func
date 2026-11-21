@@ -23,6 +23,8 @@ pub const HANDSHAKE_MS: u64 = 4000;
 pub const SILENCE_MS: u64 = 10_000;
 /// A lost network is joined again after this long.
 pub const REJOIN_MS: u64 = 3000;
+/// How long a rejoin on a listen-only channel waits for the network's beacon before it sends anything (550-NET-0090).
+pub const BEACON_WAIT_MS: u64 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Off, Scanning, Joining, Joined, Failed }
@@ -81,14 +83,40 @@ pub struct Station {
     keys: Option<Keys>,
     heard: u64,
     rejoin: Option<u64>,
+    // A rejoin on a listen-only channel, until when it waits for the network's beacon: nothing is sent there before it.
+    beacon_wait: Option<u64>,
     sequence: u16,
     // Whether the radio receives and sends OFDM on 2.4 GHz (802.11g); without it the station is 802.11b there.
     ofdm: bool,
     rates: [u8; 12],
     rate_count: usize,
     rate: usize,
-    acked: u8,
-    failed: u8,
+    // Rate control (550-NET-0091): each rate's tries and acknowledgements this window and their average; the rate the
+    // last unicast data frame went at; the frames since the window began, and in all.
+    stats: [RateStat; 12],
+    sent_at: usize,
+    window: u16,
+    frames: u16,
+}
+
+// One rate's tries and acknowledgements this window, and the success of one try averaged over windows (in 1/256).
+#[derive(Clone, Copy, Default)]
+struct RateStat { tries: u16, acked: u16, success: Option<u16> }
+
+/// Unicast data frames between two choices of the rate (550-NET-0091).
+pub const RATE_WINDOW: u16 = 20;
+/// Every this many frames one goes at a neighbour of the rate, faster and slower in turn, to keep both measured.
+pub const SAMPLE_EVERY: u16 = 8;
+// A rate's tries join its average once there are this many; fewer wait for the next window.
+const MIN_TRIES: u16 = 4;
+// The time of a try beside its data (preamble, SIFS, the acknowledgement, a backoff), and what a failed try costs more:
+// the radio tries its RTS up to its own limit before it gives a frame back (213-DRV-0032's runs, 2026-11-21).
+const OVERHEAD_US: u32 = 200;
+const FAILED_TRY_US: u32 = 1000;
+
+/// The airtime of a delivered 1500-byte frame at `rate` (500 kb/s units) whose tries succeed `success`/256 of the time.
+pub fn airtime_us(rate: u8, success: u16) -> u32 {
+    24_000 / rate.max(1) as u32 + OVERHEAD_US + (256 - success.min(256) as u32) * FAILED_TRY_US / success.max(1) as u32
 }
 
 impl Station {
@@ -99,8 +127,8 @@ impl Station {
         let count = channels.len().min(64);
         list[..count].copy_from_slice(&channels[..count]);
         Station { own, channels: list, allowed: list.map(unrestricted), channel_count: count, state: State::Off, reason: Reason::None, list: List::default(), scanning: None,
-                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
-                  acked: 0, failed: 0 }
+                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, beacon_wait: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
+                  stats: [RateStat::default(); 12], sent_at: 0, window: 0, frames: 0 }
     }
 
     /// Puts the station under a country's rules (550-NET-0035): `channels` are the only ones it uses from now on, each
@@ -122,6 +150,11 @@ impl Station {
         let count = channels.len().min(64);
         for (i, &(channel, allowed)) in channels[..count].iter().enumerate() { (self.channels[i], self.allowed[i]) = (channel, allowed); }
         self.channel_count = count;
+    }
+
+    // What the station may send on `channel`.
+    fn allowed_on(&self, channel: u8) -> Allowed {
+        self.channels[..self.channel_count].iter().zip(&self.allowed).find(|(&c, _)| c == channel).map_or(Allowed::Nothing, |(_, &a)| a)
     }
 
     // Whether the station may join an access point on `channel`.
@@ -189,6 +222,7 @@ impl Station {
         self.supplicant = None;
         self.keys = None;
         self.rejoin = None;
+        self.beacon_wait = None;
         self.state = State::Joining;
         out.channel = Some(bss.channel);
         out.filter = Some(Filter { all_beacons: false, bssid: bss.bssid });
@@ -226,11 +260,13 @@ impl Station {
         self.keys = None;
         self.scanning = None;
         self.rejoin = None;
+        self.beacon_wait = None;
     }
 
-    /// Leaves the network (deauthentication, reason 3) and forgets its keys.
+    /// Leaves the network (deauthentication, reason 3) and forgets its keys; nothing is sent while a rejoin still waits
+    /// for the network's beacon on a listen-only channel.
     pub fn leave(&mut self, out: &mut Out, tx: &mut [u8]) {
-        if let (Some(join), State::Joined | State::Joining) = (self.join, self.state) {
+        if let (Some(join), State::Joined | State::Joining, None) = (self.join, self.state, self.beacon_wait) {
             let sequence = self.next_sequence();
             if let Ok(len) = frame::deauthentication(tx, &self.own, &join.bss.bssid, 3, sequence) {
                 out.send = Some((len, Self::basic_rate(join.bss.channel)));
@@ -251,9 +287,22 @@ impl Station {
             out.filter = Some(Filter { all_beacons: false, bssid: [0; 6] });
             return Ok(());
         }
+        if let Some(until) = self.beacon_wait {
+            // No beacon: the network may have left the channel (radar, a channel switch), so nothing is sent there.
+            if now >= until { self.beacon_wait = None; self.fail(Reason::Lost); }
+            return Ok(());
+        }
         if let Some(at) = self.rejoin {
             if now < at { return Ok(()); }
             let Some(join) = self.join else { self.rejoin = None; return Ok(()) };
+            // On a listen-only channel (radar rules, NO-IR) the station first hears the network's beacon there.
+            if self.allowed_on(join.bss.channel) == Allowed::Listen {
+                self.rejoin = None;
+                self.beacon_wait = Some(now + BEACON_WAIT_MS);
+                out.channel = Some(join.bss.channel);
+                out.filter = Some(Filter { all_beacons: false, bssid: join.bss.bssid });
+                return Ok(());
+            }
             let reason = self.reason;
             self.start(join.bss, join.secret, now, out, tx)?;
             self.reason = reason;
@@ -290,8 +339,16 @@ impl Station {
         let h = frame::header(frame)?;
         if h.kind == TYPE_MANAGEMENT && (h.subtype == BEACON || h.subtype == PROBE_RESPONSE) {
             if let Some(bss) = scan::describe(frame, &h, channel, weakness, now) {
-                if self.join.is_some_and(|j| j.bss.bssid == bss.bssid) { self.heard = now; }
+                let ours = self.join.filter(|j| j.bss.bssid == bss.bssid);
+                if ours.is_some() { self.heard = now; }
                 self.list.insert(bss);
+                // The beacon a rejoin on a listen-only channel waited for, heard on that channel: the join starts.
+                if let Some(join) = ours.filter(|j| self.beacon_wait.is_some() && h.subtype == BEACON && j.bss.channel == channel) {
+                    self.beacon_wait = None;
+                    let reason = self.reason;
+                    self.start(bss, join.secret, now, out, tx)?;
+                    self.reason = reason;
+                }
             }
             return Ok(());
         }
@@ -359,26 +416,50 @@ impl Station {
         }
         self.rates[..self.rate_count].sort_unstable_by(|a, b| b.cmp(a));
         if self.rate_count == 0 { self.rates[0] = Self::basic_rate(channel); self.rate_count = 1; }
-        // Start at 24 Mb/s or the fastest below it; climb on acknowledgements.
+        // Start at 24 Mb/s or the fastest below it, nothing measured.
         self.rate = self.rates[..self.rate_count].iter().position(|&r| r <= 48).unwrap_or(self.rate_count - 1);
-        self.acked = 0;
-        self.failed = 0;
+        (self.stats, self.sent_at, self.window, self.frames) = ([RateStat::default(); 12], self.rate, 0, 0);
     }
 
     /// The rate for data frames now, in 500 kb/s units.
     pub fn data_rate(&self) -> u8 { if self.rate_count == 0 { 2 } else { self.rates[self.rate] } }
 
-    /// What became of the last data frame sent: two failures in a row step the rate down, ten successes up.
-    pub fn sent(&mut self, acked: bool) {
-        if acked {
-            self.failed = 0;
-            self.acked += 1;
-            if self.acked >= 10 && self.rate > 0 { self.rate -= 1; self.acked = 0; }
-        } else {
-            self.acked = 0;
-            self.failed += 1;
-            if self.failed >= 2 && self.rate + 1 < self.rate_count { self.rate += 1; self.failed = 0; }
+    // The rate of the next unicast data frame: the chosen one, or every SAMPLE_EVERY frames a neighbour of it.
+    fn pick_rate(&mut self) -> u8 {
+        if self.rate_count == 0 { return 2; }
+        self.frames = self.frames.wrapping_add(1);
+        let mut at = self.rate;
+        if self.frames % SAMPLE_EVERY == 0 && self.rate_count > 1 {
+            let faster = (self.frames / SAMPLE_EVERY) % 2 == 0 && self.rate > 0;
+            at = if faster { self.rate - 1 } else if self.rate + 1 < self.rate_count { self.rate + 1 } else { self.rate - 1 };
         }
+        self.sent_at = at;
+        self.rates[at]
+    }
+
+    /// What became of the last unicast data frame: acknowledged or not, after `attempts` tries (550-NET-0091). A frame
+    /// no try delivered steps the rate down at once. Every RATE_WINDOW frames each rate's success per try joins its
+    /// average, and the rate whose delivered frame takes the least airtime is chosen.
+    pub fn sent(&mut self, acked: bool, attempts: u8) {
+        if self.rate_count == 0 { return; }
+        let at = self.sent_at.min(self.rate_count - 1);
+        let s = &mut self.stats[at];
+        s.tries = s.tries.saturating_add(attempts.max(1) as u16);
+        s.acked = s.acked.saturating_add(acked as u16);
+        if !acked && at == self.rate && self.rate + 1 < self.rate_count { self.rate += 1; }
+        self.window += 1;
+        if self.window < RATE_WINDOW { return; }
+        self.window = 0;
+        for s in &mut self.stats[..self.rate_count] {
+            if s.tries < MIN_TRIES { continue; }
+            let now = (s.acked as u32 * 256 / s.tries as u32) as u16;
+            s.success = Some(s.success.map_or(now, |was| ((was as u32 + now as u32) / 2) as u16));
+            (s.tries, s.acked) = (0, 0);
+        }
+        // Rates whose tries nearly never succeed are not chosen; another rate only when it saves a sixteenth or more.
+        let airtime = |i: usize| self.stats[i].success.filter(|&p| p >= 13).map(|p| airtime_us(self.rates[i], p));
+        let Some((best, time)) = (0..self.rate_count).filter_map(|i| airtime(i).map(|t| (i, t))).min_by_key(|&(_, t)| t) else { return };
+        if airtime(self.rate).is_none_or(|now| time + now / 16 < now) { self.rate = best; }
     }
 
     fn data(&mut self, frame: &[u8], h: &Header, random: &[u8; 32], kept: &mut dyn Pairwise, out: &mut Out, tx: &mut [u8], rx: &mut [u8]) -> Result<(), Error> {
@@ -455,7 +536,7 @@ impl Station {
     // A data frame to `destination` through the access point, protected once the keys are installed.
     fn send_frame(&mut self, destination: &Mac, ethertype: u16, payload: &[u8], out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         let bssid = self.join.ok_or(Error::Unexpected)?.bss.bssid;
-        let rate = self.data_rate();
+        let rate = if frame::group(destination) { self.data_rate() } else { self.pick_rate() };
         let duration = if frame::group(destination) { 0 } else { Self::duration(rate) };
         let sequence = self.next_sequence();
         let len = match self.keys.as_mut() {
