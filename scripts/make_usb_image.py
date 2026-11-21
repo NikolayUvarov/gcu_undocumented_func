@@ -414,6 +414,39 @@ def check_image(image, payloads, mark_esp=False):
             os.fsync(disk.fileno())
 
 
+def pack_volume(volume, output, payloads, when, force=False):
+    """A raw image around a FAT boot volume made already, as make_iso.boot_volume makes the ISO's (352-UPD-0050): an MBR
+    whose entry, the ESP, holds it at 1 MiB, then the log and the store's partitions. Every date is `when`'s (seconds,
+    UTC) and the disk's signature comes from the volume's hash, so one volume gives the same bytes. Checked against
+    `payloads` before it replaces anything; returns the image's SHA-256."""
+    data = Path(volume).read_bytes()
+    total = struct.unpack_from("<H", data, 19)[0] or struct.unpack_from("<I", data, 32)[0]
+    if len(data) % SECTOR or not 0 < total * SECTOR <= len(data) or struct.unpack_from("<I", data, 28)[0] != LOG_ALIGN:
+        raise ValueError("Invalid boot volume: not whole sectors, or its FAT is not one at 1 MiB")
+    signature = hashlib.sha256(data).digest()[:4]
+    mbr = bytearray(SECTOR)
+    mbr[440:444] = signature if any(signature) else b"MIND"
+    mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff", LOG_ALIGN, total)
+    mbr[510:512] = b"\x55\xaa"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".mind-usb-", dir=output.parent) as work:
+        temporary = Path(work) / "disk.img"
+        with temporary.open("wb") as disk:
+            disk.write(mbr)
+            disk.seek(LOG_ALIGN * SECTOR)
+            disk.write(data[:total * SECTOR])
+        add_log_partition(temporary, time.gmtime(when))
+        add_store_partition(temporary)
+        check_image(temporary, payloads)
+        digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+        if force:
+            os.replace(temporary, output)
+        else:
+            os.link(temporary, output)
+            temporary.unlink()
+    return digest
+
+
 def pack(payloads, output, qemu_img, arch, force=False):
     """The payloads packed into a raw image at `output` (MBR, FAT16 marked as the ESP, the log and store partitions), checked
     against them before it replaces anything; returns the image's SHA-256."""

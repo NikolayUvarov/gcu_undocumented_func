@@ -10,7 +10,7 @@ pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd"
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "uart_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bt_hci.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "storefs.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "timed.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "nnd.elf", "updater.elf", "effector_gw.elf", "effector.elf", "httpd.elf", "sshd.elf", "clipboard.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
-pub const SERVICE_INSTANCES: [&str; 5] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2", "rtl8168#1"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64); rtl8168#1: the DEXP's second wired port (211-KRN-0187)
+pub const SERVICE_INSTANCES: [&str; 6] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2", "rtl8168#1", "ramdisk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64); rtl8168#1: the DEXP's second wired port (211-KRN-0187); ramdisk#2: the boot volume in memory, on a live boot (352-KRN-0268)
 // The largest task or endpoint quota SPAWN can delegate (16 bits): the root quota init holds (issue 171).
 pub const QUOTA_MAX: usize = 0xFFFF;
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
@@ -72,12 +72,14 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // for SLOT_EFFECTOR, the shell's client of the Effector gateway badged as its owner (801-KRN-0246). ABI 34: the kernel
 // sets BOOT_WATCHDOG_RESTARTED in the tasks' BootInfo.boot_flags when the platform's watchdog restarted the last run (000-KRN-0217).
 // ABI 35: it sets BOOT_LAST_RUN_FAULTED when the last run of the same slot ended in a fault of its own, recorded in a
-// firmware variable (801-KRN-0261).
+// firmware variable (801-KRN-0261). ABI 36: PLATFORM_BOOT_VOLUME gives the boot volume the loader read into memory, and
+// `ramdisk#2` serves it, read-only (352-KRN-0268). ABI 37 moves SLOT_DYNAMIC to 47 for SLOT_INSTALL, the shell's client of the
+// installer on a live boot (352-KRN-0269).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 35;
+pub const ABI_VERSION: u32 = 37;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -89,10 +91,11 @@ pub const ABI_VERSION: u32 = 35;
 // `usb_serial` (100000-KRN-0221), renumbers the images after it. Handoff 33: `httpd`, the release server, last
 // before the shell (110-NET-0070, where the gateway's lists of 48 services still hold `effector`), adds an image. Handoff 34:
 // `sshd`, the SSH server, after `httpd` (112-NET-0072), adds another. Handoff 35: `clipboard`, the system clipboard,
-// after `sshd` and last before the shell (000-KRN-0235), adds another.
+// after `sshd` and last before the shell (000-KRN-0235), adds another. Handoff 36: `live_volume` and `live_volume_len`
+// after `boot_flags`, and VOLUME_ELTORITO (352-KRN-0268).
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 35;
+pub const BOOT_HANDOFF_VERSION: u32 = 36;
 // BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
 // data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;
@@ -105,7 +108,10 @@ pub const BOOT_LAST_RUN_FAULTED: u32 = 4;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
-    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX], pub boot_flags: u32 }
+    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX], pub boot_flags: u32,
+    // The boot volume read whole into memory, for a system started from an El Torito entry (352-KRN-0268): its physical
+    // address and bytes, 0 and 0 otherwise. The kernel lends it read-only through PLATFORM_BOOT_VOLUME and gives tasks 0.
+    pub live_volume: u64, pub live_volume_len: u64 }
 impl BootInfo {
     pub fn image(&self, index: usize) -> Option<&ProgramImage> {
         if index < BOOT_PREFIX_IMAGES { self.programs.get(index) } else { self.extra_programs.get(index - BOOT_PREFIX_IMAGES) }
@@ -139,10 +145,13 @@ pub const LINK_WORDS_MAX: usize = 64;
 // The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
 // kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
 // partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.
+// VOLUME_ELTORITO (handoff 36): an El Torito entry of a disc or of a disk that holds an ISO (352-KRN-0268); partition is
+// the entry's number, start and sectors the extent in the medium's own blocks, as the firmware names them.
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct BootVolume { pub kind: u32, pub partition: u32, pub start: u64, pub sectors: u64, pub signature: [u8; 16] }
 pub const VOLUME_UNKNOWN: u32 = 0;
 pub const VOLUME_MBR: u32 = 1;
 pub const VOLUME_GPT: u32 = 2;
+pub const VOLUME_ELTORITO: u32 = 3;
 // Which copy of the system runs (351-KRN-0014): BOOT_SLOT_ROOT (a volume without boot records), BOOT_SLOT_A or _B; trial
 // nonzero for a slot booted on trial, which the kernel restarts after deadline_s seconds unless init confirms it
 // (BOOT_CONFIRM); manifest: the SHA-256 of the boot manifest the bootloader verified and loaded from.
@@ -332,7 +341,7 @@ pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
-pub const CAP_SLOTS: usize = 110; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246)
+pub const CAP_SLOTS: usize = 111; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246; 352-KRN-0269)
 pub const CAP_SLOTS_MAX: usize = 4096;
 // Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
 pub const DERIVE_DEPTH_MAX: usize = 64;
@@ -464,8 +473,11 @@ pub const SLOT_PASSPHRASE: usize = 44;
 // action. Its endpoint is kept across the gateway's starts, so it answers ERR_PEER while no mode runs it. The shell's
 // alone, never lent (ABI 33, 801-KRN-0246).
 pub const SLOT_EFFECTOR: usize = 45;
+// vfs_server's installer (idl/install.wit), a client badged mind::fs::BADGE_INSTALL that init mints on a live boot alone:
+// the shell's alone, for its `install` command, never lent (ABI 37, 352-KRN-0269).
+pub const SLOT_INSTALL: usize = 46;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 46;
+pub const SLOT_DYNAMIC: usize = 47;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
 pub const LAUNCH_SLOTS: [usize; 23] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
@@ -574,6 +586,10 @@ pub const PLATFORM_NODE_IRQ: usize = 16; // node index, line n: an interrupt lin
 // and its log stops going there, until no live task holds the capability. ERR_NOT_FOUND where the kernel reads no console
 // (x86's COM1 is lent by its ports); ERR_BUSY while the console is lent or another channel stands.
 pub const PLATFORM_CONSOLE: usize = 17;
+// The boot volume the loader read into memory (ABI 36, 352-KRN-0268): a read-only memory object over the loader's own
+// pages, as many bytes as BootInfo.live_volume_len rounded up to a page; ERR_NOT_FOUND when the system did not start
+// from an El Torito entry, or the loader could not read it.
+pub const PLATFORM_BOOT_VOLUME: usize = 18;
 // The platform's devices outside PCI (100000-KRN-0171): the device tree's enabled nodes that have registers on the CPU's
 // bus (not the memory, the interrupt controller and the PCI host the kernel drives), or on a board without a tree the
 // same records the kernel makes from the ACPI tables (its UART, PL031, pin controllers and TPM).

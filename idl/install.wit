@@ -1,0 +1,36 @@
+/// The installer (352-UPD-0048, 352-KRN-0269): MIND Core from a live system onto a disk of this machine, laid out as
+/// `make_usb_image.py --slots` lays out a stick: the boot volume the loader verified, sector for sector, as the ESP, then
+/// `MIND LOG`, then the block store's partition, blank and named in the new ESP's `store.txt`. The ESP's entry is written
+/// last, so a disk cut short has none and the firmware does not boot it. `vfs_server` serves this interface beside
+/// `vfs.wit`, on a live boot alone, to clients badged `mind::fs::BADGE_INSTALL`: init mints one, for the shell's `install`
+/// command in `SLOT_INSTALL`, and lends it to no program. Installing erases the disk, so `install` takes the disk's words
+/// typed back at the machine's console (MC-12.3). vfs_server answers no other request while it installs. Every call is
+/// logged.
+package mind:install@1.0.0;
+
+interface install {
+    enum bus { ata, ahci, usb, virtio, nvme, other }
+    /// Why a disk is not offered: `live`, the medium the live system booted from; `small`, smaller than the layout;
+    /// `large`, past 2 TiB, where a GPT is needed (not made yet); `read-only`; `mounted`, a volume of it is mounted.
+    enum refusal { none, live, small, large, read-only, mounted }
+    /// `not-live`: not a live boot; `no-disk`: no disk of that number; `refused`: the disk is refused (its `refusal`);
+    /// `mismatch`: `typed` is not the disk's words; `partitions`: the disk has partitions and `erase` was not given. The
+    /// others name the step of the writing that failed, after which the disk has no ESP's entry: `source`, reading the
+    /// live volume; `clear`, the table without the ESP; `copy`; `verify`, the copy read back; `log`, `MIND LOG`; `store`,
+    /// the store's partition; `named`, `store.txt`; `table`, the ESP's entry; `read-back`, the table read back; `manifest`,
+    /// the new ESP does not hold the manifest the loader verified.
+    enum error { not-live, no-disk, refused, mismatch, partitions, source, clear, copy, verify, log, store, named, table, read-back, manifest }
+    /// A disk vfs_server holds: its number for `install`, its bus, its model as the drive names itself (empty where the
+    /// driver reads none: `block.wit` 2.0 carries none yet, so empty for every disk today), its size in MiB, its MBR
+    /// signature as 8 hex digits or `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus,
+    /// MiB, the signature's first four digits or `EMPTY`; never the model), and why it is not offered.
+    record disk { number: u8, bus: bus, model: string<40>, mib: u32, signature: string<8>, partitions: u8, words: string<32>, refusal: refusal }
+    /// What was written: the new disk's MBR signature, and each partition's first sector and size in sectors.
+    record layout { signature: u32, esp-first: u32, esp-sectors: u32, log-first: u32, log-sectors: u32, store-first: u32, store-sectors: u32 }
+
+    /// The disks vfs_server holds, the live medium among them as refused; RAM disks are not listed.
+    disks: func() -> result<list<disk, 8>, error>;
+    /// Installs onto disk `number` when `typed` is its words (letters in either case, spaces between); `erase` confirms
+    /// that the partitions it lists are erased, and is needed when it lists any.
+    install: func(number: u8, typed: string<32>, erase: bool) -> result<layout, error>;
+}

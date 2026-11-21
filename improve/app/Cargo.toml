@@ -1,0 +1,17 @@
+[package]
+name = "improve"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# MIND Hub's client on MIND Core (100003-APP-0151): the console program `improve`. Its forms, signatures and the tree
+# of the hub's answers are improve/proto's; the answers are parsed by the `parse` service (MC-11.11).
+[dependencies]
+libmind = { path = "../../libmind", features = ["alloc"] }
+improve-proto = { path = "../proto" }
+ed25519-dalek = { version = "2", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

@@ -43,6 +43,9 @@ pub const BADGE_READER: u16 = 5;
 pub const BADGE_OWNERS: u16 = 8;
 /// Badge of the network time service's client (111-KRN-0206): it alone opens `system/timed`, where it keeps the floor.
 pub const BADGE_TIMED: u16 = 9;
+/// Badge of the installer's client (idl/install.wit, 352-KRN-0269): init mints it on a live boot alone, for the shell's
+/// `install` command; vfs_server answers it with install.wit, never vfs.wit.
+pub const BADGE_INSTALL: u16 = 10;
 
 /// Why a file operation failed. `Conflict`: another writer published the file first, so read it again (vfs.wit 2.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

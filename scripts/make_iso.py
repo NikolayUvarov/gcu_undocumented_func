@@ -33,7 +33,7 @@ VOLUME_LBA = 512  # the boot volume at 1 MiB, so its MBR entry starts at sector 
 VOLUME_ID = "MIND_CORE"
 FAT_LABEL = "MIND CORE"
 FAT_SERIAL = "4d494e44"  # "MIND": the volume ID is a constant, not the time of the build
-SLACK_MB = 32  # room on the boot volume for what the live system writes (its log, data/)
+SLACK_MB = 32  # room on the boot volume beyond its files, and a second slot's room when it is in slots
 MIN_MB = 64
 NAMES = {"catalog": "BOOT.CAT;1", "volume": "MINDBOOT.IMG;1", "readme": "README.TXT;1"}
 README_TEXT = (b"MIND Core installer (352-UPD-0047)\r\n\r\n"
@@ -95,7 +95,9 @@ def files_to_stage(payloads, work, when):
 def boot_volume(payloads, path, when, start=VOLUME_LBA * BLOCK // SECTOR):
     """A FAT16 image at `path` holding the payloads, told it starts at `start` (in 512-byte sectors); returns its size."""
     content = sum(-(-len(data) // 4096) * 4096 for data in payloads.values())
-    megabytes = max(MIN_MB, -(-content // (1 << 20)) + SLACK_MB)
+    # In slots, room for slot B as large as slot A, so that a disk the installer copies this volume to can be updated.
+    slot = sum(-(-len(data) // 4096) * 4096 for name, data in payloads.items() if name.startswith("MIND/A/"))
+    megabytes = max(MIN_MB, -(-(content + slot) // (1 << 20)) + SLACK_MB)
     env = dict(os.environ, **MTOOLS_ENV, SOURCE_DATE_EPOCH=str(int(when)))
     with tempfile.TemporaryDirectory(prefix=".mind-iso-", dir=path.parent) as work:
         source = files_to_stage(payloads, Path(work), when)
