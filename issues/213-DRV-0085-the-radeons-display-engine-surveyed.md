@@ -61,9 +61,9 @@ safe for MIND Core, and the memory a second framebuffer needs. In short:
   over the carve-out as the place for a second framebuffer, which the engine scans with no page table, confidence
   medium), and a request: BAR 5 uncached, the VBIOS image from the ACPI VFCT table read-only, a BAR 0 range after the
   GOP's framebuffer mapped write-combined, and a versioned interface for the compositor's second screen.
-  KRN granted it (213-KRN-0271). **Still open:** whether the Ryzen's memory map keeps the carve-out out of MIND Core's
-  frame pool (the pool takes only conventional memory); the hardware report that lists the map could not be had yet
-  and comes with the first boot after the stick is rewritten.
+  KRN granted it (213-KRN-0271). The carve-out is out of MIND Core's frame pool: the hardware report of release
+  202611211819 shows a reserved region of 541 MiB at the top of RAM, below `TOP_MEM2` (213-DRV-0086, run 0). Its start,
+  `DCN_VM_FB_OFFSET`, reads 0x8_1000_0000 under MIND Core (213-DRV-0086 step 1, run 7).
 
 **The hang, as it happened (2026-11-21).** At 13:25 UTC the Ryzen was switched from MIND Core to Linux under the lease;
 at 13:27:35 a script ran as root through the Effector agent. In this order it read: `uname`, `/proc/cmdline`,

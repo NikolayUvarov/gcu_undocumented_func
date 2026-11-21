@@ -42,23 +42,28 @@ impl<T: Bus + Poke + Clock> Engine for T {}
 pub struct Firmware { pub otg: u8, pub opp: u8, pub dig_fe: u8, pub phy: u8, pub hubps: [bool; 4] }
 impl Firmware { pub fn protected(&self) -> Protected { Protected { otg: self.otg, opp: self.opp, dig_fe: self.dig_fe, phy: self.phy } } }
 
-/// The pipe and output step 3 takes.
+/// The pipe and output step 3 takes, and the powered HUBPs, not the firmware's, that follow its timing generator: blanked,
+/// never written, read after the stages that run it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Choice { pub pipe: Pipe, pub output: Output }
+pub struct Choice { pub pipe: Pipe, pub output: Output, pub attached: [bool; 4] }
+
+/// The first stage after which the attached HUBPs are read: the one that starts step 3's timing generator.
+pub const ATTACHED_FROM: u8 = 5;
 
 /// HDMI-A-1: VBIOS path 0, UNIPHY enum 1 on PHY A, HPD 1, connector HDMI type A.
 pub const HDMI_A_1: Output = Output { phy: 0, hpd: 0, encoder_id: 0x1E, connector_id: 0x0C };
 /// What the survey expects when step 1 has not been read: the GOP on OTG 0 and PHY E (DP-2's path 4), step 3 on OTG 1,
-/// DIG front end A, PHY A. Only for describing; a stage runs only on what step 1 found.
+/// DIG front end A, PHY A, with HUBP 1 following OTG 1, blanked (as step 1 found on the Ryzen). Only for describing; a
+/// stage runs only on what step 1 found.
 pub const EXPECTED: (Firmware, Choice) = (
     Firmware { otg: 0, opp: 0, dig_fe: 4, phy: 4, hubps: [true, false, false, false] },
-    Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1 },
+    Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1, attached: [false, true, false, false] },
 );
 
 /// Why step 3 does not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// All seven of step 1's batches must have been read; this is the first that was not.
+    /// All of step 1's batches must have been read; this is the first that was not.
     NotRead { batch: u8 },
     /// Not exactly one timing generator running.
     RunningOtgs(u8),
@@ -74,13 +79,18 @@ pub enum Refusal {
     NoFreeFrontEnd,
     /// The chosen pipe's blocks overlap the firmware's (a DIG block both use).
     Overlap,
+    /// A powered HUBP follows step 3's timing generator and is not blanked: it would fetch once the generator runs.
+    AttachedHubp(u8),
+    /// The display microcontroller is enabled and not held in reset: it may own the PHYs and pixel clocks the VBIOS
+    /// tables would program, and Linux asks it rather than run them (`dmub_command_table`).
+    DmcubRuns,
     Plan(PlanError),
 }
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL SEVEN)", batch),
+            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL {})", batch, crate::batches::BATCHES),
             Refusal::RunningOtgs(n) => write!(f, "{} TIMING GENERATORS RUN, NOT ONE", n),
             Refusal::BackEnds(n) => write!(f, "{} DIG BACK ENDS ARE ENABLED, NOT ONE", n),
             Refusal::HdmiDriven => f.write_str("PHY A (HDMI-A-1) IS ALREADY DRIVEN"),
@@ -89,6 +99,8 @@ impl fmt::Display for Refusal {
             Refusal::NoFreePipe => f.write_str("NO FREE TIMING GENERATOR AND OPP"),
             Refusal::NoFreeFrontEnd => f.write_str("NO FREE DIG FRONT END"),
             Refusal::Overlap => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE FIRMWARE'S"),
+            Refusal::AttachedHubp(n) => write!(f, "HUBP{} FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED", n),
+            Refusal::DmcubRuns => f.write_str("THE DMCUB IS ENABLED AND NOT IN RESET: IT MAY OWN WHAT THE VBIOS TABLES PROGRAM"),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
         }
     }
@@ -96,10 +108,12 @@ impl fmt::Display for Refusal {
 
 const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 
-/// The firmware's pipe and the pipe step 3 takes, from step 1's values; nothing assumed. All seven batches: step 3
-/// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync).
+/// The firmware's pipe and the pipe step 3 takes, from step 1's values; nothing assumed. All eight batches: step 3
+/// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync),
+/// and it does not run while batch 8 shows the DMCUB enabled and out of reset.
 pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     if s.batches() < crate::batches::BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
+    if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
     let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
     let runs = (0..4).filter(|&t| running(t)).count() as u8;
     let Some(otg) = (0..4).find(|&t| running(t)).filter(|_| runs == 1) else { return Err(Refusal::RunningOtgs(runs)) };
@@ -122,7 +136,9 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     let t = (0..4).find(|&t| !running(t) && !opp_used(t)).ok_or(Refusal::NoFreePipe)?;
     let fe_used = |d: u8| d == dig_fe || d == phy || fe_on(d) || BOARD_PHYS.iter().any(|&p| enabled(p) && fe_mask(p) & 1 << d != 0);
     let d = (0..5).find(|&d| !fe_used(d)).ok_or(Refusal::NoFreeFrontEnd)?;
-    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output: HDMI_A_1 }))
+    let attached = [0u8, 1, 2, 3].map(|n| powered(n) && !hubps[n as usize] && s.field(R::HubpCntl, n, HUBP_VTG_SEL) == Some(t as u32));
+    if let Some(n) = (0..4u8).find(|&n| attached[n as usize] && s.field(R::HubpCntl, n, HUBP_BLANK_EN) != Some(1)) { return Err(Refusal::AttachedHubp(n)); }
+    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output: HDMI_A_1, attached }))
 }
 
 // --- the guard ---
@@ -191,13 +207,15 @@ impl Guard {
 
 // --- the firmware's registers, watched ---
 
-/// Bits of a watched register that move by themselves: OTG_BUSY; the DIG front end's metadata-missed flag; DCHUBP_CNTL's
-/// outstanding-request, in-blank, timeout and underflow statuses (dcn_2_1_0_sh_mask.h).
+/// Bits of a watched register that move by themselves, whole fields by dcn_2_1_0_sh_mask.h's masks: OTG_BUSY;
+/// OPTC_DOUBLE_BUFFER_PENDING; the DIG front end's metadata-missed flag; DCHUBP_CNTL's outstanding-request (0x2, the
+/// XRQ's 0xF0000), in-blank, timeout (0xF00000) and underflow (0x70000000) statuses.
 fn steady(r: R) -> u32 {
     match r {
         R::OtgClockControl => !(1 << 16),
+        R::OptcInputGlobalControl => !(1 << 31),
         R::DigFeCntl => !(1 << 19),
-        R::HubpCntl => !(1 << 1 | 1 << 3 | 1 << 16 | 1 << 20 | 1 << 28),
+        R::HubpCntl => !(0x2 | 0x8 | 0x000F_0000 | 0x00F0_0000 | 0x7000_0000),
         _ => !0,
     }
 }
@@ -228,6 +246,14 @@ impl Watch {
             if firmware.hubps[n as usize] {
                 for r in [R::HubpreqPrimarySurfaceAddress, R::HubpreqPrimarySurfaceAddressHigh, R::HubpSurfaceConfig, R::HubpreqSurfacePitch, R::HubpCntl] { push(r, n); }
             }
+        }
+        w
+    }
+    /// The DCHUBP_CNTL of each HUBP that follows step 3's timing generator.
+    pub fn attached(choice: &Choice) -> Watch {
+        let mut w = Watch { regs: [None; WATCH], len: 0 };
+        for n in 0..4u8 {
+            if let (true, Some(reg)) = (choice.attached[n as usize], R::HubpCntl.at(n)) { w.regs[w.len] = Some((R::HubpCntl, n, reg)); w.len += 1; }
         }
         w
     }
@@ -270,7 +296,7 @@ impl fmt::Display for Name {
         for r in dcn::ALL {
             for i in 0..r.instances() {
                 if r.at(i) == Some(self.0) {
-                    return match r.block() { "" => write!(f, "{} AT {:05X}", r.name(), self.0.offset()), b => write!(f, "{}{}_{} AT {:05X}", b, i, r.name(), self.0.offset()) };
+                    return match r.block() { "" if r.instances() > 1 => write!(f, "{}{} AT {:05X}", r.name(), i, self.0.offset()), "" => write!(f, "{} AT {:05X}", r.name(), self.0.offset()), b => write!(f, "{}{}_{} AT {:05X}", b, i, r.name(), self.0.offset()) };
                 }
             }
         }
@@ -293,7 +319,7 @@ impl fmt::Display for Bytes<'_> {
 // --- the plan ---
 
 /// Step 3 ready to run: the plan of the eight stages, the guard and the watch, for one firmware and choice.
-pub struct Light { pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard, watch: Watch }
+pub struct Light { pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard, watch: Watch, attached: Watch }
 
 impl Light {
     pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> {
@@ -301,10 +327,11 @@ impl Light {
         let plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
         let mut starts = [plan.len(); STAGES as usize + 1];
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
-        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware) })
+        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice) })
     }
     pub fn guard(&self) -> &Guard { &self.guard }
     pub fn watch(&self) -> &Watch { &self.watch }
+    pub fn attached(&self) -> &Watch { &self.attached }
     /// Stage `n`'s steps (markers left out).
     pub fn stage(&self, n: u8) -> impl Iterator<Item = Step> + '_ {
         let (a, b) = (self.starts[n as usize - 1], self.starts.get(n as usize).copied().unwrap_or(self.plan.len()).saturating_sub(if n < STAGES { 1 } else { 0 }));
@@ -330,6 +357,9 @@ impl Light {
         out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN DVI SIGNALLING (CTA VIC 16)",
             c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
             self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0));
+        for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
+            out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES {} TO {}", n, c.pipe.otg, ATTACHED_FROM, STAGES));
+        }
     }
 
     fn plan_lines(&self, n: u8, verb: &str, out: &mut dyn Out) {
@@ -378,6 +408,8 @@ pub enum Failure {
     NoFrames(u32),
     Table(atom::Error),
     FirmwareChanged { offset: u32, before: u32, after: u32 },
+    /// A HUBP that follows step 3's timing generator changed (beyond its statuses): it may have left its blank.
+    AttachedChanged { offset: u32, before: u32, after: u32 },
     JournalFull,
 }
 
@@ -391,6 +423,7 @@ impl fmt::Display for Failure {
             Failure::NoFrames(n) => write!(f, "THE FRAME COUNT MOVED {} TIMES ONLY", n),
             Failure::Table(e) => write!(f, "THE TABLE STOPPED: {:?}", e),
             Failure::FirmwareChanged { offset, before, after } => write!(f, "THE FIRMWARE'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
+            Failure::AttachedChanged { offset, before, after } => write!(f, "THE ATTACHED HUBP'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
             Failure::JournalFull => f.write_str("MORE WRITES THAN THE UNDO CAN HOLD"),
         }
     }
@@ -403,6 +436,8 @@ pub enum Outcome {
     Stopped { done: u8 },
     /// Stage `stage` failed; it and every stage before it were undone.
     Failed { stage: u8, why: Failure },
+    /// Stages 1 to `done` ran, then were undone, last first, as the build asks.
+    Undone { done: u8 },
 }
 
 /// The interpreter's machine for step 3: reads, writes through the guard into the journal, each write logged; the time
@@ -487,8 +522,9 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
 }
 
 /// Undoes stage `n`: its off call, if it has one, then every register it wrote put back, last first, so the second
-/// pipe's and PHY A's registers are as before step 3 (PHY A was off). What a table wrote through the PHY's own control
-/// register bus (`RDPCS_TX_CR_ADDR`/`_DATA`) is not reached by a restore: the undo says how many such writes there were.
+/// pipe's and PHY A's registers are as before step 3 (PHY A was off). The PHY's own control register bus
+/// (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a write to its data register is a write into the PHY, so putting it
+/// back would write stale values into the PHY. What the stage set inside the PHY stays; the undo says how much.
 fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, out: &mut dyn Out) {
     if let Some(t) = light.off_call(n) {
         let mut scratch = Journal::default();
@@ -496,20 +532,24 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
             out.line(format_args!("U{} TABLE {} STOPPED ({}); RESTORING STAGE {}'S WRITES ANYWAY", n, t.index(), why, n));
         }
     }
-    let cr_bus = (seg2(0x2934 + 0xD8 * light.choice.output.phy as u32), seg2(0x2936 + 0xD8 * light.choice.output.phy as u32));
-    let (mut restored, mut through_bus) = (0, 0);
+    let p = light.choice.output.phy as u32;
+    let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
+    let (mut restored, mut addresses, mut data) = (0, 0, 0);
     let mut i = journal.len;
     while i > 0 {
         i -= 1;
         let Some((w, old, stage)) = journal.items[i] else { continue };
         if stage != n { continue; }
-        if (cr_bus.0..cr_bus.1).contains(&w.reg().offset()) { through_bus += 1; }
+        let o = w.reg().offset();
+        if o == cr_addr { addresses += 1; continue; }
+        if o == cr_data { data += 1; continue; }
         e.write(w, old);
         restored += 1;
         out.line(format_args!("U{} RESTORED {} = {:08X}", n, Name(w.reg()), old));
     }
-    if through_bus > 0 {
-        out.line(format_args!("U{} {} WRITES WENT THROUGH PHY {}'S CONTROL REGISTER BUS: WHAT THEY SET INSIDE THE PHY IS NOT RESTORED", n, through_bus, LETTERS[light.choice.output.phy as usize]));
+    if addresses + data > 0 {
+        out.line(format_args!("U{} PHY {}'S CONTROL REGISTER BUS LEFT AS IT IS: {} ADDRESS AND {} DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS",
+            n, LETTERS[p as usize], addresses, data));
     }
     out.line(format_args!("U{} {} UNDONE: {} WRITES RESTORED", n, STAGE_NAMES[n as usize - 1], restored));
 }
@@ -517,11 +557,26 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
 /// Step 3: stages 1 to `allowed`, each logged with its writes before any is made, the firmware's pipe read before and
 /// after; a failure undoes the stage and every one before it.
 pub fn run<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, out: &mut dyn Out) -> Outcome {
+    run_with(light, e, interp, journal, allowed, false, out)
+}
+
+/// Step 3 as `run`, then, when no stage failed, the stages that ran undone, last first: the undo is seen on the hardware,
+/// and nothing is left for the next boot.
+pub fn run_then_undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, out: &mut dyn Out) -> Outcome {
+    run_with(light, e, interp, journal, allowed, true, out)
+}
+
+fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, allowed: u8, then_undo: bool, out: &mut dyn Out) -> Outcome {
     let allowed = allowed.min(STAGES);
     light.intro(allowed, false, out);
+    if then_undo { out.line(format_args!("S0 THIS BUILD UNDOES THE STAGES IT RAN, LAST FIRST, BEFORE IT STOPS")); }
     let baseline = match light.watch.read(e) {
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return Outcome::Failed { stage: 0, why }; }
+    };
+    let attached = match light.attached.read(e) {
+        Ok(v) => v,
+        Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE ATTACHED HUBPS: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
     for n in 1..=STAGES {
         let name = STAGE_NAMES[n as usize - 1];
@@ -535,10 +590,16 @@ pub fn run<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journa
         out.pause(PAUSE_BEFORE_STAGE_MS);
         let result = stage(light, e, interp, journal, n, out).and_then(|()| {
             let now = light.watch.read(e)?;
-            match light.watch.changed(&baseline, &now) { Some((reg, before, after)) => Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }), None => Ok(()) }
+            if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
+            if n < ATTACHED_FROM || light.attached.is_empty() { return Ok(()); }
+            let now = light.attached.read(e)?;
+            match light.attached.changed(&attached, &now) { Some((reg, before, after)) => Err(Failure::AttachedChanged { offset: reg.offset(), before, after }), None => Ok(()) }
         });
         match result {
-            Ok(()) => out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len())),
+            Ok(()) => {
+                out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len()));
+                if n >= ATTACHED_FROM && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
+            }
             Err(why) => {
                 out.line(format_args!("S{} {} FAILED: {}; UNDOING STAGES {} TO 1", n, name, why, n));
                 for m in (1..=n).rev() { undo(light, e, interp, journal, m, out); }
@@ -550,6 +611,14 @@ pub fn run<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journa
             }
         }
         out.pause(PAUSE_AFTER_STAGE_MS);
+    }
+    if then_undo && allowed > 0 {
+        out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", allowed, STAGES, journal.len, allowed));
+        for m in (1..=allowed).rev() { undo(light, e, interp, journal, m, out); }
+        let same = light.watch.read(e).ok().map(|a| light.watch.changed(&baseline, &a).is_none());
+        out.line(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", allowed, STAGES,
+            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+        return Outcome::Undone { done: allowed };
     }
     out.line(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
     Outcome::Stopped { done: allowed }

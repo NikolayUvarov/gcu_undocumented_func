@@ -1,4 +1,4 @@
-// Host cases of display's step 1 (213-DRV-0086): the seven batches' registers, the order of names, pauses and reads,
+// Host cases of display's step 1 (213-DRV-0086): the eight batches' registers, the order of names, pauses and reads,
 // how many batches a build reads, batch 4's dependence on batch 3, and the decoding of the state Linux's Display Core
 // dumped on the Ryzen on 2026-11-21 (hwdocs/cezanne-display.md).
 #![allow(dead_code)] // the driver uses parts these cases do not
@@ -84,7 +84,7 @@ fn all_powered() -> Known { Known { hubp_powered: Some([true; 4]) } }
 #[test]
 fn the_batches_are_the_proposal_and_stay_in_the_engine() {
     let counts: Vec<usize> = (1..=BATCHES).map(|b| plan(b, &all_powered()).len()).collect();
-    assert_eq!(counts, vec![10, 76, 8, 20, 13, 6, 14]);
+    assert_eq!(counts, vec![10, 76, 8, 20, 13, 6, 14, 31]);
     for b in 1..=BATCHES {
         for n in plan(b, &all_powered()).iter() {
             assert!(dcn::DCN_BYTES.contains(&n.reg.offset()) && !dcn::MSIX_BYTES.contains(&n.reg.offset()), "{}", n);
@@ -115,9 +115,9 @@ fn a_build_that_may_read_nothing_reads_nothing_and_names_every_batch() {
     assert!(l[0].contains("THIS BUILD MAY READ 0"));
     for b in 1..=BATCHES { assert!(l.iter().any(|x| x.starts_with(&format!("B{} ", b)) && x.contains("NOT READ")), "batch {}", b); }
     let would = |b: u8| l.iter().filter(|x| x.starts_with(&format!("B{} WOULD READ ", b))).count();
-    assert_eq!((1..=BATCHES).map(would).collect::<Vec<_>>(), vec![10, 76, 8, 20, 13, 6, 14]);
+    assert_eq!((1..=BATCHES).map(would).collect::<Vec<_>>(), vec![10, 76, 8, 20, 13, 6, 14, 31]);
     assert!(l.iter().any(|x| x.starts_with("B4 HUBP: NOT READ") && x.contains("ONLY FOR EACH HUBP n THAT B3 SHOWS POWERED")));
-    assert!(l.last().unwrap().starts_with("STEP 1 DONE: 0 OF 7 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN"));
+    assert!(l.last().unwrap().starts_with("STEP 1 DONE: 0 OF 8 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN"));
     assert!(!events.iter().any(|e| matches!(e, Event::Pause(_))));
 }
 
@@ -136,8 +136,8 @@ fn a_build_reads_its_allowed_batches_and_no_register_of_the_others() {
         assert_eq!(reads(&events), expected, "allowed {}", allowed);
         assert_eq!(report.registers_read, expected.len());
     }
-    // A number beyond seven reads the seven.
-    assert_eq!(run_on(linux_state(), 200, &[]).0.batches_read, 7);
+    // A number beyond eight reads the eight.
+    assert_eq!(run_on(linux_state(), 200, &[]).0.batches_read, 8);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn each_batch_is_named_and_paused_before_its_first_read_and_paused_after() {
     for (i, e) in events.iter().enumerate() {
         if let Event::Read(o) = e { assert!(matches!(&events[i + 1], Event::Line(l) if l.contains(&format!("AT {:05X} = ", o)))); }
     }
-    assert_eq!(events.iter().filter(|e| **e == Event::Pause(PAUSE_BETWEEN_BATCHES_MS)).count(), 7);
+    assert_eq!(events.iter().filter(|e| **e == Event::Pause(PAUSE_BETWEEN_BATCHES_MS)).count(), 8);
 }
 
 #[test]
@@ -208,7 +208,62 @@ fn a_register_the_grant_does_not_map_is_not_read_and_batch_4_waits_on_all_of_bat
     assert!(l.iter().any(|x| x.starts_with("B3 DOMAIN2_PG_STATUS AT") && x.ends_with("NOT MAPPED, NOT READ")));
     assert!(l.contains(&"B3 PIPE 1: HUBP1 -, DPP1 ON"));
     assert!(l.iter().any(|x| x.starts_with("B4 HUBP: NOTHING TO READ")));
-    assert_eq!(report.registers_read, 10 + 76 + 7 + 13 + 6 + 14);
+    assert_eq!(report.registers_read, 10 + 76 + 7 + 13 + 6 + 14 + 31);
+}
+
+// The DMCUB's registers with its timer counting at each read, for batch 8.
+struct Counting { regs: HashMap<u32, u32>, timer: u32, events: Events }
+impl Bus for Counting {
+    fn read(&mut self, reg: Reg) -> Option<u32> {
+        self.events.borrow_mut().push(Event::Read(reg.offset()));
+        if reg.offset() == reg_of(R::DmcubTimerCurrent, 0) { self.timer += 0x1000; return Some(self.timer); }
+        Some(*self.regs.get(&reg.offset()).unwrap_or(&0))
+    }
+}
+fn reg_of(r: R, i: u8) -> u32 { reg(r, i) }
+
+#[test]
+fn batch_8_tells_a_running_dmcub_from_one_held_in_reset() {
+    // Its registers lie inside the engine's window, segment 2 dwords 0xCA and 0x3278 to 0x32A7 (dcn_2_1_0_offset.h).
+    for n in plan(8, &all_powered()).iter() {
+        let o = n.reg.offset();
+        assert!(o < 0x1B000 && dcn::DCN_BYTES.contains(&o) && !dcn::MSIX_BYTES.contains(&o), "{}", n);
+        assert!(o == (0x34C0 + 0xCA) * 4 || ((0x34C0 + 0x3278) * 4..=(0x34C0 + 0x32A7) * 4).contains(&o), "{}", n);
+    }
+    let names: Vec<String> = plan(8, &all_powered()).iter().map(|n| n.to_string()).collect();
+    assert_eq!(names.first(), names.last(), "the timer is read first and last");
+    assert!(names.iter().any(|x| x == "DMCUB_SCRATCH0 AT 19D34") && names.iter().any(|x| x == "DMCUB_SCRATCH15 AT 19D70"), "{:?}", names);
+    let run8 = |regs: HashMap<u32, u32>, counts: bool| {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        if counts {
+            let mut bus = Counting { regs, timer: 0, events: events.clone() };
+            run(&mut bus, BATCHES, &mut Log(events.clone()));
+        } else {
+            let mut bus = Model { regs, events: events.clone(), unmapped: BTreeSet::new() };
+            run(&mut bus, BATCHES, &mut Log(events.clone()));
+        }
+        let out = events.borrow().clone();
+        lines(&out).iter().filter(|x| x.starts_with("B8 DMCUB: ") && !x.contains("REGISTERS NEXT")).map(|x| x.to_string()).collect::<Vec<_>>()
+    };
+    // As Linux leaves it: on the board, enabled, out of reset, counting, its mailbox set up, booted (SCRATCH0).
+    let mut running = linux_state();
+    running.insert(reg(R::CcDcPipeDis, 0), 1 << 16);
+    running.insert(reg(R::DmcubCntl, 0), 1 << 16);
+    running.insert(reg(R::DmcubScratch, 0), 0x8000_0003);
+    running.insert(reg(R::DmcubInbox1BaseAddress, 0), 0x8000_0000);
+    running.insert(reg(R::DmcubInbox1Size, 0), 0x1_0000);
+    running.insert(reg(R::DmcubInbox1Rptr, 0), 0x40);
+    running.insert(reg(R::DmcubInbox1Wptr, 0), 0x40);
+    let l = run8(running, true);
+    assert_eq!(l[0], "B8 DMCUB: ON THE BOARD 1, ENABLED 1, SOFT RESET 0, PWAIT 0; SECURE RESET 0, ITS STATUS 0; TIMER COUNTS (00002000)");
+    assert_eq!(l[1], "B8 DMCUB: SCRATCH0 (BOOT STATUS) 80000003, SCRATCH7 (GPINT ANSWER) 00000000, SCRATCH10 00000000, GPINT IN 00000000 OUT 00000000");
+    assert_eq!(l[2], "B8 DMCUB: INBOX1 AT 80000000 OF 65536 BYTES, READ 64 WRITE 64; INBOX0 READ 0 WRITE 0; OUTBOX1 READ 0 WRITE 0");
+    // Held in reset, its timer still.
+    let mut held = linux_state();
+    held.insert(reg(R::CcDcPipeDis, 0), 1 << 16);
+    held.insert(reg(R::DmcubCntl, 0), 1 << 17);
+    let l = run8(held, false);
+    assert!(l[0].starts_with("B8 DMCUB: ON THE BOARD 1, ENABLED 0, SOFT RESET 1") && l[0].ends_with("TIMER STILL (00000000)"), "{}", l[0]);
 }
 
 #[test]
@@ -232,7 +287,7 @@ fn every_register_of_the_map_is_named_once_in_the_engine_at_the_headers_offset()
     }
     // dcn_2_1_0_offset.h (Linux v7.0): segment, dword, for the registers step 1 adds, at an instance past 0.
     let seg = [0x12u32, 0xC0, 0x34C0];
-    let checks: [(R, u8, usize, u32); 18] = [
+    let checks: [(R, u8, usize, u32); 24] = [
         (R::OtgVTotalControl, 1, 2, 0x1BB3), (R::OtgVerticalInterrupt1Position, 0, 2, 0x1B64),
         (R::OtgVerticalInterrupt1Control, 0, 2, 0x1B65), (R::OtgVerticalInterrupt2Position, 1, 2, 0x1BE6),
         (R::OptcInputGlobalControl, 1, 2, 0x1ADA), (R::DomainPgStatus, 7, 2, 0x8F),
@@ -241,6 +296,8 @@ fn every_register_of_the_map_is_named_once_in_the_engine_at_the_headers_offset()
         (R::HubpCntl, 3, 2, 0x887), (R::DigBeEnCntl, 4, 2, 0x24B0), (R::DigBeCntl, 4, 2, 0x24AF),
         (R::DigFeCntl, 4, 2, 0x2468), (R::HpdControl, 4, 2, 0x1F36), (R::OtgPixelRateCntl, 3, 1, 0x8C),
         (R::OtgPhypllPixelRateCntl, 3, 1, 0x8F), (R::DcnVmAgpBase, 0, 2, 0x498),
+        (R::CcDcPipeDis, 0, 2, 0xCA), (R::DmcubSecCntl, 0, 2, 0x3278), (R::DmcubInbox1Rptr, 0, 2, 0x3281),
+        (R::DmcubScratch, 15, 2, 0x329C), (R::DmcubCntl, 0, 2, 0x32A0), (R::DmcubTimerCurrent, 0, 2, 0x32A7),
     ];
     for (r, i, s, d) in checks { assert_eq!(reg(r, i), (seg[s] + d) * 4, "{} {}", r.name(), i); }
 }

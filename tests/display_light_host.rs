@@ -23,7 +23,8 @@ fn reg(r: R, i: u8) -> u32 { r.at(i).unwrap().offset() }
 // --- step 1's values ---
 
 // What step 1 would find if the GOP drives DP-2 as the survey expects: OTG 0 from OPP 0, HUBP 0 on it, DIG front end E
-// into PHY E's enabled back end, HPD 1 sensing HDMI-A-1's monitor, every pipe's domains on.
+// into PHY E's enabled back end, HPD 1 sensing HDMI-A-1's monitor, every pipe's domains on, and HUBPs 1 to 3 blanked on
+// their own idle OTGs (DCHUBP_CNTL as the Ryzen's: 000F0002, 000F001B, 000F002B, 000F003B).
 fn found() -> Store {
     let mut s = Store::default();
     for n in 0..5u8 { s.set(R::HpdIntStatus, n, if n == 0 || n == 4 { 0b10 } else { 0 }); s.set(R::HpdControl, n, 1 << 28); }
@@ -33,13 +34,14 @@ fn found() -> Store {
         s.set(R::OtgClockControl, t, if t == 0 { 0x101 } else { 0 });
     }
     for d in 0..8u8 { s.set(R::DomainPgStatus, d, 0); }
-    for n in 0..4u8 { s.set(R::HubpCntl, n, if n == 0 { 0 } else { 0xF << 4 }); }
+    for n in 0..4u8 { s.set(R::HubpCntl, n, if n == 0 { 0x000F_0002 } else { 0x000F_000B | (n as u32) << 4 }); }
     for d in 0..5u8 { s.set(R::DigFeCntl, d, if d == 4 { 1 << 24 } else { 7 }); }
     for p in batches::BOARD_PHYS {
         s.set(R::DigBeCntl, p, if p == 4 { (1 << 4) << 8 } else { 0 });
         s.set(R::DigBeEnCntl, p, if p == 4 { 0x101 } else { 0 });
     }
-    s.set_batches(7);
+    s.set(R::DmcubCntl, 0, 1 << 17); // the DMCUB held in reset
+    s.set_batches(8);
     s
 }
 
@@ -66,6 +68,7 @@ fn the_pipe_is_chosen_from_what_step_1_found() {
 #[test]
 fn step_3_refuses_what_it_cannot_tell() {
     let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found(); change(&mut s); assess(&s).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(7)), Refusal::NotRead { batch: 8 });
     assert_eq!(refuse(&|s| s.set_batches(6)), Refusal::NotRead { batch: 7 });
     assert_eq!(refuse(&|s| s.set_batches(4)), Refusal::NotRead { batch: 5 });
     assert_eq!(refuse(&|s| s.set_batches(0)), Refusal::NotRead { batch: 1 });
@@ -77,6 +80,12 @@ fn step_3_refuses_what_it_cannot_tell() {
     assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 0, 0)), Refusal::NoMonitor);
     assert_eq!(refuse(&|s| { s.set(R::DigBeCntl, 4, 0); s.set(R::DigFeCntl, 4, 0); }), Refusal::FirmwareFrontEnd);
     assert_eq!(refuse(&|s| for d in 0..4 { s.set(R::DigFeCntl, d, 1 << 24); }), Refusal::NoFreeFrontEnd);
+    // The DMCUB enabled and out of reset: it may own the PHY and the pixel clocks; enabled but held in reset is no bar.
+    assert_eq!(refuse(&|s| s.set(R::DmcubCntl, 0, 1 << 16)), Refusal::DmcubRuns);
+    let mut held = found(); held.set(R::DmcubCntl, 0, 1 << 16 | 1 << 17);
+    assert_eq!(assess(&held), Ok(EXPECTED));
+    // HUBP 1 on OTG 1, step 3's, not blanked: it would fetch once OTG 1 runs.
+    assert_eq!(refuse(&|s| s.set(R::HubpCntl, 1, 1 << 4)), Refusal::AttachedHubp(1));
 }
 
 // --- the guard ---
@@ -109,7 +118,7 @@ fn the_guard_refuses_every_block_of_the_firmwares_pipe_and_all_off_the_route() {
         assert!(g.check(Reg::new(o).unwrap()).is_ok(), "{:05X}", o);
     }
     // A choice that shares the firmware's DIG block is refused before anything runs.
-    let shared = Choice { pipe: dcn::Pipe { otg: 1, opp: 1, dig_fe: 4 }, output: HDMI_A_1 };
+    let shared = Choice { pipe: dcn::Pipe { otg: 1, opp: 1, dig_fe: 4 }, output: HDMI_A_1, attached: [false; 4] };
     assert_eq!(light::Guard::new(&f, &shared).err(), Some(Refusal::Overlap));
 }
 
@@ -208,6 +217,8 @@ fn wait_bit(byte: u32, bit: u32, at: u16) -> Vec<u8> {
 }
 const PHY_A_CNTL0: u32 = (0x34C0 + 0x2940) * 4; // RDPCSTX0_RDPCSTX_PHY_CNTL0
 const PHY_E_CNTL0: u32 = (0x34C0 + 0x2940 + 4 * 0xD8) * 4; // RDPCSTX4_RDPCSTX_PHY_CNTL0
+const PHY_A_CR_ADDR: u32 = (0x34C0 + 0x2934) * 4; // RDPCSTX0_RDPCS_TX_CR_ADDR
+const PHY_A_CR_DATA: u32 = (0x34C0 + 0x2935) * 4; // RDPCSTX0_RDPCS_TX_CR_DATA
 
 fn tables(t12: Vec<u8>, t76: Vec<u8>) -> Vec<u8> {
     image(&[(12, t12), (4, [mov(seg(2, 0x206B), 0x1F), vec![EOT]].concat()), (76, t76)])
@@ -309,6 +320,25 @@ fn a_stage_that_fails_is_undone_with_every_stage_before_it() {
 }
 
 #[test]
+fn the_undo_leaves_the_phys_control_register_bus_as_it_is() {
+    // Table 12 writes PHY A's internal register 0x1234 through the bus; stage 5 then fails. Putting the bus registers
+    // back would write a stale value into the PHY: the undo leaves them, says so, and restores everything else.
+    let img = tables([mov(seg(1, 0xA0), 1), mov(PHY_A_CR_ADDR, 0x1234), mov(PHY_A_CR_DATA, 0x5678), mov(PHY_A_CNTL0, 0x0020_0001), vec![EOT]].concat(),
+        [mov(seg(2, 0x20B0), 1), vec![EOT]].concat());
+    let mut e = engine();
+    e.frames_move = false;
+    let before = e.regs.clone();
+    let (outcome, log) = run(&img, &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
+    // The only writes to the bus are the tables' own (the stage's, and the synthetic off call's that repeats them).
+    let by_tables = log.iter().filter(|x| x.contains(" T12 WROTE AT 177D0") || x.contains(" T12 WROTE AT 177D4")).count();
+    assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA || w.0 == PHY_A_CR_ADDR).count(), by_tables, "a restore wrote the bus");
+    assert!(log.iter().any(|x| x == "U2 PHY A'S CONTROL REGISTER BUS LEFT AS IT IS: 1 ADDRESS AND 1 DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS"), "{:#?}", log);
+    assert!(log.iter().any(|x| x.starts_with("U2 PIXEL CLOCK UNDONE: 3 WRITES RESTORED")), "{:#?}", log);
+    restored_but(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
+}
+
+#[test]
 fn a_table_that_writes_the_firmwares_phy_is_refused_and_everything_undone() {
     let img = tables([mov(seg(1, 0xA0), 1), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), mov(PHY_E_CNTL0, 0xDEAD), vec![EOT]].concat());
     let mut e = engine();
@@ -359,6 +389,90 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
     let (outcome, log) = run(&good(), &mut e, STAGES);
     match outcome { Outcome::Failed { stage: 3, why: Failure::FirmwareChanged { offset, after: 0x777, .. } } if offset == reg(R::OtgHTotal, 0) => {}, o => panic!("{:?} {:#?}", o, log) }
     assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 3") && x.ends_with("CHANGED")));
+}
+
+#[test]
+fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
+    let run_undo = |e: &mut Engine, allowed: u8| {
+        let (f, c) = EXPECTED;
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let img = good();
+        let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+        let mut journal = light::Journal::default();
+        let mut log = Log(vec![]);
+        let outcome = light::run_then_undo(&l, e, &mut interp, &mut journal, allowed, &mut log);
+        (outcome, log.0)
+    };
+    for allowed in [1, 2, 8] {
+        let mut e = engine();
+        let before = e.regs.clone();
+        let (outcome, log) = run_undo(&mut e, allowed);
+        assert_eq!(outcome, Outcome::Undone { done: allowed }, "{:#?}", log);
+        assert!(!writes(&e).is_empty());
+        restored_but(&e, &before, &[]);
+        let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
+        assert_eq!(undone, (1..=allowed).rev().collect::<Vec<u8>>());
+        assert!(log[..6].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
+        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed)));
+        assert!(!log.iter().any(|x| x.contains("LEFT IN PLACE")));
+    }
+    // A build of 0 writes nothing and has nothing to undo; a stage that fails is undone as in `run`.
+    let mut e = engine();
+    assert_eq!(run_undo(&mut e, 0).0, Outcome::Stopped { done: 0 });
+    assert!(writes(&e).is_empty());
+    let mut e = engine();
+    e.frames_move = false;
+    assert_eq!(run_undo(&mut e, STAGES).0, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
+}
+
+#[test]
+fn the_hubp_that_follows_step_3s_otg_is_read_after_stages_5_to_8() {
+    let hubp1 = reg(R::HubpCntl, 1);
+    // Its value as on the Ryzen: blanked, in blank, following OTG 1.
+    let engine1 = || { let mut e = engine(); e.regs.insert(hubp1, 0x000F_001B); e };
+    let mut e = engine1();
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", log);
+    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES 5 TO 8")));
+    for n in 1..=STAGES { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED (1 REGISTERS)", n))), n >= 5, "stage {}", n); }
+    assert!(!writes(&e).iter().any(|w| w.0 == hubp1), "HUBP1 was written");
+    // Its statuses moving when OTG 1 starts (in blank, the XRQ's requests) fail no stage.
+    let mut e = engine1();
+    e.hook = Some((reg(R::OptcDataSourceSelect, 1), hubp1, 0x000F_001B ^ (0x8 | 0x000E_0000)));
+    assert_eq!(run(&good(), &mut e, STAGES).0, Outcome::Stopped { done: 8 });
+    // Leaving its blank in stage 5 fails stage 5, which is undone with every stage before it.
+    let mut e = engine1();
+    let before = e.regs.clone();
+    e.hook = Some((reg(R::OptcDataSourceSelect, 1), hubp1, 0x000F_001A));
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    match outcome { Outcome::Failed { stage: 5, why: Failure::AttachedChanged { offset, before: 0x11, after: 0x10 } } if offset == hubp1 => {}, o => panic!("{:?} {:#?}", o, log) }
+    assert!(log.iter().any(|x| x.starts_with("S5 START FAILED: THE ATTACHED HUBP'S")));
+    restored_but(&e, &before, &[]);
+    // A change before stage 5 is not looked for until stage 5, and is caught there.
+    let mut e = engine1();
+    e.hook = Some((reg(R::OtgHTotal, 1), hubp1, 0x000F_001A));
+    match run(&good(), &mut e, STAGES).0 { Outcome::Failed { stage: 5, why: Failure::AttachedChanged { .. } } => {}, o => panic!("{:?}", o) }
+}
+
+#[test]
+fn the_firmwares_status_bits_moving_fail_no_stage_but_a_setting_beside_them_does() {
+    // Statuses that move by themselves, whole fields (the Ryzen's HUBP0 reads its XRQ field as F): DCHUBP_CNTL's
+    // outstanding-request, in-blank, XRQ, timeout and underflow; OPTC_DOUBLE_BUFFER_PENDING.
+    let hubp = reg(R::HubpCntl, 0);
+    let odm = reg(R::OptcInputGlobalControl, 0);
+    for (target, bits) in [(hubp, 0x2 | 0x8 | 0x000E_0000 | 0x00E0_0000 | 0x6000_0000), (odm, 0x8000_0000)] {
+        let mut e = engine();
+        let was = e.regs[&target];
+        e.hook = Some((reg(R::OtgHTotal, 1), target, was ^ bits));
+        let (outcome, log) = run(&good(), &mut e, STAGES);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:05X} {:#?}", target, log);
+    }
+    // HUBP_VTG_SEL (bits 4 to 7) is a setting: its change fails the stage.
+    let mut e = engine();
+    let was = e.regs[&hubp];
+    e.hook = Some((reg(R::OtgHTotal, 1), hubp, was ^ 1 << 4));
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    match outcome { Outcome::Failed { stage: 3, why: Failure::FirmwareChanged { offset, .. } } if offset == hubp => {}, o => panic!("{:?} {:#?}", o, log) }
 }
 
 #[test]
@@ -466,14 +580,17 @@ fn the_ryzens_own_tables_through_step_3() {
     for (w, _) in writes(&e) { assert!(l.guard().check(Reg::new(w).unwrap()).is_ok(), "{:05X}", w); }
     for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
     for t in [12, 4, 76] { assert!(log.iter().any(|x| x.contains(&format!("TABLE {} DONE", t))), "table {}", t); }
-    // The frame count held still: stage 5 fails, and the undo restores every register stages 1 to 4 wrote, saying how
-    // many of table 12's writes went through PHY A's control register bus, which a restore does not reach.
+    // The frame count held still: stage 5 fails, and the undo restores every register stages 1 to 4 wrote but PHY A's
+    // control register bus, which it leaves as it is (a write to its data register is a write into the PHY), saying how
+    // many of table 12's writes went through it.
     let mut e = answered();
     e.frames_move = false;
     let before = e.regs.clone();
     let (outcome, log) = run(&bytes, &mut e, STAGES);
     assert_eq!(outcome, Outcome::Failed { stage: 5, why: Failure::NoFrames(0) });
-    restored_but(&e, &before, &[]);
-    assert!(log.iter().any(|x| x.starts_with("U2 ") && x.contains("WENT THROUGH PHY A'S CONTROL REGISTER BUS")), "{:#?}", log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ")).collect::<Vec<_>>());
+    restored_but(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
+    assert!(log.iter().any(|x| x.starts_with("U2 PHY A'S CONTROL REGISTER BUS LEFT AS IT IS: 20 ADDRESS AND 17 DATA WRITES")), "{:#?}", log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ")).collect::<Vec<_>>());
+    let table_data = log.iter().filter(|x| x.starts_with("S2 T12 WROTE AT 177D4")).count();
+    assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA).count(), table_data, "the undo wrote into PHY A");
     for x in log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ") && !x.contains(" WROTE ")) { eprintln!("{}", x); }
 }
