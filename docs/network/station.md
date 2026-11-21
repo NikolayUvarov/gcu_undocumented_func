@@ -22,6 +22,10 @@
 - **Which of its access points** (550-NET-0090). A 5 GHz access point of the network goes first when its signal is −70 dBm or stronger; otherwise the strongest, whatever its band. The same holds for `wifi join`.
 - **The access point** (801-NET-0084). A key, held or kept, joins a WPA2 access point of the name alone, and no key an open one alone. An open access point that takes a WPA2 network's name is never joined in its place, however strong. A client's passphrase, or a network `keystore` keeps, means WPA2.
 
+## While the link is down
+
+When the station's link goes down with a lease, `netstack` holds the card's address and its TCP connections for 30 s (801-NET-0089), as it does for any card. A radio driver's restart takes 2 to 5 s on the Ryzen (213-DRV-0032). If the station joins again within that time and DHCP gives the same address and gateway, the connections go on. Otherwise they are aborted, as before. `wifi leave` is held the same way: the stack sees only the link.
+
 ## What the log says
 
 Each try ends in one line:
