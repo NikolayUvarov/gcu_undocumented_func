@@ -129,7 +129,8 @@ one before it; a table writing the firmware's PHY refused and everything undone;
 the time limit and undone; more writes than the undo holds; the firmware's pipe changed under a stage; its status
 fields moving by themselves failing no stage, while a setting beside them (`HUBP_VTG_SEL`) does; a build that undoes
 what it ran (`UNDO_AFTER_STAGES`, off) leaving every register as before; the undo leaving PHY A's control register bus
-as it is (no stale write into the PHY); the HUBP that follows step 3's OTG refused
+as it is (no stale write into the PHY); stages 2, 6 and 8 failing at any read, and stage 8 at table 76's wait, each
+undone whole with its off calls run to their end; the HUBP that follows step 3's OTG refused
 unless blanked, read after stages 5 to 8, its statuses free to move, its leaving blank failing the stage; a build of 0
 that only describes; the mode against the CTA table; the VFCT image; and the Ryzen's own tables (with `MIND_AMD_VBIOS`): all
 eight stages with the four statuses answered, and the undo after stage 5 fails. Run on LEG9 only.
