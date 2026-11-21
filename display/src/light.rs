@@ -191,13 +191,15 @@ impl Guard {
 
 // --- the firmware's registers, watched ---
 
-/// Bits of a watched register that move by themselves: OTG_BUSY; the DIG front end's metadata-missed flag; DCHUBP_CNTL's
-/// outstanding-request, in-blank, timeout and underflow statuses (dcn_2_1_0_sh_mask.h).
+/// Bits of a watched register that move by themselves, whole fields by dcn_2_1_0_sh_mask.h's masks: OTG_BUSY;
+/// OPTC_DOUBLE_BUFFER_PENDING; the DIG front end's metadata-missed flag; DCHUBP_CNTL's outstanding-request (0x2, the
+/// XRQ's 0xF0000), in-blank, timeout (0xF00000) and underflow (0x70000000) statuses.
 fn steady(r: R) -> u32 {
     match r {
         R::OtgClockControl => !(1 << 16),
+        R::OptcInputGlobalControl => !(1 << 31),
         R::DigFeCntl => !(1 << 19),
-        R::HubpCntl => !(1 << 1 | 1 << 3 | 1 << 16 | 1 << 20 | 1 << 28),
+        R::HubpCntl => !(0x2 | 0x8 | 0x000F_0000 | 0x00F0_0000 | 0x7000_0000),
         _ => !0,
     }
 }

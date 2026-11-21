@@ -362,6 +362,27 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
 }
 
 #[test]
+fn the_firmwares_status_bits_moving_fail_no_stage_but_a_setting_beside_them_does() {
+    // Statuses that move by themselves, whole fields (the Ryzen's HUBP0 reads its XRQ field as F): DCHUBP_CNTL's
+    // outstanding-request, in-blank, XRQ, timeout and underflow; OPTC_DOUBLE_BUFFER_PENDING.
+    let hubp = reg(R::HubpCntl, 0);
+    let odm = reg(R::OptcInputGlobalControl, 0);
+    for (target, bits) in [(hubp, 0x2 | 0x8 | 0x000E_0000 | 0x00E0_0000 | 0x6000_0000), (odm, 0x8000_0000)] {
+        let mut e = engine();
+        let was = e.regs[&target];
+        e.hook = Some((reg(R::OtgHTotal, 1), target, was ^ bits));
+        let (outcome, log) = run(&good(), &mut e, STAGES);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:05X} {:#?}", target, log);
+    }
+    // HUBP_VTG_SEL (bits 4 to 7) is a setting: its change fails the stage.
+    let mut e = engine();
+    let was = e.regs[&hubp];
+    e.hook = Some((reg(R::OtgHTotal, 1), hubp, was ^ 1 << 4));
+    let (outcome, log) = run(&good(), &mut e, STAGES);
+    match outcome { Outcome::Failed { stage: 3, why: Failure::FirmwareChanged { offset, .. } } if offset == hubp => {}, o => panic!("{:?} {:#?}", o, log) }
+}
+
+#[test]
 fn a_build_that_may_run_nothing_only_describes_and_has_no_device() {
     // describe takes the plan and the log, nothing that reads or writes.
     let (f, c) = EXPECTED;

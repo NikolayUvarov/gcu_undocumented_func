@@ -372,7 +372,10 @@ mode, 8 the PHY (table 76) and the `DIG_START` pulse.
   firmware's (the same blocks of its pipe and PHY, and the HUBP, DPP and MPCC of each HUBP that follows its OTG). The
   write path is its own trait, taking only a `Writable` the guard made; the interpreter's writes go through it too.
 - **The firmware's pipe** (30 registers on the expected state, all read by step 1) is read before step 3 and after each
-  stage; any change but of known status bits fails the stage.
+  stage; any change but of known status bits fails the stage. The status bits are whole fields by the DCN 2.1 header's
+  masks: `OTG_BUSY`, `OPTC_DOUBLE_BUFFER_PENDING`, the DIG front end's metadata-missed flag, and `DCHUBP_CNTL`'s
+  outstanding-request, in-blank, XRQ (0xF0000), timeout (0xF00000) and underflow (0x70000000) statuses. On the Ryzen,
+  HUBP0's XRQ field reads F (step 1's run 5).
 - **Undo** (of a failed stage and every one before it, last first): stage 2 first calls table 12 with pixel clock 0 (as
   Display Core powers a PLL down), stage 8 table 76's DISABLE; then every register the stage wrote is put back.
 
