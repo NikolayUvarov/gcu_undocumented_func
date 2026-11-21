@@ -25,12 +25,17 @@ static mut KEPT: [u8; KEPT_BYTES] = [0; KEPT_BYTES];
 const PACKETS: usize = 8;
 const IDLE_MS: u64 = 1000;
 const CLAIMED: usize = 8;
+// The interfaces claimed in one look (two or three devices'), and the devices that wait for the one in use to go.
+const FOUND: usize = 2 * CLAIMED;
+const SPARES: usize = 2;
 
 // A device's streams: the handles of its streaming interfaces and the settings chosen.
 struct Attached { name: [u16; 2], playback: Option<(u32, Setting)>, capture: Option<(u32, Setting)>, handles: [u32; CLAIMED], count: usize, high_speed: bool }
 
 pub struct Usb {
     host: Host, attached: Option<Attached>, looked: u64,
+    // The devices one set up later took the place of, the latest last: each comes back when that one goes (000-DRV-0080).
+    spares: [Option<Attached>; SPARES],
     // Playback: the queue's oldest byte and length; the stream selected; when it last had something to play.
     head: usize, queued: usize, playing: bool, pacer: Pacer, fed_ms: u64, sent: u64, silent: u64, started_ms: u64, fast: bool, told: bool,
     // Capture: the kept bytes (whole frames), an overflow not yet reported.
@@ -43,21 +48,23 @@ impl Usb {
     pub fn open() -> Option<Self> {
         if mind::dev::cap_info(SLOT_USB).0 != CAP_KIND_ENDPOINT { return None; }
         let host = Host::new(Endpoint(SLOT_USB)).ok()?;
-        Some(Self { host, attached: None, looked: 0, head: 0, queued: 0, playing: false, pacer: Pacer::new(1), fed_ms: 0, sent: 0, silent: 0, started_ms: 0, fast: false, told: false,
+        Some(Self { host, attached: None, looked: 0, spares: [const { None }; SPARES], head: 0, queued: 0, playing: false, pacer: Pacer::new(1), fed_ms: 0, sent: 0, silent: 0, started_ms: 0, fast: false, told: false,
                     capturing: false, kept_head: 0, kept: 0, lost: false, out_factor: 1 << 15, in_factor: 1 << 15 })
     }
 
     pub fn attached(&self) -> bool { self.attached.is_some() }
 
-    /// An attached device with no stream running is asked for its device descriptor every LOOK_MS: one that went away
-    /// answers no more, and the gateway goes back to the codec. A running stream finds that out by itself.
-    pub fn check(&mut self) {
+    /// With no stream running, every LOOK_MS: the device in use is asked for its device descriptor (one that went
+    /// answers no more), and usb_host for a device set up since. True when another device is in use now: one set up
+    /// later, or, the one in use gone, the one before it. With none left the gateway goes back to the codec.
+    pub fn check(&mut self) -> bool {
+        if self.attached.is_none() { return self.fall_back(); }
         let now = mind::time::uptime_ms() as u64;
-        let Some(a) = self.attached.as_ref() else { return };
-        if self.active() || now < self.looked + LOOK_MS { return; }
+        if self.active() || now < self.looked + LOOK_MS { return false; }
         self.looked = now;
-        let first = a.handles[0];
-        if let Err(e) = self.host.control(first, 0x80, 6, 0x0100, 0, 18) { self.gone(e); }
+        let first = self.attached.as_ref().map_or(0, |a| a.handles[0]);
+        if let Err(e) = self.host.control(first, 0x80, 6, 0x0100, 0, 18) { self.gone(e); return self.fall_back(); }
+        self.take_newer()
     }
 
     /// Claims an audio function's interfaces if usb_host has one, at most every LOOK_MS; true when one is attached now.
@@ -66,15 +73,39 @@ impl Usb {
         if self.attached.is_some() { return true; }
         if self.looked != 0 && now < self.looked + LOOK_MS { return false; }
         self.looked = now.max(1);
-        let mut claimed = [(0u32, Interface::default()); CLAIMED];
+        self.take_newer();
+        self.attached.is_some()
+    }
+
+    // Every audio interface not ours yet is a device's that usb_host set up since the last look. Each usable device,
+    // the earliest set up first, takes the place of the one in use, which waits (000-DRV-0080): the device plugged in
+    // last plays, as a headset beside a machine's own USB audio. True when the device in use changed.
+    fn take_newer(&mut self) -> bool {
+        let mut claimed = [(0u32, Interface::default()); FOUND];
         let mut count = 0;
-        while count < CLAIMED { match self.host.claim() { Ok(c) => { claimed[count] = c; count += 1; } Err(_) => break } }
-        if count == 0 { return false; }
-        // The interfaces of the first device claimed (a handle's low byte names the interface); the others go back.
-        let device = claimed[0].0 & !0xFF;
-        for &(h, _) in claimed[..count].iter().filter(|(h, _)| h & !0xFF != device) { let _ = self.host.release(h); }
-        let mine: [(u32, Interface); CLAIMED] = core::array::from_fn(|i| if i < count && claimed[i].0 & !0xFF == device { claimed[i] } else { (0, Interface::default()) });
-        let first = mine[0];
+        while count < FOUND { match self.host.claim() { Ok(c) => { claimed[count] = c; count += 1; } Err(_) => break } }
+        let mut changed = false;
+        // A handle's high half counts usb_host's set-ups, its low byte names the interface.
+        while let Some(device) = claimed[..count].iter().filter(|(h, _)| *h != 0).map(|(h, _)| h & !0xFF).min_by_key(|d| d >> 16) {
+            let mut mine = [(0u32, Interface::default()); CLAIMED];
+            let mut n = 0;
+            for c in claimed[..count].iter_mut().filter(|(h, _)| *h != 0 && h & !0xFF == device) {
+                if n < CLAIMED { mine[n] = *c; n += 1; }
+                c.0 = 0;
+            }
+            let Some(found) = self.read(&mine[..n]) else { continue };
+            if let Some(before) = self.attached.replace(found) { self.wait(before); }
+            changed = true;
+        }
+        // The counts of packets played are the last stream's: they are not another device's.
+        if changed { (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head, self.sent, self.silent) = (0, 0, false, false, 0, 0, 0, 0); }
+        changed
+    }
+
+    // A device's audio function from its interfaces `mine`: the settings to use. One with none stays claimed, so it is
+    // not looked at again until it is plugged in again.
+    fn read(&mut self, mine: &[(u32, Interface)]) -> Option<Attached> {
+        let first = *mine.first()?;
         let read = self.host.control(first.0, 0x80, 6, 0x0200, 0, 9).ok().and_then(|_| {
             let total = u16::from_le_bytes([self.host.buffer()[2], self.host.buffer()[3]]).clamp(9, mind::usb::CONTROL_MAX as u16);
             self.host.control(first.0, 0x80, 6, 0x0200, 0, total).ok()
@@ -82,23 +113,43 @@ impl Usb {
         let function = read.and_then(|got| uac::parse(&self.host.buffer()[..got]));
         let Some(function) = function else {
             mind::println!("[AUDIO] USB {:04X}:{:04X}: NO 16-BIT 48 KHZ SETTING TO USE", first.1.vendor, first.1.product);
-            return false; // its interfaces stay claimed, so it is not looked at again until it is plugged in again
+            return None;
         };
-        let handle_of = |number: u8| mine.iter().find(|(h, i)| *h != 0 && i.number == number).map(|(h, _)| *h);
+        let handle_of = |number: u8| mine.iter().find(|(_, i)| i.number == number).map(|(h, _)| *h);
         let playback = function.playback.and_then(|s| handle_of(s.interface).map(|h| (h, s)));
         let capture = function.capture.and_then(|s| handle_of(s.interface).map(|h| (h, s)));
         let mut handles = [0u32; CLAIMED];
-        let mut n = 0;
-        for (h, _) in mine.iter().filter(|(h, _)| *h != 0) { handles[n] = *h; n += 1; }
-        let speed = first.1.speed;
+        for (i, (h, _)) in mine.iter().enumerate() { handles[i] = *h; }
         let say = |s: Option<(u32, Setting)>| s.map_or((0, 0, 0, 0, false), |(_, s)| (s.interface, s.channels, s.endpoint, s.packet, s.feedback.is_some()));
         let (p, c) = (say(playback), say(capture));
         mind::println!("[AUDIO] USB {:04X}:{:04X} ATTACHED: PLAYBACK {} (INTERFACE {}, {} CHANNELS, ENDPOINT {:02X}, {} BYTES{}), CAPTURE {} (INTERFACE {}, {} CHANNELS, ENDPOINT {:02X}, {} BYTES)",
             first.1.vendor, first.1.product, if playback.is_some() { "YES" } else { "NO" }, p.0, p.1, p.2, p.3, if p.4 { ", FEEDBACK" } else { "" },
             if capture.is_some() { "YES" } else { "NO" }, c.0, c.1, c.2, c.3);
-        self.attached = Some(Attached { name: [first.1.vendor, first.1.product], playback, capture, handles, count: n, high_speed: speed >= 3 });
-        (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head) = (0, 0, false, false, 0, 0);
-        true
+        Some(Attached { name: [first.1.vendor, first.1.product], playback, capture, handles, count: mine.len(), high_speed: first.1.speed >= 3 })
+    }
+
+    // The device a later one took the place of waits, its interfaces ours. With no room the earliest waiting is
+    // forgotten, its interfaces still claimed: it is not taken again until it is plugged in again.
+    fn wait(&mut self, before: Attached) {
+        mind::println!("[AUDIO] USB {:04X}:{:04X} WAITS: A DEVICE SET UP AFTER IT IS USED", before.name[0], before.name[1]);
+        if self.spares.iter().all(Option::is_some) { self.spares.rotate_left(1); self.spares[SPARES - 1] = None; }
+        if let Some(room) = self.spares.iter_mut().find(|s| s.is_none()) { *room = Some(before); }
+    }
+
+    // The device in use went: the latest of those that wait takes its place, if it still answers. True when one did.
+    fn fall_back(&mut self) -> bool {
+        for at in (0..SPARES).rev() {
+            let Some(a) = self.spares[at].take() else { continue };
+            if self.host.control(a.handles[0], 0x80, 6, 0x0100, 0, 18).is_ok() {
+                mind::println!("[AUDIO] USB {:04X}:{:04X} AGAIN: THE DEVICE SET UP AFTER IT WENT", a.name[0], a.name[1]);
+                self.attached = Some(a);
+                (self.head, self.queued, self.playing, self.capturing, self.kept, self.kept_head, self.sent, self.silent) = (0, 0, false, false, 0, 0, 0, 0);
+                self.looked = mind::time::uptime_ms() as u64;
+                return true;
+            }
+            for &h in &a.handles[..a.count] { let _ = self.host.release(h); }
+        }
+        false
     }
 
     // usb_host refused the device's stream (its controller takes none): the codec again, and the device's interfaces stay
@@ -160,12 +211,28 @@ impl Usb {
     /// Flushes the playback queue; the stream stops.
     pub fn reset(&mut self) { self.queued = 0; self.stop_playback(); }
 
+    // An endpoint that takes its sampling frequency by request is told 48 kHz once its setting is selected: SET_CUR of
+    // the sampling frequency control (UAC1 5.2.3.2.3.1), as Linux's init_sample_rate_v1. Without it the DEXP's 0573:1573
+    // rasped at the rate it had. What the device then says it runs at goes to the log; one that refuses plays on.
+    fn rate(&mut self, handle: u32, endpoint: u8) {
+        self.host.buffer_mut()[..3].copy_from_slice(&uac::RATE.to_le_bytes()[..3]);
+        let set = self.host.control(handle, 0x22, 0x01, 0x0100, endpoint as u16, 3);
+        let got = self.host.control(handle, 0xA2, 0x81, 0x0100, endpoint as u16, 3).ok().filter(|&n| n >= 3)
+            .map(|_| { let b = self.host.buffer(); u32::from_le_bytes([b[0], b[1], b[2], 0]) });
+        match (set, got) {
+            (Ok(_), Some(hz)) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: {} HZ ASKED, THE DEVICE SAYS {} HZ", endpoint, uac::RATE, hz),
+            (Ok(_), None) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: {} HZ ASKED, THE DEVICE DOES NOT SAY ITS RATE", endpoint, uac::RATE),
+            (Err(e), _) => mind::println!("[AUDIO] USB ENDPOINT {:02X}: THE DEVICE REFUSED {} HZ ({:?}), IT SAYS {:?} HZ", endpoint, uac::RATE, e, got),
+        }
+    }
+
     // The playback setting selected, so its stream runs.
     fn start(&mut self) {
         if self.playing { return; }
         let Some((handle, s)) = self.attached.as_ref().and_then(|a| a.playback) else { return };
         match self.host.select(handle, s.alternate) {
             Ok(_) => {
+                if s.rated { self.rate(handle, s.endpoint); }
                 self.playing = true;
                 self.pacer = Pacer::new(s.packet as usize / s.frame());
                 self.fed_ms = mind::time::uptime_ms() as u64;
@@ -301,7 +368,7 @@ impl Usb {
         let Some((handle, s)) = self.attached.as_ref().and_then(|a| a.capture) else { return false };
         if self.capturing { return true; }
         match self.host.select(handle, s.alternate) {
-            Ok(_) => { (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
+            Ok(_) => { if s.rated { self.rate(handle, s.endpoint); } (self.capturing, self.kept, self.kept_head, self.lost) = (true, 0, 0, false); true }
             Err(e) => { mind::println!("[AUDIO] USB CAPTURE SETTING {} REFUSED ({:?})", s.alternate, e); if matches!(e, mind::Error::NotFound | mind::Error::Peer) { self.gone(e); } else { self.refused(e); } false }
         }
     }

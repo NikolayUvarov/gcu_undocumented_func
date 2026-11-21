@@ -121,7 +121,13 @@ impl Controller {
     }
 
     // Gives back a slot and its pages.
-    fn discard(&mut self, slot: u8, pages: &[usize]) { self.xhci.disable_slot(slot); for &page in pages { self.xhci.release(page); } }
+    // The completion code of the step that failed stays for the report: Disable Slot's own would take its place.
+    fn discard(&mut self, slot: u8, pages: &[usize]) {
+        let last = self.xhci.last;
+        self.xhci.disable_slot(slot);
+        if !self.xhci.stuck { self.xhci.last = last; }
+        for &page in pages { self.xhci.release(page); }
+    }
 
     /// Sets up the device on a port: address, descriptors, configuration, its endpoints or, for a hub, its ports.
     fn enumerate(&mut self, root: u8, route: u32, depth: u8, speed: u8, parent: Option<(usize, u8)>) -> Option<usize> {
@@ -306,7 +312,10 @@ impl Controller {
                 self.xhci.acknowledge(port);
             }
             self.step = "PORT RESET"; self.xhci.last = 0;
-            let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
+            let (again, before) = (self.root_tries[port - 1] > 0, self.xhci.port_status(port));
+            let enabled = self.xhci.enable_port(port, again);
+            if again { mind::println!("[USB] {}PORT {}: RESET FOR ANOTHER TRY (PORTSC {:08X}, THEN {:08X})", Tag(self.xhci.number), port, before, self.xhci.port_status(port)); }
+            let set_up = enabled.and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             if self.xhci.stuck { self.add_suspect(port as u8, 0, format_args!("{}", port)); return; }
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
             // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
@@ -578,8 +587,13 @@ impl Host {
         let (device, iface) = self.interface(handle, badge)?;
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_control(b, badge, device, iface, request_type, request, value, index, length); }
         let c = xhci_device(handle).0;
-        let info = self.root(c)?.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
-        if !Self::allowed(&info, request_type, request, index) { return Err(Error::Rights); }
+        let root = self.root(c)?;
+        let found = root.devices[device].ok_or(Error::NotFound)?;
+        let info = found.interfaces[iface].info;
+        // An endpoint of the interface's selected setting is the interface's too while its stream runs: a USB audio
+        // endpoint is told its sampling frequency there (000-DRV-0073).
+        let streams = request_type & 0x1F == 2 && index <= 0xFF && root.xhci.streams_of(found.slot, Some(info.number)) & 1 << dci(index as u8) != 0;
+        if !Self::allowed(&info, request_type, request, index) && !streams { return Err(Error::Rights); }
         if length as usize > CONTROL_MAX { return Err(Error::Invalid); }
         let input = request_type & 0x80 != 0;
         if !input { let data: [u8; CONTROL_MAX] = { let mut d = [0; CONTROL_MAX]; d[..length as usize].copy_from_slice(&self.buffer(badge)?[..length as usize]); d }; self.root(c)?.small(length as usize).copy_from_slice(&data[..length as usize]); }
@@ -729,7 +743,7 @@ impl Host {
         let (endpoints, count) = setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?;
         let streams = &endpoints[..count as usize];
         if root.no_isochronous && streams.iter().any(EndpointInfo::is_isochronous) {
-            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED, OR IS AN AMD ONE)", Tag(root.xhci.number), device.slot, info.number, alternate);
+            mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED)", Tag(root.xhci.number), device.slot, info.number, alternate);
             return Err(Error::Invalid);
         }
         if root.xhci.streams_of(device.slot, Some(info.number)) != 0 || streams.iter().any(EndpointInfo::is_isochronous) {
@@ -884,11 +898,7 @@ fn main(_info: &'static BootInfo) {
         }
         // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
         for port in 1..=xhci.ports() { mind::println!("[USB] {}PORT {} PORTSC {:08X}", tag, port, xhci.port_status(port)); }
-        // AMD's xHCI (the Ryzen's 1022:1639) stops with a host controller error on the first isochronous TD, where Linux
-        // streams: it takes no stream until that is understood (000-DRV-0073), and a USB audio device falls to the codec.
-        let amd = config(0) & 0xFFFF == 0x1022;
-        if amd { mind::println!("[USB] {}AMD CONTROLLER: NO ISOCHRONOUS STREAM ON IT YET (000-DRV-0073)", tag); }
-        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: amd, suspects: [None; 4], restarts: 0, since: mind::time::uptime_ms() as u64 });
+        roots[nth] = Some(Controller { xhci, devices: [None; MAX_DEVICES], generation: 0, root_failed: 0, step: "", root_tries: [0; 64], no_isochronous: false, suspects: [None; 4], restarts: 0, since: mind::time::uptime_ms() as u64 });
     }
     if roots.iter().all(Option::is_none) { return; }
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.

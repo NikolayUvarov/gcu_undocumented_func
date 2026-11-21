@@ -4315,6 +4315,60 @@ def files_check(vm, pid):
     return output
 
 
+def iso_suite(args):
+    """352-UPD-0047: the hybrid ISO make_iso.py makes of this build. Written as a USB disk, it boots to the shell, and
+    vfs_server mounts its volume at the MBR partition's start, the one holding the verified manifest. As an IDE CD-ROM, OVMF starts the loader
+    from the El Torito entry, larger than the entry's 16-bit count, and the loader reads the kernel and the services
+    from that volume, checked against the signed manifest. The ISO's bytes are the same after both boots. The system on
+    a disc has no driver for its volume yet: that is the volume in memory, the task's step 2."""
+    if args.arch != "x86_64":
+        print("SKIP: the iso suite is x86 for now (352-UPD-0047)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: iso suite needs mkfs.fat and mtools", flush=True)
+        return
+    import make_iso
+    from make_usb_image import read_payloads
+    when = 1763668800  # a fixed date: the same build gives the same ISO
+    with tempfile.TemporaryDirectory(prefix="smoke-iso-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        volume, iso = temp / "boot.img", temp / "mind.iso"
+        make_iso.boot_volume(read_payloads(ROOT / IMAGE, "x86_64"), volume, when)
+        digest = make_iso.write_iso(volume, iso, when, "x86_64")
+        volume.unlink()
+        start = make_iso.VOLUME_LBA * make_iso.BLOCK // make_iso.SECTOR
+        vm = VM(args, iso.relative_to(ROOT).as_posix(), usb=True)
+        try:
+            # OVMF takes the El Torito entry on a disk too, ahead of the MBR: the loader is given no partition, and
+            # vfs_server mounts the volume that holds the manifest the loader verified (211-KRN-0012).
+            require(ANSI.sub("", vm.log), "BOOT: VOLUME UNKNOWN PARTITION 0 AT LBA 0")
+            vfs = vm.service_logs("vfs_server", f"[VFS] MOUNTED FAT16 FROM USB AT LBA {start}")
+            require(vfs, f"[VFS] MOUNTED FAT16 FROM USB AT LBA {start}")
+            require(vfs, "[VFS] THE BOOT VOLUME: A VOLUME THE FIRMWARE DID NOT NAME, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            require(vm.command("run files &"), "PID=1 NAME=files BACKGROUND")
+            files_check(vm, 1)
+            vm.command("kill 1")
+        finally:
+            vm.close()
+        blank = temp / "blank.img"
+        with blank.open("wb") as f:
+            f.truncate(16 << 20)
+        cd = iso.relative_to(ROOT).as_posix().replace(",", ",,")
+        vm = VM(args, blank.relative_to(ROOT).as_posix(), raw=True,
+                extra=["-drive", f"file={cd},format=raw,media=cdrom,readonly=on,if=none,id=cd", "-device", "ide-cd,drive=cd,bootindex=0"])
+        try:
+            log = ANSI.sub("", vm.log).replace("\r", "")
+            assert re.search(r"BOOT: MANIFEST \S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED\n", log), log[-3000:]
+            require(log, "MIND CORE BOOT: KERNEL AND ")
+            require(log, "MIND CORE KERNEL: INIT STARTED")
+        finally:
+            vm.close()
+        with iso.open("rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == digest, "the ISO changed"
+    print(f"PASS: the hybrid ISO ({digest[:16]}) boots as a USB disk to the shell from its volume at LBA {start}, and as an "
+          "IDE CD-ROM through El Torito, its loader reading and checking the kernel and the services; the ISO unchanged", flush=True)
+
+
 def ahci_suite(vm):
     baseline = heap_used(vm)
     services = vm.services()
@@ -10822,11 +10876,13 @@ def hda_suite(args):
 def usbaudio_suite(args):
     """000-DRV-0073: a USB Audio Class 1 device in audio_gw. QEMU's usb-audio (UAC1, 48 kHz stereo playback) on an xHCI
     of its own: usb_host streams its isochronous OUT endpoint, the gateway takes it in the codec's place, and beep's
-    packets go out on it while beep plays; unplugged, the codec comes back."""
+    packets go out on it while beep plays; unplugged, the codec comes back. 000-DRV-0080: a second one plugged in beside
+    it is the one that plays, and the first plays again once the second is gone."""
     with tempfile.TemporaryDirectory(prefix="mind-uac-") as temp:
-        wav = Path(temp) / "usb.wav"
+        wav, wav2 = Path(temp) / "usb.wav", Path(temp) / "usb2.wav"
         vm = VM(args, IMAGE, audio="none", audio_card="HDA",
-                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
+                extra=["-audiodev", f"wav,id=usnd,path={wav}", "-audiodev", f"wav,id=usnd2,path={wav2}",
+                       "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=usnd,id=uac"])
         try:
             log = ""
             for _ in range(20):
@@ -10851,6 +10907,34 @@ def usbaudio_suite(args):
             assert stopped and int(stopped[1]) > 500, log
             usb = vm.service_logs("usb_host", "STREAMS OUT")
             require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            # A device plugged in beside it is the one used; the first waits, and comes back when that one goes.
+            vm.qmp("device_add", driver="usb-audio", bus="axhci.0", audiodev="usnd2", id="uac2")
+            waits, again = "WAITS: A DEVICE SET UP AFTER IT IS USED", "AGAIN: THE DEVICE SET UP AFTER IT WENT"
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", waits)
+                if waits in log:
+                    break
+            require(log, "ATTACHED: PLAYBACK YES")
+            require(log, waits)
+            second = re.search(r"PID=(\d+) NAME=beep BACKGROUND", vm.command("run beep &"))
+            assert second, "beep did not start for the second device"
+            output = ""
+            for _ in range(60):
+                output += vm.command(f"logs {second[1]}")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DONE")
+            time.sleep(2.5)
+            require(vm.service_logs("audio_gw", "USB PLAYBACK STOPPED"), "[AUDIO] USB PLAYBACK STOPPED")
+            vm.qmp("device_del", id="uac2")
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", again)
+                if again in log:
+                    break
+            require(log, again)
             # Unplugged: the gateway goes back to the codec.
             vm.qmp("device_del", id="uac")
             log = ""
@@ -10861,11 +10945,20 @@ def usbaudio_suite(args):
             require(log, "[AUDIO] LEVELS THE CODEC AGAIN")
         finally:
             vm.close()
-        # QEMU 8.2's xHCI ends each isochronous OUT TD with success and no byte taken: usb-audio gets nothing, and its
-        # wav backend keeps a bare header. What the device hears is checked on a real one (the STM-Speaker, the Ryzen).
-        print(f"NOTE: usb-audio's wav holds {wav.stat().st_size} bytes: QEMU's xHCI moves no isochronous OUT data", flush=True)
+        # What the device heard: usb-audio's wav holds beep's tone. With the Isoch TRB written as type 17, QEMU ended each
+        # TD with success and took no byte of it, and the wav kept a bare header (000-DRV-0073).
+        heard = []
+        for file in (wav, wav2):
+            with wave.open(str(file), "rb") as sound:
+                rate, channels, width, frames = sound.getframerate(), sound.getnchannels(), sound.getsampwidth(), sound.readframes(sound.getnframes())
+            assert width == 2, width
+            loud = sum(1 for (sample,) in struct.iter_unpack("<h", frames[: len(frames) & ~1]) if abs(sample) > 1000)
+            assert loud >= rate * channels // 4, f"{file.name}: usb-audio heard {loud} loud samples of {len(frames) // 2} at {rate} Hz: beep's tone did not reach it"
+            heard.append(loud / channels / rate)
     print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
-          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played; unplugged, the codec again", flush=True)
+          f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
+          f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
+          f"unplugged, the codec again", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -19721,6 +19814,9 @@ def main():
         if suite == "ehci":
             ehci_suite(args)
             continue
+        if suite == "iso":
+            iso_suite(args)
+            continue
         if suite == "hda":
             hda_suite(args)
             continue
@@ -19938,12 +20034,22 @@ def main():
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096). The store suite's machine reboots once at
             # its end (309-STO-0031): its RAM disk store starts blank, and the snapshot overlay keeps the boot volume's files.
-            vm = VM(args, disk.relative_to(ROOT).as_posix(),
+            # The ahci suite's disk is a raw image (000-KRN-0267): vvfat's bytes past a file's end change between reads,
+            # and the restarted driver's medium comparison (000-KRN-0085) took that for another medium.
+            image = None
+            if suite == "ahci":
+                if not raw_tools():
+                    print("SKIP: ahci suite needs mkfs.fat and mtools", flush=True)
+                    continue
+                image = Path(tempfile.mkdtemp(prefix="smoke-ahci-", dir=ROOT / IMAGE))
+            vm = VM(args, (raw_fat_image(image)[0] if image else disk).relative_to(ROOT).as_posix(), raw=image is not None,
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
                     extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults"
                     else ["-drive", f"if=none,id=models,format=raw,readonly=on,file={models}", "-device", "virtio-blk-pci,drive=models"] if models else (),
                     tablet=suite == "tablet", usb_input=suite == "usb",
                     reboot=suite == "store")
+            if image:
+                vm.temporary.append(image)
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)

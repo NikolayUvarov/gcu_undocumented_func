@@ -385,11 +385,17 @@ fn main(_info: &'static BootInfo) {
         let now = mind::time::uptime_ms() as u64;
         if watching && now >= jack_due { if let Some(d) = device.as_mut() { d.watch_jack(); } jack_due = now + JACK_MS; }
         // The USB device plugged in: the codec steps aside, its clients' waits answered; gone: the codec comes back.
-        if let Some(Device::Usb(u)) = device.as_mut() { u.check(); }
+        // A USB device set up after the one in use takes its place, and gives it back when it goes (000-DRV-0080).
+        let another = if let Some(Device::Usb(u)) = device.as_mut() { u.check() } else { false };
         if usb.as_mut().is_some_and(|u| u.look()) {
             if let Some(d) = device.as_mut() { d.record_stop(); d.reset(); }
             internal = device.take();
             device = usb.take().map(Device::Usb);
+            owner = None;
+            set = device.as_ref().map(Device::levels);
+            if let Some(l) = &set { l.say("USB DEVICE"); }
+            release(&mut device, &mut waiters, true);
+        } else if another {
             owner = None;
             set = device.as_ref().map(Device::levels);
             if let Some(l) = &set { l.say("USB DEVICE"); }
