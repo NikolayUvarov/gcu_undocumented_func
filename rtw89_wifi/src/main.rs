@@ -285,6 +285,9 @@ fn served(event: receive_service::Event) {
         receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
             mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 5 S MORE (DEBUG)",
                 count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
+        receive_service::Event::Heard5 { channel, bssid: b } =>
+            mind::println!("[RTW89] HEARD {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ON 5 GHZ CHANNEL {} (213-DRV-0087)",
+                b[0], b[1], b[2], b[3], b[4], b[5], channel),
         receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
                 channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),

@@ -55,6 +55,8 @@ pub enum Event {
     /// A send refused on a listen-only channel (213-DRV-0087): no beacon of its receiver heard there since the tune, or a
     /// probe request; logged once a tune.
     ListenOnly { channel: u8, receiver: [u8; 6], heard: usize },
+    /// An access point first heard on a 5 GHz channel in this run (213-DRV-0087), the first HEARD_LOGGED of them.
+    Heard5 { channel: u8, bssid: [u8; 6] },
 }
 
 #[derive(Debug)]
@@ -94,6 +96,7 @@ impl Heard {
     pub(crate) fn at_ms(&self) -> u64 { self.at_ms }
 }
 const HEARD: usize = 16;
+const HEARD_LOGGED: usize = 16;
 
 fn address(value: u64) -> [u8; 6] { core::array::from_fn(|i| (value >> (40 - 8 * i)) as u8) }
 fn packed(value: [u8; 6]) -> u64 { value.into_iter().fold(0, |word, byte| (word << 8) | u64::from(byte)) }
@@ -108,6 +111,8 @@ pub(crate) struct ReceiveOnly {
     set: bool,
     // The access points heard on `channel` since its tune (213-DRV-0087), and whether a refusal was logged since.
     heard: [Option<Heard>; HEARD], told: bool,
+    // The 5 GHz access points logged so far (Event::Heard5), and those heard since the last step, not yet logged.
+    logged: [(u8, [u8; 6]); HEARD_LOGGED], logged_count: usize, fresh: [Option<(u8, [u8; 6])>; 4],
 }
 
 impl ReceiveOnly {
@@ -116,7 +121,8 @@ impl ReceiveOnly {
         Self { mac, channel, filter: Filter::new(mac, true, [0; 6], [0; 6]), limits: None, settings: 0, admits, ask: None,
             frames: [[0; FRAME_BYTES]; FRAMES], lengths: [0; FRAMES], head: 0, count: 0, dropped: 0,
             waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default(),
-            narrow: false, narrowing: None, set: false, heard: [None; HEARD], told: false }
+            narrow: false, narrowing: None, set: false, heard: [None; HEARD], told: false,
+            logged: [(0, [0; 6]); HEARD_LOGGED], logged_count: 0, fresh: [None; 4] }
     }
     pub(crate) fn limits(&self) -> Option<&Limits> { self.limits.as_ref() }
     /// The `set-country` requests taken so far, which number the next.
@@ -154,6 +160,11 @@ impl ReceiveOnly {
         let at_ms = time::monotonic_ns() / 1_000_000;
         let heard = Heard { channel: self.channel, bssid, at_ms };
         if let Some(slot) = self.heard.iter_mut().find(|h| h.is_some_and(|h| h.bssid == bssid) || h.is_none()) { *slot = Some(heard); }
+        let new = (self.channel, bssid);
+        if self.channel > 14 && self.logged_count < HEARD_LOGGED && !self.logged[..self.logged_count].contains(&new)
+            && !self.fresh.contains(&Some(new)) {
+            if let Some(slot) = self.fresh.iter_mut().find(|f| f.is_none()) { *slot = Some(new); }
+        }
     }
 
     fn take(&mut self, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8]) {
@@ -212,6 +223,11 @@ impl ReceiveOnly {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVE, POLL_MS);
         let now = time::monotonic_ns() / 1_000_000;
         if now < self.last_ms { self.fail(Stop::Clock) } else { self.last_ms = now; if let Err(e) = self.progress(session, now) { self.fail(e) } }
+        for fresh in &mut self.fresh {
+            let Some((channel, bssid)) = fresh.take() else { continue };
+            if self.logged_count < HEARD_LOGGED { self.logged[self.logged_count] = (channel, bssid); self.logged_count += 1; }
+            events(Event::Heard5 { channel, bssid });
+        }
         match received {
             Ok(request) => self.dispatch(request, now, events),
             Err(sys::Error::Other(code)) if code == mind::abi::ERR_TIMEOUT => {}

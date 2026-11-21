@@ -86,6 +86,8 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **2026-11-21, DPK on 5 GHz:** `dpk.rs` takes `_dpk_rf_setting`'s 5 GHz branch (RR_RXA2's SWATT, RR_RXA_LNA 0x920FC, RR_XALNA2 0x2C0, RR_IQGEN 0x38800, all three in the RF backup Linux restores) and `_dpk_idl_mpa`'s MDPD order 2 for a 5 GHz channel under 80 MHz; its notices carry the band. No external PA is assumed on either band, as before (`_dpk_bypass_check`'s ePA flags are not read). Host case: channel 100 with those RF values, order 2 on both paths, the BB, KIP and RF backups restored; channels 14, 34 and 178 refused before any write. The 2.4 GHz DPK cases pass unchanged.
 
+**2026-11-21, a line for the bench:** the receive-only service logs the first 16 access points it hears on 5 GHz channels in a run (`[RTW89] HEARD <BSSID> ON 5 GHZ CHANNEL n`), from the same beacons its listen-only rule keeps; host case in the radar-channel case.
+
 **Not done yet:** the coexistence on 5 GHz (role, policy, antenna), anything on the Ryzen.
 
 ## Related
