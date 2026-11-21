@@ -511,3 +511,29 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     assert_eq!(h2c(c,8).len(),joins+1);assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4]);
     drop(service);clean();
 });}
+
+// 213-DRV-0091 step 2: a beacon interval and a millisecond after the link's H2Cs, port 0 is set for INFRA as Linux's
+// rtw89_mac_port_update does; the station's checks then expect it; the deauthentication sets it for no link again.
+#[test]
+fn service_the_link_sets_port_0_for_infra_after_a_beacon_interval(){run(0,true,true,|data,c|{
+    use crate::{btc_session::data_mode::PROBE_MAC,receive_service::Event};
+    let port=|probe:&crate::btc_session::data_mode::Probe|probe.mac[PROBE_MAC.iter().position(|&a|a==0xc400).unwrap()];
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,7,0xc0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{aid:Some(7),after:Some(after),..})=service.take_event()else{panic!("no link")};
+    assert_eq!(port(&after)&0x13e1f,4,"the H2Cs first, the port untouched");
+    ipc::advance(50);assert!(service.step());assert!(service.take_event().is_none(),"not before a beacon interval");
+    ipc::advance(60);assert!(service.step());
+    let Some(Event::Port{channel:6,linked:true,after:Some(after)})=service.take_event()else{panic!("no port")};
+    assert_eq!(port(&after)&0x13e1f,0x1281c,"FUNC_EN, NET_TYPE INFRA, TBTT_PROHIB, BRK_SETUP, BSSID fit, TSF update");
+    // The data mode's checks go on expecting it: steps with traffic run on.
+    for _ in 0..3{c.borrow_mut().incoming.push(packet());ipc::advance(20);assert!(service.step());}
+    assert!(service.take_event().is_none());
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(10,&[8,0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:None,..})));
+    ipc::advance(110);assert!(service.step());
+    let Some(Event::Port{linked:false,after,..})=service.take_event()else{panic!("no port back")};
+    if let Some(after)=after{assert_eq!(port(&after)&0x13e1f,4);}
+    drop(service);clean();
+});}

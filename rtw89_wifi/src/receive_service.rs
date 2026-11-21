@@ -80,6 +80,8 @@ pub enum Event {
     /// The firmware told of the station's link (213-DRV-0091): connected to `bssid` as `aid` (join info and address CAM as
     /// INFRA), or no link again (None); `was`, the AID before; the registers just before and after, the first two times.
     Linked { channel: u8, bssid: [u8; 6], aid: Option<u16>, was: Option<u16>, before: Option<data_mode::Probe>, after: Option<data_mode::Probe> },
+    /// Port 0 set for INFRA (`linked`) or for NO_LINK again (213-DRV-0091 step 2); the registers after, the first times.
+    Port { channel: u8, linked: bool, after: Option<data_mode::Probe> },
     /// The `n`-th hole closed by a beacon, `ms` after the last one before it; the counts since it opened; the registers.
     HoleEnded { n: u32, ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64, probe: Option<data_mode::Probe> },
 }

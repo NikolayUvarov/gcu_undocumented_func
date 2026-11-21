@@ -40,7 +40,9 @@ pub(crate) struct CheckFailure{pub cause:Fault,pub selector_restore:Option<Fault
 pub(crate) struct Failure{pub stage:Stage,pub cause:Cause,pub radio_stop:Option<Fault>,pub port_stop:Option<Fault>,pub selector_restore:Option<Fault>}
 /// One initial client role with MACID/port/CAM zero; this is neither association nor TX permission.
 #[derive(Debug)]
-pub(crate) struct Prepared{attempt:u64,session:u64,channel:u8,policy_version:u64,mac:[u8;6],cmac:[u32;8],filter:Option<Filter>}
+pub(crate) struct Prepared{attempt:u64,session:u64,channel:u8,policy_version:u64,mac:[u8;6],cmac:[u32;8],filter:Option<Filter>,
+    // Port 0 set for INFRA (213-DRV-0091 step 2), which the register checks then expect.
+    linked:bool}
 impl Prepared{
     pub(crate) fn matches(&self,tuned:&channel::Tuned,mac:[u8;6])->bool{
         self.attempt==tuned.attempt&&self.session==tuned.session&&self.channel==tuned.channel
@@ -61,7 +63,7 @@ impl Prepared{
     /// As check_registers, with `filter` the one installed (a reconfiguration checks the new one).
     pub(crate) fn check_registers_for(&self,bus:&mut impl RegisterIo,filter:Option<Filter>)->Result<(),CheckFailure>{
         let selector=io::read32(bus,SELECTOR).map_err(|cause|CheckFailure{cause,selector_restore:None})?;
-        let result=verify(bus,&self.cmac).and_then(|()|if let Some(f)=filter{verify_filter(bus,rx_filter(&f))}else{Ok(())});
+        let result=verify(bus,&self.cmac,port_expected(self.linked)).and_then(|()|if let Some(f)=filter{verify_filter(bus,rx_filter(&f))}else{Ok(())});
         let restore=select(bus,selector).and_then(|()|bus.delay_us(0)).err();
         match(result,restore){(Ok(()),None)=>Ok(()),(Err(cause),selector_restore)=>Err(CheckFailure{cause,selector_restore}),
             (Ok(()),Some(cause))=>Err(CheckFailure{cause,selector_restore:Some(cause)})}
@@ -142,6 +144,24 @@ fn select(bus:&mut impl RegisterIo,address:u32)->io::Result<()>{
     bus.write32(SELECTOR,address)?;let value=io::read32(bus,SELECTOR)?;
     if value!=address{return Err(fault(SELECTOR,value));}Ok(())
 }
+// PORT_CFG_P0's fields (reg.h): those checked, and what Linux's rtw89_mac_port_update (mac.c) sets for INFRA where it
+// sets nothing for NO_LINK: NET_TYPE (11:10) INFRA, TBTT_PROHIB_EN (13) and BRK_SETUP (16) by rtw89_mac_port_cfg_bcn_prct,
+// RX_BSSID_FIT_EN (4) by rtw89_mac_port_cfg_rx_sw, TSF_UDT_EN (3) by rtw89_mac_port_cfg_rx_sync_by_nettype.
+const PORT_CHECKED:u32=0x13e1f;
+const PORT_FUNC_EN:u32=1<<2;
+const PORT_INFRA:u32=2<<10|1<<13|1<<16|1<<4|1<<3;
+fn port_expected(linked:bool)->u32{PORT_FUNC_EN|if linked{PORT_INFRA}else{0}}
+/// Linux's rtw89_mac_port_update of a port whose function is on (213-DRV-0091 step 2), for INFRA or for NO_LINK again:
+/// rtw89_mac_port_cfg_func_sw turns the function off, resets the TSF and the beacon count (its wait of a beacon
+/// interval before that is the caller's), the fields are set for the link, the function on again, and after
+/// BCN_ERLY_SET_DLY (20 us) the beacon-early time and BCN_PSR_RPT's BSSID index. The beacon timing the station stage set
+/// (setup, hold, mask area, interval 100 TU, TBTT early) is the same for both.
+pub(crate) fn port_link(bus:&mut impl RegisterIo,linked:bool)->io::Result<()>{
+    field(bus,PORT,PORT_FUNC_EN|1<<16,0)?;io::modify32(bus,PORT,1<<5,1<<5)?;bus.write32(0xc434,0)?;
+    field(bus,PORT,0x13c1b,if linked{PORT_INFRA}else{0})?;
+    field(bus,PORT,PORT_FUNC_EN,PORT_FUNC_EN)?;bus.delay_us(20)?;
+    field(bus,0xc40c,0xfff,160)?;field(bus,0xce84,0x7ff,0)?;bus.delay_us(0)
+}
 fn port(bus:&mut impl RegisterIo)->io::Result<()>{
     field(bus,PORT,0x13c1b,0)?;
     field(bus,0xc414,0xffff,100)?;field8(bus,0xc590,0xff,0)?;
@@ -198,8 +218,8 @@ fn control(antenna:u8)->([u8;68],[u32;8]){
     for i in 0..8{expected[i]=(expected[i]&!words[i+9])|words[i+1];}
     let mut out=[0;68];encode(words,&mut out);(out,expected)
 }
-fn verify(bus:&mut impl RegisterIo,expected:&[u32;8])->io::Result<()>{
-    for(at,mask,wanted)in[(PORT,0x13e1f,4),(0x9eb0,1,0),(0xc660,0x30,0x10)]{
+fn verify(bus:&mut impl RegisterIo,expected:&[u32;8],port_cfg:u32)->io::Result<()>{
+    for(at,mask,wanted)in[(PORT,PORT_CHECKED,port_cfg),(0x9eb0,1,0),(0xc660,0x30,0x10)]{
         let value=io::read32(bus,at)?;if value&mask!=wanted{return Err(fault(at,value));}}
     // Firmware owns unrelated control words after ROLE/JOIN; validate the fields written by this CCTL command.
     select(bus,CMAC)?;
@@ -240,9 +260,9 @@ pub(crate) fn prepare<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Bo
         stage=Stage::Join;command(phy.bus_between_stages(),8,0,&join_info(false),true,deadline)?;
         stage=Stage::Cam;command(phy.bus_between_stages(),6,0,&cam(board.identity.mac,[0;6]),true,deadline)?;
         stage=Stage::Control;command(phy.bus_between_stages(),5,2,&payload,true,deadline)?;
-        stage=Stage::Verify;phy.bus_between_stages().registers(deadline,|bus|{verify(bus,&expected)?;select(bus,selector)})?;
+        stage=Stage::Verify;phy.bus_between_stages().registers(deadline,|bus|{verify(bus,&expected,port_expected(false))?;select(bus,selector)})?;
         live(phy,board,owner,start)?;
-        Ok(Prepared{attempt,session,channel:tuned.channel,policy_version:tuned.policy_version,mac:board.identity.mac,cmac:expected,filter:None})
+        Ok(Prepared{attempt,session,channel:tuned.channel,policy_version:tuned.policy_version,mac:board.identity.mac,cmac:expected,filter:None,linked:false})
     })();
     match result{Ok(value)=>Ok(value),Err(cause)=>{
         let radio_stop=phy::disable_bb_rf(phy.bus_between_stages()).err();phy.mark_failed();
