@@ -12450,11 +12450,13 @@ def wifi_join_check(vm):
                 break
             time.sleep(1)
         require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
-        # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
-        for _ in range(3):
+        # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU); more while
+        # the stack has the link back only on its next check, its lease held through the link down (801-NET-0089).
+        for _ in range(6):
             pinged = vm.command("wifiping ping:10.0.4.1")
             if "NETCHECK ping:10.0.4.1 OK" in pinged:
                 break
+            time.sleep(1)
         require(pinged, "NETCHECK ping:10.0.4.1 OK")
         return shown
 
@@ -12760,6 +12762,78 @@ def dhcp_sent(pcap):
     return sent
 
 
+class _Sink:
+    """A TCP server on the host's loopback that counts the bytes each connection sent, in the order they came."""
+    def __init__(self):
+        self.server = socket.socket()
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(4)
+        self.port = self.server.getsockname()[1]
+        self.counts = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            self.counts.append(0)
+            threading.Thread(target=self._read, args=(connection, len(self.counts) - 1), daemon=True).start()
+
+    def _read(self, connection, index):
+        with connection:
+            try:
+                while data := connection.recv(4096):
+                    self.counts[index] += len(data)
+            except OSError:
+                pass
+
+
+def held_link_check(vm, sink):
+    """801-NET-0089: a card whose link is down for a few seconds keeps its lease and its connections: a connection
+    netcheck holds goes on, and what it sent while the link was down reaches the host. Down past 30 s, the address
+    goes and the connection is aborted, as before."""
+    try:
+        def holder(seconds):
+            pid = int(re.search(r"PID=(\d+) NAME=netcheck", vm.command(f"run netcheck hold:10.0.2.2:{sink.port}:{seconds} &"))[1])
+            vm.program_logs(pid, "NETCHECK HOLDING", 40)
+            return pid
+        pid = holder(20)
+        vm.hmp("set_link n0 off")
+        held = r"\[NETSTACK\] CARD 0 LINK DOWN: ADDRESS AND [1-9]\d* CONNECTIONS HELD FOR 30 S"  # netcheck's, and any service's
+        assert re.search(held, log := vm.service_logs("netstack", "HELD FOR")), log[-2000:]
+        time.sleep(3)
+        vm.hmp("set_link n0 on")
+        back = vm.service_logs("netstack", "BACK ON ITS NETWORK")
+        kept = re.search(r"\[NETSTACK\] CARD 0 BACK ON ITS NETWORK AFTER (\d+) MS: ADDRESS AND [1-9]\d* CONNECTIONS KEPT", back)
+        assert kept, back[-2000:]
+        require(vm.program_logs(pid, f"NETCHECK hold:10.0.2.2:{sink.port}:20 ", 160), f"NETCHECK hold:10.0.2.2:{sink.port}:20 OK")
+        deadline = time.monotonic() + 30
+        while sink.counts[-1:] != [20]:  # one byte a second, those sent while the link was down sent again after
+            assert time.monotonic() < deadline and len(sink.counts) == 1, sink.counts
+            time.sleep(.5)
+        # Down past the hold: the address goes, and the connection is aborted.
+        pid = holder(90)
+        vm.hmp("set_link n0 off")
+        assert re.search(held, log := vm.service_logs("netstack", "HELD FOR")), log[-2000:]
+        time.sleep(31)
+        log = vm.service_logs("netstack", "LINK STILL DOWN")
+        assert re.search(r"\[NETSTACK\] CARD 0 LINK STILL DOWN AFTER 30 S: ADDRESS DROPPED, [1-9]\d* CONNECTIONS ABORTED", log), log[-2000:]
+        ended = vm.program_logs(pid, f"NETCHECK hold:10.0.2.2:{sink.port}:90 ", 80)
+        assert re.search(fr"NETCHECK hold:10\.0\.2\.2:{sink.port}:90 (?!OK)\w+", ended), ended
+        vm.hmp("set_link n0 on")
+        log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
+        require_all(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP", "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+        if "DEFAULT ROUTE: CARD 0" not in log:
+            require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
+    finally:
+        sink.server.close()
+    print(f"PASS: a link down 3 s kept card 0's lease and the connection netcheck held, every byte reaching the host, its lease "
+          f"confirmed {kept[1]} ms after the link went down (801-NET-0089); down past 30 s, the address dropped and the "
+          "connection aborted", flush=True)
+
+
 def dhcp_name_check(vm, pcap):
     """000-NET-0050: netstack sends the machine's name as option 12 in each DISCOVER and REQUEST, read from
     data/machine/name through init's read-only scope; a name changed later goes out with the next lease."""
@@ -12770,9 +12844,9 @@ def dhcp_name_check(vm, pcap):
     require(vm.command("write data/machine/name lab-2"), "WROTE 6 BYTES")
     before = len(sent)
     vm.hmp("set_link n0 off")
-    require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+    require(vm.service_logs("netstack", "LINK DOWN"), "[NETSTACK] CARD 0 LINK DOWN: ADDRESS AND ")
     vm.hmp("set_link n0 on")
-    log = vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15/24")
+    log = vm.service_logs("netstack", "BACK ON ITS NETWORK")  # the held lease asked for again (801-NET-0089)
     require(log, "[NETSTACK] NAME FOR DHCP: lab-2 (data/machine/name)")
     deadline = time.monotonic() + 30
     while {kind for kind, _ in dhcp_sent(pcap)[before:]} < {1, 3}:
@@ -13013,8 +13087,9 @@ def net_suite(args, disk):
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
     # and one driver's restart leaves the other card working and gives the new instance its own card back. netcheck
     # sends datagrams to a TEST-NET address, on neither card's network, to show which card is the default (550-NET-0025).
+    sink = _Sink()  # held_link_check's connections
     with open(disk / "netpolicy.txt", "a") as policy:
-        policy.write("netcheck 192.0.2.1 udp 9\n")
+        policy.write(f"netcheck 192.0.2.1 udp 9\nnetcheck 10.0.2.2 tcp {sink.port}\n")
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
     web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
@@ -13040,16 +13115,18 @@ def net_suite(args, disk):
         assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
         require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
         assert frames()[0][0] - after[0][0] >= 3, (after, frames())
-        # A card's link down and up again (550-NET-0023): its address and its connections go, the default route moves
-        # to the other card; back up, it gets a lease again and the default route returns.
+        # A card's link down and up again (550-NET-0023): the default route moves to the other card; back up, its lease
+        # is asked for again and the default route returns. A lease held through it (801-NET-0089): the same address.
         vm.hmp("set_link n0 off")
         log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
-        require(log, "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+        assert re.search(r"\[NETSTACK\] CARD 0 LINK DOWN: ADDRESS AND \d+ CONNECTIONS HELD FOR 30 S", log), log[-2000:]
         require(vm.command(f"fetch 10.0.3.2:{web_port} /while-down"), "hello from the host: /while-down")
         vm.hmp("set_link n0 on")
-        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
-        require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
+        log = vm.service_logs("netstack", "BACK ON ITS NETWORK")
+        require_all(log, "[NETSTACK] CARD 0 LINK UP, ASKING DHCP WHETHER 10.0.2.15 IS STILL ITS ADDRESS", "DEFAULT ROUTE: CARD 0",
+                    "[NETSTACK] CARD 0 BACK ON ITS NETWORK AFTER ")
         require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
+        held_link_check(vm, sink)
         # The default card (550-NET-0025): wired cards before the station, the first with a gateway; the policy's
         # `default card 1` makes card 1 the default while its link is up, and the rule takes over while it is down.
         def default_sends(card):
