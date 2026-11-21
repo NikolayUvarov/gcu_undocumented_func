@@ -4338,15 +4338,13 @@ def files_check(vm, pid):
 
 
 def iso_suite(args):
-    """352-UPD-0047, 352-KRN-0268: the hybrid ISO make_iso.py makes of this build, booted as an IDE CD-ROM and, the same
-    file, as a USB disk. OVMF starts the loader from the El Torito entry either way (on a disk too, ahead of the MBR),
+    """352-UPD-0047, 352-KRN-0268: the hybrid ISO make_iso.py makes of this build, booted as a CD-ROM (IDE on x86, SCSI
+    on aarch64's virt) and, the same file, as a USB disk. The firmware (OVMF, AAVMF) starts the loader from the El Torito
+    entry either way (on a disk too, ahead of the MBR),
     larger than the entry's 16-bit count. The loader reads the kernel and the services from that volume, checked against
     the signed manifest, then the whole volume into memory: ramdisk#2 serves it read-only, and vfs_server mounts it as the
     boot volume, the one holding the manifest the loader verified. Programs run from it. The ISO's bytes are the same after
     both boots."""
-    if args.arch != "x86_64":
-        print("SKIP: the iso suite is x86 for now (352-UPD-0047)", flush=True)
-        return
     if not raw_tools():
         print("SKIP: iso suite needs mkfs.fat and mtools", flush=True)
         return
@@ -4356,17 +4354,20 @@ def iso_suite(args):
     with tempfile.TemporaryDirectory(prefix="smoke-iso-", dir=ROOT / IMAGE) as temp:
         temp = Path(temp)
         volume, iso = temp / "boot.img", temp / "mind.iso"
-        make_iso.boot_volume(read_payloads(ROOT / IMAGE, "x86_64"), volume, when)
-        digest = make_iso.write_iso(volume, iso, when, "x86_64")
+        make_iso.boot_volume(read_payloads(ROOT / IMAGE, args.arch), volume, when)
+        digest = make_iso.write_iso(volume, iso, when, args.arch)
         kb = volume.stat().st_size // 1024
         volume.unlink()
         blank = temp / "blank.img"
         with blank.open("wb") as f:
             f.truncate(16 << 20)
         cd = iso.relative_to(ROOT).as_posix().replace(",", ",,")
+        # x86: an IDE CD-ROM on the PC's own controller; aarch64's virt has none, so a SCSI CD-ROM on virtio-scsi.
+        drive = ["-drive", f"file={cd},format=raw,media=cdrom,readonly=on,if=none,id=cd"]
+        cdrom = ([*drive, "-device", "ide-cd,drive=cd,bootindex=0"] if args.arch == "x86_64" else
+                 ["-device", "virtio-scsi-pci,id=scsi", *drive, "-device", "scsi-cd,drive=cd,bus=scsi.0,bootindex=0"])
         machines = {
-            "an IDE CD-ROM": dict(disk=blank.relative_to(ROOT).as_posix(), raw=True,
-                                  extra=["-drive", f"file={cd},format=raw,media=cdrom,readonly=on,if=none,id=cd", "-device", "ide-cd,drive=cd,bootindex=0"]),
+            "a CD-ROM": dict(disk=blank.relative_to(ROOT).as_posix(), raw=True, extra=cdrom),
             "a USB disk": dict(disk=iso.relative_to(ROOT).as_posix(), usb=True),
         }
         for what, options in machines.items():
@@ -4388,7 +4389,7 @@ def iso_suite(args):
                 vm.close()
         with iso.open("rb") as f:
             assert hashlib.sha256(f.read()).hexdigest() == digest, "the ISO changed"
-    print(f"PASS: the hybrid ISO ({digest[:16]}) boots as an IDE CD-ROM and as a USB disk through El Torito; its loader reads "
+    print(f"PASS: the hybrid ISO ({digest[:16]}, {args.arch}) boots as a CD-ROM and as a USB disk through El Torito; its loader reads "
           f"and checks the kernel and the services, then the whole volume ({kb} KB) into memory, which ramdisk#2 serves "
           "read-only and vfs_server mounts as the boot volume; programs run from it, a write is refused, the ISO unchanged", flush=True)
 
