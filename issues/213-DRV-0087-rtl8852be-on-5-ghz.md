@@ -82,7 +82,9 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **2026-11-21, IQK on 5 GHz:** `iqk.rs` takes the band of the tuned channel: `_lok_res_table`'s 5 GHz entry, `_iqk_txk_setting`'s 5 GHz branch (XGLNA2, BIASA, LUTWA 0x80), LOK's GR1 of 4, `_txk_group_sel`'s `_a_` track ranges and ITQT, `_rxk_group_sel`'s `_a_` gains on RR_RXA2's HATT and CC2 with RXK's 5 GHz select, RF18 checked with its band fields, IQKCH's band field, RX DCK and the BTC notices with the band in their phy map. Host case: channel 100 runs both paths' 26 one-shots with each of those values and restores the RF backups; a 2.4 GHz RF18 refuses it before any command. The 2.4 GHz IQK cases pass unchanged.
 
-**Not done yet:** TSSI and DPK on 5 GHz, the coexistence on 5 GHz, anything on the Ryzen.
+**2026-11-21, TSSI on 5 GHz:** `scripts/hardware/rtw89_tssi_tables.py` also extracts `rtw8852b_tssi_sys_{a,b}_defs_5g`, `slope_{a,b}_defs_5g`, the six `align_{a,b}_5g{1,2,3}_all_defs` and the three sub-band rows of `_txpwr_track_delta_swingidx_5g{a,b}_{n,p}` from the same pinned files (`--check` reproduces `tssi_tables.rs`). `phy/tssi.rs` takes RR_TXPOW's TXA on 5 GHz, the band's system and slope tables, the sub-band's alignment and thermal tables, the sub-band's gain offset and no BTG in the PMAC samples, leaves CCK's CCA disabled after a PMAC stop on 5 GHz (`rtw8852bx_bb_set_pmac_tx`), and writes the DE from Linux's OFDM, trim and CCK groups (`_tssi_get_ofdm_group` with its averaged extra groups, `_tssi_get_trim_group`); its notices carry the band. Host cases: the groups of every channel against Linux's tables (the 2.4 GHz ones as before), the 5 GHz thermal rows, and the engine on channel 100 with TXA, the 5 GHz system and alignment values, no BTG and CCA kept off. The 2.4 GHz TSSI cases pass unchanged.
+
+**Not done yet:** DPK on 5 GHz, the coexistence on 5 GHz, anything on the Ryzen.
 
 ## Related
 
