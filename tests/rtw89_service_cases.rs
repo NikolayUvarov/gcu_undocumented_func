@@ -15,7 +15,8 @@ fn service_info_advertises_only_the_actual_admitted_2g20_channel(){run(0,true,tr
     ipc::reset();let mut service=Service::new(data).unwrap();let id=ipc::buffer(1,&[]);assert!(service.step());
     let(words,bytes)=ipc::response(id).unwrap();assert_eq!(words[0]&255,0);let mut r=Reader::new(&bytes[..words[0]>>16]);
     let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());assert_eq!(info.mac,0x020304050607);
-    assert_eq!(info.bands,5);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
+    // bands 7 since 213-DRV-0087: 2.4 GHz, its OFDM, and 5 GHz; the radio's own channels include the 5 GHz ones.
+    assert_eq!(info.bands,7);assert_eq!(info.supported.len(),41);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
     assert_eq!(ipc::dropped(id),1);let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
 
@@ -360,4 +361,27 @@ fn service_a_run_of_unacknowledged_sends_is_logged_once(){run(0,true,true,|data,
     // An acknowledgement ends the run; the next run is logged again.
     c.borrow_mut().unacked=false;let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());words(sent);
     let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});}
+
+// 213-DRV-0087: in data mode on a listen-only channel (100 here), sends go to the admitted access point alone while its
+// beacon is heard: no probe request, nothing to another receiver, nothing after LISTEN_BEACON_MS of silence; no CCK rate.
+#[test]
+fn service_on_a_listen_only_channel_sends_to_the_heard_access_point_alone(){run_at(5500,0,true,true,|data,c|{
+    ipc::reset();let now=ipc::clock()/1_000_000;let ap=[2,1,1,1,1,1];
+    let mut service=Service::new(data).unwrap().listening_to(ap,now);
+    let info=ipc::buffer(1,&[]);assert!(service.step());let(w,b)=ipc::response(info).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let info=wlanhw::Info::decode(&mut r).unwrap();assert_eq!((info.channel,info.bands),(100,7));
+    let cck=ipc::buffer(4,&body(&frame(),2,1));assert!(service.step());error(cck,wlanhw::Error::Invalid);
+    let mut probe=frame();probe[0]=0x40;probe[4..10].fill(0xff);
+    let id=ipc::buffer(4,&body(&probe,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    let mut other=frame();other[4..10].copy_from_slice(&[2,9,9,9,9,9]);
+    let id=ipc::buffer(4,&body(&other,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,0,"nothing published for the refused sends");
+    let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let info=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(words(sent)[1],0,"to the access point: sent");ipc::response(info).unwrap();
+    assert_eq!(c.borrow().published,1);
+    // Its beacon unheard for longer than the station's silence: nothing more is sent there.
+    ipc::advance(crate::service::LISTEN_BEACON_MS+1);
+    let late=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(late,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,1);drop(service);clean();
 });}

@@ -55,9 +55,22 @@ fn receive_only_listen_hears_each_bssid_once_with_ssid_and_ds_channel() {
     });
 }
 
+// 213-DRV-0087: the listen on channel 100, where the bench's 5 GHz network is; a 5 GHz beacon carries no DS channel.
+#[test]
+fn a_receive_only_listen_on_channel_100_hears_its_beacons() {
+    let a = [2, 0x11, 0x22, 0x33, 0x44, 0x8c];
+    run(5500, vec![management(8, a, &[0, 3, b'n', b'e', b't', 1, 1, 0x8c])], |d, result, heard| {
+        let listened = result.unwrap();
+        assert_eq!(listened.channel, 100); assert_eq!(listened.tally.beacons, 1);
+        assert_eq!(heard.len(), 1); assert_eq!((heard[0].bssid, heard[0].ssid()), (a, &b"net"[..]));
+        assert_eq!(d.inner.get(0x10734, 4) >> 16 & 255, 0x30);
+    });
+}
+
 #[test]
 fn a_frequency_outside_channels_one_to_thirteen_is_refused_before_any_command() {
-    for center in [2484, 2413, 5180] { run(center, Vec::new(), |d, result, heard| {
+    // Neither channel 14, nor off the raster, nor a 5 GHz number the radio does not have (34, 182).
+    for center in [2484, 2413, 5170, 5502, 5910] { run(center, Vec::new(), |d, result, heard| {
         assert!(matches!(result.unwrap_err().cause, Cause::Policy)); assert!(heard.is_empty());
         assert!(d.inner.normal_packets.is_empty()); assert_eq!(d.inner.get(0xce20, 4) & SCAN_OPEN, SCAN_OPEN);
     }); }

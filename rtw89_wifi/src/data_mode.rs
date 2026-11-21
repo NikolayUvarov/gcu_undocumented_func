@@ -383,9 +383,10 @@ fn radio(bus:&mut impl RegisterIo,channel:u8)->io::Result<()>{
     require(bus,R_AX_WLRF_CTRL,B_AX_AFC_AFEDIG,B_AX_AFC_AFEDIG)?;
     let cycle=bus.read8(0x8040)?;
     if cycle==u8::MAX||cycle&15!=15{return Err(Fault::new(FaultKind::PowerState,0x8040,u32::from(cycle)))}
-    require(bus,crate::phy::PHY_BASE+0x734,0x00ff0000,u32::from(channel)<<16)?;
-    // RF18's direct copy reads back only its CH field on the Ryzen (2026-11-04).
-    for path in 0..2{for (at,mask,expected) in [(0x18,0x3ffff,0x1c00|u32::from(channel)),(0x10018,255,u32::from(channel))]{
+    require(bus,crate::phy::PHY_BASE+0x734,0x00ff0000,crate::phy::channel::channel_index(channel)<<16)?;
+    // RF18's direct copy reads back only its CH field on the Ryzen (2026-11-04); on 5 GHz RF18 has its band fields too.
+    let band=if channel>14{0x10100}else{0};
+    for path in 0..2{for (at,mask,expected) in [(0x18,0x3ffff,0x1c00|band|u32::from(channel)),(0x10018,255,u32::from(channel))]{
         let actual=crate::phy::rf_read(bus,path,at,mask)?;
         if actual!=expected{return Err(Fault::new(FaultKind::PowerState,at as usize,actual))}
     }}Ok(())

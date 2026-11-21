@@ -33,7 +33,7 @@ impl Context {
     pub(crate) fn runtime<T:Transport>(&mut self,transport:&mut T,attempt:u64,session:u64,channel:u8,deadline:u64)->Result<Progress,Error>{
         use crate::btc_codec::Policy;
         if attempt==0||session==0||self.attempt!=attempt||self.session!=session||self.rfk.is_some()
-            ||self.connection!=Connection::Reported||!matches!(self.policy,Policy::NoLink|Policy::Station)
+            ||self.connection!=Connection::Reported||!matches!(self.policy,Policy::NoLink|Policy::Station|Policy::Station5g)
             ||self.station.is_some_and(|c|c!=channel){return Err(Error::Order)}
         Self::radio_active(transport,deadline)?;self.events(transport,deadline)?;
         if self.station.is_none(){self.connect(transport,channel,deadline)?;}
@@ -44,7 +44,7 @@ impl Context {
             transport.validate_owner(remaining)?;left(transport,deadline)?;return Ok(Progress::Stable)
         }
         self.dirty=false;
-        let desired=if self.bt.state().enabled{Antenna::NoLink}else{Antenna::WlanOnly};
+        let desired=if self.five{Antenna::Wlan5g}else if self.bt.state().enabled{Antenna::NoLink}else{Antenna::WlanOnly};
         let applied=transport.registers(deadline,|b|btc_control::antenna_runtime(b,desired,100_000))?;
         self.common(transport,false,deadline)?;
         // Runtime batches yield under continuous valid traffic; startup's empty-ring drain remains a separate contract.

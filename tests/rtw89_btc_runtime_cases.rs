@@ -109,3 +109,17 @@ fn runtime_tells_the_coexistence_of_the_connected_station_once(){run(0,true,true
     let c=c.borrow();assert_eq!(sent(&c,5,&[1,64,1,1,2,0,1,0,1,6]),1);assert_eq!(sent(&c,10,&[1,6,32]),1);
     assert!(c.coex_packets.len()>=count);
 });}
+
+// 213-DRV-0087: admitted on channel 100, the whole calibration and data mode in the models; the first reconcile tells the
+// coexistence what Linux's _action_wl_5g does: the 5G role (link mode 9, band 1), antenna W5G, OFF_EQ0, AFH off.
+#[test]
+fn runtime_tells_the_coexistence_of_a_5_ghz_station_as_linux(){run_at(5500,0,true,true,|data,c|{
+    assert_eq!(data.channel(),100);
+    c.borrow_mut().bt=Some(BT);data.poll_packets(100_000).unwrap();
+    let sent=|c:&Control,id:u8,body:&[u8]|c.coex_packets.iter().filter(|p|p[1]==id&&p.len()>=8+body.len()&&&p[8..8+body.len()]==body).count();
+    let c=c.borrow();
+    assert_eq!(sent(&c,5,&[1,64,1,9,2,0,0x41,0,1,100]),1,"the station's 5 GHz role");
+    assert_eq!(sent(&c,3,&[1,10,1,0,100,0,0xff,0xff,0xff,0xff,0,0]),1,"OFF_EQ0");
+    assert_eq!(sent(&c,10,&[0,0,32]),c.coex_packets.iter().filter(|p|p[1]==10).count(),"AFH off, never around the channel");
+    assert_eq!(sent(&c,10,&[1,100,32]),0);
+});}

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 extern crate self as mind;
 #[path="../libmind/src/sha256.rs"]pub mod sha256;
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path="../rtw89_wifi/src/io.rs"]mod io;
 #[path="../rtw89_wifi/src/registers.rs"]mod registers;
 #[path="../rtw89_wifi/src/power.rs"]mod power;

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2019-2022, 2024 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
-//! Private initial 2 GHz/20 MHz MAC/BB/RF/power transaction; channel RFK and TX authorization remain separate.
+//! Private 20 MHz MAC/BB/RF/power transaction, 2.4 and 5 GHz; channel RFK and TX authorization remain separate.
 
 use super::{Phy,PhyIo,State,RegisterPhase,PHY_BASE,Gain,dm,tail,guard,rf_read,rf_write_masked,disable_bb_rf};
-use crate::{board::Board,calibration,channel_policy as defaults,channel_power::{self,Constraints},download::DefaultTables,
-    io::{self,Fault,FaultKind,RegisterIo,TimedIo}};
+use crate::{band::{self,Band,Subband},board::Board,calibration,channel_policy as defaults,channel_power::{self,Constraints},
+    download::DefaultTables,io::{self,Fault,FaultKind,RegisterIo,TimedIo}};
 
 #[path="../calibration_policy.rs"]
 pub(crate) mod calibration_policy;
@@ -23,7 +23,7 @@ impl Rule{
     /// One channel of the station's `set-country`, as `country::Limits` applied it. With no antenna-gain table on the
     /// platform the conducted limit is the EIRP, as Linux's rtw89 without RTAG; this assumes 0 dBi, it does not measure it.
     pub(crate) fn station(code:[u8;2],version:u64,channel:u8,eirp_half_dbm:i8,listen:bool)->Self{
-        Self{country:code,version,center_mhz:2407+5*u16::from(channel),
+        Self{country:code,version,center_mhz:band::center_mhz(channel).unwrap_or(0),
             access:if listen{Access::PassiveOnly}else{Access::InitiateRadiation},eirp_half_dbm,conducted_half_dbm:eirp_half_dbm}
     }
 }
@@ -39,14 +39,15 @@ impl Policy{
     pub(crate) fn resolve(board:&Board,rule:Rule,platform:Platform)->Result<Self,PolicyError>{
         let hint=defaults::board_country(board).map_err(|_|PolicyError::Board)?;
         // `00`, the world, is a country the station may give (wlanhw.wit 1.3); its power group is WORLDWIDE.
+        let channel=band::channel_at(rule.center_mhz).ok_or(PolicyError::Frequency)?;
+        // The country's power group of the channel's band: COUNTRY_REGD's 2.4 GHz column, or its 5 GHz one.
+        let column=if band::band(channel)==Some(Band::Ghz5){1}else{0};
         let group=if rule.country==*b"00"{defaults::Group::WORLDWIDE}
-            else{defaults::country_default(rule.country).ok_or(PolicyError::Country)?.groups[0]};
+            else{defaults::country_default(rule.country).ok_or(PolicyError::Country)?.groups[column]};
         if rule.version==0{return Err(PolicyError::Country);}
         if let defaults::Hint::Programmed(programmed)=hint.hint{
             if programmed.alpha2!=rule.country{return Err(PolicyError::Country);}
         }
-        let delta=rule.center_mhz.checked_sub(2407).ok_or(PolicyError::Frequency)?;
-        if delta%5!=0||!(1..=13).contains(&(delta/5)){return Err(PolicyError::Frequency);}
         if rule.access==Access::Disabled{return Err(PolicyError::Disabled);}
         let Platform::Resolved(mut limits)=platform else{return Err(PolicyError::UnknownPlatform);};
         if !(-64..=63).contains(&rule.eirp_half_dbm)||!(-64..=63).contains(&rule.conducted_half_dbm)
@@ -56,7 +57,7 @@ impl Policy{
         }
         for value in &mut limits.per_ntx{*value=(*value).min(rule.conducted_half_dbm);}
         // The maintainer (2026-11-14): with the country unknown, at most 75 % of the maximum (801-DRV-0071).
-        let channel=(delta/5)as u8;let mut cap=None;
+        let mut cap=None;
         if rule.country==*b"00"{
             let(capped,maximum)=channel_power::unknown_country(group,channel,limits).map_err(|_|PolicyError::Power)?;
             limits=capped;cap=Some(Cap{maximum,limit:capped.per_ntx});
@@ -70,9 +71,8 @@ impl Policy{
     /// Receive-only tuning: world group, lowest limits, version zero; PassiveOnly never admits calibration or packet TX.
     pub(crate) fn passive(board:&Board,center_mhz:u16)->Result<Self,PolicyError>{
         let hint=defaults::board_country(board).map_err(|_|PolicyError::Board)?;
-        let delta=center_mhz.checked_sub(2407).ok_or(PolicyError::Frequency)?;
-        if delta%5!=0||!(1..=13).contains(&(delta/5)){return Err(PolicyError::Frequency);}
-        Ok(Self{country:hint.raw,selected_country:*b"00",plan:hint.raw_channel_plan,version:0,channel:(delta/5)as u8,
+        let channel=band::channel_at(center_mhz).ok_or(PolicyError::Frequency)?;
+        Ok(Self{country:hint.raw,selected_country:*b"00",plan:hint.raw_channel_plan,version:0,channel,
             access:Access::PassiveOnly,eirp_half_dbm:-64,conducted_half_dbm:-64,group:defaults::Group::WORLDWIDE,
             limits:Constraints{per_ntx:[-64;2],per_path:[-64;2]},cap:None})
     }
@@ -113,7 +113,7 @@ impl CalibrationTransmit{
     pub(crate) fn matches(&self,tuned:&Tuned,engine:CalibrationEngine)->bool{
         tuned.access==Access::InitiateRadiation&&self.attempt!=0&&self.session!=0&&self.policy_version!=0
             &&self.attempt==tuned.attempt&&self.session==tuned.session&&self.channel==tuned.channel
-            &&self.policy_version==tuned.policy_version&&self.engine==engine&&(1..=13).contains(&self.channel)
+            &&self.policy_version==tuned.policy_version&&self.engine==engine&&band::band(self.channel).is_some()
             &&tuned.policy_matches(&self.policy)&&self.board_fingerprint==tuned.board_fingerprint
     }
     #[cfg(test)]
@@ -148,10 +148,11 @@ fn scheduler(bus:&mut impl ChannelIo,timeout:u32)->io::Result<()>{
 fn tssi(bus:&mut impl RegisterIo,hold:bool)->io::Result<()>{
     for at in [0x58dc,0x5818,0x78dc,0x7818]{bb(bus,at,1<<30,u32::from(hold))?;}Ok(())
 }
-fn reset(bus:&mut impl RegisterIo,enable:bool)->io::Result<()>{
+// rtw8852b_bb_reset_en: CCK's CCA comes back on 2.4 GHz alone.
+fn reset(bus:&mut impl RegisterIo,enable:bool,band:Band)->io::Result<()>{
     if enable{
         bb(bus,0x1200,0x70000000,0)?;bb(bus,0x3200,0x70000000,0)?;
-        bb(bus,0x704,2,1)?;bb(bus,0x2344,1<<31,0)?;bb(bus,0xc3c,1<<9,0)
+        bb(bus,0x704,2,1)?;if band==Band::Ghz2{bb(bus,0x2344,1<<31,0)?;}bb(bus,0xc3c,1<<9,0)
     }else{
         bb(bus,0x2344,1<<31,1)?;bb(bus,0xc3c,1<<9,1)?;
         bb(bus,0x1200,0x70000000,7)?;bb(bus,0x3200,0x70000000,7)?;
@@ -163,46 +164,73 @@ fn reset_all(bus:&mut impl RegisterIo)->io::Result<()>{
     bb(bus,0x704,2,1)?;bb(bus,0x704,2,0)?;
     bb(bus,0x1200,0x70000000,0)?;bb(bus,0x3200,0x70000000,0)?;bb(bus,0x704,2,1)
 }
-fn mac(bus:&mut impl RegisterIo)->io::Result<()>{
-    io::modify8(bus,0xc010,3,0)?;bus.write32(0xc088,0)?;io::modify8(bus,0xc628,0x13,0x10)?;
-    for(at,mask,wanted)in[(0xc010,3,0),(0xc628,0x13,0x10)]{
+// __rtw8852bx_set_channel_mac: BAND_MODE on 2.4 GHz; on 5 GHz CHECK_CCK_EN and RTS_LIMIT_IN_OFDM6 instead.
+fn mac(bus:&mut impl RegisterIo,band:Band)->io::Result<()>{
+    let rate=if band==Band::Ghz2{0x10}else{0x03};
+    io::modify8(bus,0xc010,3,0)?;bus.write32(0xc088,0)?;io::modify8(bus,0xc628,0x13,rate)?;
+    for(at,mask,wanted)in[(0xc010,3,0),(0xc628,0x13,rate)]{
         let value=bus.read8(at)?;if value==255||value&mask!=wanted{return Err(fault(at,u32::from(value)));}
     }
     let value=io::read32(bus,0xc088)?;if value!=0{return Err(fault(0xc088,value));}Ok(())
 }
 fn average(a:i8,b:i8)->u8{((i16::from(a)+i16::from(b))>>1)as i8 as u8}
-fn gain(bus:&mut impl RegisterIo,g:&Gain)->io::Result<()>{
+// rtw8852bx_set_gain_error: bb_gain_lna/bb_gain_tia's gain_g registers on 2.4 GHz, gain_a's on 5 GHz.
+fn gain(bus:&mut impl RegisterIo,g:&Gain,subband:Subband)->io::Result<()>{
+    let n=subband.bb_gain();
     for p in 0..2{
-        let base=if p==0{0x4678}else{0x475c};
-        for(i,(off,shift))in[(0,16),(0,24),(4,0),(4,8),(4,16),(4,24),(8,0)].into_iter().enumerate(){
-            bb(bus,base+off,255<<shift,g.lna[0][p][i]as u8 as u32)?;
+        let regs:[usize;3]=match(subband.band(),p){(Band::Ghz2,0)=>[0x4678,0x467c,0x4680],(Band::Ghz2,_)=>[0x475c,0x4760,0x4764],
+            (Band::Ghz5,0)=>[0x45dc,0x4660,0x4664],(Band::Ghz5,_)=>[0x4740,0x4744,0x4748]};
+        for(i,(reg,shift))in[(0,16),(0,24),(1,0),(1,8),(1,16),(1,24),(2,0)].into_iter().enumerate(){
+            bb(bus,regs[reg],255<<shift,g.lna[n][p][i]as u8 as u32)?;
         }
-        for i in 0..2{bb(bus,base+8,255<<(16+i*8),g.tia[0][p][i]as u8 as u32)?;}
+        for i in 0..2{bb(bus,regs[2],255<<(16+i*8),g.tia[n][p][i]as u8 as u32)?;}
     }Ok(())
 }
-fn rpl(bus:&mut impl RegisterIo,g:&Gain)->io::Result<()>{
-    let a=|v:[[i8;2];4]|average(v[0][0],v[0][1]);
-    let b=|i|average(g.offset40[0][0][i],g.offset40[0][1][i]);
-    let c=|i|average(g.offset80[0][0][i],g.offset80[0][1][i]);
+fn rpl(bus:&mut impl RegisterIo,g:&Gain,subband:Subband)->io::Result<()>{
+    let n=subband.bb_gain();
+    let a=|v:[[i8;2];4]|average(v[n][0],v[n][1]);
+    let b=|i|average(g.offset40[n][0][i],g.offset40[n][1][i]);
+    let c=|i|average(g.offset80[n][0][i],g.offset80[n][1][i]);
     let value=u32::from_le_bytes([0,a(g.offset20),b(0),b(1)]);
     for at in [0x49b0,0x4a00]{bb(bus,at,0xffffff00,value>>8)?;}
     for(at,value)in[(0x49b4,[b(2),c(0),c(1),c(10)]),(0x4a04,[b(2),c(0),c(1),c(10)]),
         (0x49b8,[c(2),c(3),c(4),c(9)]),(0x4a08,[c(2),c(3),c(4),c(9)])]{bus.write32(PHY_BASE+at,u32::from_le_bytes(value))?;}Ok(())
 }
-fn baseband(bus:&mut impl RegisterIo,channel:u8,path:u8,cal:&calibration::Calibration,prefix:&dm::Prefix)->io::Result<()>{
+// rtw8852bx_sco_mapping: the SCO compensation of a 20 MHz channel's centre.
+pub(crate) fn sco(channel:u8)->u32{
+    match channel{1=>109,2..=6=>108,7..=10=>107,11..=14=>106,36|38=>51,40..=58=>50,60..=64=>49,100|102=>48,104..=126=>47,
+        128..=151=>46,153..=177=>45,_=>0}
+}
+// rtw89_encode_chan_idx: 2.4 GHz is the channel; 5 GHz a base of 36, 100, 132 or 149 (index 2 to 5) and half the offset.
+pub(crate) fn channel_index(channel:u8)->u32{
+    if channel<=14{return u32::from(channel);}
+    let (index,base)=[(5,149),(4,132),(3,100),(2,36)].into_iter().find(|&(_,b)|channel>=b).unwrap_or((2,36));
+    index<<4|u32::from((channel-base)>>1)
+}
+// __rtw8852bx_set_channel_bb at 20 MHz: CCK's thresholds on 2.4 GHz, the band select, SCO, the TX FIR, the band's gain
+// tables, offsets and RPL, the bandwidth, CCK on or off, on 5 GHz Bluetooth's share of the paths off, the channel index.
+// `restore_btg`: a 2.4 GHz tune after a 5 GHz one puts back the receive path's BTG as the initial tail left it.
+fn baseband(bus:&mut impl RegisterIo,channel:u8,path:u8,cal:&calibration::Calibration,prefix:&dm::Prefix,restore_btg:bool)->io::Result<()>{
     const BARKER:[u32;13]=[0x1cfea,0x1d0e1,0x1d1d7,0x1d2cd,0x1d3c3,0x1d4b9,0x1d5b0,0x1d6a6,0x1d79c,0x1d892,0x1d988,0x1da7f,0x1db75];
     const CCK:[u32;13]=[0x27de3,0x27f35,0x28088,0x281da,0x2832d,0x2847f,0x285d2,0x28724,0x28877,0x289c9,0x28b1c,0x28c6e,0x28dc1];
-    bb(bus,0x23b0,0x7ffff,BARKER[channel as usize-1])?;bb(bus,0x23b4,0x7ffff,CCK[channel as usize-1])?;
-    bb(bus,0x4738,1<<17,1)?;bb(bus,0x4aa4,1<<17,1)?;
-    bb(bus,0x49c0,127,match channel{1=>109,2..=6=>108,7..=10=>107,_=>106})?;
+    let subband=band::subband(channel).ok_or(fault(0,u32::from(channel)))?;let two=subband==Subband::Ghz2;
+    if two{bb(bus,0x23b0,0x7ffff,BARKER[channel as usize-1])?;bb(bus,0x23b4,0x7ffff,CCK[channel as usize-1])?;}
+    bb(bus,0x4738,1<<17,u32::from(two))?;bb(bus,0x4aa4,1<<17,u32::from(two))?;
+    bb(bus,0x49c0,127,sco(channel))?;
     for(i,v)in[0x3d23ff,0x29b354,0xfc1c8,0xfdb053,0xf86f9a,0xfaef92,0xfe5fcc,0xffdff5].into_iter().enumerate(){bb(bus,0x2300+4*i,0xffffff,v)?;}
-    let defaults=super::gain_defaults();gain(bus,&defaults)?;
-    tail::gain_offset(bus,cal,prefix,tail::Subband::Ghz2,path)?;rpl(bus,&defaults)?;
+    let defaults=super::gain_defaults();gain(bus,&defaults,subband)?;
+    tail::gain_offset(bus,cal,prefix,subband,path)?;rpl(bus,&defaults,subband)?;
     bb(bus,0x49c0,0xc0000000,0)?;bb(bus,0x49c4,0x3000,0)?;bb(bus,0x49c4,0xf00,0)?;
     bb(bus,0x12b0,0xfff,0x333)?;bb(bus,0x32b0,0xfff,0x333)?;
     for(at,mask,value)in[(0xc0ec,0x6000,0),(0xc0e4,0x30,2),(0xc1ec,0x6000,0),(0xc1e4,0x30,2)]{bb(bus,at,mask,value)?;}
     if path!=3{bb(bus,if path==1{0x32b0}else{0x12b0},0xfff,0x111)?;}
-    bb(bus,0x700,1<<5,1)?;bb(bus,0x2344,1<<31,0)?;bb(bus,0x734,0x00ff0000,u32::from(channel))?;
+    bb(bus,0x700,1<<5,u32::from(two))?;bb(bus,0x2344,1<<31,u32::from(!two))?;
+    if !two{
+        for(at,mask)in[(0x4738,1<<19),(0x4738,1<<22),(0x4aa4,1<<19),(0x4aa4,1<<22),(0x49c4,1<<14),(0x49c0,0x03c00000),(0x4420,1<<31),(0xc6c,1<<21)]{
+            bb(bus,at,mask,0)?;
+        }
+    }else if restore_btg{tail::btg(bus,path!=1)?;}
+    bb(bus,0x734,0x00ff0000,channel_index(channel))?;
     bb(bus,0x46f8,1<<12,0)?;bb(bus,0x47b8,1<<12,0)?;bb(bus,0x4440,1<<31,0)?;reset_all(bus)
 }
 
@@ -243,10 +271,12 @@ fn rf18(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()>{
     rf_write_masked(bus,path,at,RF_MASK,value)?;
     let actual=rf_read(bus,path,at,255)?;if actual!=value&255{return Err(fault(at as usize,actual));}Ok(())
 }
+// _ch_setting: RF18's channel, and on 5 GHz its two band fields (CFGCH_BAND1_5G, CFGCH_BAND0_5G).
 fn radio(bus:&mut impl RegisterIo,channel:u8,saved:&mut Cleanup)->io::Result<()>{
+    let band_bits=if channel>14{0x10000|0x100}else{0};
     for(path,at)in[(0,0x18),(1,0x18),(0,0x10018),(1,0x10018)]{
         let old=rf_read(bus,path,at,RF_MASK)?;
-        let value=(old&!(0x30000|0xe000|0x300|255|0x1000))|u32::from(channel)|0x1000;
+        let value=(old&!(0x30000|0xe000|0x300|255|0x1000))|u32::from(channel)|band_bits|0x1000;
         if path==0&&at==0x18{arfc(bus,value,saved)?;lock(bus,saved)?;}else{rf18(bus,path,at,value)?;}
         // The lock-status bin is a trigger, never read back (rtw8852b_rfk.c:4098-4099); the Ryzen reads it as 0.
         rf_write_masked(bus,path,0xcf,1,0)?;rf_write_masked(bus,path,0xcf,1,1)?;
@@ -270,7 +300,7 @@ fn cleanup(bus:&mut impl RegisterIo,saved:&Cleanup)->io::Result<()>{
     remember(timed.delay_us(0));first.map_or(Ok(()),Err)
 }
 
-/// Private initial 2 GHz managed-channel stage; the same-band DM prefix and real platform policy are mandatory.
+/// Private 20 MHz managed-channel stage, 2.4 or 5 GHz; the initial 2.4 GHz DM prefix and real platform policy are mandatory.
 /// It leaves ordinary DMA TX and the MAC scheduler stopped; RXDCK/IQK/TSSI/DPK and BTC channel work remain.
 /// A tuned channel may be tuned again (another channel, or the same one under a new policy), as Linux's set_channel.
 pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefix,configured:&tail::Configured,
@@ -281,6 +311,7 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         ||prefix.band!=crate::dack::Band::Ghz2||session==0||configured.session!=session||provenance.session()!=session
         ||board.identity!=phy.identity||policy.country!=board.identity.country||policy.plan!=board.identity.channel_plan
         ||!(1..=3).contains(&configured.rx_path){return Err(fail(fault(0,phy.state as u32)));}
+    let band=band::band(policy.channel).ok_or(fail(fault(0,u32::from(policy.channel))))?;
     let cal=calibration::decode(board).map_err(fail)?;let fingerprint=calibration_policy::board_fingerprint(board);
     let image=channel_power::build(policy.group,policy.channel,policy.limits).map_err(|_|fail(fault(0xd200,0)))?;
     let start=phy.bus.now_us();guard(phy.bus,&phy.identity,RegisterPhase::AfterDack).and_then(|()|{
@@ -294,8 +325,11 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         let timeout=left(phy.bus,start)?.min(1_000_000)as u32;scheduler(phy.bus,timeout)?;pause_complete=true;
         let budget=left(phy.bus,start)?;let mut timed=TimedIo::new(phy.bus,budget);
         stage=Stage::Prepare;field(&mut timed,0xce40,1,0)?;tssi(&mut timed,true)?;bb(&mut timed,0x20fc,0xff000000,15)?;
-        timed.delay_us(40)?;reset(&mut timed,false)?;
-        stage=Stage::Mac;mac(&mut timed)?;stage=Stage::Baseband;baseband(&mut timed,policy.channel,configured.rx_path,&cal,prefix)?;
+        timed.delay_us(40)?;reset(&mut timed,false,band)?;
+        // RF18's band field says the band tuned before: 5 GHz cleared the BTG share that a 2.4 GHz channel uses.
+        let from_5g=rf_read(&mut timed,0,0x18,0x30000)?!=0;
+        stage=Stage::Mac;mac(&mut timed,band)?;stage=Stage::Baseband;
+        baseband(&mut timed,policy.channel,configured.rx_path,&cal,prefix,from_5g&&band==Band::Ghz2)?;
         stage=Stage::Radio;radio(&mut timed,policy.channel,&mut saved)?;
         // The MAC power tables keep 7-bit signed bytes: bit 7 reads back 0 (the Ryzen, 2026-11-04).
         stage=Stage::Power;for w in image.writes(){let old=timed.read32(w.at)?;timed.write32(w.at,(old&!w.mask)|w.bits)?;let value=timed.read32(w.at)?;
@@ -305,7 +339,7 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         // Bits 0-8 are the PPDU report's (Linux's); bit 24 is the hardware's own (the Ryzen, 2026-11-06).
         let actual=io::read32(&mut timed,0xce40)?;if actual&0x1ff!=0x2b{return Err(fault(0xce40,actual));}
         field(&mut timed,0x9c18,3,1)?;
-        bb(&mut timed,0x20fc,0xff000000,0)?;tssi(&mut timed,false)?;reset(&mut timed,true)?;timed.delay_us(0)?;
+        bb(&mut timed,0x20fc,0xff000000,0)?;tssi(&mut timed,false)?;reset(&mut timed,true,band)?;timed.delay_us(0)?;
         stage=Stage::Restore;let timeout=left(phy.bus,start)?.min(1_000_000)as u32;restore_attempted=true;scheduler(phy.bus,timeout)?;
         stage=Stage::Verify;guard(phy.bus,&phy.identity,RegisterPhase::AfterDack)?;left(phy.bus,start)?;Ok(())
     })();

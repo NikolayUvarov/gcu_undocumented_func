@@ -180,3 +180,28 @@ cases (0.00 s), and the saved updated PHY/admission binary passed 171 cases
 (0.89 s), with one inherited private-firmware ignore and no failures. The
 original 7/8 failure remains recorded above. These are register-model and
 packing results, not physical power measurements or calibration authorization.
+
+## 5 GHz at 20 MHz (213-DRV-0087)
+
+The same stage tunes the 5 GHz channels of Linux's `rtw89_channels_5ghz`
+(36 to 177), from the same initial 2.4 GHz DM prefix, as Linux's
+`set_channel` does after its 2.4 GHz start. What changes with the band, all
+from the pinned `05f7e89a` sources:
+
+| Where | 2.4 GHz | 5 GHz | Linux |
+|---|---|---|---|
+| `R_AX_TXRATE_CHK` (0xC628) | `BAND_MODE` | `CHECK_CCK_EN`, `RTS_LIMIT_IN_OFDM6` | `__rtw8852bx_set_channel_mac` |
+| CCK thresholds 0x23B0/0x23B4 | per channel | not written | `rtw8852bx_ctrl_sco_cck` |
+| band select 0x4738/0x4AA4 bit 17 | 1 | 0 | `rtw8852bx_ctrl_ch` |
+| SCO 0x49C0[6:0] | 109 to 106 | 51 to 45 (48 on channel 100) | `rtw8852bx_sco_mapping` |
+| LNA/TIA gain error | `gain_g` registers, band 0 | `gain_a` registers (0x45DC, 0x4660, 0x4664; 0x4740-0x4748), bands 1-3 | `rtw8852bx_set_gain_error` |
+| gain offset, RPL | sub-band 2G | sub-bands 5G low (36-64), middle (100-144), high (149-177) | `rtw8852bx_set_gain_offset`, `_set_rxsc_rpl_comp` |
+| CCK 0x700 bit 5, CCA 0x2344 bit 31 | on, enabled | off, disabled (also after the BB reset) | `rtw8852bx_ctrl_cck_en`, `rtw8852b_bb_reset_en` |
+| Bluetooth's share (0x4738/0x4AA4 bits 19, 22; 0x49C4 bit 14; 0x49C0[25:22]; 0x4420 bit 31; 0xC6C bit 21) | the tail's BTG | all 0 | `__rtw8852bx_set_channel_bb` |
+| channel index 0x734[23:16] | the channel | base index 2-5 and half the offset (0x30 on 100) | `rtw89_encode_chan_idx` |
+| RF18 | channel | channel, `CFGCH_BAND1_5G`, `CFGCH_BAND0_5G` | `_ch_setting` |
+| power image | 2.4 GHz tables, CCK DFIR | 5 GHz tables (CCK's by-rate from 2.4 GHz), no DFIR | `rtw89_phy_set_txpwr_*`, `rtw8852bx_set_tx_shape` |
+
+A 2.4 GHz tune after a 5 GHz one (RF18's band field says which) writes the
+tail's BTG share again, as it was before the 5 GHz tune; Linux does that
+through its coexistence on the band switch.

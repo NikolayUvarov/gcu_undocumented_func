@@ -35,7 +35,7 @@ fn guard<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board,owner:&In
     left(phy.bus_between_stages(),start,0).map(|_|())
 }
 
-/// Same cold PHY/session, initial 2 GHz/20 MHz slot zero only; ordinary TX stays stopped and DMA remains owned.
+/// Same cold PHY/session, a 20 MHz channel on 2.4 or 5 GHz, slot zero only; ordinary TX stays stopped and DMA remains owned.
 /// This does not associate, enable packet transmission, or replace actual RFK power/SAR/regulatory admission.
 pub(crate) fn run<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board,prefix:&dm::Prefix,
     tuned:&channel::Tuned,owner:&Initialized,authorities:Authorities)->Result<Completed,Failure>{
@@ -49,6 +49,7 @@ pub(crate) fn run<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board,
     let start=phy.bus_between_stages().now_us();let mut stage=Stage::Guard;let mut begun=false;let mut ended=false;
     let result=(||{
         guard(phy,board,owner,start)?;
+        phy.bus_between_stages().coexistence_band(tuned.channel>14);
         stage=Stage::ConnectionBegin;let timeout=left(phy.bus_between_stages(),start,0)?.min(CALLBACK_US);begun=true;
         phy.bus_between_stages().connection_rfk(true,timeout).map_err(Cause::Owner)?;
         stage=Stage::Iqk;left(phy.bus_between_stages(),start,6_000_000)?;
