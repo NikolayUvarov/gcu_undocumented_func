@@ -41,6 +41,14 @@ pub(crate) const QUIET_MS:u64=10_000;
 // Unicast sends in a row not acknowledged, over at least UNHEARD_MS: logged once a run, the service goes on.
 pub(crate) const UNHEARD:u32=16;
 pub(crate) const UNHEARD_MS:u64=5_000;
+// 213-DRV-0087: what became of the PPDU status reports is logged this often while it changes.
+const SIGNALS_MS:u64=60_000;
+// 213-DRV-0090: no beacon of the joined BSS for this long, once one was heard, is a hole (they come about ten a second);
+// the first HOLES_PROBED of a run are logged with the registers, and the minute's line has them on its first minute
+// and every PROBE_MINUTES after.
+const HOLE_MS:u64=1000;
+const HOLES_PROBED:u32=12;
+const PROBE_MINUTES:u32=10;
 
 #[derive(Debug)]
 pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTimeout(tx::Seen),UnknownAttempts,RetainedControl,Frame(frames::Error),
@@ -78,7 +86,19 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     checked:Option<u64>,
     // 213-DRV-0087: on a listen-only channel, the access point admitted for and when its beacon was last heard.
     listen:Option<([u8;6],u64)>,
+    // 213-DRV-0087: the frames kept for the station, and when the reports' counts were last logged, as they were then.
+    kept:u64,signals_at:(u64,crate::ppdu::Signals),
+    // 213-DRV-0090: the data mode's count of the joined BSS's beacons when it last moved, then, and the counts then;
+    // whether one was heard since the filter; the hole open since it; the holes so far and the longest; the sends
+    // answered and acknowledged; minutes logged; a line that waits for the event slot.
+    beacons:(u64,u64,Marks),heard_bss:bool,hole:Option<Hole>,holes:(u32,u64),sent:(u64,u64),minutes:u32,later:Option<Event>,
 }
+/// The counts a hole's lines are told against (213-DRV-0090).
+#[derive(Clone,Copy,Default)]
+struct Marks{wifi:u64,kept:u64,ppdu:u64,pressure:u64,sent:u64,acked:u64}
+// An open hole: its number, its last beacon's time, the counts when it was seen, and its first beacon after.
+#[derive(Clone,Copy)]
+struct Hole{n:u32,since:u64,marks:Marks,back:Option<u64>}
 /// On a listen-only channel a send goes to the admitted access point alone, while its beacon was heard within this, half
 /// the station's own silence; after it, and before the beacon comes back, nothing is sent there.
 pub(crate) const LISTEN_BEACON_MS:u64=QUIET_MS/2;
@@ -112,7 +132,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
-            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None})
+            heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
+            beacons:(0,start_ms,Marks::default()),heard_bss:false,hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -162,10 +183,13 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if let Some(call)=self.pending.take().and_then(|p|p.call){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));}
         for waiter in &mut self.waiters{if let Some(waiter)=waiter.take(){let _=wlanhw::reply_wait(waiter.call,0);}}
     }
-    fn collect(&mut self)->Result<(),Fatal>{
+    // `hold`: the last poll gave a receive packet, so another may follow: a frame whose PPDU status report may be next waits
+    // for it in the inbox, as Linux's rx_queue holds a frame for its report (213-DRV-0087), until a poll finds none; the
+    // next step's drain polls again, so it waits a step at most, and no poll is added for it.
+    fn collect(&mut self,hold:bool)->Result<(),Fatal>{
         let data=self.owner.as_deref_mut().unwrap();
         for _ in 0..FRAMES{
-            if self.frames.count==FRAMES{break}
+            if self.frames.count==FRAMES||hold&&data.awaits_signal(){break}
             let Some(record)=data.packet()else{break};
             if record.metadata().channel!=rx::Channel::Rxq||record.metadata().packet.kind!=rxdesc::TYPE_WIFI{return Err(Fatal::RetainedControl)}
             let frame=frames::from_packet(record.metadata().packet,record.buffer()).map_err(Fatal::Frame)?;
@@ -173,8 +197,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let m=frame.mpdu();
                 if m.len()>=24&&matches!(m[0],0x80|0x50)&&m[16..22]==*bssid{*heard=time::monotonic_ns()/1_000_000;}
             }
-            let at=(self.frames.head+self.frames.count)%FRAMES;
+            let at=(self.frames.head+self.frames.count)%FRAMES;let signal=record.signal();
             let length=frame.write(data.channel(),data.current_filter().all_beacons(),&mut self.frames.bytes[at]).map_err(Fatal::Frame)?;
+            self.frames.bytes[at][frames::SIGNAL]=signal;self.kept=self.kept.saturating_add(1);
             self.frames.lengths[at]=length;self.frames.count+=1;data.consume_packet();
         }Ok(())
     }
@@ -198,7 +223,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let mut empty=false;
         for _ in 0..DRAIN{
             let full=self.frames.count==FRAMES;
-            let received=self.data().poll_more(!full,WORK_US).map_err(Fatal::Radio)?;self.collect()?;
+            let received=self.data().poll_more(!full,WORK_US).map_err(Fatal::Radio)?;self.collect(received[0])?;
             if received==[false,false]{empty=!full;break}
             if full{break}
         }
@@ -207,11 +232,11 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         // drops. CHECK_LATEST_MS without them, they are made over a queue that is not empty.
         let since=now.saturating_sub(self.checked.unwrap_or(self.start_ms));
         if (self.checked.is_none()||since>=CHECK_MS)&&(empty||since>=CHECK_LATEST_MS){
-            self.checked=Some(now);self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect()?;
+            self.checked=Some(now);let received=self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect(received[0])?;
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
-        self.listened(now)?;
+        self.listened(now)?;self.holes(now);self.signals(now);
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
             if waiter.as_ref().is_some_and(|w|waiting!=0||now>=w.deadline){
@@ -233,6 +258,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
     fn ended(&mut self,unicast:bool,acked:bool,now:u64){
         self.quiet.0=self.quiet.0.saturating_add(1);if acked{self.quiet.1=self.quiet.1.saturating_add(1);}
+        self.sent.0=self.sent.0.saturating_add(1);if acked{self.sent.1=self.sent.1.saturating_add(1);}
         if !unicast{return}
         if acked{self.unacked=(0,0,false);return}
         if self.unacked.0==0{self.unacked.1=now;}self.unacked.0=self.unacked.0.saturating_add(1);
@@ -250,6 +276,56 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let stall=Stall{quiet_ms,frames,sent:self.quiet.0,acked:self.quiet.1};
         if self.event.is_none(){self.event=Some(Event::Stalled{channel:self.data().channel(),quiet_ms,frames,sent:stall.sent,acked:stall.acked})}
         Err(Fatal::ReceiveStalled(stall))
+    }
+    // 213-DRV-0087: once in SIGNALS_MS while they changed, what became of the PPDU status reports since the admission;
+    // 213-DRV-0090: and every SIGNALS_MS the traffic's line, after it.
+    fn signals(&mut self,now:u64){
+        if now.saturating_sub(self.signals_at.0)<SIGNALS_MS||self.event.is_some(){return}
+        let signals=self.data().counts().signals;
+        if signals!=self.signals_at.1{let crate::ppdu::Signals{measured,late,unmatched}=signals;
+            self.event=Some(Event::Signals{channel:self.data().channel(),kept:self.kept,measured,late,unmatched});}
+        self.signals_at=(now,signals);
+        let probe=(self.minutes%PROBE_MINUTES==0).then(||self.data().probe());self.minutes=self.minutes.saturating_add(1);
+        let(c,channel)=(self.data().counts(),self.data().channel());
+        let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
+            ppdu:c.ppdu_reports,beacons:c.beacons,sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
+        if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
+    }
+    // The counts now, for a hole's lines.
+    fn marks(&mut self)->Marks{
+        let c=self.data().counts();Marks{wifi:c.wifi,kept:self.kept,ppdu:c.ppdu_reports,pressure:c.pressure,sent:self.sent.0,acked:self.sent.1}
+    }
+    // 213-DRV-0090: a hole opens when the joined BSS, heard once, sends no beacon for HOLE_MS, and closes with its next one.
+    // Each end is logged with the counts since the other and, for the first HOLES_PROBED, the registers then. A line
+    // that finds the event slot taken waits a step; a hole's length is told from its beacons, not from the lines.
+    fn holes(&mut self,now:u64){
+        if self.event.is_none(){self.event=self.later.take();}
+        let beacons=self.data().counts().beacons;
+        if beacons!=self.beacons.0{
+            self.beacons=(beacons,now,self.marks());self.heard_bss=true;if let Some(hole)=self.hole.as_mut(){hole.back.get_or_insert(now);}
+        }
+        let joined=self.data().filter().is_some_and(|f|!f.all_beacons()&&f.bssid()!=[0;6]);
+        if !joined||!self.heard_bss{self.hole=None;return}
+        if self.event.is_some(){return}
+        let d=|a:u64,b:u64|a.saturating_sub(b);
+        match self.hole{
+            None if now.saturating_sub(self.beacons.1)>=HOLE_MS=>{
+                let n=self.holes.0.saturating_add(1);self.holes.0=n;let(was,mark,since)=(self.beacons.2,self.marks(),self.beacons.1);
+                let probe=(n<=HOLES_PROBED).then(||self.data().probe());let bssid=self.data().current_filter().bssid();
+                self.event=Some(Event::Hole{n,channel:self.data().channel(),bssid,ms:now.saturating_sub(since),wifi:d(mark.wifi,was.wifi),
+                    kept:d(mark.kept,was.kept),ppdu:d(mark.ppdu,was.ppdu),pressure:d(mark.pressure,was.pressure),sent:d(mark.sent,was.sent),
+                    acked:d(mark.acked,was.acked),pending:self.pending.is_some(),probe});
+                self.hole=Some(Hole{n,since,marks:mark,back:None});
+            }
+            Some(Hole{n,since,marks:was,back:Some(back)})=>{
+                let mark=self.marks();let probe=(n<=HOLES_PROBED).then(||self.data().probe());let ms=back.saturating_sub(since);
+                self.holes.1=self.holes.1.max(ms);
+                self.event=Some(Event::HoleEnded{n,ms,wifi:d(mark.wifi,was.wifi),kept:d(mark.kept,was.kept),ppdu:d(mark.ppdu,was.ppdu),
+                    pressure:d(mark.pressure,was.pressure),sent:d(mark.sent,was.sent),acked:d(mark.acked,was.acked),probe});
+                self.hole=None;
+            }
+            _=>{}
+        }
     }
     // DEBUG: the first change of each SNAPSHOT register, while the data mode runs: after its shutdown they are its own
     // (BB off, DMA stopped), which the Ryzen's log of 2026-11-08 had taken for the firmware's.
@@ -291,7 +367,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             },
             wlanhw::Request::SetFilter{filter}=>{
                 let result=self.data().set_filter(filter.all_beacons,address(filter.bssid),address(filter.own),COMMAND_US);
-                if result.is_ok(){self.frames.clear();}
+                // 213-DRV-0090: another BSS's beacons are counted from none, and no hole is open.
+                if result.is_ok(){self.frames.clear();self.beacons.1=now;self.heard_bss=false;self.hole=None;}
                 let reply=result.as_ref().map(|_|()).map_err(error);let _=wlanhw::reply_set_filter(call,reply);
                 if let Err(failure)=result{if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}}
             },

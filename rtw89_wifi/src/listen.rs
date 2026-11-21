@@ -66,9 +66,16 @@ fn parse(mpdu: &[u8]) -> Option<Heard> {
     Some(heard)
 }
 
+/// Where a packet stands in the receive queue (213-DRV-0087): its n-th Wi-Fi frame, a PPDU status report after the
+/// n-th (None: after another report), or another packet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Order { Frame(u64), Report(Option<u64>), Other }
+
 struct Listener<F> { table: [Option<Heard>; HEARD_MAX], tally: Tally, first: F }
 impl<F: FnMut(&Heard)> Listener<F> {
-    fn take(&mut self, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8]) {
+    fn take(&mut self, order: Order, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8]) {
+        // A listen counts no reports, as before they reached it.
+        if let Order::Report(_) = order { return; }
         let tally = &mut self.tally;
         if channel != rx::Channel::Rxq || packet.kind != rxdesc::TYPE_WIFI { tally.other_packets = tally.other_packets.saturating_add(1); return; }
         let Ok(frame) = frames::from_packet(packet, buffer) else { tally.rejected = tally.rejected.saturating_add(1); return };
@@ -89,16 +96,20 @@ impl<F: FnMut(&Heard)> Listener<F> {
 }
 
 struct Each<F>(F);
-impl<F: FnMut(rx::Channel, rxdesc::Packet, &[u8])> PacketHandler for Each<F> {
+impl<F: FnMut(Order, rx::Channel, rxdesc::Packet, &[u8])> PacketHandler for Each<F> {
     fn packet(&mut self, _: u64, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8], _: bool) -> Result<bool, btc_session::Error> {
-        (self.0)(channel, packet, buffer); Ok(true)
+        (self.0)(Order::Other, channel, packet, buffer); Ok(true)
     }
+    fn frame(&mut self, _: u64, number: u64, packet: rxdesc::Packet, buffer: &[u8], _: bool) -> Result<bool, btc_session::Error> {
+        (self.0)(Order::Frame(number), rx::Channel::Rxq, packet, buffer); Ok(true)
+    }
+    fn report(&mut self, frame: Option<u64>, packet: rxdesc::Packet, buffer: &[u8]) { (self.0)(Order::Report(frame), rx::Channel::Rxq, packet, buffer) }
 }
 
 impl<B: DeviceIo> Session<'_, '_, '_, B> {
-    /// At most one packet per hardware channel to `each`, after the startup permit's re-check; then the BTC events
+    /// At most one packet per hardware channel to `each`, PPDU status reports included, after the startup permit's re-check; then the BTC events
     /// retained meanwhile are observed. Returns which channels gave a packet and how many events there were.
-    pub(crate) fn poll_frames(&mut self, each: impl FnMut(rx::Channel, rxdesc::Packet, &[u8])) -> Result<([bool; 2], usize), Cause> {
+    pub(crate) fn poll_frames(&mut self, each: impl FnMut(Order, rx::Channel, rxdesc::Packet, &[u8])) -> Result<([bool; 2], usize), Cause> {
         let now = self.clock().map_err(Cause::Listen)?;
         let received = self.poll_before_with(now + POLL_US, &mut Each(each)).map_err(Cause::Listen)?;
         let pending = self.pending_events();
@@ -169,7 +180,7 @@ pub fn listen<B: DeviceIo>(bus: &mut B, queue: &mut Queue<'_>, rings: &mut rx::R
         loop {
             let now = session.clock().map_err(Cause::Listen)?;
             if now >= end { return Ok(now - begin); }
-            let (received, events) = session.poll_frames(|c, p, b| listener.take(c, p, b))?;
+            let (received, events) = session.poll_frames(|o, c, p, b| listener.take(o, c, p, b))?;
             listener.tally.btc_events = listener.tally.btc_events.saturating_add(events as u32);
             if received == [false, false] { session.idle()?; }
         }
