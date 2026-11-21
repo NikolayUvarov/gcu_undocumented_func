@@ -71,8 +71,12 @@ A computer is given MIND Core today only as a raw disk image (`dist/mind-core-us
 
 **Step 3, in part** (on 352-KRN-0268's branch): on a live boot the updater fills no slot, as the volume is read-only in memory; it says `[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL`. The `iso` suite now builds the ISO in slots, as the installer will copy them, and checks that line. Writes are refused by the read-only volume, and the log stays in memory without a `MIND LOG`.
 
+**In `main` since round 165** (64605784cc, the gate GREEN on both architectures): step 2 (352-KRN-0268, closed) and step 3's part above. The installer's service of step 4 is in `main` too ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), closed): on a live boot `init` gives the store no disk, and the shell gets the installer's client. The shell's `install` command is APP's (requested).
+
 **Left:**
-- steps 3 to 5;
+- step 3's log on a `MIND LOG` partition of the stick;
+- step 4's start of the installer on the console, with APP's command (352-UPD-0048);
+- step 5;
 - a real machine.
 
 ## Related
