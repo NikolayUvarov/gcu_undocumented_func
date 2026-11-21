@@ -9,6 +9,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub bt:Option<u32>,pub command_bt:Option<u32>,pub btc_events:Vec<Vec<u8>>,pub btc_on_command:Vec<Vec<u8>>,pub continuous_wifi:usize,pub continuous_bt:usize,
     pub coex_packets:Vec<Vec<u8>>,pub lte_writes:usize,pub grants:u32,pub btg:u32,pub missing_coex_ack:bool,pub delay_next_command:u64,pub delayed_ack:bool,pub ppdu_on_command:usize,
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
+    // Whole receive buffers, after `incoming`: frames with their PPDU count and rate, and captured reports (213-DRV-0087).
+    pub buffers:Vec<Vec<u8>>,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -52,6 +54,7 @@ impl Device{
         for _ in 0..count{self.wifi(true,false);}
         let incoming=std::mem::take(&mut self.control.borrow_mut().incoming);
         for mut frame in incoming{frame.extend_from_slice(&[0;4]);self.raw().inject_packet(0,0,&frame);}
+        let buffers=std::mem::take(&mut self.control.borrow_mut().buffers);for buffer in buffers{self.raw().inject_buffer(0,&buffer);}
         if std::mem::take(&mut self.control.borrow_mut().control_event){
             let mut event=[0;12];event[0]=3;event[1]=0x77;event[4]=12;event[8]=0xa5;self.raw().inject_c2h(&event);
         }}

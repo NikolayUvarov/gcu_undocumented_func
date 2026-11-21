@@ -113,6 +113,8 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 
 **2026-11-21, 15:53-15:58 UTC, the branch's head on channel 8** (90699adaa's `rtw89_wifi`, no bench delay, `replace`d into release 202611211156): the station applied RU, scanned the 13 channels and joined CoolNet2 on channel 8 (`DATAPATH ADMITTED ON CHANNEL 8`, DHCP); 6 MB from the LAN three times at 289, 292 and 303 KB/s, the sender's figures. The release's driver was put back after it.
 
+**2026-11-21, the signal wired into both services** (host cases; see the section below): the station gets each frame's signal in the header's byte 2 when its PPDU status report follows it, and the reports that cannot be matched are counted. All 40 `rtw89_*_host.rs` files pass; the full `host_tests.sh` passes.
+
 ## Where it stands (2026-11-21, evening)
 
 | Part | State | Host cases | On the Ryzen |
@@ -125,12 +127,13 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 | Listen-only rule (receive-only and data mode) | written | `rtw89_receive_service_cases`, `rtw89_service_cases` | not reached: no listen-only channel was allowed |
 | IQK, TSSI, DPK on 5 GHz | written | `rtw89_iqk_cases`, `rtw89_tssi_cases`, `rtw89_dpk_cases`, `rtw89_tssi_tables_test.py`, `--check` | not run: nothing may be sent on 5 GHz here |
 | Coexistence on 5 GHz | written | `rtw89_btc_codec_cases`, `rtw89_btc_runtime_cases` (the whole admission on channel 100 in the models) | not run |
+| The signal in the receive header (both modes) | written | `rtw89_ppdu_host`, `rtw89_receive_service_cases`, `rtw89_service_cases` | not run: ABI 37 builds wait for the stick |
 | A join and a download on 5 GHz | blocked by the country and the access point's channel (above) | — | — |
 | 2.4 GHz with the same code | unchanged path | every 2.4 GHz case as before | joined channel 8; 159/242/215 KB/s against the release's 184/262/277 in the same minutes; the head's build (90699adaa, no bench delay) 289/292/303 KB/s at 15:54-15:57 UTC |
 
-**What a person must do for a 5 GHz join here:** choose the Ryzen's country if it is not RU (`wifi set-country XX`, which the station keeps), and put CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). As long as the driver reports no signal, the station joins the first CoolNet2 it heard, the 2.4 GHz one: for that run a driver build whose `supported` leaves 2.4 GHz out is needed (a bench build, not committed).
+**What a person must do for a 5 GHz join here:** choose the Ryzen's country if it is not RU (`wifi set-country XX`, which the station keeps), and put CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). With the signal now in the header (host cases only), the station ranks CoolNet2's two networks by it. On the bench their beacons were 1 to 2 dB apart (5 GHz −63, 2.4 GHz −64 to −65 dBm), too close to choose by, so for that run a driver build whose `supported` leaves 2.4 GHz out is still needed (a bench build, not committed).
 
-**Not done, each a later task:** other channel widths, HT and VHT, aggregation; the signal in the receive header (the PPDU status reports are counted, not parsed); DPK tracking and TSSI tracking on 5 GHz (not on 2.4 GHz either); the coexistence's TDMA policies; other machines than the Ryzen.
+**Not done, each a later task:** other channel widths, HT and VHT, aggregation; DPK tracking and TSSI tracking on 5 GHz (not on 2.4 GHz either); the coexistence's TDMA policies; other machines than the Ryzen.
 
 ## The signal: what the hardware reports, read on the Ryzen (2026-11-21, 16:29-16:33 UTC)
 
@@ -138,21 +141,57 @@ So on this bench the station never joins channel 100 lawfully: under RU and UZ i
 - **What they show:** each frame's report follows it at once, with the same 3-bit PPDU count and the same rate in its descriptor (Linux's `rtw89_core_rx_ppdu_match`). The report carries the MAC info (one user, the PLCP) and then the PHY status: its header's average and per-path RSSI, and for a CCK or OFDM PPDU type the IEs whose RPL Linux's 8852B moves the paths by (`convert_rpl_to_rssi`).
 - **The values, by Linux's rule** (`RTW89_RSSI_RAW_TO_DBM` of the stronger path): CoolNet2's 5 GHz beacon on channel 100 −63 dBm (header average −64); its 2.4 GHz beacon −64 to −65 dBm; its data frames to this radio −56 to −62 dBm. Linux on the same spot at other hours: beacons at −63 dBm on 2.4 GHz and −67 dBm on 5 GHz.
 - **`ppdu.rs`** parses a report so, every length checked. Host cases (`tests/rtw89_ppdu_host.rs`) use five of the captured reports: 5 GHz −63, 2.4 GHz CCK −65, an OFDM break −64, a data frame −61, another station's CCK −75. Every truncation, a longer packet, a cleared valid bit, five users and an IE of no length are covered.
-- **Not done yet:** handing the signal to the station. Both services write a frame's 8-byte header when they store it, before its report has arrived; the header's byte 2 must be filled when the matching report comes (same count and rate, the next report after the frame) and the frame is still unread, or stay 0. That needs the session to pass the reports to the services in their order with the frames, in receive-only and in data mode.
+## The signal in the station's header (2026-11-21, host cases only)
+
+**How it is wired:**
+- **The session** numbers the receive queue's Wi-Fi frames and hands each PPDU status report to the packet's handler in the queue's order, with the number of the Wi-Fi frame just before it (none if another report came between). A C2H event between a frame and its report does not break the pair; a Wi-Fi frame or a report between does.
+- **The match** (`ppdu::Matcher`): a report gives its signal to the one frame its owner kept last, only when that frame is the Wi-Fi frame just before the report and has the report's 3-bit PPDU count and its rate (Linux's `rtw89_core_rx_ppdu_match`, which compares the count and the rate too). Anything else is dropped and counted, never put on another frame:
+  - a report of a frame that was not kept (the filter dropped it, the buffer was full, a calibration's poll took it);
+  - another PPDU's count or rate;
+  - a report after another report;
+  - a report that does not parse.
+- **The receive-only service** writes byte 2 of the frame it stored, while the station has not taken it yet.
+- **The data mode:** the session marks its inbox record. The service's drain leaves a frame that still waits for its report in the inbox while the last poll gave a packet, as Linux's `rx_queue` holds a frame until its report. The next poll gives the report or finds the ring empty, and only then is the frame copied, with its byte 2, for the station.
+  - The drain polls until the ring is empty anyway, so this adds no poll.
+  - A frame held when a step's 64 polls ran out waits for the next step.
+- **What a report finds after the station took its frame** is counted as late, and that frame keeps its 0. This can happen only when the ring was read empty between the frame and its report, so the report was not yet written when the poll looked:
+  - in receive-only mode, also when a step's 8 polls ended on the frame;
+  - in data mode, the frame then went on at that empty poll.
+- **How often that happens under a download is not known yet.** It is a matter of the hardware's time between writing a frame and writing its report against the driver's poll. No bench run has been made with this code: the branch is on ABI 37 and the stick is not.
+- **The counts that will tell it:**
+  - **Scan:** `[RTW89] SCAN: … n FRAMES KEPT, …; SIGNAL ON m OF THEM, l REPORTS AFTER THE STATION TOOK THE FRAME, u UNMATCHED`, once a scan, for the frames the scan kept (beacons and probe responses mostly).
+  - **Data mode:** `[RTW89] SIGNAL ON CHANNEL c SINCE THE ADMISSION: ON m OF k FRAMES KEPT; l REPORTS AFTER THE FRAME WAS HANDED ON, u UNMATCHED`, at most once a minute while the counts change.
+  - A kept frame with neither a measure nor a late report had no matching report at all; those are `kept − measured − late`.
+- **Whether beacons get their figure in time for the scan's ranking:**
+  - A scan's beacon is handed to the station only after the step's polls end on an empty ring or after 8 polls. So it carries its figure when its report was in the ring by then.
+  - A beacon without one has 0, which `dot11`'s ranking (`best_of`, by weakness) puts last, behind every measured one.
+  - Measured on the bench: not yet (the SCAN line above).
+- **What it adds to each packet:**
+  - **For each Wi-Fi frame:** a counter and an `Option` store in the session, and the choice between two handler calls. For a frame kept, one 4-byte read of its descriptor's word 1 from the copy already made, and a 32-byte store.
+  - **For each report:** the parse, which reads the MAC info's two words, the PHY header's two and, for CCK and legacy OFDM types, one word per IE (3 to 5 in the captures), and one comparison.
+  - **In the data service's copy loop:** one more comparison for each frame.
+  - Reports were copied out of the ring and counted before this as well. No register is read, nothing more is copied, and no poll is added. Not measured as time on the bench.
+- **Host cases:**
+  - `tests/rtw89_ppdu_host.rs` (the matcher, with the captured 5 GHz report): the frame just before is marked −63 dBm, a second report finds nothing, and a frame handed on is late. No frame is guessed after another Wi-Fi frame, another report, another count, another rate, a broken report or a forget.
+  - `tests/rtw89_receive_service_cases.rs`: a scan's beacon with the report after it reaches the station with 63 in byte 2 and 6 Mb/s in byte 4. Another PPDU's count, a frame not kept between, and a report after the station took its frame leave 0, and the scan's line counts 4 kept, 1 measured, 1 late, 2 unmatched.
+  - `tests/rtw89_service_cases.rs` (data mode, the same cases): the frame waits in the inbox for its report and reaches the station with 63. Alone in the ring it goes on with 0 and its report is late; the minute's line and the data mode's counts agree.
+  - Without the inbox's wait, the data mode's first case fails: the frame went on with 0.
+  - Frames without reports (every older case) keep 0 as before.
 
 ## What a machine running this driver does differently on 2.4 GHz (against `main`'s driver)
 
 - **Each scan takes about four seconds longer** while the country leaves no 5 GHz channel. On the Ryzen under RU (the logs of 2026-11-21): from `[WLAN] Scanning` to `JOINING CoolNet2 ON CHANNEL 8`, 1.35 s with `main`'s driver, 5.6 and 5.7 s with this one. The cause is in `dot11`: `Station::tick` steps through every channel of the radio's list, and gives a channel the country bars (`Allowed::Nothing`) the passive dwell of 150 ms. This driver refuses the tune (`invalid`), so the radio stays on the last channel it was on. 28 barred 5 GHz channels at 150 ms make the 4.2 s. The fix belongs in `dot11`, not here: a scan should skip a barred channel. It is asked of NET in the handoff file `request-NET-WIFI.md`. Until then, every scan, every first join and every rejoin after a stall is about 4 s slower here.
 - **The first scan after the station starts anew** (no country yet, so every channel listen-only) visits all 41 channels: 6.3 s on the Ryzen.
-- **With a country that allows 5 GHz channels,** the station can join a 5 GHz network. Of two networks of one name it takes the first it heard: this driver reports no signal (NET's 550-NET-0090 prefers 5 GHz above a signal floor, which needs the signal).
+- **With a country that allows 5 GHz channels,** the station can join a 5 GHz network. Of two networks of one name it takes the stronger by the signal this driver now reports (host cases only so far; NET's 550-NET-0090 prefers 5 GHz above a signal floor).
+- **The receive header's byte 2 carries the signal** (minus dBm), where it was 0, on 2.4 GHz too. In data mode a frame whose report may still come waits in the inbox for at most the rest of the drain, or the next step when the drain's 64 polls ran out. The scan's line has three more counts, and data mode logs one more line, at most once a minute.
 - **Nothing else on 2.4 GHz changed in what a user sees:** the join, DHCP and the rate on channel 8 were as before on the Ryzen (289 to 303 KB/s with the head of the branch). The data path is the same code. A 2.4 GHz tune after a 5 GHz one writes the BTG share back, as the initial PHY left it.
 
 ## The lawful 5 GHz join: the order of the run (ready for the maintainer's choice)
 
 Needs: the Ryzen's country chosen by the maintainer, and CoolNet2's 5 GHz network on a channel that country lets a station send on (UZ: 36, 40, 44 or 48). Then, under the lease, with a build of this branch on the stick's ABI:
 1. `wifi set-country XX` typed on the console (the station keeps it); the log should show `[WLAN] COUNTRY XX (CHOSEN …)` and `[RTW89] COUNTRY XX: n CHANNELS, m LISTEN ONLY`.
-2. The driver of the run: as long as the station takes the first network heard, a bench build whose `supported` lists the 5 GHz channels alone (not committed). If NET's preference by signal is in and this driver reports the signal by then, the branch's own build.
-3. The scan: `[RTW89] SCAN: …` with no failed tune, `[RTW89] HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL n`.
+2. The driver of the run: a bench build whose `supported` lists the 5 GHz channels alone (not committed), as long as the two CoolNet2 networks are too close in signal for the station's choice. If NET's 5 GHz preference is in by then, the branch's own build.
+3. The scan: `[RTW89] SCAN: …` with no failed tune and its signal counts, `[RTW89] HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL n`.
 4. The calibration: `[RTW89] DATAPATH ADMITTED ON CHANNEL n` with no `ADMISSION` stop. A failure line names the stage (IQK, TSSI, DPK, station, data mode) and its register.
 5. The join: `[WLAN] AUTO-JOIN CoolNet2: JOINED`, `[NETSTACK] DHCP …`.
 6. Three 6 MB downloads, the sender's `TCP_INFO` (`S/srv/putsrv.py`), typed with `get -w --insecure-http -m 60 …`.
