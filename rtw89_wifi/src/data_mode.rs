@@ -133,7 +133,7 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
@@ -142,9 +142,14 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
             let Some(filter)=self.filter else{self.counts.previous_epoch=self.counts.previous_epoch.saturating_add(1);return Ok(true)};
             let frame=match crate::frames::from_packet(packet,buffer){Ok(frame)=>frame,Err(_)=>{
                 self.counts.invalid=self.counts.invalid.saturating_add(1);return Ok(true)}};
-            if !filter.accepts(frame.mpdu()){self.counts.filtered=self.counts.filtered.saturating_add(1);return Ok(true)}
-            // 213-DRV-0090: the joined BSS's beacons as the ring gives them, read by the station or not.
-            let m=frame.mpdu();if m[0]==0x80&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}
+            // 213-DRV-0090: beacons as the ring gives them, read by the station or not: the joined BSS's, and the others the
+            // station's filter refuses.
+            let m=frame.mpdu();let beacon=m.len()>=24&&m[0]==0x80;
+            if !filter.accepts(m){
+                self.counts.filtered=self.counts.filtered.saturating_add(1);
+                if beacon{self.counts.other_beacons=self.counts.other_beacons.saturating_add(1);}return Ok(true)
+            }
+            if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}
             if full{self.counts.pressure=self.counts.pressure.saturating_add(1);return Ok(true)}
             return Ok(false)
         }

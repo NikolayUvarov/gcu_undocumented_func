@@ -81,13 +81,32 @@ On the Ryzen, joined to CoolNet2 on channel 8 (about 650 frames of other station
   - **Each step:** a few comparisons.
   - **The minute's line:** one counts read.
   - **The registers:** 60 reads, at the first 12 holes' ends and every tenth minute.
-- **Host case:** `tests/rtw89_service_cases.rs`, `service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it`:
+- **While no beacon of the BSS reaches the host** (as on the Ryzen's first boot with the counters), a hole is a second with no Wi-Fi frame at all, closed by the next frame. Its line says `NO WI-FI FRAME AT ALL FOR t MS`. The minute's second line names the filter's BSSID and counts the beacons the filter refused.
+- **Host cases:** `tests/rtw89_service_cases.rs`, `service_with_no_beacon_of_its_bss_a_second_without_any_frame_is_a_hole` (the frame-based hole, and a refused beacon counted), and `service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it`:
   - no hole before the first beacon;
   - a hole after 1.2 s of frames to the station without one, with its counts and registers (the scheduler as admitted, the ring read to its end, RF 0x18 on channel 6);
   - its end at the next beacon;
   - the minute's line with the hole's length and a good link's registers.
 
   The 40 `rtw89_*_host.rs` files pass.
+
+## The first boot with the counters (boot 55, 2026-11-21 19:08-19:16 UTC, release 202611211902 with e146cb563)
+
+- **No beacon of the joined BSS was counted:** `TRAFFIC ON 8: … 0 BEACONS` every minute, so no hole could open.
+- **About 9.8 frames a second were filtered out** while the link was idle (586 in the second minute), which is one access point's beacon rate. They may be CoolNet2's own beacons refused by the station's filter, or another network's, and the line did not say which. The next build counts the beacons the filter refuses, names the filter's BSSID on the minute's line, and measures holes by any Wi-Fi frame while no beacon of the BSS reaches the host.
+- **The good link's registers at 94 s:**
+  - the receive ring read to its end (`1050=C500C5`);
+  - path A's synthesizer locked (`AC5=80AB`, bit 15) and RF mode 3 (`A0=337E1`);
+  - RF 0x18 on channel 8 on both paths;
+  - `LTE38=0` (no grant under software control);
+  - CTN_DRV_TXEN reads `DEADBEEF` (not readable there).
+- **The data mode's own radio check** confirms, at every CHECK_MS:
+  - SYS_FUNC_EN's BB bits;
+  - BB 0x734's channel index;
+  - RF 0x18 on both paths.
+
+  It stops with a radio fault otherwise, and it did not in any hole, so the BB stayed on and both paths on the channel through them.
+- **This boot's first join came at 34.9 s instead of 12.5 s,** because of the signal and 550-NET-0090's 5 GHz preference: the station picked CoolNet2's channel-100 access point, which RU bars. That is told to NET in `NET/2026-11-21T1918Z-…`.
 
 ## What Linux's 2 s track work does that this driver does not
 
