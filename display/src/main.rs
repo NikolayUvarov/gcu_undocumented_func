@@ -20,6 +20,9 @@ const BATCHES_ALLOWED: u8 = 0;
 /// How many of step 3's eight stages this build may run. 0 makes no writer: it logs each stage with every write it would
 /// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED at 7.
 const STAGES_ALLOWED: u8 = 0;
+/// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
+/// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
+const UNDO_AFTER_STAGES: bool = false;
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 /// Before step 1, so that the boot's own lines are kept first.
@@ -98,7 +101,11 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usi
     let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return 0 };
     let mut interp = Box::new(atom::Interpreter::new(image));
     let mut journal = Box::new(light::Journal::default());
-    light::run(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+    if UNDO_AFTER_STAGES {
+        light::run_then_undo(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+    } else {
+        light::run(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+    }
     journal.len()
 }
 
