@@ -595,6 +595,8 @@ fn setup(args: &[String]) -> Result<(), String> {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("improve — MIND Hub's client: requests to the agents who build MIND Core, their questions and your check.\nUsage: improve setup | register | status | answer | new | list | show N | watch | reply N | check N | version | devices | pair | revoke | delete N | export FILE\n(improve with no command names each one's words)");
+    // The user's files through the client the launcher lent (REQUEST_FILES), which may write where improve's own may not.
+    if mind::dev::cap_info(mind::abi::SLOT_FILE).0 == mind::abi::CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(mind::abi::SLOT_FILE)); }
     let args = match words::split(mind::process::args_str()) {
         Ok(a) => a,
         Err(why) => { mind::println!("improve: {why}"); mind::process::exit_with(1) }
