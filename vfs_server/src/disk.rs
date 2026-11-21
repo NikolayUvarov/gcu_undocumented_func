@@ -310,6 +310,8 @@ impl Shared {
     pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
     pub fn kind(&self) -> usize { self.0.borrow().kind() }
     pub fn mounted(&self) { self.0.borrow_mut().mounted() }
+    /// The same disk, through another handle (352-KRN-0269: a disk with a mounted volume is not installed onto).
+    pub fn same(&self, other: &Shared) -> bool { Rc::ptr_eq(&self.0, &other.0) }
 }
 
 impl Sectors for Shared {

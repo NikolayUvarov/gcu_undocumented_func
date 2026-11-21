@@ -11,6 +11,18 @@ pub const MAX_MS: u32 = 10_000;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Note { pub hz: u32, pub ms: u32 }
 
+const fn n(hz: u32, ms: u32) -> Note { Note { hz, ms } }
+
+/// Without arguments, the opening of Richard Strauss's "Also sprach Zarathustra" (1896), the maintainer's choice of
+/// 2026-11-21 (551-APP-0149): the trumpets' C, G and C, the chord's third falling from E to E flat, then the timpani's C
+/// and G. All of it is beep's own samples, queued as the gateway has room: its own tones take only what its ring holds
+/// at once (0.68 s), so a melody longer than that would be cut.
+pub const OPENING: [Note; 14] = [n(262, 400), n(392, 400), n(523, 600), n(659, 150), n(622, 600),
+                                 n(131, 80), n(0, 40), n(98, 80), n(0, 40), n(131, 80), n(0, 40), n(98, 80), n(0, 40), n(131, 80)];
+
+/// The opening's length, in milliseconds.
+pub fn opening_ms() -> u32 { OPENING.iter().map(|n| n.ms).sum() }
+
 /// The channels the notes sound on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel { Both, Left, Right }

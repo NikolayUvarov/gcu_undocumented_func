@@ -78,7 +78,7 @@ HOST_GROUPS=(
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
     "x86: boot, display, shell, memory, clock|$X86 --suites boot,display,normal,memory,dzen,power"
-    "x86: network, TLS and Effector|$X86 --suites net,tls,effector"
+    "x86: network, TLS and Effector|$X86 --suites net,tls,effector,hub"
     "x86: a developer's release through the Effector agent|$X86 --suites effector-update"
     "x86: a release that loses the server, rolled back|$X86 --suites rollback"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,usbaudio,link,modes"
@@ -111,7 +111,7 @@ A64_GROUPS=(
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar,nnd"
     # The tools as aarch64's virt shows them: a 37-row screen, a VirtIO tablet, BOOTAA64.EFI (000-APP-0137, 000-KRN-0240).
-    "aarch64: tools|$A64 --suites tools"
+    "aarch64: tools|$A64 --suites tools,iso"
     "aarch64: files and the block store|$A64 --suites vfs,store,storefaults"
     "aarch64: network, TLS and Effector|$A64 --suites net,tls,effector"
     "aarch64: a developer's release through the Effector agent|$A64 --suites effector-update"

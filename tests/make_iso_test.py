@@ -53,6 +53,13 @@ class MakeIso(unittest.TestCase):
             self.assertGreater(make_iso.MIN_MB << 20, 0xFFFF * make_iso.SECTOR)
             self.assertEqual(count, 1)
 
+    def test_a_volume_in_slots_has_room_for_slot_b(self):
+        slot = {"MIND/A/kernel.elf": b"\x7fELF" + bytes(40 << 20), "MIND/BOOT0": b"r", "EFI/BOOT/BOOTX64.EFI": b"MZ"}
+        with tempfile.TemporaryDirectory() as d:
+            volume = Path(d) / "boot.img"
+            size = make_iso.boot_volume(slot, volume, WHEN)
+            self.assertGreaterEqual(size, (2 * 40 + make_iso.SLACK_MB) << 20)
+
     def test_a_changed_byte_is_refused(self):
         places = {
             "the MBR's partition start": 446 + 8,

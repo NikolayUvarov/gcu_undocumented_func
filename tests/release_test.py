@@ -4,12 +4,17 @@ directory verifies; a version not above the channel's is refused; an upload cut 
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
 refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014); a bundle
 holds what a device needs of the channel, stored, the same for the same release, and only of a layout that verifies
-(751-UPD-0032). The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
+(751-UPD-0032). A release's downloads (352-UPD-0050): listed in SHA256SUMS, signed by the release keys of the key file
+beside it, and every changed, missing or added file refused. The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
 published only above the server's version; a channel signed by a key it does not name refused; real keys refused on a
 server without one."""
 import datetime
 import hashlib
 import json
+import os
+import shutil
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -261,6 +266,75 @@ class Releases(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "missing or not as listed"):
             release.bundle(self.dest, self.dir / "bad.zip", now=NOW)
         self.assertFalse((self.dir / "bad.zip").exists())
+
+    def test_a_release_downloads_listed_and_signed(self):
+        # 352-UPD-0050: SHA256SUMS of every download, its signature lines and the key file, and what verify-sums refuses.
+        out = self.dir / "downloads"
+        out.mkdir()
+        (out / "mind-core-x86_64.iso").write_bytes(b"iso" * 1000)
+        (out / "mind-core-x86_64.img").write_bytes(b"img")
+        body = release.write_sums(out)
+        self.assertEqual(body.decode().splitlines()[0].split("  ")[1], "mind-core-x86_64.img")
+        self.assertEqual(body.decode().splitlines()[1], hashlib.sha256(b"iso" * 1000).hexdigest() + "  mind-core-x86_64.iso")
+        self.assertIsNone(release.verify_sums(out, now=NOW))
+        good = {p.name: p.read_bytes() for p in out.iterdir()}
+        def reason(change):
+            for name, data in good.items():
+                (out / name).write_bytes(data)
+            for p in out.iterdir():
+                if p.name not in good:
+                    p.unlink()
+            change()
+            return release.verify_sums(out, now=NOW)
+        self.assertIn("its SHA-256 is not", reason(lambda: (out / "mind-core-x86_64.img").write_bytes(b"imh")))
+        self.assertIn("does not list the files there: extra.txt", reason(lambda: (out / "extra.txt").write_bytes(b"x")))
+        self.assertIn("does not list the files there", reason(lambda: (out / "mind-core-x86_64.iso").unlink()))
+        self.assertIn("signed by 0 of the release keys", reason(lambda: (out / "SHA256SUMS.sig").write_bytes(
+            release.signature_lines((out / "SHA256SUMS").read_bytes(), [sm.TEST_SEED]))))
+        def signed_list(body):
+            (out / "SHA256SUMS").write_bytes(body)
+            (out / "SHA256SUMS.sig").write_bytes(release.signature_lines(body, [release.TEST_RELEASE_SEED]))
+        self.assertIn("signed by 0 of the release keys", reason(lambda: (out / "SHA256SUMS").write_bytes(b"00  ../x\n")))
+        self.assertIn("not a line of its form", reason(lambda: signed_list(b"0" * 64 + b"  ../x\n")))
+        self.assertIn("KEYS: signed by 0 of the root keys", reason(lambda: (out / "KEYS").write_bytes(
+            release.test_keys_file(roots=(release.TEST_RELEASE_SEED,)))))
+        self.assertIn("SHA256SUMS.sig: missing", reason(lambda: (out / "SHA256SUMS.sig").unlink()))
+        self.assertIsNone(reason(lambda: None))
+        # Real release keys need the key file that names them.
+        with self.assertRaisesRegex(release.ReleaseError, "name the key file"):
+            release.write_sums(out, seeds=[hashlib.sha256(b"another release key").digest()])
+
+    @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy")), "needs mkfs.fat and mtools")
+    def test_every_download_of_a_release(self):
+        # 352-UPD-0050: the ISO and the USB image around one boot volume in slots with the channel and key file, the
+        # bundle, the record and the signed list; the same date gives the same files, the USB image among them.
+        import make_iso
+        built = volume(self.dir / "built", b"\x7fELF kernel 4", 4)
+        files = lambda arch: {p.relative_to(built).as_posix(): p.read_bytes() for p in built.rglob("*") if p.is_file()}  # noqa: E731
+        when = int(NOW.timestamp())
+        make = lambda out: release.artifacts(4, out, ["x86_64"], when=when, volumes={"x86_64": built}, payloads=files)  # noqa: E731
+        names = make(self.dir / "out")
+        self.assertEqual(names, ["KEYS", "RELEASE.json", "SHA256SUMS", "SHA256SUMS.sig", "mind-core-4-x86_64-update.zip", "mind-core-4-x86_64.img", "mind-core-4-x86_64.iso"])
+        self.assertIsNone(release.verify_sums(self.dir / "out", now=NOW))
+        lba, _ = make_iso.check_iso(self.dir / "out/mind-core-4-x86_64.iso")
+        env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+        listing = subprocess.run(["mdir", "-b", "-i", f"{self.dir / 'out/mind-core-4-x86_64.iso'}@@{lba * make_iso.BLOCK}", "::MIND/A"], capture_output=True, text=True, env=env).stdout
+        for name in ("CHANNEL", "KEYS", "MANIFEST", "kernel.elf"):
+            self.assertIn(f"::/MIND/A/{name}", listing)
+        # The USB image's ESP is the ISO's boot volume, byte for byte, and its log and store partitions follow it.
+        iso, img = (self.dir / "out/mind-core-4-x86_64.iso").read_bytes(), (self.dir / "out/mind-core-4-x86_64.img").read_bytes()
+        start, length = struct.unpack_from("<II", img, 454)
+        self.assertEqual((img[450], start), (0xEF, 2048))
+        self.assertEqual(img[start * 512:(start + length) * 512], iso[lba * make_iso.BLOCK:lba * make_iso.BLOCK + length * 512])
+        self.assertEqual((img[466], img[482]), (0x0E, 0x7F))
+        record = json.loads((self.dir / "out/RELEASE.json").read_text())
+        self.assertEqual((record["version"], record["arches"], record["test_keys"]), (4, ["x86_64"], True))
+        with zipfile.ZipFile(self.dir / "out/mind-core-4-x86_64-update.zip") as archive:
+            self.assertIn("channels/stable", archive.namelist())
+        make(self.dir / "again")
+        self.assertEqual((self.dir / "out/SHA256SUMS").read_bytes(), (self.dir / "again/SHA256SUMS").read_bytes())
+        with self.assertRaises(FileExistsError):
+            make(self.dir / "out")
 
     def keys(self, *argv):
         # release.py keys …, its exit status and what it printed.
