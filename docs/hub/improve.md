@@ -1,6 +1,6 @@
-# `improve` on any computer
+# `improve`: on any computer, and on MIND Core
 
-**Version:** 1 (2026-11-21) · **Task:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
+**Version:** 2 (2026-11-21): MIND Core's `improve` (section 5, 100003-APP-0151); 1 (2026-11-21) · **Tasks:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done), [100003-APP-0151](../../issues/100003-APP-0151-improve-on-mind-core.md) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
 
 `improve` is MIND Hub's client for a computer that is not a MIND machine: Linux, macOS, any Unix. Through it a person files a request, answers the agents' questions and gives the verdict on the result. It also lists, pairs and revokes the person's devices. It speaks `hub-api 2` to a hub of `tools/mindhub`, signing each call with a key of its own. A browser does the same through the hub's pages; a MIND machine will do it with its own `improve` (stage 4), with the same commands.
 
@@ -66,3 +66,35 @@ improve status
 
 - **Windows:** the key file's mode is a Unix one, and its build there has not run.
 - **Attachments' kinds:** a file's kind is the one the person names. Nothing reads a file to see what it is, and nothing filters a log by its lines (design 9: the kinds of lines the user picks).
+
+## 5. On MIND Core
+
+`improve` is a console program of MIND Core with the same commands (100003-APP-0151). Their words are given on its command line, and a quoted word, `"…"` or `'…'`, stays whole.
+
+```text
+improve setup mind.example.org 203.0.113.5 8443 <the hub key's SPKI SHA-256>
+improve register "Your name" --name laptop
+improve new fault 'The fan is loud' 'At idle, since the last update'
+improve list
+improve show 1
+improve reply 1 'Two fans, one stopped' --answer 2
+```
+
+- **Its authority** is the design's (section 9 of [README.md](README.md)):
+  - **The network:** a flow grant to the hub's host on its port alone. A host its grant does not name is asked of the user (socket.wit 2.8), and a line of the network policy names it for good: `improve 203.0.113.5 tcp 8443 …`.
+  - **TLS:** to the hub's pinned key alone (`connect-pins`, the SPKI SHA-256 the hub printed at its start), with no device certificate. Another key is refused, whoever signed it.
+  - **Its key:** its own Ed25519 key, made at `setup`, kept as its own secret in `keystore` (`hub-key`). No other program reads it.
+  - **Its files:** its own directory, `system/own/improve/`, for `hub.conf`. `setup NAME ADDRESS|dns PORT PIN [PIN]` writes it; `dns` resolves the name.
+- **What it reads:** it holds a long-term key and the network, so it parses nothing of the hub's itself (MC-11.11).
+  - The `parse` service reads each answer, and `improve/proto` builds its tree and checks it against the API's forms.
+  - Each call is signed over a fresh challenge, read from the body of `GET /hub/v1/challenge`, as `mind::http` hands a program no header of the hub's own.
+- **What leaves the machine is shown first:** `new` prints the request and asks `send it? [y/N]`, and `--yes` answers for a script.
+- **The version:** `improve version RELEASE` tells the hub the release this machine runs, so that a request a release carries awaits the user's check.
+- **Its check:** the QEMU suite `hub` (in the x86 network group) runs it against `tools/mindhub` on the host, over TLS by the hub's pin. It goes from setup and registration through the admin's approval, a request, the agents' question and its answer, and a wrong pin. `tests/improve_host.rs` tests its words.
+- **Not yet:**
+  - **Long texts.** A thread with a text past 512 bytes, or an answer past 16 KiB, is named as unread: `parse` reads no longer string or document yet (`issues/requests-NET.md`).
+  - **Attachments:** not yet sent from MIND Core.
+  - **The export:** not on MIND Core yet.
+  - **The running release:** not taken from the updater by itself.
+  - **Notices:** the shell's notice and `wm`'s mark are stage 6.
+

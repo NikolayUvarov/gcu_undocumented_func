@@ -333,7 +333,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | Route | Purpose |
 |---|---|
 | `POST devices` | register: the key, the name, the kind, the platform, a display name or a pairing code, optionally a contact, optionally the proof of work |
-| `GET challenge` | a challenge, unsigned, to sign the first call with, and the proof of work a registration needs now |
+| `GET challenge` | a challenge, unsigned, to sign the next call with, in the `Hub-Challenge` header and in the body, and the proof of work a registration needs now |
 | `GET devices/me` | the state, the admin's messages, the user, the trust, the quotas left, the next challenge |
 | `GET devices` | the user's devices, the asking one marked |
 | `POST devices/me/version` | the release the device runs, which moves its user's delivered requests to `awaiting-check` (6.3) |
@@ -383,7 +383,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | 2 | 100003-APP-0146 (done) | the separate hub, `tools/mindhub`: intake, registration and its conversation, trust, anti-flood, threads, the board, the admin pages, the agents' API; the conformance suite on the host ([server.md](server.md)) |
 | 2+ | 100003-APP-0148 (done) | what stage 2 left: a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself, the flag on a request for a credential; `hub-api 2` |
 | 3 | numbered when it starts | the hub's updates: the release tree through `httpd`'s library, the packages, the channels by band, the delivery link |
-| 4 | numbered when it starts | `improve` on MIND Core, the console; QEMU against the separate hub |
+| 4 | 100003-APP-0151 (in progress) | `improve` on MIND Core, the console; QEMU against the separate hub (the `hub` suite) ([improve.md](improve.md), section 5) |
 | 5 | 100003-APP-0150 (done) | `improve` on a host ([improve.md](improve.md)); the web pages for browsers, made with stage 2 |
 | 6 | numbered when it starts | the shell's notice and `wm`'s window; the phone's screen with `MOB` |
 | 7 | numbered when it starts | the native hub on MIND Core |
