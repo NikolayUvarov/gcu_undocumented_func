@@ -43,8 +43,9 @@ impl core::fmt::Display for Counter {
     }
 }
 
-// What a stream gave: frames, the first and last numbers, the time to the first, and whether every frame had the size.
-struct Got { frames: u32, first: u32, last: u32, first_ms: u64, elapsed_ms: u64, sized: bool, counter: Counter }
+// What a stream gave: frames, the first and last numbers, the time to the first, the longest read after it (a picture
+// that froze, 158-DRV-0082), and whether every frame had the size.
+struct Got { frames: u32, first: u32, last: u32, first_ms: u64, elapsed_ms: u64, longest_ms: u64, sized: bool, counter: Counter }
 
 // The frame buffer the gateway writes into: shared once, lent for each read. One for the largest frame of a run, since
 // a shared buffer stays the program's until it ends.
@@ -73,10 +74,11 @@ fn stream(camera: u8, seconds: u32, width: u16, height: u16, rate: u8, synthetic
             o.index, encoding(o.mode.encoding), o.mode.width, o.mode.height, o.mode.rate, if o.scaled { ", SCALED" } else { "" }),
         other => mind::println!("VIDEO STUB: OPENED CAMERA {} \"{}\" {}X{} AT {}/S; OPENED: {:?}", camera, name, width, height, rate, other),
     }
-    let mut got = Got { frames: 0, first: 0, last: 0, first_ms: 0, elapsed_ms: 0, sized: true, counter: Counter::None };
+    let mut got = Got { frames: 0, first: 0, last: 0, first_ms: 0, elapsed_ms: 0, longest_ms: 0, sized: true, counter: Counter::None };
     let mut ahead = None::<Option<u32>>;
     let until = started + seconds as u64 * 1_000_000_000;
     while mind::time::monotonic_ns() < until {
+        let asked = mind::time::monotonic_ns();
         let lent = mind::ipc::mint(cap, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0);
         let read = lent.map(|lent| idl::read(CAMERA, bytes as u32, lent));
         let _ = mind::ipc::revoke(cap);
@@ -84,7 +86,7 @@ fn stream(camera: u8, seconds: u32, width: u16, height: u16, rate: u8, synthetic
             Ok(Ok(Ok(sequence))) => sequence,
             other => { let _ = idl::close(CAMERA); fail(format_args!("READ AFTER {} FRAMES: {:?}", got.frames, other)) }
         };
-        if got.frames == 0 { got.first = sequence; got.first_ms = (mind::time::monotonic_ns() - started) / 1_000_000; }
+        if got.frames == 0 { got.first = sequence; got.first_ms = (mind::time::monotonic_ns() - started) / 1_000_000; } else { got.longest_ms = got.longest_ms.max((mind::time::monotonic_ns() - asked) / 1_000_000); }
         got.frames += 1;
         got.last = sequence;
         let frame = idl::frame(CAMERA).ok().and_then(|f| f.ok());
@@ -104,8 +106,8 @@ fn stream(camera: u8, seconds: u32, width: u16, height: u16, rate: u8, synthetic
 }
 
 fn said(camera: u8, width: u16, height: u16, got: &Got) {
-    mind::println!("VIDEO STUB: CAMERA {}: {} FRAMES IN {} MS, SEQUENCE {}..{}, FIRST AFTER {} MS, {}X{}{}{}", camera, got.frames, got.elapsed_ms, got.first, got.last,
-        got.first_ms, width, height, if got.sized { "" } else { ", A FRAME OF ANOTHER SIZE" }, got.counter);
+    mind::println!("VIDEO STUB: CAMERA {}: {} FRAMES IN {} MS, SEQUENCE {}..{}, FIRST AFTER {} MS, THE LONGEST READ {} MS, {}X{}{}{}", camera, got.frames, got.elapsed_ms, got.first, got.last,
+        got.first_ms, got.longest_ms, width, height, if got.sized { "" } else { ", A FRAME OF ANOTHER SIZE" }, got.counter);
 }
 
 fn modes(camera: u8) -> mind::idl::codec::List<idl::Mode, 256> {

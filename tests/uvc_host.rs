@@ -89,14 +89,16 @@ fn a_bulk_camera_streams_through_alternate_setting_zero() {
     assert_eq!(camera.endpoint, 0x81, "the input header after it names the endpoint");
 }
 
+// 158-DRV-0084: YUY2 or MJPEG, the smallest that holds the picture at its rate, YUY2 first at one size.
 #[test]
-fn the_frame_size_holds_the_picture_asked_for_and_is_yuy2() {
+fn the_frame_size_holds_the_picture_asked_for_at_its_rate() {
     let camera = parse(&camera_descriptor()).unwrap();
-    let pick = |w, h| camera.choose(w, h).map(|f| (f.width, f.height));
-    assert_eq!(pick(320, 240), Some((320, 240)));
-    assert_eq!(pick(100, 80), Some((320, 240)), "the smallest that holds it");
-    assert_eq!(pick(400, 300), Some((640, 480)));
-    assert_eq!(pick(1280, 720), Some((640, 480)), "the largest YUY2, not the MJPEG one");
+    let pick = |w, h, rate| camera.choose(w, h, rate).map(|f| (f.width, f.height, f.encoding));
+    assert_eq!(pick(320, 240, 30), Some((320, 240, Encoding::Yuy2)));
+    assert_eq!(pick(100, 80, 10), Some((320, 240, Encoding::Yuy2)), "the smallest that holds it");
+    assert_eq!(pick(400, 300, 30), Some((640, 480, Encoding::Yuy2)));
+    assert_eq!(pick(1280, 720, 30), Some((1280, 720, Encoding::Mjpeg)), "MJPEG, now decoded");
+    assert_eq!(pick(1920, 1080, 30), Some((1280, 720, Encoding::Mjpeg)), "nothing holds it: the largest");
     assert_eq!(camera.largest(640).map(|f| f.width), Some(640));
     assert_eq!(camera.largest(400).map(|f| f.width), Some(320));
     assert_eq!(camera.largest(100).map(|f| f.width), Some(320), "the smallest when all are wider");
@@ -254,7 +256,7 @@ fn a_bulk_camera_is_parsed_with_its_endpoint_and_no_settings() {
     assert!(cam.bulk);
     assert_eq!(cam.endpoint, 0x81);
     assert!(cam.alternates.is_empty());
-    assert_eq!(cam.choose(640, 480).map(|f| (f.width, f.height)), Some((640, 480)));
+    assert_eq!(cam.choose(640, 480, 25).map(|f| (f.width, f.height)), Some((640, 480)));
 }
 
 // 158-DRV-0083: a camera's modes and what its settings carry.
@@ -316,7 +318,16 @@ fn a_camera_with_motion_jpeg_alone_has_its_modes_but_no_yuy2() {
     let camera = parse(&c).expect("a camera");
     let modes: Vec<_> = camera.modes().iter().map(|m| (m.encoding, m.width, m.height, m.rate())).collect();
     assert_eq!(modes, vec![(Encoding::Mjpeg, 1920, 1080, 30), (Encoding::Mjpeg, 1920, 1080, 15), (Encoding::Mjpeg, 640, 480, 30)]);
-    assert_eq!(camera.choose(640, 480), None, "nothing the gateway converts");
+    assert_eq!(camera.choose(640, 480, 30).map(|f| (f.width, f.encoding)), Some((640, Encoding::Mjpeg)), "MJPEG alone is decoded (158-DRV-0084)");
+    assert_eq!(camera.choose(1280, 720, 30).map(|f| f.width), Some(1920), "the smallest that holds it at its rate");
+    assert_eq!(camera.largest(640).map(|f| (f.width, f.encoding)), Some((640, Encoding::Mjpeg)), "a camera without YUY2 offers its MJPEG");
+    // A frame's buffer: the committed size, at most three bytes a pixel, at least 1 KiB.
+    let f = &camera.frames[1];
+    assert_eq!(f.buffer(200_000), (200_000, false));
+    assert_eq!(f.buffer(0xFFFF_FFFF), (640 * 480 * 3, false), "a camera's claim bounded");
+    assert_eq!(f.buffer(10), (1024, false));
+    assert_eq!(Assembler::new(f.buffer(200_000).0, false).capacity(), 200_000, "frames of any length up to it");
+    assert_eq!(camera.frames[0].buffer(0), ((1920 * 1080 * 2) as usize, false), "none committed: the descriptor's");
 }
 
 // 158-DRV-0083: the Ryzen's two cameras, from the configuration descriptors video_gw logged on 2026-11-21
@@ -341,6 +352,15 @@ fn the_ryzens_visible_light_camera_has_its_thirteen_yuy2_modes() {
     assert_eq!(yuy2_modes(&camera), vec![(640, 480, 25), (1920, 1080, 3), (1600, 1200, 5), (1280, 1024, 5), (1280, 960, 9), (1280, 720, 10), (1024, 768, 15),
         (800, 600, 20), (2048, 1536, 3), (640, 360, 30), (352, 288, 30), (320, 240, 30), (160, 120, 30)]);
     assert_eq!(camera.modes().len(), 26, "13 MJPEG modes as well");
+    // 158-DRV-0084: 1280x720 at 25 a second only as MJPEG; at 10 YUY2 carries it, with no decoding.
+    let pick = |w, h, rate| camera.choose(w, h, rate).map(|f| (f.width, f.height, f.encoding, f.max_rate()));
+    assert_eq!(pick(1280, 720, 25), Some((1280, 720, Encoding::Mjpeg, 25)));
+    assert_eq!(pick(1280, 720, 10), Some((1280, 720, Encoding::Yuy2, 10)));
+    assert_eq!(pick(640, 480, 25), Some((640, 480, Encoding::Yuy2, 25)));
+    assert_eq!(pick(800, 600, 25), Some((800, 600, Encoding::Mjpeg, 25)), "YUY2 800x600 gives 20");
+    let mode = |encoding, w, h| camera.modes().into_iter().find(|m| m.encoding == encoding && (m.width, m.height) == (w, h)).unwrap();
+    assert!(!camera.opens_as(&mode(Encoding::Mjpeg, 640, 480)), "MJPEG 640x480 at 25: YUY2 gives it");
+    assert!(camera.opens_as(&mode(Encoding::Yuy2, 640, 480)) && camera.opens_as(&mode(Encoding::Mjpeg, 1280, 720)));
     assert_eq!(camera.capacity(3), None, "bulk: not bounded by a setting");
 }
 
@@ -351,4 +371,24 @@ fn the_ryzens_infrared_camera_has_its_twelve_yuy2_modes() {
     assert_eq!(yuy2_modes(&camera), vec![(640, 480, 30), (1920, 1080, 5), (1280, 1024, 5), (1280, 960, 5), (1280, 720, 10), (1024, 768, 10), (960, 720, 15),
         (800, 600, 20), (640, 360, 30), (432, 240, 30), (352, 288, 30), (320, 240, 30)]);
     assert_eq!(camera.modes().len(), 24);
+}
+
+// 158-DRV-0084: a Motion JPEG frame's buffers start small and grow with its frames, up to the camera's maximum; frames
+// of a fixed size get theirs whole; a frame past the maximum is broken.
+#[test]
+fn frame_buffers_of_varying_frames_grow_as_their_frames_do() {
+    let max = 1280 * 720 * 2;
+    let mut a = Assembler::try_new(max, false).expect("memory");
+    assert_eq!(a.capacity(), max);
+    let mut payload = vec![2u8, EOF];
+    payload.extend((0..300_000).map(|i| i as u8));
+    assert_eq!(a.feed(&payload, false), Some(true), "a frame larger than the first buffer grows into it");
+    assert_eq!(a.ready().len(), 300_000);
+    let mut over = vec![2u8, EOF];
+    over.extend(std::iter::repeat_n(7u8, max + 1));
+    assert_eq!(a.feed(&over, false), Some(false), "past the maximum: broken");
+    assert_eq!(a.ready().len(), 300_000, "the last good one kept");
+    let exact = Assembler::try_new(640 * 480 * 2, true).expect("memory");
+    assert_eq!(exact.capacity(), 640 * 480 * 2);
+    assert!(Assembler::try_new(usize::MAX / 2, true).is_none(), "memory that is not there refuses, without a panic");
 }

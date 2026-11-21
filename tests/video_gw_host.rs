@@ -104,7 +104,7 @@ fn a_test_pattern_has_three_modes_the_pattern_draws() {
 // The Ryzen's two cameras (tests/data/uvc-0471-*.hex, logged by video_gw on 2026-11-21): the YUY2 modes open takes are
 // offered, those wider than 1280 or taller than 1024 are not, and MJPEG is not yet.
 #[test]
-fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
+fn the_ryzens_cameras_offer_their_yuy2_and_mjpeg_modes_up_to_1280_by_1024() {
     for (name, offered_sizes) in [
         ("0471-a6ca", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (800, 600), (640, 360), (352, 288), (320, 240), (160, 120)]),
         ("0471-a6cd", vec![(640, 480), (1280, 1024), (1280, 960), (1280, 720), (1024, 768), (960, 720), (800, 600), (640, 360), (432, 240), (352, 288), (320, 240)]),
@@ -114,7 +114,74 @@ fn the_ryzens_cameras_offer_their_yuy2_modes_up_to_1280_by_1024() {
         let camera = uvc::parse(&bytes).unwrap();
         let capacity = camera.capacity(3);
         let offered_now: Vec<(u16, u16)> = camera.modes().iter()
-            .filter(|m| offered(m.encoding == uvc::Encoding::Yuy2, m.width, m.height, m.rate(), m.bytes_per_second(), capacity)).map(|m| (m.width, m.height)).collect();
+            .filter(|m| m.encoding == uvc::Encoding::Yuy2 && offered(true, m.width, m.height, m.rate(), m.bytes_per_second(), capacity)).map(|m| (m.width, m.height)).collect();
         assert_eq!(offered_now, offered_sizes, "{name}");
+        // 158-DRV-0084: their MJPEG modes as well, as video_gw lists them (a compressed mode's bytes are 0), up to 1280x1024.
+        // Those YUY2 gives at the same size and rate are streamed as YUY2, so not offered as MJPEG: what is left is where
+        // YUY2 is slower (the Ryzen's, 2026-11-21: open of 640x480 at 25 streamed YUY2's mode 13).
+        let mjpeg: Vec<(u16, u16)> = camera.modes().iter()
+            .filter(|m| m.encoding == uvc::Encoding::Mjpeg && offered(true, m.width, m.height, m.rate(), 0, capacity) && camera.opens_as(m)).map(|m| (m.width, m.height)).collect();
+        let want = if name == "0471-a6ca" { vec![(1280, 1024), (1280, 960), (1280, 720), (1024, 768), (800, 600)] } else { vec![(1280, 1024), (1280, 960), (1280, 720), (1024, 768), (960, 720), (800, 600)] };
+        assert_eq!(mjpeg, want, "{name}");
+        assert!(camera.modes().iter().filter(|m| m.encoding == uvc::Encoding::Yuy2).all(|m| camera.opens_as(m)), "{name}: every YUY2 mode is reached");
     }
+}
+
+// 158-DRV-0082: a bulk camera's stop runs a step at a time after its close: the clear-halt, then the reset; none after.
+#[test]
+fn a_bulk_cameras_stop_is_its_clear_halt_then_its_reset() {
+    assert_eq!(after(Step::Halt), Some(Step::Reset));
+    assert_eq!(after(Step::Reset), None);
+    let mut s = Settle::default();
+    assert!(s.ready(0) && s.next.is_none(), "a camera never closed is ready");
+    s.closed(1_000);
+    assert_eq!((s.next, s.closed_ns), (Some(Step::Halt), 1_000));
+    assert!(!s.ready(u64::MAX), "not before its steps are done");
+    s.done(Step::Halt, 2_000);
+    assert_eq!((s.next, s.reset_ns), (Some(Step::Reset), 0), "the clear-halt is no reset");
+    assert!(!s.ready(u64::MAX));
+    s.done(Step::Reset, 3_000_000);
+    assert_eq!((s.next, s.reset_ns), (None, 3_000_000));
+}
+
+// 158-DRV-0082: after its reset a camera is probed again SETTLE_MS later at the soonest, at once when it was not reset.
+#[test]
+fn a_reset_camera_is_probed_again_once_settled() {
+    let ms = 1_000_000u64;
+    let mut s = Settle::default();
+    assert_eq!(s.ms, SETTLE_MS);
+    s.closed(0);
+    s.done(Step::Halt, 5 * ms);
+    s.done(Step::Reset, 10 * ms);
+    assert!(!s.ready(10 * ms) && !s.ready((10 + SETTLE_MS as u64) * ms - 1));
+    assert!(s.ready((10 + SETTLE_MS as u64) * ms));
+    // A failed step counts as done: the next one is tried, and the camera does not wait for ever.
+    let mut f = Settle::default();
+    f.closed(0);
+    f.done(Step::Halt, ms);
+    f.done(Step::Reset, 2 * ms);
+    assert!(f.ready((2 + SETTLE_MS as u64) * ms));
+}
+
+// 158-DRV-0082: a probe answered late after the settling lengthens the next settling by its lateness, up to a second;
+// a prompt one, or an open with no reset before it, keeps it.
+#[test]
+fn the_settling_learns_from_a_late_probe() {
+    assert_eq!(learned(250, PROMPT_MS), 250);
+    assert_eq!(learned(250, 150), 400);
+    assert_eq!(learned(900, 400), SETTLE_MAX_MS);
+    assert_eq!(learned(SETTLE_MAX_MS, 999), SETTLE_MAX_MS);
+    let mut s = Settle::default();
+    assert!(!s.opened(500), "no reset before it: nothing learned");
+    s.closed(0);
+    s.done(Step::Halt, 1);
+    s.done(Step::Reset, 2);
+    assert!(s.opened(150));
+    assert_eq!((s.ms, s.reset_ns), (400, 0), "the Ryzen's camera 0: 250 ms and a probe 150 ms late");
+    assert!(s.ready(0), "opened: no longer settling");
+    s.closed(10);
+    s.done(Step::Halt, 11);
+    s.done(Step::Reset, 12);
+    assert!(!s.opened(3), "a prompt probe keeps it");
+    assert_eq!(s.ms, 400);
 }

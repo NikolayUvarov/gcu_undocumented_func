@@ -364,7 +364,7 @@ fn a_video_1_0_program_works_with_a_1_1_gateway() {
     assert_eq!(old::open(endpoint, 0, 640, 480, 30), Ok(Err(old::Error::Busy)));
     assert_eq!(old::frame(endpoint).unwrap().unwrap().sequence, 7);
     assert_eq!(old::close(endpoint), Ok(Ok(())));
-    assert_eq!((old::VERSION, idl::video::VERSION), ((1, 0, 0), (1, 1, 0)), "the same major version: the same wire for 1.0's calls");
+    assert_eq!((old::VERSION, idl::video::VERSION), ((1, 0, 0), (1, 2, 0)), "the same major version: the same wire for 1.0's calls (1.2, 158-DRV-0084, adds none)");
 }
 
 #[test]

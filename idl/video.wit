@@ -9,7 +9,10 @@
 /// and says which the gateway offers; `open` asked for an offered mode's size and rate streams that mode unscaled, and
 /// `opened` says which mode the camera sends. The calls of 1.0 are unchanged on the wire, so a 1.0 program works with a
 /// 1.1 gateway; a 1.0 gateway refuses `modes` and `opened` (the call is rejected as invalid).
-package mind:video@1.1.0;
+///
+/// 1.2 (158-DRV-0084): the gateway decodes Motion JPEG, so a camera's MJPEG modes within the sizes and rates it takes
+/// are offered too, and `open` may stream one. Nothing changes on the wire: a 1.1 program works with a 1.2 gateway.
+package mind:video@1.2.0;
 
 interface video {
     enum error { not-found, busy, invalid, not-open, no-memory }
@@ -18,13 +21,13 @@ interface video {
     /// A frame: its number since the stream opened (from 1), when it was taken (monotonic clock, µs), its size and the
     /// bytes copied into the lent buffer.
     record frame { sequence: u32, timestamp-us: u64, width: u16, height: u16, bytes: u32 }
-    /// 1.1: how a mode's frames come from the camera: YUY2 (which the gateway converts), Motion JPEG, another
-    /// uncompressed format, or drawn by the gateway (the test pattern).
+    /// 1.1: how a mode's frames come from the camera: YUY2 (which the gateway converts), Motion JPEG (which it decodes,
+    /// 1.2), another uncompressed format, or drawn by the gateway (the test pattern).
     enum encoding { yuy2, mjpeg, uncompressed, synthetic }
     /// 1.1: a mode: a frame size in an encoding at one of the camera's frame intervals (100 ns units, as the camera
     /// states it), so at `rate` frames a second (10^7 / interval rounded down; 0 for less than one a second); `offered`
-    /// when the gateway streams it now: a YUY2 mode within the sizes and rates it takes, which the camera's streaming
-    /// settings carry.
+    /// when the gateway streams it now: a mode it decodes (YUY2; Motion JPEG too, 1.2) within the sizes and rates it
+    /// takes, which the camera's streaming settings carry.
     record mode { encoding: encoding, width: u16, height: u16, rate: u8, interval: u32, offered: bool }
     /// 1.1: the caller's stream: the camera's number when it was opened, the mode the camera sends (its place in that
     /// camera's `modes`, 65535 for a test pattern drawn at a size none of its modes has, and its facts), and whether
