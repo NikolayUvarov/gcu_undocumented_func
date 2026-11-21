@@ -6,7 +6,7 @@ The kernel's size is measured and held to a budget by the host tests (`scripts/k
 
 | Guarantee | TCB |
 |---|---|
-| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices and its runtime variable services after it (`GetVariable`, `SetVariable`: the kernel calls them in ring 0 for `FIRMWARE_VARIABLE`, 351-KRN-0027), bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`, `virtio_input`, `rtl8168`, `rtw89_wifi`, `bcm_wifi`** (each holds a DMA region from `init`; no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
+| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices and its runtime variable services after it (`GetVariable`, `SetVariable`: the kernel calls them in ring 0 for `FIRMWARE_VARIABLE`, 351-KRN-0027), bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`, `virtio_input`, `rtl8168`, `rtw89_wifi`, `bcm_wifi`** (each holds a DMA region from `init`; no IOMMU); **`display`** (213-KRN-0270, 0271: no DMA region, but the Radeon's display engine registers on a device the firmware left mastering the bus; among them the engine's apertures, which can aim its reads, and any writeback it has, at memory); `init` (it can mint DMA regions and device MMIO capabilities). |
 | Kernel integrity | Same as above. |
 | Capability confinement of applications | Kernel; `loader` (decides which client capabilities an application gets); `init` (decides what `loader` holds). |
 | Capability confinement of services | Kernel; `init`. |
