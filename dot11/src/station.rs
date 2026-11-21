@@ -23,6 +23,8 @@ pub const HANDSHAKE_MS: u64 = 4000;
 pub const SILENCE_MS: u64 = 10_000;
 /// A lost network is joined again after this long.
 pub const REJOIN_MS: u64 = 3000;
+/// How long a rejoin on a listen-only channel waits for the network's beacon before it sends anything (550-NET-0090).
+pub const BEACON_WAIT_MS: u64 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Off, Scanning, Joining, Joined, Failed }
@@ -81,6 +83,8 @@ pub struct Station {
     keys: Option<Keys>,
     heard: u64,
     rejoin: Option<u64>,
+    // A rejoin on a listen-only channel, until when it waits for the network's beacon: nothing is sent there before it.
+    beacon_wait: Option<u64>,
     sequence: u16,
     // Whether the radio receives and sends OFDM on 2.4 GHz (802.11g); without it the station is 802.11b there.
     ofdm: bool,
@@ -99,7 +103,7 @@ impl Station {
         let count = channels.len().min(64);
         list[..count].copy_from_slice(&channels[..count]);
         Station { own, channels: list, allowed: list.map(unrestricted), channel_count: count, state: State::Off, reason: Reason::None, list: List::default(), scanning: None,
-                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
+                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, beacon_wait: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
                   acked: 0, failed: 0 }
     }
 
@@ -122,6 +126,11 @@ impl Station {
         let count = channels.len().min(64);
         for (i, &(channel, allowed)) in channels[..count].iter().enumerate() { (self.channels[i], self.allowed[i]) = (channel, allowed); }
         self.channel_count = count;
+    }
+
+    // What the station may send on `channel`.
+    fn allowed_on(&self, channel: u8) -> Allowed {
+        self.channels[..self.channel_count].iter().zip(&self.allowed).find(|(&c, _)| c == channel).map_or(Allowed::Nothing, |(_, &a)| a)
     }
 
     // Whether the station may join an access point on `channel`.
@@ -189,6 +198,7 @@ impl Station {
         self.supplicant = None;
         self.keys = None;
         self.rejoin = None;
+        self.beacon_wait = None;
         self.state = State::Joining;
         out.channel = Some(bss.channel);
         out.filter = Some(Filter { all_beacons: false, bssid: bss.bssid });
@@ -226,11 +236,13 @@ impl Station {
         self.keys = None;
         self.scanning = None;
         self.rejoin = None;
+        self.beacon_wait = None;
     }
 
-    /// Leaves the network (deauthentication, reason 3) and forgets its keys.
+    /// Leaves the network (deauthentication, reason 3) and forgets its keys; nothing is sent while a rejoin still waits
+    /// for the network's beacon on a listen-only channel.
     pub fn leave(&mut self, out: &mut Out, tx: &mut [u8]) {
-        if let (Some(join), State::Joined | State::Joining) = (self.join, self.state) {
+        if let (Some(join), State::Joined | State::Joining, None) = (self.join, self.state, self.beacon_wait) {
             let sequence = self.next_sequence();
             if let Ok(len) = frame::deauthentication(tx, &self.own, &join.bss.bssid, 3, sequence) {
                 out.send = Some((len, Self::basic_rate(join.bss.channel)));
@@ -251,9 +263,22 @@ impl Station {
             out.filter = Some(Filter { all_beacons: false, bssid: [0; 6] });
             return Ok(());
         }
+        if let Some(until) = self.beacon_wait {
+            // No beacon: the network may have left the channel (radar, a channel switch), so nothing is sent there.
+            if now >= until { self.beacon_wait = None; self.fail(Reason::Lost); }
+            return Ok(());
+        }
         if let Some(at) = self.rejoin {
             if now < at { return Ok(()); }
             let Some(join) = self.join else { self.rejoin = None; return Ok(()) };
+            // On a listen-only channel (radar rules, NO-IR) the station first hears the network's beacon there.
+            if self.allowed_on(join.bss.channel) == Allowed::Listen {
+                self.rejoin = None;
+                self.beacon_wait = Some(now + BEACON_WAIT_MS);
+                out.channel = Some(join.bss.channel);
+                out.filter = Some(Filter { all_beacons: false, bssid: join.bss.bssid });
+                return Ok(());
+            }
             let reason = self.reason;
             self.start(join.bss, join.secret, now, out, tx)?;
             self.reason = reason;
@@ -290,8 +315,16 @@ impl Station {
         let h = frame::header(frame)?;
         if h.kind == TYPE_MANAGEMENT && (h.subtype == BEACON || h.subtype == PROBE_RESPONSE) {
             if let Some(bss) = scan::describe(frame, &h, channel, weakness, now) {
-                if self.join.is_some_and(|j| j.bss.bssid == bss.bssid) { self.heard = now; }
+                let ours = self.join.filter(|j| j.bss.bssid == bss.bssid);
+                if ours.is_some() { self.heard = now; }
                 self.list.insert(bss);
+                // The beacon a rejoin on a listen-only channel waited for, heard on that channel: the join starts.
+                if let Some(join) = ours.filter(|j| self.beacon_wait.is_some() && h.subtype == BEACON && j.bss.channel == channel) {
+                    self.beacon_wait = None;
+                    let reason = self.reason;
+                    self.start(bss, join.secret, now, out, tx)?;
+                    self.reason = reason;
+                }
             }
             return Ok(());
         }

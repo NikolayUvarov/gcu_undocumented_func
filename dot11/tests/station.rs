@@ -2,11 +2,12 @@
 //! an open and a WPA2-PSK network (the access point's handshake from `wpa::authenticator`), data both ways under CCMP,
 //! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), a country's
 //! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035), and
-//! the access point a key joins: WPA2 alone, never an open one of the same name (801-NET-0084).
+//! the access point a key joins: WPA2 alone, never an open one of the same name (801-NET-0084), and on 5 GHz: its access
+//! point first, and a rejoin on a listen-only channel that waits for the network's beacon (550-NET-0090).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
 use dot11::country::{self, Rule, Standing};
-use dot11::station::{Allowed, Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
+use dot11::station::{Allowed, Out, Reason, Secret, State, Station, BEACON_WAIT_MS, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
 use dot11::Error;
 use wpa::authenticator::{Authenticator, FRAME_MAX as EAPOL_MAX};
 use wpa::ccmp;
@@ -707,4 +708,70 @@ fn country_rules_give_each_channel_its_standing() {
     assert_eq!(country::standing(&[], 6, true), (Standing::Barred, 0));
     // A rule narrower than 20 MHz holds no channel.
     assert_eq!(country::standing(&[Rule { bandwidth_khz: 10_000, ..rule(2_402_000, 2_482_000, 2000) }], 6, true), (Standing::Barred, 0));
+}
+
+#[test]
+fn a_5_ghz_access_point_of_the_network_goes_before_a_stronger_2_4_ghz_one() {
+    // One network on channel 8 and on channel 100, as the Ryzen hears CoolNet2 (213-DRV-0087); weakness is minus dBm.
+    let mut ap = wpa2();
+    let mut heard = |last: u8, channel: u8, weakness: u8| {
+        ap.channel = channel;
+        let mut f = ap.beacon();
+        (f[15], f[21]) = (last, last); // a BSSID of its own
+        let h = frame::header(&f).unwrap();
+        scan::describe(&f, &h, channel, weakness, 0).unwrap()
+    };
+    let (two, five, faint, other) = (heard(1, 8, 45), heard(2, 100, 65), heard(3, 36, scan::FIVE_GHZ_FLOOR + 5), heard(4, 149, 55));
+    let mut list = scan::List::default();
+    list.insert(two);
+    list.insert(five);
+    assert_eq!(list.best_of(SSID, Security::Wpa2).map(|b| b.channel), Some(100), "5 GHz above the floor first, though weaker");
+    assert_eq!(list.best(SSID).map(|b| b.channel), Some(100));
+    // Below the floor, the strongest wins whatever its band.
+    let mut list = scan::List::default();
+    list.insert(two);
+    list.insert(faint);
+    assert_eq!(list.best_of(SSID, Security::Wpa2).map(|b| b.channel), Some(8));
+    // Among 5 GHz access points above the floor, the strongest.
+    list.insert(five);
+    list.insert(other);
+    assert_eq!(list.best_of(SSID, Security::Wpa2).map(|b| b.channel), Some(149));
+}
+
+#[test]
+fn a_rejoin_on_a_listen_only_channel_waits_for_the_networks_beacon() {
+    // Channel 6, the access point's, is listen-only, as a radar channel is (52 to 144 on 5 GHz).
+    let mut air = Air::new(wpa2());
+    restrict(&mut air, &rules(|c| if c == 6 { Allowed::Listen } else { Allowed::Send }));
+    air.scan();
+    beacon(&mut air);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+    let lose = |air: &mut Air| {
+        let mut deauth = air.ap.header(frame::DEAUTHENTICATION, &OWN);
+        deauth.extend_from_slice(&[7, 0]);
+        (air.ap.tk, air.ap.confirmed) = (None, false);
+        air.hear(&deauth).unwrap();
+        assert_eq!((air.station.state(), air.station.reason()), (State::Joining, Reason::Lost));
+        air.sent.clear();
+    };
+    // Lost: past the rejoin's wait nothing is sent there until the network's beacon is heard; then the join goes on.
+    lose(&mut air);
+    air.wait(REJOIN_MS + BEACON_WAIT_MS / 2);
+    assert!(air.sent.is_empty(), "nothing sent on a listen-only channel before a beacon: {:?}", air.sent);
+    assert_eq!((air.station.state(), air.channel), (State::Joining, 6));
+    beacon(&mut air);
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+    assert!(air.ap.confirmed);
+    // Lost again, and no beacon: the rejoin gives up having sent nothing, and the search is the station service's.
+    lose(&mut air);
+    air.wait(REJOIN_MS + BEACON_WAIT_MS + 20);
+    assert_eq!((air.station.state(), air.station.reason()), (State::Failed, Reason::Lost));
+    assert!(air.sent.is_empty(), "{:?}", air.sent);
+    // On a channel it may send on, the rejoin goes at once, as before.
+    let mut air = joined();
+    lose(&mut air);
+    air.wait(REJOIN_MS + 20);
+    assert_eq!(air.station.state(), State::Joined);
 }
