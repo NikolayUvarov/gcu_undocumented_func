@@ -8094,9 +8094,12 @@ def camera_check(vm):
     vm.hmp("sendkey n")
     vm.serial(enter=False)
     vm.logged("[CAMERA] ONE CAMERA ONLY: test pattern", since)
+    # Read from the log: camera may end, and the shell resume, within the 100 ms serial() drops (round 162's gate).
+    since = len(vm.log)
     vm.hmp("sendkey esc")
     vm.serial(enter=False)
-    require(vm.expect("SHELL RESUMED.", timeout=30), "[CAMERA] SHOWN ")
+    vm.logged("[CAMERA] SHOWN ", since)
+    vm.logged("SHELL RESUMED.", since)
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
           "-c beyond the list refused, n with one camera named (158-APP-0147)", flush=True)
