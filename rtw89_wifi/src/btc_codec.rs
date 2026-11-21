@@ -59,8 +59,10 @@ impl Profile {
     /// One station connected on 2.4 GHz, 20 MHz, port 0 (213-DRV-0052): rtw89_fw_h2c_cxdrv_role_v2 at
     /// BTC_ROLE_MSTS_STA_CONN_END. One connection, link mode 2G_STA, the station bit, then the role's connected bit, band,
     /// width, role STATION and channel; the macid is not in this version.
+    /// On 5 GHz (213-DRV-0087) the link mode is BTC_WLINK_5G (9) and the role's band field (bits 6-7) is 1.
     pub fn driver_station(&self, channel: u8) -> Encoded {
-        let mut out = Encoded::driver(); out.put(&[1,64]); out.put(&[1,1,2,0,1,0,1,channel]); out.put(&[0;56]); out
+        let (link, band) = if channel > 14 { (9, 1u8 << 6) } else { (1, 0) };
+        let mut out = Encoded::driver(); out.put(&[1,64]); out.put(&[1,link,2,0,1|band,0,1,channel]); out.put(&[0;56]); out
     }
     /// Source no-link width starts at enum 20MHz=0 and still encodes the six-channel guard on both sides.
     pub fn afh_no_link(&self) -> Encoded { let mut out = Encoded::set(10); out.put(&[0,0,32]); out }
@@ -90,13 +92,14 @@ impl Profile {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// `Station` is Linux's OFF_BWB1, a connected station beside an idle or scanning Bluetooth with Wi-Fi idle (`_action_bt_idle`).
-pub enum Policy { ResetDefaults, NoLink, Rfk, Station }
+/// `Station5g` is OFF_EQ0, `_action_wl_5g`'s: the OFF slot's table all ones, TDMA off (213-DRV-0087).
+pub enum Policy { ResetDefaults, NoLink, Rfk, Station, Station5g }
 impl Policy {
     pub(crate) fn tdma(self) -> [u8; 8] { [0,0,0,0,0,0,0,if self == Self::Rfk { 1 } else { 0 }] }
     pub(crate) fn slot(self, index: usize) -> (u16,u32,u16) {
         if index != 0 { return SLOTS[index]; }
         match self { Self::ResetDefaults => SLOTS[0], Self::NoLink => (100,0xe5555555,0), Self::Rfk => (100,0xaaaaaaaa,1),
-            Self::Station => (100,0xea5a5a5a,0) }
+            Self::Station => (100,0xea5a5a5a,0), Self::Station5g => (100,0xffffffff,0) }
     }
 }
 

@@ -68,7 +68,7 @@ fn serve(admits: bool, frames: Vec<Vec<u8>>,
 // What the serving loop does for Ask::Tune: the passive policy of that channel, tuned on the live PHY.
 fn tune(service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, receive: &listen::Receiving, tables: &DefaultTables, board: &Board) -> u8 {
     let Some(Ask::Tune(ch, call)) = service.take_ask() else { panic!("no tune asked") };
-    let policy = Policy::passive(board, 2407 + 5 * u16::from(ch)).unwrap();
+    let policy = Policy::passive(board, crate::band::center_mhz(ch).unwrap()).unwrap();
     channel::run(phy, board, &receive.prepared.prefix, &receive.prepared.paths, tables, &policy).unwrap();
     // A tune is said to take 100 us a channel number, so that a scan's longest is known.
     service.tuned(ch, u64::from(ch) * 100); wlanhw::reply_set_channel(call, Ok(())).unwrap(); ch
@@ -97,10 +97,12 @@ fn filter(all_beacons: bool, bssid: u64) -> Vec<u8> {
 fn every_channel_is_tuned_passively_before_a_country() { serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
     let id = ipc::buffer(1, &[]); step(service, phy, events);
     let first = info(id);
-    assert_eq!(first.channels.as_slice(), &(1..=13).collect::<Vec<u8>>()[..]);
-    assert_eq!(first.supported.as_slice(), &(1..=13).collect::<Vec<u8>>()[..]);
+    // 1 to 13 and, since 213-DRV-0087, the 5 GHz channels at 20 MHz (bands bit 1).
+    assert_eq!(first.channels.as_slice(), &crate::band::SUPPORTED[..]);
+    assert_eq!(first.supported.as_slice(), &crate::band::SUPPORTED[..]);
+    assert_eq!(&first.supported.as_slice()[..13], &(1..=13).collect::<Vec<u8>>()[..]);
     // Listening on channel 1, but no channel set by the client yet: 0, as a restarted radio says (550-NET-0061).
-    assert_eq!((first.channel, first.bands, first.frame_max), (0, 5, 2346));
+    assert_eq!((first.channel, first.bands, first.frame_max), (0, 7, 2346));
     let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 1);
     assert!(service.take_ask().is_none());
@@ -121,8 +123,9 @@ fn before_a_country_the_first_send_takes_the_world_rules() { serve(true, Vec::ne
     error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none()); assert!(service.limits().is_none());
     let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     let id = ipc::buffer(4, &send_body()); step(service, phy, events);
-    error(id, wlanhw::Error::Busy); assert!(matches!(service.take_ask(), Some(Ask::Admit(1))));
-    assert_eq!(events.as_slice(), &[Event::NoCountry { channels: 13, listen_only: 2 }]);
+    error(id, wlanhw::Error::Busy); assert!(matches!(service.take_ask(), Some(Ask::Admit(1, None))));
+    // 13 + 25 channels since 213-DRV-0087: the world rules keep every 5 GHz one up to 165 listen-only.
+    assert_eq!(events.as_slice(), &[Event::NoCountry { channels: 38, listen_only: 27 }]);
     let world = service.limits().unwrap(); assert_eq!(world.code(), *b"00"); assert_eq!(world.version(), 1);
     assert_eq!(world.applied(1).unwrap().eirp_half_dbm, 40); assert!(world.applied(12).unwrap().listen);
     // A country given later replaces it and is numbered after it.
@@ -193,7 +196,7 @@ fn under_a_country_the_first_send_asks_admission_and_listen_only_channels_ask_no
         let id = ipc::words(2, 1); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
         let id = ipc::buffer(4, &send_body()); step(service, phy, events);
         error(id, wlanhw::Error::Busy);
-        assert!(matches!(service.take_ask(), Some(Ask::Admit(1))));
+        assert!(matches!(service.take_ask(), Some(Ask::Admit(1, None))));
         // 00 lets channel 13 be listened to only: tuned there, a send is refused and admits nothing.
         let id = ipc::buffer(9, &country("00", &all(20))); step(service, phy, events); info(id);
         let id = ipc::words(2, 13); step(service, phy, events); tune(service, phy, receive, tables, board);
@@ -237,7 +240,7 @@ fn a_scans_probe_request_admits_nothing_and_the_joins_first_frame_does() { serve
     let id = ipc::buffer(3, &filter(false, 0x021122334455)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events);
     error(id, wlanhw::Error::Busy);
-    assert!(matches!(service.take_ask(), Some(Ask::Admit(8))));
+    assert!(matches!(service.take_ask(), Some(Ask::Admit(8, None))));
     let kept = service.filter(); assert!(!kept.all_beacons()); assert_eq!(kept.bssid(), BSSID);
     assert_eq!(kept.own(), board.identity.mac);
 });}
@@ -251,13 +254,13 @@ fn a_scan_ends_with_its_tunes_and_the_frames_it_kept() { serve(true, vec![beacon
         assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     }
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
-    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 2, longest_us: 600, kept: 1, dropped: 0 }]);
+    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 2, longest_us: 600, kept: 1, dropped: 0, measured: 0, late: 0, unmatched: 0 }]);
     // A filter that ends no scan logs none; the next scan counts from its own start.
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
     let id = ipc::buffer(3, &filter(true, 0)); step(service, phy, events); ipc::response(id).unwrap();
     let id = ipc::words(2, 2); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
-    assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0 }]);
+    assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0, measured: 0, late: 0, unmatched: 0 }]);
 });}
 
 #[test]
@@ -269,4 +272,102 @@ fn a_networks_filter_narrows_the_hardware_and_a_scan_opens_it_again() { serve(tr
     set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), Some(true));
     set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), None);
     set(service, phy, events, true, 0); assert_eq!(service.take_narrowing(), Some(false));
+});}
+
+// 213-DRV-0087: the registers a band sets, read back from the modelled device.
+fn read(phy: &mut Live<'_, '_, '_, '_>, at: usize) -> u32 { crate::io::read32(phy.bus_between_stages(), at).unwrap() }
+fn rf18(phy: &mut Live<'_, '_, '_, '_>) -> u32 { crate::phy::rf_read(phy.bus_between_stages(), 0, 0x18, 0xfffff).unwrap() }
+
+#[test]
+fn a_5_ghz_channel_is_tuned_for_its_band_and_2_4_ghz_comes_back() { serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
+    let btg = read(phy, 0x14738) & (1 << 19 | 1 << 22);
+    let id = ipc::words(2, 100); step(service, phy, events); assert_eq!(tune(service, phy, receive, tables, board), 100);
+    assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    assert_eq!(read(phy, 0x10734) >> 16 & 255, 0x30, "rtw89_encode_chan_idx: base 100 (index 3), offset 0");
+    assert_eq!(read(phy, 0x14738) & (1 << 17 | 1 << 19 | 1 << 22), 0, "band select 5 GHz, Bluetooth's share off");
+    assert_eq!(read(phy, 0x14aa4) & (1 << 17 | 1 << 19 | 1 << 22), 0);
+    assert_eq!(read(phy, 0x149c0) & 127, 48, "SCO of channel 100");
+    assert_eq!((read(phy, 0x10700) >> 5 & 1, read(phy, 0x12344) >> 31), (0, 1), "CCK off, its CCA disabled");
+    assert_eq!(read(phy, 0xc628) & 0x13, 3, "CHECK_CCK_EN and RTS_LIMIT_IN_OFDM6, no BAND_MODE");
+    assert_eq!(rf18(phy) & 0x303ff, 0x10164, "RF18: channel 100 and both 5 GHz band fields");
+    let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 100);
+    // Back to 2.4 GHz: CCK, the band select, BAND_MODE, RF18's band fields and the tail's BTG share come back.
+    let id = ipc::words(2, 6); step(service, phy, events); assert_eq!(tune(service, phy, receive, tables, board), 6); ipc::response(id).unwrap();
+    assert_eq!(read(phy, 0x10734) >> 16 & 255, 6);
+    assert_eq!(read(phy, 0x14738) & (1 << 17 | 1 << 19 | 1 << 22), 1 << 17 | btg);
+    assert_eq!((read(phy, 0x10700) >> 5 & 1, read(phy, 0x12344) >> 31), (1, 0));
+    assert_eq!(read(phy, 0xc628) & 0x13, 0x10);
+    assert_eq!(rf18(phy) & 0x303ff, 6);
+    // The other sub-bands' indices; channels outside the radio's own are refused.
+    for (ch, index) in [(36, 0x20), (64, 0x2e), (144, 0x46), (165, 0x58)] {
+        let id = ipc::words(2, ch); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+        assert_eq!(read(phy, 0x10734) >> 16 & 255, index, "channel {ch}");
+    }
+    for ch in [14, 34, 38, 178] { let id = ipc::words(2, ch); step(service, phy, events); error(id, wlanhw::Error::Invalid); }
+    assert!(events.is_empty());
+});}
+
+#[test]
+fn nothing_is_sent_on_a_radar_channel_before_its_access_points_beacon() { serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
+    // US: 36 may be sent on; 100 is a DFS channel, listen-only.
+    let id = ipc::buffer(9, &country("US", &[(36, 23, false), (100, 24, true)])); step(service, phy, events);
+    assert_eq!(info(id).channels.as_slice(), &[36, 100]);
+    let id = ipc::words(2, 100); step(service, phy, events); assert_eq!(tune(service, phy, receive, tables, board), 100); ipc::response(id).unwrap();
+    // The join's authentication before any beacon there: refused, nothing admitted, logged once; a probe the same.
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events);
+    error(id, wlanhw::Error::Failed); assert!(service.take_ask().is_none());
+    let mut probe = management(4); probe[4..10].fill(0xff); probe[16..22].fill(0xff);
+    let id = ipc::buffer(4, &send_frame(&probe)); step(service, phy, events); error(id, wlanhw::Error::Failed);
+    assert_eq!(events.drain(..).collect::<Vec<_>>(), [Event::CountryTaken { code: *b"US", channels: 2, listen_only: 1, applied: true },
+        Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }]);
+    // Its beacon heard on 100: a frame to that access point admits the channel with the evidence; to another, nothing.
+    phy.bus_between_stages().device_for_test().inner.inject_packet(0, 0, &beacon());
+    step(service, phy, events);
+    let heard: Vec<_> = service.heard().map(|h| (h.channel(), h.bssid())).collect(); assert_eq!(heard, [(100, BSSID)]);
+    let mut other = management(11); other[4..10].copy_from_slice(&[2, 9, 9, 9, 9, 9]);
+    let id = ipc::buffer(4, &send_frame(&other)); step(service, phy, events); error(id, wlanhw::Error::Failed);
+    assert!(service.take_ask().is_none());
+    let id = ipc::buffer(4, &send_frame(&probe)); step(service, phy, events); error(id, wlanhw::Error::Failed);
+    assert!(service.take_ask().is_none(), "a probe request is never sent there");
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    let Some(Ask::Admit(100, Some(evidence))) = service.take_ask() else { panic!("no admission with evidence") };
+    assert_eq!((evidence.channel(), evidence.bssid()), (100, BSSID));
+    // A tune forgets what was heard: back on 100, the beacon must be heard again; 36 needs none.
+    for ch in [36, 100] { let id = ipc::words(2, ch); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap(); }
+    assert_eq!(service.heard().count(), 0);
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Failed);
+    assert!(service.take_ask().is_none());
+    // The access point heard on 5 GHz is logged once a run (Event::Heard5), the refusal once a tune.
+    assert_eq!(events.as_slice(), &[Event::Heard5 { channel: 100, bssid: BSSID }, Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }]);
+});}
+
+// 213-DRV-0087: a PPDU status report gives the frame kept just before it its signal while the station has not taken it;
+// one after the station took it, or that follows no kept frame of its count and rate, is counted and dropped.
+#[test]
+fn a_scans_beacon_carries_its_signal_from_the_report_that_follows_it() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+    use crate::captures::{bytes, frame, FIVE};
+    let report = bytes(FIVE);
+    let inject = |phy: &mut Live<'_, '_, '_, '_>, buffer: &[u8]| phy.bus_between_stages().device_for_test().inner.inject_buffer(0, buffer);
+    let receive = |service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>| {
+        let id = ipc::buffer(5, &[]); step(service, phy, events);
+        let (w, b) = ipc::response(id).unwrap(); let mut r = Reader::new(&b[..w[0] >> 16]);
+        let received = codec::decode_bytes::<2354>(&mut r).unwrap(); assert!(r.done()); received[..8].to_vec()
+    };
+    // The beacon at OFDM 6 Mb/s with the report's count 1: -63 dBm, the 5 GHz figure Linux gave -67 at other hours.
+    inject(phy, &frame(&beacon(), 1, 4)); inject(phy, &report);
+    let header = receive(service, phy, events);
+    assert_eq!((header[2], header[4]), (63, 12));
+    // Another PPDU's count: not this frame's report, its 0 stands.
+    inject(phy, &frame(&beacon(), 2, 4)); inject(phy, &report);
+    assert_eq!(receive(service, phy, events)[2], 0);
+    // A frame not kept (a control frame) between the kept one and the report: the report is that frame's, not the kept one's.
+    let mut other = other_data(); other.extend_from_slice(&[0; 4]); other[0] = 0x84;
+    inject(phy, &frame(&beacon(), 1, 4)); inject(phy, &frame(&other, 1, 4)); inject(phy, &report);
+    assert_eq!(receive(service, phy, events)[2], 0);
+    // Taken by the station before its report came: the report is late, nothing else is marked.
+    inject(phy, &frame(&beacon(), 1, 4));
+    assert_eq!(receive(service, phy, events)[2], 0);
+    inject(phy, &report); step(service, phy, events);
+    let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
+    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 0, longest_us: 0, kept: 4, dropped: 0, measured: 1, late: 1, unmatched: 2 }]);
 });}

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 #[path = "../rtw89_wifi/src/frames.rs"] mod frames;
 

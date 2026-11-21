@@ -120,3 +120,41 @@ fn tssi_applied_stop_error_is_rechecked_before_saved_register_restoration(){
         let d=p.bus_between_stages();off(d);assert_eq!(d.get(0x1458c,4)>>28,3);
     });
 }
+
+// 213-DRV-0087: the 5 GHz groups, thermal rows and tables of rtw8852b_tssi on channel 100.
+#[test]
+fn tssi_5_ghz_groups_and_thermal_rows_follow_linux(){
+    for ch in 1..=13u8{let old=match ch{1..=2=>0,3..=5=>1,6..=8=>2,9..=11=>3,_=>4};
+        assert_eq!((tssi::ofdm_group(ch),tssi::cck_group(ch),tssi::trim_group(ch)),(Some((old,false)),old,Some(usize::from(ch>=9))),"{ch}");}
+    for (ch,group,trim) in [(36,(5,false),2),(64,(8,false),3),(100,(9,false),4),(108,(10,false),4),(116,(11,false),5),
+        (132,(13,false),6),(144,(14,false),6),(149,(15,false),7),(165,(17,false),7),(177,(18,false),7)]{
+        assert_eq!((tssi::ofdm_group(ch),tssi::trim_group(ch),tssi::cck_group(ch)),(Some(group),Some(trim),0),"{ch}");}
+    assert_eq!(tssi::ofdm_group(42),Some((5,true)));assert_eq!(tssi::ofdm_group(170),Some((17,true)));
+    for ch in crate::band::CHANNELS_5G{assert!(tssi::ofdm_group(ch).is_some()&&tssi::trim_group(ch).is_some(),"{ch}");}
+    assert_eq!((tssi::ofdm_group(34),tssi::trim_group(145)),(None,None));
+    // Path A, 5 GHz middle (100-144), thermal 23: the second rows of delta_swingidx_5ga_n and _p.
+    let a:Vec<_>=tssi::modeled_thermal_in(0,23,crate::band::Subband::Ghz5Middle).into_iter().flat_map(u32::to_le_bytes).collect();
+    let(down,up)=(crate::phy::tssi::tables::THERMAL_5G_A_N[1],crate::phy::tssi::tables::THERMAL_5G_A_P[1]);
+    for j in 0..32{assert_eq!(a[j] as i8,-down[j.min(29)]);assert_eq!(a[63-j] as i8,up[(j+1).min(29)]);}
+    assert_eq!(tssi::modeled_thermal_in(1,255,crate::band::Subband::Ghz5High),[0;16]);
+}
+#[test]
+fn tssi_on_channel_100_takes_txa_the_5_ghz_tables_and_no_btg(){
+    channel_cases::with_prepared(|phy,prefix,configured,tables|{
+        let board=channel_cases::board();
+        let rule=channel::Rule{center_mhz:5500,..channel_cases::rule()};
+        let policy=channel::Policy::resolve(&board,rule,channel_cases::platform()).unwrap();
+        let tuned=channel::run(phy,&board,&prefix,&configured,&tables,&policy).unwrap();assert_eq!(tuned.channel,100);
+        let d=phy.bus_between_stages();d.events.clear();d.btc.clear();d.btc_event_positions.clear();d.scheduler_calls.clear();d.writes=0;
+        d.tssi=Some(TssiModel{delay:40,..TssiModel::default()});d.put(0x1458c,4,3<<28);d.put(0x14594,4,0x1f4<<22);
+        let done=run(phy,&prefix,&tuned).unwrap();assert!(done.matches(&tuned));
+        let d=phy.bus_between_stages();
+        for path in 0..2{assert_eq!(d.rf[path][0x7f]&(1<<8),1<<8,"RR_TXPOW_TXA on path {path}");}
+        assert_eq!(d.get(0x1120c,4)&255,0x44,"tssi_sys_a_defs_5g");assert_eq!(d.get(0x158f8,4)&(1<<30),0);
+        assert_eq!(d.get(0x15600,4)&0x3fffffff,0x3f2d2721,"tssi_align_a_5g2_all_defs");
+        assert_eq!(d.get(0x14738,4)&(1<<17|1<<19),0,"no BTG and the 5 GHz band select through the PMAC samples");
+        assert_eq!(d.get(0x12344,4)>>31,1,"CCK's CCA stays disabled after the PMAC stop on 5 GHz");
+        assert!(d.btc.iter().all(|v|v.0.phy_map>>6==1),"every notice names 5 GHz");
+        assert_eq!(phy.state(),State::ChannelTuned);
+    });
+}

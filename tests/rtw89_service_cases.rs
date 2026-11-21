@@ -15,7 +15,8 @@ fn service_info_advertises_only_the_actual_admitted_2g20_channel(){run(0,true,tr
     ipc::reset();let mut service=Service::new(data).unwrap();let id=ipc::buffer(1,&[]);assert!(service.step());
     let(words,bytes)=ipc::response(id).unwrap();assert_eq!(words[0]&255,0);let mut r=Reader::new(&bytes[..words[0]>>16]);
     let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());assert_eq!(info.mac,0x020304050607);
-    assert_eq!(info.bands,5);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
+    // bands 7 since 213-DRV-0087: 2.4 GHz, its OFDM, and 5 GHz; the radio's own channels include the 5 GHz ones.
+    assert_eq!(info.bands,7);assert_eq!(info.supported.len(),41);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
     assert_eq!(ipc::dropped(id),1);let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
 
@@ -360,4 +361,56 @@ fn service_a_run_of_unacknowledged_sends_is_logged_once(){run(0,true,true,|data,
     // An acknowledgement ends the run; the next run is logged again.
     c.borrow_mut().unacked=false;let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());words(sent);
     let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});}
+
+// 213-DRV-0087: in data mode on a listen-only channel (100 here), sends go to the admitted access point alone while its
+// beacon is heard: no probe request, nothing to another receiver, nothing after LISTEN_BEACON_MS of silence; no CCK rate.
+#[test]
+fn service_on_a_listen_only_channel_sends_to_the_heard_access_point_alone(){run_at(5500,0,true,true,|data,c|{
+    ipc::reset();let now=ipc::clock()/1_000_000;let ap=[2,1,1,1,1,1];
+    let mut service=Service::new(data).unwrap().listening_to(ap,now);
+    let info=ipc::buffer(1,&[]);assert!(service.step());let(w,b)=ipc::response(info).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let info=wlanhw::Info::decode(&mut r).unwrap();assert_eq!((info.channel,info.bands),(100,7));
+    let cck=ipc::buffer(4,&body(&frame(),2,1));assert!(service.step());error(cck,wlanhw::Error::Invalid);
+    let mut probe=frame();probe[0]=0x40;probe[4..10].fill(0xff);
+    let id=ipc::buffer(4,&body(&probe,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    let mut other=frame();other[4..10].copy_from_slice(&[2,9,9,9,9,9]);
+    let id=ipc::buffer(4,&body(&other,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,0,"nothing published for the refused sends");
+    let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let info=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(words(sent)[1],0,"to the access point: sent");ipc::response(info).unwrap();
+    assert_eq!(c.borrow().published,1);
+    // Its beacon unheard for longer than the station's silence: nothing more is sent there.
+    ipc::advance(crate::service::LISTEN_BEACON_MS+1);
+    let late=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(late,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,1);drop(service);clean();
+});}
+
+// 213-DRV-0087: a frame waits in the inbox for its PPDU status report while the drain goes on, and the station gets it
+// with its signal; a report after the frame was handed on, or after another frame, is counted and put on none.
+fn header(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->Vec<u8>{
+    let id=ipc::buffer(5,&[]);assert!(service.step());let(w,b)=ipc::response(id).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let received=codec::decode_bytes::<2354>(&mut r).unwrap();assert!(r.done());received[..8].to_vec()
+}
+#[test]
+fn service_a_frame_carries_the_signal_of_the_report_after_it(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},ppdu::Signals,receive_service::Event,service::QUIET_MS};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let mut own=packet();own.extend_from_slice(&[0;4]);let report=bytes(FIVE);
+    let mut foreign=packet();foreign[4..10].copy_from_slice(&[2,8,7,6,5,4]);foreign.extend_from_slice(&[0;4]);
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),report.clone()];
+    let first=header(&mut service);assert_eq!((first[2],first[3],first[4]),(63,6,12),"-63 dBm, channel 6, 6 Mb/s");
+    // Alone in the ring: handed on when the drain finds it empty; the report a step later is late.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4)];assert_eq!(header(&mut service)[2],0);
+    c.borrow_mut().buffers=vec![report.clone()];assert!(service.step());
+    // A frame the filter drops comes between: the report is that frame's.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),buffer(&foreign,1,4),report.clone()];assert_eq!(header(&mut service)[2],0);
+    // Logged once a minute while it changes, frames coming meanwhile.
+    let mut logged=None;
+    for n in 0..8u64{c.borrow_mut().incoming.push(packet());ipc::advance(QUIET_MS-100);assert!(service.step());
+        if let Some(event)=service.take_event(){logged=Some((n,event));break}}
+    let Some((n,Event::Signals{channel:6,kept,measured:1,late:1,unmatched:1}))=logged else{panic!("no signal line: {logged:?}")};
+    assert_eq!(kept,3+n+1);
+    let stopped=service.stop();assert!(stopped.failure.is_none());
+    assert_eq!(stopped.owner.counts().signals,Signals{measured:1,late:1,unmatched:1});assert_eq!(stopped.owner.counts().filtered,1);clean();
 });}

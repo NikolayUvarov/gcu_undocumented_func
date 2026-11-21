@@ -274,8 +274,9 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] DATAPATH ADMITTED ON CHANNEL {}", channel);
             mind::println!("[RTW89] REGISTERS AT ADMISSION: {:?}", registers);
         }
-        receive_service::Event::Scanned { tunes, longest_us, kept, dropped } =>
-            mind::println!("[RTW89] SCAN: {} PASSIVE TUNES, THE LONGEST {} US; {} FRAMES KEPT, {} DROPPED", tunes, longest_us, kept, dropped),
+        receive_service::Event::Scanned { tunes, longest_us, kept, dropped, measured, late, unmatched } =>
+            mind::println!("[RTW89] SCAN: {} PASSIVE TUNES, THE LONGEST {} US; {} FRAMES KEPT, {} DROPPED; SIGNAL ON {} OF THEM, {} REPORTS AFTER THE STATION TOOK THE FRAME, {} UNMATCHED (213-DRV-0087)",
+                tunes, longest_us, kept, dropped, measured, late, unmatched),
         receive_service::Event::Recovered { count, ser, cmac, bb_us, restored, waited_us, after_reconcile } =>
             mind::println!("[RTW89] FIRMWARE RECOVERY {} {} (SER_DBG_INFO {:08X}, CMAC_ERR_ISR {:08X}): BB BACK AFTER {} US, THE SCHEDULER {} AFTER {} US; DEBUG MODE GOES ON",
                 count, if after_reconcile { "AFTER A COEXISTENCE RECONCILE" } else { "BETWEEN OPERATIONS" }, ser, cmac, bb_us,
@@ -285,6 +286,15 @@ fn served(event: receive_service::Event) {
         receive_service::Event::LateFrame { count, finished, fetched, released, length, age_us } =>
             mind::println!("[RTW89] A FRAME OUTRAN ITS TIME ({}): {} BYTES, {} SUBMISSIONS DONE, THE NEXT {} AND {} AFTER {} US; ANSWERED NOT ACKNOWLEDGED, ITS RELEASE AWAITED 5 S MORE (DEBUG)",
                 count, length, finished, if fetched { "FETCHED" } else { "NOT FETCHED" }, if released { "RELEASED" } else { "NOT RELEASED" }, age_us),
+        receive_service::Event::Heard5 { channel, bssid: b } =>
+            mind::println!("[RTW89] HEARD {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ON 5 GHZ CHANNEL {} (213-DRV-0087)",
+                b[0], b[1], b[2], b[3], b[4], b[5], channel),
+        receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
+            mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
+                channel, measured, kept, late, unmatched),
+        receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
+            mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
+                channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),
         receive_service::Event::DataCountry { code: [b'0', b'0'], channel, kept: true, .. } =>
             mind::println!("[RTW89] COUNTRY 00 IN DATA MODE: CHANNEL {} KEPT AT THE POWER IT WAS ADMITTED AT (AN UNKNOWN COUNTRY'S 75 % CAP IS SET AT ADMISSION)", channel),
         receive_service::Event::DataCountry { code, channel, kept: true, .. } =>

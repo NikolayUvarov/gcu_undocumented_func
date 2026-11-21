@@ -94,7 +94,7 @@ fn service_channel<B:crate::btc_session::DeviceIo>(service:&mut crate::receive_s
         Some(Ask::Tune(to,call))=>{assert_eq!(to,ch);let policy=Policy::passive(board,2407+5*u16::from(to)).unwrap();
             channel::run(phy,board,&receive.prepared.prefix,&receive.prepared.paths,tables,&policy).unwrap();
             service.tuned(to,0);wlanhw::reply_set_channel(call,Ok(())).unwrap();to}
-        Some(Ask::Admit(_))=>panic!("admission asked by a tune"),
+        Some(Ask::Admit(_, _))=>panic!("admission asked by a tune"),
         None=>ch,
     }
 }
@@ -151,10 +151,10 @@ fn a_receive_only_start_is_admitted_under_the_stations_country_and_served(){
             assert_eq!(ipc::response(change).unwrap().0,[0,0]);
             let first=ipc::buffer(4,&body[..length]);assert!(service.step(phy.bus_between_stages(),&mut |e|events.push(e)));
             assert_eq!(ipc::response(first).unwrap().0,[2,wlanhw::Error::Busy as usize]);
-            let Some(Ask::Admit(6))=service.take_ask() else{panic!("no admission asked")};
+            let Some(Ask::Admit(6, None))=service.take_ask() else{panic!("no admission asked")};
             service.hand_over();
             let (tuned,calibrated,station)=receive_service::calibrate(&mut phy,&board,&caps,&tables,&receive.prepared,
-                service.limits().unwrap(),6,P::CheckedAbsent,service.filter()).unwrap();
+                service.limits().unwrap(),6,None,P::CheckedAbsent,service.filter()).unwrap();
             assert_eq!((tuned.channel,tuned.access),(6,channel::Access::InitiateRadiation));
             // As serve does: the inbox only now, so that receive-only and the calibrations retain no packet.
             assert!(!phy.bus_between_stages().retains_packets());phy.bus_between_stages().attach_inbox(&mut bank).unwrap();
