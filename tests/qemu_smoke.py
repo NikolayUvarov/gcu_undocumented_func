@@ -10559,14 +10559,14 @@ def hub_check(args, disk):
         devices = call("admin", "GET", "/hub/admin/v1/devices")
         assert "QEMU tester" in devices and '"state":"pending"' in devices, devices
         device = hashlib.sha256(bytes.fromhex(device_key)).hexdigest()
-        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 2","decision":"approve","text":"Welcome to the hub"}')
+        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 3","decision":"approve","text":"Welcome to the hub"}')
         out = vm.command("improve status", timeout=60)
         require_all(out, "device qemu (", "): approved", "user QEMU tester #1, trust 0 (band 0), access open", "admin maintainer, welcome: Welcome to the hub")
         out = vm.command("improve new fault 'Fan noise' 'It is loud at idle' --attach log:fan.log --yes", timeout=60)
         require_all(out, f"attachment: log fan.log ({len(fan_log)} bytes, sha256 {hashlib.sha256(fan_log.encode()).hexdigest()}) from fan.log", "request 1: new, 1 attachments sent")
         assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
         assert call("admin", "GET", "/hub/admin/v1/requests/1/attachments/0") == f"200\n{fan_log}\n", "the attachment's bytes as the machine read them"
-        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"question","text":"One fan or two?"}')
         since = len(vm.log)
         require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
         # The shell says the change above its prompt within its 5 s, as improve kept it.
@@ -10587,11 +10587,21 @@ def hub_check(args, disk):
         require_all(vm.command("cat ram:hub.json", timeout=30), '"display_name":"QEMU tester"', '"title":"Fan noise"')
         # The user's check (6.3): accepted, worked, landed and delivered in a release; not on the machine until it runs it.
         release = "202611211200"
-        call("intake", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"accepted","reason":"a fan","track":"APP","task":"000-APP-9999"}')
-        call("track", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"in-progress","reason":"working"}')
-        call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"result","text":"The fan curve is gentler","release":"' + release + '"}')
-        call("lander", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"landed","reason":"round 1"}')
-        call("admin", "POST", "/hub/admin/v1/delivered", '{"api":"hub-api 2","release":"' + release + '","requests":[1]}')
+        call("intake", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"accepted","reason":"a fan","track":"APP","task":"000-APP-9999"}')
+        # The track's proposal before it starts (hub-api 3, 100003-APP-0155): it waits, and the machine corrects it.
+        since = len(vm.log)
+        proposal = re.search(r'"n":(\d+)', call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"proposal","text":"A gentler fan curve at idle"}'))[1]
+        require(vm.command("improve list", timeout=60), "Fan noise  [a proposal for you]")
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        require(vm.command("improve show 1", timeout=60), f'(waits for your answer: improve reply 1 --answer {proposal} --accept, or improve reply 1 "TEXT" --answer {proposal} --correct|--decline)')
+        require(vm.command(f"improve reply 1 'Quiet under load too' --answer {proposal}", timeout=60), "refused (400 consent)")
+        require(vm.command(f"improve reply 1 'Quiet under load too' --answer {proposal} --correct", timeout=60), "the request is accepted")
+        assert f'"answers":{proposal},"consent":"correct"' in call("track", "GET", "/hub/agent/v1/requests/1"), "the correction, as the track reads it"
+        require(vm.command("improve show 1", timeout=60), f"answer to #{proposal}, correcting it")
+        call("track", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"in-progress","reason":"working"}')
+        call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"result","text":"The fan curve is gentler","release":"' + release + '"}')
+        call("lander", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"landed","reason":"round 1"}')
+        call("admin", "POST", "/hub/admin/v1/delivered", '{"api":"hub-api 3","release":"' + release + '","requests":[1]}')
         require(vm.command("improve show 1", timeout=60), f"release {release} carries it; the hub does not know the release this machine runs: improve version RELEASE")
         require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the hub does not know the release this machine runs")
         require(vm.command("improve version 202611201200", timeout=60), "the hub knows this machine runs 202611201200")
@@ -10622,7 +10632,7 @@ def hub_check(args, disk):
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
         # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
         # The admin's comment, which a verified request still takes.
-        call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
+        call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
         require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
@@ -10636,9 +10646,10 @@ def hub_check(args, disk):
         shutil.rmtree(work, ignore_errors=True)
     print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
           "approved by the admin, a request filed with a log attached, the agents' question answered with a file, news watched, the export "
-          "written into ram:, the release that carries it not on the machine, then on it, and the user's verdict on it; what waits for "
+          "written into ram:, the track's proposal corrected from the machine (hub-api 3), the release that carries it not on the machine, "
+          "then on it, and the user's verdict on it; what waits for "
           "the user said by the shell above its first prompt and when it changed, and marked by wm (100003-APP-0153); a wrong pin refused; a text past 512 bytes named as unread "
-          "until NET's change to parse (100003-APP-0151, 0153)", flush=True)
+          "until NET's change to parse (100003-APP-0151, 0153, 0155)", flush=True)
 
 
 def tone_power(samples, rate, start, hz, seconds=0.04):

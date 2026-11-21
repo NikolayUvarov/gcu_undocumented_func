@@ -1,10 +1,10 @@
 //! `improve` for any computer (100003-APP-0150; docs/hub/README.md, sections 2 and 10): a user's requests to MIND Hub,
-//! their conversation, the user's check of the result and their devices, over `hub-api 2`. It keeps its own Ed25519 key
+//! their conversation, the user's check of the result and their devices, over `hub-api 3`. It keeps its own Ed25519 key
 //! and the hub's address and pins in a directory of its own, and signs each call over the hub's last challenge with
 //! `tools/mindhub`'s client. MIND Core's `improve` (stage 4) gives the same commands.
 
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{Attachment, AttachmentKind, Consent, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::json::Value;
 use improve_proto::{wire, work};
 use mindhub::client::{self, Client, Reply};
@@ -22,6 +22,7 @@ pub const USAGE: &str = "usage: improve [--dir DIR] COMMAND
       [--attach log|hardware|screenshot|text:PATH]... [--yes]
   list | show N
   reply N TEXT [--answer QUESTION] [--attach KIND:PATH]... [--yes]
+  reply N [TEXT] --answer PROPOSAL --accept | reply N TEXT --answer PROPOSAL --correct|--decline
   check N works|partly|does-not-work --release RELEASE TEXT [--attach KIND:PATH]... [--yes]
   watch [--once]                              waits for news, at the hub's interval
   devices | pair | revoke DEVICE
@@ -40,7 +41,7 @@ pub fn run(args: &[String], env: &mut Env) -> i32 {
 
 /// The flags that take a value; every other flag stands alone.
 const VALUED: [&str; 11] = ["--hub", "--pin", "--name", "--display-name", "--pair", "--contact", "--title", "--text", "--text-file", "--kind", "--attach"];
-const ALONE: [&str; 5] = ["--private", "--security", "--named", "--yes", "--once"];
+const ALONE: [&str; 8] = ["--private", "--security", "--named", "--yes", "--once", "--accept", "--correct", "--decline"];
 const MORE_VALUED: [&str; 2] = ["--answer", "--release"];
 
 struct Args { words: Vec<String>, flags: Vec<(String, Option<String>)> }
@@ -135,6 +136,7 @@ fn when(ms: i64) -> String {
 fn s<'a>(v: &'a Value, k: &str) -> &'a str { v.get(k).and_then(Value::as_str).unwrap_or("") }
 fn n(v: &Value, k: &str) -> i64 { v.get(k).and_then(Value::as_int).unwrap_or(0) }
 fn list<'a>(v: &'a Value, k: &str) -> &'a [Value] { v.get(k).and_then(Value::as_array).unwrap_or(&[]) }
+fn flag(v: &Value, k: &str) -> bool { v.get(k).and_then(Value::as_bool) == Some(true) }
 
 fn hostname() -> String {
     let name = std::fs::read_to_string("/etc/hostname").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
@@ -205,7 +207,7 @@ fn command(args: &[String], env: &mut Env) -> Result<(), String> {
             let all = list(&v, "requests");
             if all.is_empty() { let _ = writeln!(env.out, "no requests"); }
             for r in all {
-                let question = if r.get("open_question").and_then(Value::as_bool) == Some(true) { "  [a question for you]" } else { "" };
+                let question = if flag(r, "open_question") { "  [a question for you]" } else if flag(r, "open_proposal") { "  [a proposal for you]" } else { "" };
                 let waits = if !list(r, "flagged").is_empty() && r.get("cleared").and_then(Value::as_bool) != Some(true) { "  [waits for the admin]" } else { "" };
                 let _ = writeln!(env.out, "{:>5}  {:<16} {}{question}{waits}", n(r, "id"), s(r, "state"), s(r, "title"));
             }
@@ -388,9 +390,11 @@ fn show(id: u64, env: &mut Env) -> Result<(), String> {
     }
     for p in list(r, "thread") {
         let extra = match s(p, "kind") {
-            "answer" => format!(" to #{}", n(p, "answers")),
+            "answer" => format!(" to #{}{}", n(p, "answers"), match s(p, "consent") { "accept" => ", accepting it", "correct" => ", correcting it", "decline" => ", declining it", _ => "" }),
             "verdict" => format!(": {} on {}", s(p, "verdict"), s(p, "release")),
             "question" if p.get("answered").and_then(Value::as_bool) == Some(false) => " (waits for your answer: improve reply N TEXT --answer #)".into(),
+            "proposal" if p.get("answered").and_then(Value::as_bool) == Some(false) =>
+                format!(" (waits for your answer: improve reply {id} --answer {n} --accept, or improve reply {id} TEXT --answer {n} --correct|--decline)", id = n(r, "id"), n = n(p, "n")),
             _ => String::new(),
         };
         let _ = writeln!(env.out, "#{} {}{extra}, {}, {}\n  {}", n(p, "n"), s(p, "kind"), s(p, "author"), when(n(p, "at_ms")), s(p, "text").trim_end().replace('\n', "\n  "));
@@ -415,10 +419,15 @@ fn send(a: &Args, env: &mut Env, id: u64, message: Message, what: &str) -> Resul
 
 fn reply(a: &Args, env: &mut Env) -> Result<(), String> {
     let id = number(a.word(1, "the request's number")?)?;
-    let text = a.word(2, "the text")?.to_string();
+    // A proposal's answer accepts it, corrects it or declines it (hub-api 3, 100003-APP-0155); an acceptance may say nothing.
+    let given: Vec<Consent> = [("--accept", Consent::Accept), ("--correct", Consent::Correct), ("--decline", Consent::Decline)].iter().filter(|(f, _)| a.has(f)).map(|(_, c)| *c).collect();
+    if given.len() > 1 { return Err("one of --accept, --correct and --decline".into()); }
+    let consent = given.first().copied();
+    if consent.is_some() && a.value("--answer").is_none() { return Err("--accept, --correct and --decline answer a proposal: name it with --answer".into()); }
+    let text = match a.word(2, "the text") { Ok(t) => t.to_string(), Err(_) if consent == Some(Consent::Accept) => String::new(), Err(e) => return Err(e) };
     let message = match a.value("--answer") {
-        Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's number")?), verdict: None, release: None, attachments: Vec::new() },
-        None => Message { kind: MessageKind::Comment, text, answers: None, verdict: None, release: None, attachments: Vec::new() },
+        Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's or the proposal's number")?), consent, verdict: None, release: None, attachments: Vec::new() },
+        None => Message { kind: MessageKind::Comment, text, answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() },
     };
     let what = format!("a reply on request {id}");
     send(a, env, id, message, &what)
@@ -428,7 +437,7 @@ fn check(a: &Args, env: &mut Env) -> Result<(), String> {
     let id = number(a.word(1, "the request's number")?)?;
     let verdict = Verdict::from_name(a.word(2, "the verdict")?).ok_or("a verdict is works, partly or does-not-work")?;
     let release = a.value("--release").ok_or("check needs --release, the release you checked on")?.to_string();
-    let message = Message { kind: MessageKind::Verdict, text: a.word(3, "what you saw")?.to_string(), answers: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() };
+    let message = Message { kind: MessageKind::Verdict, text: a.word(3, "what you saw")?.to_string(), answers: None, consent: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() };
     let what = format!("your verdict on request {id}: {}", verdict.name());
     send(a, env, id, message, &what)
 }
@@ -445,7 +454,7 @@ fn watch(a: &Args, env: &mut Env) -> Result<(), String> {
             let v = expect(c.call("GET", &format!("/hub/v1/requests?since={}", since + 1), b"").map_err(io)?, &[200])?;
             let changed = list(&v, "requests");
             for r in changed {
-                let question = if r.get("open_question").and_then(Value::as_bool) == Some(true) { ", a question waits for you" } else { "" };
+                let question = if flag(r, "open_question") { ", a question waits for you" } else if flag(r, "open_proposal") { ", a proposal waits for you" } else { "" };
                 let _ = writeln!(env.out, "request {}: {} since {}{question} (improve show {})", n(r, "id"), s(r, "state"), when(n(r, "since_ms")), n(r, "id"));
                 since = since.max(n(r, "since_ms"));
             }

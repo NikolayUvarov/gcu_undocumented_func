@@ -1,8 +1,8 @@
 # `improve`: on any computer, and on MIND Core
 
-**Version:** 4 (2026-11-21): the shell's notice and `wm`'s mark (100003-APP-0153); 3 (2026-11-21): the user's check of the result on MIND Core; 2 (2026-11-21): MIND Core's `improve` (section 5, 100003-APP-0151); 1 (2026-11-21) · **Tasks:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done), [100003-APP-0151](../../issues/100003-APP-0151-improve-on-mind-core.md) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
+**Version:** 5 (2026-11-21): `hub-api 3`, a proposal answered with `--accept`, `--correct` or `--decline` (100003-APP-0155); 4 (2026-11-21): the shell's notice and `wm`'s mark (100003-APP-0153); 3 (2026-11-21): the user's check of the result on MIND Core; 2 (2026-11-21): MIND Core's `improve` (section 5, 100003-APP-0151); 1 (2026-11-21) · **Tasks:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done), [100003-APP-0151](../../issues/100003-APP-0151-improve-on-mind-core.md) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
 
-`improve` is MIND Hub's client for a computer that is not a MIND machine: Linux, macOS, any Unix. Through it a person files a request, answers the agents' questions and gives the verdict on the result. It also lists, pairs and revokes the person's devices. It speaks `hub-api 2` to a hub of `tools/mindhub`, signing each call with a key of its own. A browser does the same through the hub's pages; a MIND machine will do it with its own `improve` (stage 4), with the same commands.
+`improve` is MIND Hub's client for a computer that is not a MIND machine: Linux, macOS, any Unix. Through it a person files a request, answers the agents' questions and gives the verdict on the result. It also lists, pairs and revokes the person's devices. It speaks `hub-api 3` to a hub of `tools/mindhub`, signing each call with a key of its own. A browser does the same through the hub's pages; a MIND machine will do it with its own `improve` (stage 4), with the same commands.
 
 This page says what is built and tested on the host. It is not a guarantee about any other configuration (MC-12.1, 12.3).
 
@@ -34,6 +34,7 @@ improve status
 | `new --title T --text T` (or `--text-file F`) | A request: `--kind fault` (the default), `improvement` or `capability`; `--private`; `--security`, private always; `--named`, the user's name on the board once it is a task; `--attach log:PATH` (or `hardware:`, `screenshot:`, `text:`) |
 | `list`, `show N` | The user's requests, with a question that waits; one request's text, attachments and thread |
 | `reply N TEXT` | A comment; with `--answer #Q` the answer to question Q, which may carry attachments |
+| `reply N [TEXT] --answer P --accept`, `reply N TEXT --answer P --correct\|--decline` | The answer to the agents' proposal P: accepted, with or without words; corrected or declined, with them. `list` marks a proposal that waits, and `show` names the command |
 | `check N works\|partly\|does-not-work --release R TEXT` | The verdict, once the device runs the release that carries the request |
 | `watch` | News at the hub's interval: a request that changed, a question that waits. `--once` looks once. A hub out of reach is asked again later and later, up to 15 minutes |
 | `devices`, `pair`, `revoke DEVICE` | The user's devices; a pairing code for 10 minutes; a device revoked, named by the start of its ID |
@@ -58,6 +59,7 @@ improve status
   - a phone paired, listed and revoked;
   - the export;
   - a request and the account deleted, and their words gone from the hub's journal.
+- **A proposal** (100003-APP-0155): marked in `list`, named in `watch`, its command in `show`; refused without `--answer`, with two consents, a correction with no words, and an answer with no consent; accepted with no words, a second one corrected, and the track reads both.
 - **A flagged request:** it says it waits for the admin.
 - **Usage:** an unknown command or flag is named.
 - **TLS:** checked by hand against `mindhub serve` with an Ed25519 certificate: the right pin registers, a wrong one is refused with the hub key's hash. The client is `tools/mindhub`'s, whose TLS the hub's conformance suite runs with an Ed25519 and a P-256 key.
@@ -78,6 +80,7 @@ improve new fault 'The fan is loud' 'At idle, since the last update'
 improve list
 improve show 1
 improve reply 1 'Two fans, one stopped' --answer 2
+improve reply 1 --answer 4 --accept
 ```
 
 - **Its authority** is the design's (section 9 of [README.md](README.md)):
@@ -94,7 +97,8 @@ improve reply 1 'Two fans, one stopped' --answer 2
   - Each one is shown before it is sent, with its kind, name, size and SHA-256, and its bytes go after its request or message.
 - **`watch [--once]`:** the news since the last look (kept as `seen` in its own directory), at the hub's interval, until Esc.
 - **`export FILE`:** all the hub keeps of the user, written as the hub sent it into a user's file such as `ram:hub.json`. Nothing of it is parsed on the machine, so its length is the answer's bound, 64 KiB.
-- **What waits for the user** (100003-APP-0153): a request with an open question of the agents, or whose check waits.
+- **A proposal's answer:** `reply N --answer P --accept`, or with a text `--correct` and `--decline`, as on a host.
+- **What waits for the user** (100003-APP-0153): a request with an open question or proposal of the agents, or whose check waits.
   - `list`, `watch` and each change of the user's (`reply`, `check`, `version`, `delete`) keep their numbers in the user's files, `data/improve/waiting`, when they changed: a comment line, then the numbers.
   - The shell says them above its first prompt, as `improve` last saw them: `IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)`. It reads the file every 5 s and says a change above its prompt on the console shown, once no program is in front there.
   - `wm` marks them at its top bar's right end, ` HUB 2 `, and a click names them.
@@ -106,6 +110,7 @@ improve reply 1 'Two fans, one stopped' --answer 2
   - `improve check N works|partly|does-not-work "WHAT YOU SAW"` gives the verdict on the release this machine runs, as the hub knows it; `--release R` names another.
 - **Its check:** the QEMU suite `hub` (in the x86 network group) runs it against `tools/mindhub` on the host, over TLS by the hub's pin.
   - It goes from setup and registration through the admin's approval to a request with a log attached, the agents' question and its answer with a file, `watch`, the export, and a wrong pin.
+  - The track's proposal waits, an answer with no consent is refused, and its correction from the machine reaches the track.
   - What waits: an earlier boot's file said above the first prompt; the agents' question said above a later prompt once `list` saw it, and again when the check waited; `wm`'s mark read off its screen.
   - Then the agents accept, work and land the request, and the admin delivers it in a release. `improve` says the machine does not run it, at an unknown version and at an older one. At that release the check waits, and the user's `works` verifies the request, with that release in the verdict.
   - The admin and intake read the attached bytes back. `tests/improve_host.rs` tests its words.

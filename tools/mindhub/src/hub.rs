@@ -166,6 +166,19 @@ impl Item {
         self.thread.iter().any(|p| p.n == n && p.message.kind == MessageKind::Question && !p.answered)
     }
     fn open_questions(&self) -> usize { self.thread.iter().filter(|p| p.message.kind == MessageKind::Question && !p.answered).count() }
+    /// Proposal `n` waits for its user's answer: accepted, corrected or declined (hub-api 3, 100003-APP-0155).
+    pub fn open_proposal(&self, n: u32) -> bool {
+        self.thread.iter().any(|p| p.n == n && p.message.kind == MessageKind::Proposal && !p.answered)
+    }
+    /// A question or a proposal waits for the user.
+    pub fn waits_for_user(&self) -> (bool, bool) {
+        let open = |kind| self.thread.iter().any(|p| p.message.kind == kind && !p.answered);
+        (open(MessageKind::Question), open(MessageKind::Proposal))
+    }
+    /// The user's answer to post `n`: its consent, if it was a proposal's.
+    pub fn consent_to(&self, n: u32) -> Option<form::Consent> {
+        self.thread.iter().find(|p| p.message.kind == MessageKind::Answer && p.message.answers == Some(n)).and_then(|p| p.message.consent)
+    }
     /// Flagged and not cleared: it waits for the admin, as a held request does.
     pub fn waits_for_admin(&self) -> bool { !self.flags.is_empty() && !self.cleared && !self.deleted }
     /// Its user may delete it: it was never accepted into a track's plan.
@@ -238,7 +251,7 @@ fn within(times: &VecDeque<u64>, now: u64, window: u64) -> Vec<u64> { times.iter
 pub fn agent_author(key: &[u8; 32], track: &str) -> Author { Author::Agent { track: track.into(), id: hex(&sign::id(key)[..8]) } }
 
 fn message_text(text: &str) -> Result<(), Refusal> {
-    Message { kind: MessageKind::Comment, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() }.check().map_err(form_refusal)
+    Message { kind: MessageKind::Comment, text: text.into(), answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() }.check().map_err(form_refusal)
 }
 
 fn reason_line(reason: &str) -> Result<(), Refusal> {
@@ -594,7 +607,16 @@ impl Hub {
                 if !form::may_post(Role::User, message.kind) { return Err(refuse(403, "kind", format!("a user posts no {}", message.kind.name()))); }
                 form::attachments_within(&message.attachments, &limits).map_err(form_refusal)?;
                 let answer = message.kind == MessageKind::Answer;
-                if answer && !r.open_question(message.answers.unwrap_or(0)) { return Err(refuse(400, "answers", "answers names no open question of the thread")); }
+                if answer {
+                    // A question's answer has no consent; a proposal's accepts, corrects or declines it (hub-api 3).
+                    let n = message.answers.unwrap_or(0);
+                    match (r.open_question(n), r.open_proposal(n), message.consent) {
+                        (true, _, None) | (false, true, Some(_)) => {}
+                        (true, _, Some(_)) => return Err(refuse(400, "consent", "an answer to a question takes no consent: accept, correct and decline answer a proposal")),
+                        (false, true, None) => return Err(refuse(400, "consent", "an answer to a proposal accepts, corrects or declines it")),
+                        (false, false, _) => return Err(refuse(400, "answers", "answers names no open question or proposal of the thread")),
+                    }
+                }
                 if !answer {
                     if let Err(w) = u.messages.resized(limits.messages_per_day, limits.messages_per_day, now).take(now) {
                         return Err(wait("messages", format!("{} messages a day at this trust", limits.messages_per_day), w.unwrap_or(DAY_MS)));
@@ -627,7 +649,7 @@ impl Hub {
                 }
                 moved(State::NeedsInfo, role, author.clone(), "a question for the user".into());
             }
-            MessageKind::Answer if r.state == State::NeedsInfo && r.open_questions() == 1 => {
+            MessageKind::Answer if r.state == State::NeedsInfo && r.open_question(message.answers.unwrap_or(0)) && r.open_questions() == 1 => {
                 let back = r.before_question.unwrap_or(State::New);
                 moved(back, Role::User, Author::User, "the user answered".into());
             }
@@ -976,7 +998,7 @@ impl Hub {
     }
 }
 
-fn status_message(text: String) -> Message { Message { kind: MessageKind::Status, text, answers: None, verdict: None, release: None, attachments: Vec::new() } }
+fn status_message(text: String) -> Message { Message { kind: MessageKind::Status, text, answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn same_owner(a: &Owner, b: &Owner) -> bool {
     match (a, b) {

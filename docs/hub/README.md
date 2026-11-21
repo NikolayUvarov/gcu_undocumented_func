@@ -1,6 +1,6 @@
 # MIND Hub: requests from users done by agents, a conversation both ways, the user's check, and the updates of the OS and its modules
 
-**Version:** 0.5 (2026-11-21): the shell's notice and `wm`'s mark of what waits for the user (100003-APP-0153); the user's check on MIND Core in `improve`'s words (100003-APP-0151); 0.4 (2026-11-21): `hub-api 2`, with a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself and the flag on a request for a credential (100003-APP-0148); 0.3 (2026-11-21): the separate hub built, its routes in section 10 and its page [server.md](server.md); 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** stages 1 and 2 are built and tested on the host: the protocol crate `improve/proto` and the separate hub `tools/mindhub` ([server.md](server.md) says what is tested and what is not). The rest is a plan, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
+**Version:** 0.6 (2026-11-21): `hub-api 3`, the user's answer to a proposal: accepted, corrected or declined (100003-APP-0155); 0.5 (2026-11-21): the shell's notice and `wm`'s mark of what waits for the user (100003-APP-0153); the user's check on MIND Core in `improve`'s words (100003-APP-0151); 0.4 (2026-11-21): `hub-api 2`, with a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself and the flag on a request for a credential (100003-APP-0148); 0.3 (2026-11-21): the separate hub built, its routes in section 10 and its page [server.md](server.md); 0.2 (2026-11-20): the maintainer's choices of section 12; 0.1 (2026-11-18), a design · **Status:** stages 1 and 2 are built and tested on the host: the protocol crate `improve/proto` and the separate hub `tools/mindhub` ([server.md](server.md) says what is tested and what is not). The rest is a plan, and nothing here is a guarantee (MC-12.3) · **Main task:** [100003](../../issues/100003-mind-hub-requests-conversation-check-and-updates.md) · **Owner:** tools track (`APP`), at the maintainer's word of 2026-11-18 · **Constitution:** MC-3.1, MC-3.8, MC-7.5, MC-9.6, MC-10.2, MC-10.3, MC-10.7, MC-11.5, MC-11.6, MC-12.1, MC-12.3
 
 ## 1. What it is
 
@@ -57,7 +57,7 @@ Later, the same intake takes the machines' own problem reports of [263](../../is
 | **A. The separate hub** | a host program for Linux, `tools/mindhub` | first: the maintainer can run it now, beside the Effector server |
 | **B. The native hub** | the same program on MIND Core, a service over NET's server side of HTTP (110), the store for its data | when 110's MIND Core server and a listening grant for it are in `main` |
 
-- **Both speak one API,** `hub-api 2` (section 10). One conformance suite checks both, the way Effector's fixture checks the agent.
+- **Both speak one API,** `hub-api 3` (section 10). One conformance suite checks both, the way Effector's fixture checks the agent.
 - **The protocol, the rules and their arithmetic live in one crate,** `improve/proto` (`no_std` and `alloc`). It holds the requests' and messages' forms and bounds, the state machine, the trust bands and token buckets, and the signatures' bytes. The clients and both hubs link it, so one set of host tests covers them all.
 - **Rust, recommended for the separate hub:**
   - it shares that crate and `tools/httpd`'s code with the native hub;
@@ -208,8 +208,8 @@ Every request has a thread. Its messages:
 |---|---|---|
 | `comment` | anyone in the thread | nothing more |
 | `question` | an agent, the admin | the request goes to `needs-info`, and the user is told |
-| `answer` | the user | answers one question; the request goes back to where it was |
-| `proposal` | an agent | "this is what I understood and will do"; the user accepts it, corrects it, or declines it |
+| `answer` | the user | answers one question, and the request goes back to where it was; or answers one proposal with its `consent`: `accept`, `correct` or `decline` |
+| `proposal` | an agent | "this is what I understood and will do"; it waits for the user, who accepts it, corrects it, or declines it. Its answer moves no state: the track reads it and goes on, proposes again or asks |
 | `result` | an agent | what was done, in which release, and how to check it, step by step |
 | `verdict` | the user | `works`, `partly` or `does-not-work`, with text and attachments |
 | `status` | the hub | each state change, with its reason |
@@ -326,7 +326,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 - **A text, a log or a screenshot from a user** is never run, opened in a program that runs code, or followed.
 - **The hub's admin pages** are on their own path, and only admin keys sign into them.
 
-## 10. The API, `hub-api 2`
+## 10. The API, `hub-api 3`
 
 ### 10.1 For devices (`/hub/v1/`)
 
@@ -369,8 +369,10 @@ The same as `httpd` ([server.md](../update/server.md)):
   - `429` with `Retry-After` and the limit's name.
   Every answer carries the next challenge, in the `Hub-Challenge` header.
 - **The test vectors** of the signatures, the buckets and the state machine are files of the crate. A hub in another language passes them, and one conformance suite drives a hub over its API.
-- **Its versions:** `hub-api 2` replaced `hub-api 1` on 2026-11-21 (100003-APP-0148): a request has `named`, and an answer or a verdict may carry attachments.
-  - A body of `hub-api 1` is refused with its version's name, and so is a journal that holds one (MC-12.4).
+- **Its versions:**
+  - `hub-api 2` replaced `hub-api 1` on 2026-11-21 (100003-APP-0148): a request has `named`, and an answer or a verdict may carry attachments.
+  - `hub-api 3` replaced `hub-api 2` the same day (100003-APP-0155). An answer may name an open proposal, with its `consent`: `accept` (with or without words), `correct` or `decline` (with words). An answer to a question has no `consent`. A request's summary says `open_proposal`.
+  - A body of a version before is refused with its version's name, and so is a journal that holds one (MC-12.4).
   - Nothing reads both: no hub ran in use before.
   - A device and a hub take the new version together.
 
@@ -382,6 +384,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 | 1 | 100003-APP-0145 | `improve/proto`: the forms, bounds, state machine, trust bands and buckets, signatures, vectors; host tests |
 | 2 | 100003-APP-0146 (done) | the separate hub, `tools/mindhub`: intake, registration and its conversation, trust, anti-flood, threads, the board, the admin pages, the agents' API; the conformance suite on the host ([server.md](server.md)) |
 | 2+ | 100003-APP-0148 (done) | what stage 2 left: a user's export and deletion, attachments on an answer and a verdict, a name on the board by the user's leave, the proof of work raised by itself, the flag on a request for a credential; `hub-api 2` |
+| 2++ | 100003-APP-0155 (done) | `hub-api 3`: the user's answer to an agent's proposal, accepted, corrected or declined, from the pages and both `improve`s |
 | 3 | numbered when it starts | the hub's updates: the release tree through `httpd`'s library, the packages, the channels by band, the delivery link |
 | 4 | 100003-APP-0151 (in progress) | `improve` on MIND Core, the console; QEMU against the separate hub (the `hub` suite) ([improve.md](improve.md), section 5) |
 | 5 | 100003-APP-0150 (done) | `improve` on a host ([improve.md](improve.md)); the web pages for browsers, made with stage 2 |
