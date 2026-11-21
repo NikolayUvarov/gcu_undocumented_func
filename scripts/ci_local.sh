@@ -78,7 +78,7 @@ HOST_GROUPS=(
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
     "x86: boot, display, shell, memory, clock|$X86 --suites boot,display,normal,memory,dzen,power"
-    "x86: network, TLS and Effector|$X86 --suites net,tls,effector"
+    "x86: network, TLS and Effector|$X86 --suites net,tls,effector,hub"
     "x86: a developer's release through the Effector agent|$X86 --suites effector-update"
     "x86: a release that loses the server, rolled back|$X86 --suites rollback"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,usbaudio,link,modes"

@@ -13,6 +13,8 @@ const USAGE: &str = "usage:
   mindhub public FILE              print a key file's public half
   mindhub admin-code --key FILE --hub URL [--pin SPKI-SHA256]...
                                    a one-time code for the admin pages, signed with an admin key
+  mindhub call --key FILE --hub URL [--pin SPKI-SHA256]... METHOD PATH [BODY]
+                                   one call signed with a key (an admin's, an agent's), its status and answer printed
   mindhub conformance --hub URL [--pin SPKI-SHA256]... --admin-key F --intake-key F --track-key F --track TRK --integrator-key F
                                    the conformance suite against a hub, from a network that registered no key there today";
 
@@ -41,6 +43,19 @@ fn main() {
                 Some(code) if reply.status == 201 => println!("{code}  (for the admin pages, once, within 10 minutes)"),
                 _ => fail(&format!("the hub answered {}: {}", reply.status, reply.text())),
             }
+        }
+        Some("call") => {
+            let key = client::read_key(&PathBuf::from(flag("--key").unwrap_or_else(|| fail(USAGE)))).unwrap_or_else(|e| fail(&e));
+            let pins: Vec<[u8; 32]> = args.windows(2).filter(|w| w[0] == "--pin").map(|w| improve_proto::parse_hex32(&w[1]).unwrap_or_else(|| fail("--pin takes 64 hex"))).collect();
+            // The words after the flags and their values: METHOD PATH [BODY].
+            let mut rest = Vec::new();
+            let mut i = 1;
+            while i < args.len() { if args[i].starts_with("--") { i += 2; } else { rest.push(args[i].clone()); i += 1; } }
+            let (Some(method), Some(path)) = (rest.first(), rest.get(1)) else { fail(USAGE) };
+            let mut c = client::Client::new(&flag("--hub").unwrap_or_else(|| fail(USAGE)), &pins, key).unwrap_or_else(|e| fail(&e));
+            let reply = c.call(method, path, rest.get(2).map(String::as_bytes).unwrap_or(b"")).unwrap_or_else(|e| fail(&e.to_string()));
+            println!("{}\n{}", reply.status, reply.text());
+            if reply.status >= 300 { exit(1); }
         }
         Some("conformance") => {
             let key = |name: &str| client::read_key(&PathBuf::from(flag(name).unwrap_or_else(|| fail(USAGE)))).unwrap_or_else(|e| fail(&e));

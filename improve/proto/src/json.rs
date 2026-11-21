@@ -212,6 +212,56 @@ impl Value {
     }
 }
 
+/// A value as MIND Core's `parse` service gives it (`parse.wit`'s `json`): flat, in document order, each with its kind,
+/// the index of the object or array it is in (None for the outermost), its member's key and its text (a string's text,
+/// a number's lexeme).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlatKind { Object, Array, String, Number, True, False, Null }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Flat<'a> { pub kind: FlatKind, pub parent: Option<u16>, pub key: &'a str, pub text: &'a str }
+
+/// The tree of flat values, held to this reader's rules: one outermost value, members under an object or array that
+/// came before them, no key twice in one object, integers only within i64 and in their one form, no deeper than DEPTH.
+/// The error's offset is the value's index.
+pub fn tree(values: &[Flat]) -> Result<Value, Error> {
+    if values.is_empty() || values[0].parent.is_some() { return Err(Error::Syntax(0)); }
+    let mut children: Vec<Vec<usize>> = (0..values.len()).map(|_| Vec::new()).collect();
+    for (i, v) in values.iter().enumerate().skip(1) {
+        let p = v.parent.ok_or(Error::Trailing(i))? as usize;
+        if p >= i || !matches!(values[p].kind, FlatKind::Object | FlatKind::Array) { return Err(Error::Syntax(i)); }
+        children[p].push(i);
+    }
+    build(values, &children, 0, 0)
+}
+
+fn build(values: &[Flat], children: &[Vec<usize>], i: usize, depth: usize) -> Result<Value, Error> {
+    let v = &values[i];
+    Ok(match v.kind {
+        FlatKind::Object => {
+            if depth + 1 > DEPTH { return Err(Error::TooDeep); }
+            let mut fields: Vec<(String, Value)> = Vec::new();
+            for &c in &children[i] {
+                if fields.iter().any(|(k, _)| k == values[c].key) { return Err(Error::Duplicate(c)); }
+                fields.push((String::from(values[c].key), build(values, children, c, depth + 1)?));
+            }
+            Value::Object(fields)
+        }
+        FlatKind::Array => {
+            if depth + 1 > DEPTH { return Err(Error::TooDeep); }
+            let mut items = Vec::new();
+            for &c in &children[i] { items.push(build(values, children, c, depth + 1)?); }
+            Value::Array(items)
+        }
+        FlatKind::String => Value::Str(String::from(v.text)),
+        // The lexeme read by this reader's own rule, so a number has one form whoever parsed it.
+        FlatKind::Number => match parse(v.text) { Ok(Value::Int(n)) => Value::Int(n), _ => return Err(Error::Number(i)) },
+        FlatKind::True => Value::Bool(true),
+        FlatKind::False => Value::Bool(false),
+        FlatKind::Null => Value::Null,
+    })
+}
+
 /// Writes JSON with its keys in the order given and no white space: the API's one encoding.
 #[derive(Default)]
 pub struct Writer { out: String, first: Vec<bool> }

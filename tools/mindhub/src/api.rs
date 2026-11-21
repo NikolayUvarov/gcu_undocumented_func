@@ -248,9 +248,11 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
     let m = req.method.as_str();
     match (m, seg.as_slice()) {
         ("GET", ["challenge"]) => {
-            // The proof of work a registration needs now, so that a device solves it before it asks (5.4).
+            // The proof of work a registration needs now, so that a device solves it before it asks (5.4); and a
+            // challenge in the body too, for a client that reads no header of the hub's own (MIND Core's `mind::http`).
+            let challenge = s.challenges.issue(now, &cx.network);
             let mut w = begin();
-            w.field_int("work_bits", s.hub.work_bits(now) as i64).end_object();
+            w.field_int("work_bits", s.hub.work_bits(now) as i64).field_str("challenge", &hex(&challenge)).end_object();
             return ok(200, w);
         }
         ("GET", ["board"]) => return Ok(Response::json(200, wire::encode_board(&s.hub.board()))),

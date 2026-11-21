@@ -347,3 +347,28 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     vector("request.json", &(wire::encode_request(&request()) + "\n"));
     vector("message.json", &(wire::encode_message(&m) + "\n"));
 }
+
+#[test]
+fn the_parse_services_flat_values_make_the_same_tree() {
+    use json::{tree, Flat, FlatKind::*};
+    let f = |kind, parent: Option<u16>, key: &'static str, text: &'static str| Flat { kind, parent, key, text };
+    // {"api":"hub-api 2","n":-7,"ok":true,"list":[1,"x",null]}
+    let flat = [f(Object, None, "", ""), f(String, Some(0), "api", "hub-api 2"), f(Number, Some(0), "n", "-7"), f(True, Some(0), "ok", ""),
+                f(Array, Some(0), "list", ""), f(Number, Some(4), "", "1"), f(String, Some(4), "", "x"), f(Null, Some(4), "", "")];
+    assert_eq!(tree(&flat), json::parse(r#"{"api":"hub-api 2","n":-7,"ok":true,"list":[1,"x",null]}"#));
+    let mut twice = flat;
+    twice[2] = f(Number, Some(0), "api", "1");
+    assert_eq!(tree(&twice), Err(json::Error::Duplicate(2)), "a key twice in one object");
+    let mut lexeme = flat;
+    lexeme[2] = f(Number, Some(0), "n", "1.5");
+    assert_eq!(tree(&lexeme), Err(json::Error::Number(2)), "a number past this reader's rule");
+    let mut forward = flat;
+    forward[5] = f(Number, Some(6), "", "1");
+    assert_eq!(tree(&forward), Err(json::Error::Syntax(5)), "a member under a value that came after it");
+    let mut two = flat;
+    two[7] = f(Null, None, "", "");
+    assert_eq!(tree(&two), Err(json::Error::Trailing(7)), "a second outermost value");
+    let deep: Vec<Flat> = (0..=json::DEPTH).map(|i| f(Array, (i > 0).then(|| i as u16 - 1), "", "")).collect();
+    assert_eq!(tree(&deep), Err(json::Error::TooDeep));
+}
+

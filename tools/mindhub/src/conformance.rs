@@ -109,6 +109,11 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let r = anon.plain("GET", "/hub/v1/challenge", &[], b"").map_err(io)?;
     let v = expect("a challenge", &r, 200, None)?;
     if int(&v, &["work_bits"]).is_none() { return Err("the challenge's answer does not say the proof of work it asks".into()); }
+    // A client that reads no header of the hub's own signs with the challenge in the body (MIND Core's improve).
+    let from_body = text(&v, &["challenge"]).and_then(improve_proto::parse_hex32).ok_or("the challenge's answer has no challenge in its body")?;
+    let mut bodied = s.device()?;
+    let header = sign::header(bodied.key(), "GET", "/hub/v1/devices/me", b"", &from_body).map_err(|e| format!("{e:?}"))?;
+    expect("a call signed with the body's challenge", &bodied.plain("GET", "/hub/v1/devices/me", &[(sign::HEADER, header)], b"").map_err(io)?, 403, Some("unregistered"))?;
     let r = anon.plain("GET", "/hub/v1/board", &[], b"").map_err(io)?;
     wire::read(&r.text(), wire::decode_board).map_err(|e| format!("the board's JSON: {e:?}"))?;
     s.ok("a challenge in every answer, and the board's JSON");
