@@ -1,6 +1,6 @@
 # 000-APP-0154 — `wm`'s Run window (Alt+R) keeps a history of what was entered
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's word, 2026-11-21, passed on by DRV) · **Status:** in progress (written and host-tested, 2026-11-21; the `wm` suite's run on x86 and the Ryzen's left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's word, 2026-11-21, passed on by DRV) · **Status:** in progress (done in QEMU on x86, 2026-11-21; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
 
 **Recorded by:** the tools track, 2026-11-21, from DRV's message `APP/2026-11-21T1325Z-DRV-request-wms-run-window-keeps-a-history-of-what-was-entered.md` on `internal-dev-messages`. It passes on the maintainer's word after `camera -c 0` and `camera -c 1` were started through Alt+R on the Ryzen: «окно Alt+R (запуска программ) должно поддерживать историю введённых команд, поставь задачу треку APP».
 
@@ -36,10 +36,8 @@
   - `Wm::runs`, a `History` of 16;
   - `runs_text` and `runs_read`;
   - the load at `wm`'s start and the write after a new line, `[WM] RUN HISTORY: N LINES KEPT IN data/wm-run.txt` in its log.
-- **Tested** in this container: `tests/wm_host.rs` (49 tests) pass. The `wm` suite's check is written; its run on x86 is under way.
-- **Left:**
-  - the `wm` suite's run on x86;
-  - the Ryzen's run, where the maintainer asked for it (MC-12.1: QEMU's screen and keyboard are not the Ryzen's).
+- **Tested** in this container, x86_64, 4 CPUs: `tests/wm_host.rs` (49 tests) and the `wm` suite pass. In the suite, `clock` run from the Run window is kept in `data/wm-run.txt`, and ↑ with Enter starts it again.
+- **Left:** the Ryzen's run, where the maintainer asked for it (MC-12.1: QEMU's screen and keyboard are not the Ryzen's).
 
 ## Related
 
