@@ -488,6 +488,98 @@ release (`STAGES_ALLOWED` 0) followed.
   what the DMCUB does in its place.
 - The GOP is another runner of these tables. It lights DP-2 before any OS, with its own code; whether that code is the
   same bytecode is not known.
+- **Linux's own fallback.** `set_pixel_clock_v7` and `transmitter_control_v1_6` go to the DMCUB only `if (dmub_srv &&
+  debug.dmub_command_table)`. Otherwise they run `EXEC_BIOS_CMD_TABLE(setpixelclock, ...)` and `(dig1transmittercontrol,
+  ...)` on the host with the same parameter structs. This is so in the v7.0 file at hand, and the owner session found
+  the same in v5.6 and v5.10. So host execution of tables 12 and 76 is a supported path of Linux on this engine when the
+  DMCUB's firmware is not there.
+  - Its limits: this board has not taken that path under Linux.
+  - What the DMCUB writes into the PHY in its place is not visible.
+
+**Step 1's batch 8: does the DMCUB run under MIND Core?** This read-only question now decides the design.
+- If the firmware left the DMCUB running and it owns the PHY and the pixel clocks, host tables may fight it. The right
+  path would then be to ask it, as Linux does.
+- If it is held in reset, the host tables are the only way, and the GOP must itself have used them or its own code.
+
+Batch 8 (0ba209bf1) reads 31 registers, all in segment 2 (base 0x34C0), so bytes 0xD668 and 0x19CE0 to 0x19D9C, inside
+the granted [0, 0x1B000) (`dcn_2_1_0_offset.h`; fields from `dcn_2_1_0_sh_mask.h`):
+
+| Register | Dword | Byte | What it tells |
+|---|---|---|---|
+| `CC_DC_PIPE_DIS` | 0xCA | 0x0D668 | `DC_DMCUB_ENABLE` (bit 16): the board has a DMCUB (`dmub_dcn20_is_supported`) |
+| `DMCUB_CNTL` | 0x32A0 | 0x19D80 | `DMCUB_ENABLE` (16), `DMCUB_SOFT_RESET` (17), `DMCUB_PWAIT_MODE_STATUS` (20): enabled, held in reset, waiting (`dmub_dcn20_is_hw_init`, `_reset`) |
+| `DMCUB_SEC_CNTL` | 0x3278 | 0x19CE0 | `DMCUB_SEC_RESET` (16) and `DMCUB_SEC_RESET_STATUS` (21) |
+| `DMCUB_SCRATCH0`..`15` | 0x328D..0x329C | 0x19D34..0x19D70 | 0: the firmware's boot status; 7: its answer to a GPINT; 10: read by `dmub_dcn21_is_phy_init` |
+| `DMCUB_INBOX0_WPTR`, `_RPTR` | 0x327C, 0x327D | 0x19CF0, 0x19CF4 | the inbox 0 pointers |
+| `DMCUB_INBOX1_BASE_ADDRESS`, `_SIZE`, `_WPTR`, `_RPTR` | 0x327E..0x3281 | 0x19CF8..0x19D04 | the command ring Linux writes, and how far the DMCUB has read |
+| `DMCUB_OUTBOX1_WPTR`, `_RPTR` | 0x3288, 0x3289 | 0x19D20, 0x19D24 | its answers |
+| `DMCUB_GPINT_DATAIN1`, `_DATAOUT` | 0x32A2, 0x32A3 | 0x19D88, 0x19D8C | the GPINT mailbox |
+| `DMCUB_TIMER_CURRENT` | 0x32A7 | 0x19D9C | read first and last in the batch: counting means its clock runs |
+
+- The roles of the scratch registers are as recalled from Linux's `dmub_dcn20.c` and `dmub_dcn21.c`, which are not
+  among the files at hand. The fields are the header's.
+- The batch decodes into three lines:
+  - `B8 DMCUB: ON THE BOARD n, ENABLED n, SOFT RESET n, PWAIT n; SECURE RESET n, ITS STATUS n; TIMER COUNTS|STILL (v)`;
+  - `B8 DMCUB: SCRATCH0 (BOOT STATUS) ..., SCRATCH7 (GPINT ANSWER) ..., SCRATCH10 ..., GPINT IN ... OUT ...`;
+  - `B8 DMCUB: INBOX1 AT ... OF n BYTES, READ n WRITE n; INBOX0 ...; OUTBOX1 ...`.
+- Step 3 now needs all eight batches. It refuses with `THE DMCUB IS ENABLED AND NOT IN RESET` while `DMCUB_CNTL`
+  shows it enabled and out of reset.
+- Host cases: the registers and offsets against the header; a running DMCUB (enabled, counting, a ring set up) and
+  one held in reset; the refusal, and its absence when held in reset.
+
+## The watched run, for the maintainer (planned for 2026-11-22)
+
+**First, batch 8.** If it shows the DMCUB enabled and out of reset, step 3 refuses by itself (`THE DMCUB IS ENABLED
+AND NOT IN RESET`). Then nothing below runs, and the route must ask the DMCUB as Linux does. If it is held in reset,
+the plan below holds.
+
+**The release.** One release with `BATCHES_ALLOWED` 8, `STAGES_ALLOWED` 8 and `UNDO_AFTER_STAGES` false, through
+`S/rz-release.sh`.
+- It takes 6 to 8 minutes from the start to the confirmed trial: about 1 minute to build, bundle and upload, then 4 to
+  6 minutes for the download over the Ryzen's Wi-Fi, the restart through Linux and MIND Core's start.
+- Times below are seconds on MIND Core's boot clock, the log's `[ n.nnn ]`. That clock starts about half a minute
+  after Linux's `boot_switch`.
+- Step 1 ends at about 45 s. Each stage is then logged, paused 1 s, run, and paused 3 s, so the stages fall roughly
+  at these times.
+
+| Stage | About | DP-2 (MIND Core's screen) | HDMI-A-1 |
+|---|---|---|---|
+| 1 OTG clocks | 46 s | unchanged: no flicker, blank or loss of signal | dark (no signal / asleep) |
+| 2 pixel clock (table 12) | 50-53 s | unchanged | dark |
+| 3 timing | 57 s | unchanged | dark |
+| 4 test pattern | 61 s | unchanged | dark |
+| 5 start (OTG1 runs) | 65 s | unchanged | dark: nothing drives PHY A yet |
+| 6 front end (table 4) | 69 s | unchanged | dark |
+| 7 back end | 73 s | unchanged | dark |
+| 8 PHY (table 76) | 77-80 s | unchanged | **wakes: the engine's colour squares, 1920x1080, its menu showing 1920x1080 at 60 Hz** |
+
+- Any flicker, blank or loss of signal on DP-2 is the stage's failure, whatever the log says. Note the time, so the
+  log's stage can be matched to it. The log lines that show each stage went through are in the table under "What a
+  person must see".
+- Without the undo, everything stays as written until the next boot. Any release afterwards (the night one,
+  `STAGES_ALLOWED` 0) starts from a restart.
+
+**The one thing that cannot be undone, and the maintainer decides whether stage 2 runs.**
+- **What.** Table 12 (stage 2) writes into PHY A's internal registers through its control register bus
+  (`RDPCS_TX_CR_ADDR`/`_DATA`). On the model with the Ryzen's VBIOS that is 20 address and 17 data writes out of its
+  111. No restore can return those internal registers. The undo leaves the bus alone (6ab7fd7a1), so that it does not
+  write stale data into the PHY.
+- **Table 76 (stage 8)** makes no write through the bus on the model: 23 writes, none to the bus. The hardware may take
+  another path through the table; the log shows every write it makes.
+- **Why we think it is harmless:**
+  - it is the vendor's own routine for the purpose (the VBIOS's SetPixelClock);
+  - its parameters are for a standard CTA mode (1920x1080 at 148.5 MHz, DVI signalling, PHY A's PLL);
+  - PHY A stays off until stage 8;
+  - running these tables on the host is Linux's own fallback on this engine when no DMCUB is present
+    (`set_pixel_clock_v7`, `transmitter_control_v1_6`).
+- **What is not known:**
+  - whether the firmware resets PHY A's internals at the next boot;
+  - what the DMCUB would have written instead, since under Linux it, not the host, ran these tables on this board;
+  - whether the bytecode run from the host does on this hardware what the model shows.
+- **A gap in stage 8's undo,** which only matters if stage 8 fails. On the model, table 76's DISABLE writes
+  `DP0_DP_LINK_CNTL` (DIG A's DP block, dword 0x2108), which the guard refuses as off the route. So the off call stops
+  there, and the undo restores stage 8's writes without the VBIOS's own disable having run to its end. Allowing that
+  register for the off call only is a change to make before stage 8 is asked for with the undo.
 
 ## Related
 
