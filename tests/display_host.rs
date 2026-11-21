@@ -5,7 +5,7 @@
 #[path = "../display/src/edid.rs"] mod edid;
 #[path = "../display/src/dcn.rs"] mod dcn;
 
-use dcn::{first_light, Field, Output, Pattern, Pipe, PlanError, Protected, Reg, Signal, Step, Table, R};
+use dcn::{first_light, Field, Output, Pattern, Pipe, PlanError, Protected, Reg, RegError, Signal, Step, Table, R};
 use std::collections::HashMap;
 use timing::{Otg, Timing, CEA_1080P60};
 
@@ -197,34 +197,34 @@ fn edid_detailed_timing_polarities_and_descriptors() {
 // --- DCN 2.1 registers and first light ---
 
 const DCN: [u32; 3] = [0x12, 0xC0, 0x34C0];
-fn byte(segment: usize, dword: u32) -> Reg { Reg((DCN[segment] + dword) * 4) }
+fn byte(segment: usize, dword: u32) -> Reg { Reg::new((DCN[segment] + dword) * 4).unwrap() }
 
 #[test]
 fn register_addresses_match_the_headers_instances() {
     // dcn_2_1_0_offset.h: instance 1 of each, against its stride from instance 0.
-    assert_eq!(R::OtgHTotal.at(1), byte(2, 0x1BAA));
-    assert_eq!(R::OtgVBlankStartEnd.at(1), byte(2, 0x1BB6));
-    assert_eq!(R::OtgControl.at(1), byte(2, 0x1BC1));
-    assert_eq!(R::OtgStatusFrameCount.at(1), byte(2, 0x1BCC));
-    assert_eq!(R::OtgClockControl.at(1), byte(2, 0x1C06));
-    assert_eq!(R::OtgVreadyParam.at(1), byte(2, 0x1C09));
-    assert_eq!(R::OptcDataSourceSelect.at(1), byte(2, 0x1ADB));
-    assert_eq!(R::OptcInputClockControl.at(1), byte(2, 0x1ADF));
-    assert_eq!(R::VtgControl.at(1), byte(2, 0x0529));
-    assert_eq!(R::OppPipeControl.at(1), byte(2, 0x18E6));
-    assert_eq!(R::DpgControl.at(1), byte(2, 0x18AE));
-    assert_eq!(R::DpgDimensions.at(1), byte(2, 0x18B0));
-    assert_eq!(R::DpgOffsetSegment.at(1), byte(2, 0x18B4));
-    assert_eq!(R::DigFeCntl.at(1), byte(2, 0x2168));
-    assert_eq!(R::DigBeCntl.at(1), byte(2, 0x21AF));
-    assert_eq!(R::OtgPixelRateCntl.at(1), byte(1, 0x84));
-    assert_eq!(R::OtgPhypllPixelRateCntl.at(1), byte(1, 0x87));
-    assert_eq!(R::PhypllPixclkResyncCntl.at(3), byte(1, 0x43));
-    assert_eq!(R::PhypllPixclkResyncCntl.at(4), byte(1, 0x4C));
-    assert_eq!(R::HpdControl.at(1), byte(2, 0x1F1E));
-    assert_eq!(R::DentistDispclkCntl.at(0), byte(1, 0x64));
-    for i in 0..dcn::PIPES { assert!(dcn::DCN_BYTES.contains(&R::OtgVreadyParam.at(i).0)); }
-    for i in 0..dcn::DIGS { assert!(dcn::DCN_BYTES.contains(&R::DigBeCntl.at(i).0)); }
+    assert_eq!(R::OtgHTotal.at(1).unwrap(), byte(2, 0x1BAA));
+    assert_eq!(R::OtgVBlankStartEnd.at(1).unwrap(), byte(2, 0x1BB6));
+    assert_eq!(R::OtgControl.at(1).unwrap(), byte(2, 0x1BC1));
+    assert_eq!(R::OtgStatusFrameCount.at(1).unwrap(), byte(2, 0x1BCC));
+    assert_eq!(R::OtgClockControl.at(1).unwrap(), byte(2, 0x1C06));
+    assert_eq!(R::OtgVreadyParam.at(1).unwrap(), byte(2, 0x1C09));
+    assert_eq!(R::OptcDataSourceSelect.at(1).unwrap(), byte(2, 0x1ADB));
+    assert_eq!(R::OptcInputClockControl.at(1).unwrap(), byte(2, 0x1ADF));
+    assert_eq!(R::VtgControl.at(1).unwrap(), byte(2, 0x0529));
+    assert_eq!(R::OppPipeControl.at(1).unwrap(), byte(2, 0x18E6));
+    assert_eq!(R::DpgControl.at(1).unwrap(), byte(2, 0x18AE));
+    assert_eq!(R::DpgDimensions.at(1).unwrap(), byte(2, 0x18B0));
+    assert_eq!(R::DpgOffsetSegment.at(1).unwrap(), byte(2, 0x18B4));
+    assert_eq!(R::DigFeCntl.at(1).unwrap(), byte(2, 0x2168));
+    assert_eq!(R::DigBeCntl.at(1).unwrap(), byte(2, 0x21AF));
+    assert_eq!(R::OtgPixelRateCntl.at(1).unwrap(), byte(1, 0x84));
+    assert_eq!(R::OtgPhypllPixelRateCntl.at(1).unwrap(), byte(1, 0x87));
+    assert_eq!(R::PhypllPixclkResyncCntl.at(3).unwrap(), byte(1, 0x43));
+    assert_eq!(R::PhypllPixclkResyncCntl.at(4).unwrap(), byte(1, 0x4C));
+    assert_eq!(R::HpdControl.at(1).unwrap(), byte(2, 0x1F1E));
+    assert_eq!(R::DentistDispclkCntl.at(0).unwrap(), byte(1, 0x64));
+    for i in 0..dcn::PIPES { assert!(dcn::DCN_BYTES.contains(&R::OtgVreadyParam.at(i).unwrap().offset())); }
+    for i in 0..dcn::DIGS { assert!(dcn::DCN_BYTES.contains(&R::DigBeCntl.at(i).unwrap().offset())); }
 }
 
 #[test]
@@ -244,9 +244,9 @@ impl Model {
     fn new() -> Model {
         let mut regs = HashMap::new();
         // The firmware's pipe 0 on PHY E (illustrative values).
-        regs.insert(R::OtgControl.at(0), 0x0001_0001);
-        regs.insert(R::OtgHTotal.at(0), 2719);
-        regs.insert(R::DigBeCntl.at(4), 0x0000_0100);
+        regs.insert(R::OtgControl.at(0).unwrap(), 0x0001_0001);
+        regs.insert(R::OtgHTotal.at(0).unwrap(), 2719);
+        regs.insert(R::DigBeCntl.at(4).unwrap(), 0x0000_0100);
         Model { regs, tables: Vec::new(), log: Vec::new() }
     }
     fn read(&self, r: Reg) -> u32 { *self.regs.get(&r).unwrap_or(&0) }
@@ -254,24 +254,24 @@ impl Model {
         for (i, step) in plan.steps().enumerate() {
             match step {
                 Step::Update { reg, mask, value } => {
-                    assert!(dcn::DCN_BYTES.contains(&reg.0), "write outside the engine: {:x}", reg.0);
-                    assert_eq!(value & !mask, 0, "value outside its mask at {:x}", reg.0);
+                    assert!(dcn::DCN_BYTES.contains(&reg.offset()), "write outside the engine: {:x}", reg.offset());
+                    assert_eq!(value & !mask, 0, "value outside its mask at {:x}", reg.offset());
                     let v = (self.read(reg) & !mask) | value;
                     self.regs.insert(reg, v);
                     self.log.push(reg);
                     self.follow(reg, v);
                 }
-                Step::Wait { reg, mask, value, .. } => assert_eq!(self.read(reg) & mask, value, "wait {} never ends at {:x}", i, reg.0),
+                Step::Wait { reg, mask, value, .. } => assert_eq!(self.read(reg) & mask, value, "wait {} never ends at {:x}", i, reg.offset()),
                 Step::Call(t) => self.tables.push((i, t)),
-                Step::Frames { otg, .. } => assert_eq!(self.read(R::OtgControl.at(otg)) & 1, 1, "frames waited for on a stopped generator"),
+                Step::Frames { otg, .. } => assert_eq!(self.read(R::OtgControl.at(otg).unwrap()) & 1, 1, "frames waited for on a stopped generator"),
             }
         }
     }
     fn follow(&mut self, reg: Reg, v: u32) {
         for i in 0..dcn::PIPES {
-            if reg == R::OptcInputClockControl.at(i) { self.regs.insert(reg, (v & !4) | ((v >> 1) & 1) << 2); }
-            if reg == R::OtgClockControl.at(i) { self.regs.insert(reg, (v & !0x100) | (v & 1) << 8); }
-            if reg == R::OtgControl.at(i) { self.regs.insert(reg, (v & !0x1_0000) | (v & 1) << 16); }
+            if reg == R::OptcInputClockControl.at(i).unwrap() { self.regs.insert(reg, (v & !4) | ((v >> 1) & 1) << 2); }
+            if reg == R::OtgClockControl.at(i).unwrap() { self.regs.insert(reg, (v & !0x100) | (v & 1) << 8); }
+            if reg == R::OtgControl.at(i).unwrap() { self.regs.insert(reg, (v & !0x1_0000) | (v & 1) << 16); }
         }
     }
     fn index_of(&self, reg: Reg) -> usize { self.log.iter().position(|&r| r == reg).expect("register never written") }
@@ -290,40 +290,40 @@ fn first_light_programs_the_second_pipe_in_display_cores_order() {
     let before: Vec<(Reg, u32)> = FIRMWARE.registers().map(|r| (r, m.read(r))).collect();
     m.run(&plan);
     // The firmware's pipe and PHY: never written, unchanged.
-    for r in FIRMWARE.registers() { assert!(!plan.written().any(|w| w == r), "plan writes the firmware's {:x}", r.0); }
+    for r in FIRMWARE.registers() { assert!(!plan.written().any(|w| w == r), "plan writes the firmware's {:x}", r.offset()); }
     assert_eq!(before, FIRMWARE.registers().map(|r| (r, m.read(r))).collect::<Vec<_>>());
     // The timing as the arithmetic gives it.
     let o = CEA_1080P60.otg().unwrap();
-    assert_eq!(m.read(R::OtgHTotal.at(1)), o.h_total);
-    assert_eq!(m.read(R::OtgHBlankStartEnd.at(1)), o.h_blank_start | o.h_blank_end << 16);
-    assert_eq!(m.read(R::OtgHSyncA.at(1)), o.h_sync_end << 16);
-    assert_eq!(m.read(R::OtgVTotal.at(1)), o.v_total);
-    assert_eq!(m.read(R::OtgVTotalMax.at(1)), o.v_total);
-    assert_eq!(m.read(R::OtgVBlankStartEnd.at(1)), o.v_blank_start | o.v_blank_end << 16);
-    assert_eq!(m.read(R::OtgVSyncA.at(1)), o.v_sync_end << 16);
-    assert_eq!(m.read(R::VtgControl.at(1)) >> 16 & 0x7FFF, o.vcount_init);
+    assert_eq!(m.read(R::OtgHTotal.at(1).unwrap()), o.h_total);
+    assert_eq!(m.read(R::OtgHBlankStartEnd.at(1).unwrap()), o.h_blank_start | o.h_blank_end << 16);
+    assert_eq!(m.read(R::OtgHSyncA.at(1).unwrap()), o.h_sync_end << 16);
+    assert_eq!(m.read(R::OtgVTotal.at(1).unwrap()), o.v_total);
+    assert_eq!(m.read(R::OtgVTotalMax.at(1).unwrap()), o.v_total);
+    assert_eq!(m.read(R::OtgVBlankStartEnd.at(1).unwrap()), o.v_blank_start | o.v_blank_end << 16);
+    assert_eq!(m.read(R::OtgVSyncA.at(1).unwrap()), o.v_sync_end << 16);
+    assert_eq!(m.read(R::VtgControl.at(1).unwrap()) >> 16 & 0x7FFF, o.vcount_init);
     // The wiring: OTG 1 from OPP 1, DIG front end A from OTG 1, PHY A's back end from front end A in DVI mode.
-    assert_eq!(m.read(R::OptcDataSourceSelect.at(1)) >> 8 & 0xF, 1);
-    assert_eq!(m.read(R::DigFeCntl.at(0)) & 7, 1);
-    assert_eq!(m.read(R::DigBeCntl.at(0)) >> 8 & 0x7F, 1);
-    assert_eq!(m.read(R::DigBeCntl.at(0)) >> 16 & 7, 2);
-    assert_eq!(m.read(R::DpgControl.at(1)) & 0xF1, 0x01);
-    assert_eq!(m.read(R::DpgDimensions.at(1)), 1920 << 16 | 1080);
+    assert_eq!(m.read(R::OptcDataSourceSelect.at(1).unwrap()) >> 8 & 0xF, 1);
+    assert_eq!(m.read(R::DigFeCntl.at(0).unwrap()) & 7, 1);
+    assert_eq!(m.read(R::DigBeCntl.at(0).unwrap()) >> 8 & 0x7F, 1);
+    assert_eq!(m.read(R::DigBeCntl.at(0).unwrap()) >> 16 & 7, 2);
+    assert_eq!(m.read(R::DpgControl.at(1).unwrap()) & 0xF1, 0x01);
+    assert_eq!(m.read(R::DpgDimensions.at(1).unwrap()), 1920 << 16 | 1080);
     // The order.
-    let clocks = m.index_of(R::OtgClockControl.at(1));
-    let timing = m.index_of(R::OtgHTotal.at(1));
-    let pattern = m.index_of(R::DpgControl.at(1));
-    let source = m.index_of(R::OptcDataSourceSelect.at(1));
-    let started = m.log.iter().rposition(|&r| r == R::OtgControl.at(1)).unwrap();
-    let back_end = m.index_of(R::DigBeCntl.at(0));
+    let clocks = m.index_of(R::OtgClockControl.at(1).unwrap());
+    let timing = m.index_of(R::OtgHTotal.at(1).unwrap());
+    let pattern = m.index_of(R::DpgControl.at(1).unwrap());
+    let source = m.index_of(R::OptcDataSourceSelect.at(1).unwrap());
+    let started = m.log.iter().rposition(|&r| r == R::OtgControl.at(1).unwrap()).unwrap();
+    let back_end = m.index_of(R::DigBeCntl.at(0).unwrap());
     assert!(clocks < timing && timing < pattern && pattern < source && source < started && started < back_end);
     let calls: Vec<u8> = m.tables.iter().map(|(_, t)| t.index()).collect();
     assert_eq!(calls, vec![dcn::TABLE_SETPIXELCLOCK, dcn::TABLE_DIGXENCODERCONTROL, dcn::TABLE_DIG1TRANSMITTERCONTROL]);
     let at = |table: u8| m.tables.iter().find(|(_, t)| t.index() == table).unwrap().0;
     let step_of = |reg: Reg| plan.steps().position(|s| matches!(s, Step::Update { reg: r, .. } if r == reg)).unwrap();
-    assert!(at(dcn::TABLE_SETPIXELCLOCK) < step_of(R::OtgHTotal.at(1)), "the pixel clock before the timing");
-    assert!(at(dcn::TABLE_DIG1TRANSMITTERCONTROL) > step_of(R::DigBeCntl.at(0)), "the PHY after its back end");
-    assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(0)));
+    assert!(at(dcn::TABLE_SETPIXELCLOCK) < step_of(R::OtgHTotal.at(1).unwrap()), "the pixel clock before the timing");
+    assert!(at(dcn::TABLE_DIG1TRANSMITTERCONTROL) > step_of(R::DigBeCntl.at(0).unwrap()), "the PHY after its back end");
+    assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(0).unwrap()));
 }
 
 #[test]
@@ -356,9 +356,55 @@ fn first_light_refuses_the_firmwares_pipe_bad_instances_and_clocks_beyond_the_si
     let plan = first_light(PIPE1, HDMI_A, &HDMI_PREFERRED, Signal::Hdmi, Pattern::VerticalBars, FIRMWARE).unwrap();
     let mut m = Model::new();
     m.run(&plan);
-    assert_eq!(m.read(R::DigBeCntl.at(0)) >> 16 & 7, 3);
-    assert_eq!(m.read(R::DpgControl.at(1)) >> 4 & 7, 3);
+    assert_eq!(m.read(R::DigBeCntl.at(0).unwrap()) >> 16 & 7, 3);
+    assert_eq!(m.read(R::DpgControl.at(1).unwrap()) >> 4 & 7, 3);
     let mut interlaced = CEA_1080P60;
     interlaced.interlaced = true;
     assert_eq!(first_light(PIPE1, HDMI_A, &interlaced, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap_err(), PlanError::Timing(timing::TimingError::Interlaced));
+}
+
+// Every R of the engine, for the cases that walk them all.
+const ALL_R: [R; 37] = { use R::*; [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal,
+    OtgVTotalMin, OtgVTotalMax, OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl,
+    OtgInterlaceControl, OtgStatus, OtgStatusPosition, OtgStatusFrameCount, OtgClockControl, OtgVstartupParam,
+    OtgVupdateParam, OtgVreadyParam, OptcDataSourceSelect, OptcDataFormatControl, OptcInputClockControl, VtgControl,
+    OppPipeControl, DpgControl, DpgDimensions, DpgOffsetSegment, DigFeCntl, DigBeCntl, OtgPixelRateCntl,
+    OtgPhypllPixelRateCntl, PhypllPixclkResyncCntl, HpdIntStatus, HpdControl, DentistDispclkCntl] };
+
+#[test]
+fn no_register_can_name_the_msix_table_or_pending_bits() {
+    // KRN's rule: BAR 5 bytes 0x42000 to 0x43FFF are never touched. Every offset there is refused, aligned or not.
+    for offset in 0x42000u32..0x44000 { assert_eq!(Reg::new(offset), Err(RegError::MsiX), "{:x}", offset); }
+    assert_eq!(dcn::MSIX_BYTES, 0x42000..0x44000);
+    // Around it: outside the windows, so refused too, for the other reason.
+    assert_eq!(Reg::new(0x41FFC), Err(RegError::Outside));
+    assert_eq!(Reg::new(0x44000), Err(RegError::Outside));
+    // The windows themselves.
+    assert_eq!(Reg::new(0x48).map(Reg::offset), Ok(0x48));
+    assert_eq!(Reg::new(0x1AFFC).map(Reg::offset), Ok(0x1AFFC));
+    assert_eq!(Reg::new(0x1B000), Err(RegError::Outside));
+    assert_eq!(Reg::new(0x44), Err(RegError::Outside));
+    assert_eq!(Reg::new(0x4A), Err(RegError::Unaligned));
+    for m in dcn::SMU_MAILBOX { assert_eq!(Reg::new(m).map(Reg::offset), Ok(m)); }
+    assert_eq!(Reg::new(dcn::SMU_MAILBOX[0] + 4), Err(RegError::Outside));
+    assert_eq!(Reg::new(u32::MAX - 3), Err(RegError::Outside));
+    // Every register of every instance lies in a window and none in the MSI-X bytes; one past the last instance is None.
+    for r in ALL_R {
+        for i in 0..r.instances() {
+            let reg = r.at(i).unwrap_or_else(|| panic!("{:?} {} has no register", r, i));
+            assert!(!dcn::MSIX_BYTES.contains(&reg.offset()));
+            assert_eq!(Reg::new(reg.offset()), Ok(reg));
+        }
+        assert_eq!(r.at(r.instances()), None, "{:?}", r);
+    }
+}
+
+#[test]
+fn every_step_of_first_light_stays_in_the_engine() {
+    let plan = first_light(PIPE1, HDMI_A, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap();
+    for step in plan.steps() {
+        if let Step::Update { reg, .. } | Step::Wait { reg, .. } = step {
+            assert!(dcn::DCN_BYTES.contains(&reg.offset()) && !dcn::MSIX_BYTES.contains(&reg.offset()));
+        }
+    }
 }

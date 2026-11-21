@@ -37,14 +37,21 @@ boot image, ABI 38; this branch adds no `Cargo.toml`, `main.rs` or linker script
 - `display/src/dcn.rs`: DCN 2.1's registers as BAR 5 offsets (segments, blocks, instance strides), the fields first
   light writes, the three VBIOS command tables it calls with their parameter bytes, and `first_light`, the ordered plan
   of step 3 (the DPG's colour squares on a second pipe), which refuses the firmware's pipe and PHY.
-- `tests/display_host.rs`, 13 cases, run by `scripts/host_tests.sh` with no line of its own: the timing arithmetic
+- `tests/display_host.rs`, run by `scripts/host_tests.sh` with no line of its own (its loop over `tests/*_host.rs`): the timing arithmetic
   (CTA 1080p60; the Ryzen's two monitors, whose EDID timings give exactly the OTG values Display Core dumped under
   Linux), the parser on synthetic EDIDs (the monitors' own bytes are not kept) and on damaged ones, the register
   addresses against the header's instance 1, and the plan run against a model of the blocks: the firmware's registers
   never written and unchanged, the timing and wiring written, the order (clocks, pixel clock, timing, pattern, start,
   front end, back end, PHY), the tables' parameter bytes, and the refusals.
 
-Tested on LEG9 only: the 13 cases pass, and the three modules build as `#![no_std]` with `-D warnings`. Nothing of it
+**KRN's rule for BAR 5** (2026-11-21): `display` never touches bytes 0x42000 to 0x43FFF, the MSI-X table and pending
+bits. In `dcn.rs` a `Reg` can only be made by `Reg::new`, which refuses that range before anything else, then any
+unaligned offset, then any outside the engine's bytes (0x48 to 0x1AFFF) and the SMU mailbox's three registers;
+`R::at` goes through it and gives None past a block's instances; constant assertions keep every window clear of the
+MSI-X bytes. Two cases: every offset of the range refused, every register of every instance inside a window, and every
+step of first light inside the engine.
+
+Tested on LEG9 only: the 15 cases pass, and the three modules build as `#![no_std]` with `-D warnings`. Nothing of it
 has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md)),
 not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command tables need an interpreter (or their
 writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core

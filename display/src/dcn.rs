@@ -9,17 +9,65 @@
 
 use crate::timing::{Otg, Timing, TimingError, DVI_SINGLE_LINK_KHZ, TMDS_NO_SCRAMBLING_KHZ};
 
+use core::ops::Range;
+
 /// Dword bases of the engine's register segments 0, 1 and 2 in BAR 5 (DCN_BASE).
 pub const SEGMENT: [u32; 3] = [0x12, 0xC0, 0x34C0];
 /// The bytes of BAR 5 that hold the engine's registers (segments 0 to 2: DCN 2.1's blocks and its DPCS).
-pub const DCN_BYTES: core::ops::Range<u32> = 0x48..0x1B000;
+pub const DCN_BYTES: Range<u32> = 0x48..0x1B000;
+/// The SMU's display-clock mailbox, `MP1_SMN_C2PMSG_67`, `_83` and `_91` (MP1 base 0x16000 dwords): message, argument,
+/// response. Not used by first light; the only bytes outside the engine `display` may name.
+pub const SMU_MAILBOX: [u32; 3] = [0x58A0C, 0x58A4C, 0x58A6C];
+/// The bytes of BAR 5 that `display` never touches: the device's MSI-X table (+0x42000) and pending bits (+0x43000),
+/// where a write is kept by the device (KRN's rule for the grant).
+pub const MSIX_BYTES: Range<u32> = 0x42000..0x44000;
+/// BAR 5's size on this device.
+pub const BAR5_BYTES: u32 = 0x80000;
 /// Timing generators, OPPs and pipes; DIG encoders and PHYs (A to E).
 pub const PIPES: u8 = 4;
 pub const DIGS: u8 = 5;
 
-/// A register, as its byte offset in BAR 5.
+// No window may reach into the MSI-X bytes, whatever the windows become.
+const _: () = assert!(DCN_BYTES.end <= MSIX_BYTES.start || DCN_BYTES.start >= MSIX_BYTES.end);
+const _: () = {
+    let mut i = 0;
+    while i < SMU_MAILBOX.len() {
+        assert!(SMU_MAILBOX[i] + 4 <= MSIX_BYTES.start || SMU_MAILBOX[i] >= MSIX_BYTES.end);
+        assert!(SMU_MAILBOX[i] + 4 <= BAR5_BYTES);
+        i += 1;
+    }
+};
+
+/// Why an offset is not a register `display` may touch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegError {
+    /// In the MSI-X table or pending bits: refused before anything else.
+    MsiX,
+    /// Not a multiple of four.
+    Unaligned,
+    /// Outside the engine's bytes and the SMU mailbox.
+    Outside,
+}
+
+/// A register `display` may touch, as its byte offset in BAR 5. The only ways to make one are `Reg::new` and `R::at`,
+/// which goes through it, so no `Reg` names a byte of the MSI-X range or one outside the windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Reg(pub u32);
+pub struct Reg(u32);
+
+impl Reg {
+    /// The register at `offset`, if `display` may touch it.
+    pub const fn new(offset: u32) -> Result<Reg, RegError> {
+        if offset >= MSIX_BYTES.start && offset < MSIX_BYTES.end { return Err(RegError::MsiX); }
+        if offset % 4 != 0 { return Err(RegError::Unaligned); }
+        let in_engine = offset >= DCN_BYTES.start && offset <= DCN_BYTES.end - 4;
+        let in_mailbox = offset == SMU_MAILBOX[0] || offset == SMU_MAILBOX[1] || offset == SMU_MAILBOX[2];
+        if in_engine || in_mailbox { Ok(Reg(offset)) } else { Err(RegError::Outside) }
+    }
+    /// Its byte offset in BAR 5.
+    pub const fn offset(self) -> u32 { self.0 }
+    /// Its dword index in BAR 5.
+    pub const fn dword(self) -> usize { (self.0 / 4) as usize }
+}
 
 /// The registers first light reads and writes, each of one instance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +82,20 @@ pub enum R {
 }
 
 impl R {
-    /// The register of instance `inst`: OTG/ODM/VTG/OPP/DPG/pixel rate by pipe, DIG by encoder, PHY PLL by PHY, HPD by
-    /// pin.
-    pub fn at(self, inst: u8) -> Reg {
+    /// How many instances the block has: pipes for OTG/ODM/VTG/OPP/DPG/pixel rate, encoders for DIG, PHY PLL and HPD.
+    pub const fn instances(self) -> u8 {
         use R::*;
+        match self {
+            DigFeCntl | DigBeCntl | PhypllPixclkResyncCntl | HpdIntStatus | HpdControl => DIGS,
+            DentistDispclkCntl => 1,
+            _ => PIPES,
+        }
+    }
+
+    /// The register of instance `inst`; None beyond the block's instances (or, by construction, outside the windows).
+    pub fn at(self, inst: u8) -> Option<Reg> {
+        use R::*;
+        if inst >= self.instances() { return None; }
         let i = inst as u32;
         let otg = |off: u32| (2, 0x1B2A + off + 0x80 * i);
         let (segment, dword) = match self {
@@ -57,7 +115,7 @@ impl R {
             HpdIntStatus => (2, 0x1F14 + 8 * i), HpdControl => (2, 0x1F16 + 8 * i),
             DentistDispclkCntl => (1, 0x64),
         };
-        Reg((SEGMENT[segment] + dword) * 4)
+        Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
 }
 
@@ -282,12 +340,15 @@ impl Protected {
             OtgVTotalMin, OtgVTotalMax, OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl,
             OtgInterlaceControl, OtgClockControl, OtgVstartupParam, OtgVupdateParam, OtgVreadyParam, OptcDataSourceSelect,
             OptcDataFormatControl, OptcInputClockControl, VtgControl, OtgPixelRateCntl, OtgPhypllPixelRateCntl];
-        let pipe = BY_PIPE.iter().map(move |r| r.at(self.otg));
-        let opp = [OppPipeControl, DpgControl, DpgDimensions, DpgOffsetSegment].into_iter().map(move |r| r.at(self.opp));
+        let pipe = BY_PIPE.iter().filter_map(move |r| r.at(self.otg));
+        let opp = [OppPipeControl, DpgControl, DpgDimensions, DpgOffsetSegment].into_iter().filter_map(move |r| r.at(self.opp));
         let dig = [DigFeCntl.at(self.dig_fe), DigBeCntl.at(self.phy), PhypllPixclkResyncCntl.at(self.phy)];
-        pipe.chain(opp).chain(dig)
+        pipe.chain(opp).chain(dig.into_iter().flatten())
     }
 }
+
+/// The register of an instance, for a plan: an instance beyond the block's is refused.
+fn reg(r: R, inst: u8) -> Result<Reg, PlanError> { r.at(inst).ok_or(PlanError::NoSuchInstance) }
 
 /// First light: the engine's own test pattern on `output` through `pipe` at `timing`, the firmware's pipe and PHY left
 /// alone. The order is Display Core's for a TMDS stream: the timing generator's clocks, the pixel clock, the timing,
@@ -310,76 +371,76 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     let mut plan = Plan::default();
 
     // The timing generator's clocks (optc1_enable_optc_clock).
-    plan.update(OptcInputClockControl.at(t), &[(OPTC_INPUT_CLK_EN, 1), (OPTC_INPUT_CLK_GATE_DIS, 1)])?;
-    plan.wait(OptcInputClockControl.at(t), OPTC_INPUT_CLK_ON, 1, 1000)?;
-    plan.update(OtgClockControl.at(t), &[(OTG_CLOCK_EN, 1), (OTG_CLOCK_GATE_DIS, 1)])?;
-    plan.wait(OtgClockControl.at(t), OTG_CLOCK_ON, 1, 1000)?;
+    plan.update(reg(OptcInputClockControl, t)?, &[(OPTC_INPUT_CLK_EN, 1), (OPTC_INPUT_CLK_GATE_DIS, 1)])?;
+    plan.wait(reg(OptcInputClockControl, t)?, OPTC_INPUT_CLK_ON, 1, 1000)?;
+    plan.update(reg(OtgClockControl, t)?, &[(OTG_CLOCK_EN, 1), (OTG_CLOCK_GATE_DIS, 1)])?;
+    plan.wait(reg(OtgClockControl, t)?, OTG_CLOCK_ON, 1, 1000)?;
 
     // The pixel clock: the PHY's PLL through the VBIOS, then 8-bit colour on its resync (dce112_program_pix_clk).
     plan.push(Step::Call(Table::SetPixelClock {
         pixclk_100hz: timing.pixel_khz * 10, pll_id: COMBOPHY_PLL0 + output.phy, encoder_id: output.encoder_id,
         encoder_mode: mode, crtc_id: t, deep_color: 0,
     }))?;
-    plan.update(PhypllPixclkResyncCntl.at(output.phy), &[(PHYPLL_DEEP_COLOR_CNTL, 0)])?;
+    plan.update(reg(PhypllPixclkResyncCntl, output.phy)?, &[(PHYPLL_DEEP_COLOR_CNTL, 0)])?;
 
     // The timing (optc1_program_timing), the generator stopped.
     write_timing(&mut plan, t, &otg)?;
 
     // The OPP's clock and its pattern generator, before the generator starts (opp2_set_disp_pattern_generator).
-    plan.update(OppPipeControl.at(o), &[(OPP_PIPE_CLOCK_EN, 1)])?;
-    plan.update(DpgDimensions.at(o), &[(DPG_ACTIVE_WIDTH, timing.h_active as u32), (DPG_ACTIVE_HEIGHT, timing.v_active as u32)])?;
-    plan.update(DpgOffsetSegment.at(o), &[(WHOLE, 0)])?;
+    plan.update(reg(OppPipeControl, o)?, &[(OPP_PIPE_CLOCK_EN, 1)])?;
+    plan.update(reg(DpgDimensions, o)?, &[(DPG_ACTIVE_WIDTH, timing.h_active as u32), (DPG_ACTIVE_HEIGHT, timing.v_active as u32)])?;
+    plan.update(reg(DpgOffsetSegment, o)?, &[(WHOLE, 0)])?;
     let (dpg_mode, res) = match pattern { Pattern::ColorSquares => (0, 6), Pattern::VerticalBars => (3, 0), Pattern::HorizontalBars => (4, 0) };
-    plan.update(DpgControl.at(o), &[(DPG_EN, 1), (DPG_MODE, dpg_mode), (DPG_DYNAMIC_RANGE, 0), (DPG_BIT_DEPTH, 1), (DPG_VRES, res), (DPG_HRES, res)])?;
+    plan.update(reg(DpgControl, o)?, &[(DPG_EN, 1), (DPG_MODE, dpg_mode), (DPG_DYNAMIC_RANGE, 0), (DPG_BIT_DEPTH, 1), (DPG_VRES, res), (DPG_HRES, res)])?;
 
     // The generator started on its OPP (optc2_enable_crtc) and seen counting frames.
-    plan.update(OptcDataSourceSelect.at(t), &[(OPTC_SEG0_SRC_SEL, o as u32)])?;
-    plan.update(VtgControl.at(t), &[(VTG0_ENABLE, 1)])?;
-    plan.update(OtgControl.at(t), &[(OTG_DISABLE_POINT_CNTL, 3), (OTG_MASTER_EN, 1)])?;
-    plan.wait(OtgControl.at(t), OTG_CURRENT_MASTER_EN_STATE, 1, 50_000)?;
+    plan.update(reg(OptcDataSourceSelect, t)?, &[(OPTC_SEG0_SRC_SEL, o as u32)])?;
+    plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 1)])?;
+    plan.update(reg(OtgControl, t)?, &[(OTG_DISABLE_POINT_CNTL, 3), (OTG_MASTER_EN, 1)])?;
+    plan.wait(reg(OtgControl, t)?, OTG_CURRENT_MASTER_EN_STATE, 1, 50_000)?;
     plan.push(Step::Frames { otg: t, frames: 2, timeout_us: 200_000 })?;
 
     // The DIG front end on that generator, RGB 8 bits (enc1_stream_encoder_dvi_set_stream_attribute).
     plan.push(Step::Call(Table::DigEncoderStreamSetup { dig: d, mode, lanes: 4, pclk_10khz: timing.pixel_khz / 10, bpc: PANEL_8BIT_PER_COLOR }))?;
-    plan.update(DigFeCntl.at(d), &[(DIG_SOURCE_SELECT, t as u32), (TMDS_PIXEL_ENCODING, 0), (TMDS_COLOR_FORMAT, 0)])?;
+    plan.update(reg(DigFeCntl, d)?, &[(DIG_SOURCE_SELECT, t as u32), (TMDS_PIXEL_ENCODING, 0), (TMDS_COLOR_FORMAT, 0)])?;
 
     // The back end's mode and front end (dcn10_link_encoder_setup, connect_dig_be_to_fe), then the PHY.
-    plan.update(DigBeCntl.at(output.phy), &[(DIG_MODE, mode as u32), (DIG_FE_SOURCE_SELECT, 1 << d)])?;
+    plan.update(reg(DigBeCntl, output.phy)?, &[(DIG_MODE, mode as u32), (DIG_FE_SOURCE_SELECT, 1 << d)])?;
     plan.push(Step::Call(Table::DigTransmitter {
         phy: output.phy, action: TRANSMITTER_ENABLE, mode, lanes: 4, symclk_10khz: timing.pixel_khz / 10,
         hpd_sel: output.hpd + 1, dig_fe_sel: 1 << d, connector_id: output.connector_id,
     }))?;
     // The front end's FIFO started once its clock runs (the DIG_START pulse of the DCN 1 stream encoder).
-    plan.update(DigFeCntl.at(d), &[(DIG_START, 1)])?;
-    plan.update(DigFeCntl.at(d), &[(DIG_START, 0)])?;
+    plan.update(reg(DigFeCntl, d)?, &[(DIG_START, 1)])?;
+    plan.update(reg(DigFeCntl, d)?, &[(DIG_START, 0)])?;
     Ok(plan)
 }
 
 fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {
     use field::*;
     use R::*;
-    plan.update(OtgControl.at(t), &[(OTG_MASTER_EN, 0)])?;
-    plan.update(OtgHTotal.at(t), &[(COUNTER_LOW, otg.h_total)])?;
-    plan.update(OtgHSyncA.at(t), &[(COUNTER_LOW, 0), (COUNTER_HIGH, otg.h_sync_end)])?;
-    plan.update(OtgHBlankStartEnd.at(t), &[(COUNTER_LOW, otg.h_blank_start), (COUNTER_HIGH, otg.h_blank_end)])?;
-    plan.update(OtgHSyncACntl.at(t), &[(SYNC_POL, otg.h_sync_negative as u32)])?;
-    plan.update(OtgVTotal.at(t), &[(COUNTER_LOW, otg.v_total)])?;
-    plan.update(OtgVTotalMin.at(t), &[(COUNTER_LOW, otg.v_total)])?;
-    plan.update(OtgVTotalMax.at(t), &[(COUNTER_LOW, otg.v_total)])?;
-    plan.update(OtgVSyncA.at(t), &[(COUNTER_LOW, 0), (COUNTER_HIGH, otg.v_sync_end)])?;
-    plan.update(OtgVBlankStartEnd.at(t), &[(COUNTER_LOW, otg.v_blank_start), (COUNTER_HIGH, otg.v_blank_end)])?;
-    plan.update(OtgVSyncACntl.at(t), &[(SYNC_POL, otg.v_sync_negative as u32)])?;
-    plan.update(OtgInterlaceControl.at(t), &[(OTG_INTERLACE_ENABLE, 0)])?;
-    plan.update(VtgControl.at(t), &[(VTG0_ENABLE, 0)])?;
-    plan.update(OtgControl.at(t), &[(OTG_START_POINT_CNTL, 0), (OTG_FIELD_NUMBER_CNTL, 0)])?;
+    plan.update(reg(OtgControl, t)?, &[(OTG_MASTER_EN, 0)])?;
+    plan.update(reg(OtgHTotal, t)?, &[(COUNTER_LOW, otg.h_total)])?;
+    plan.update(reg(OtgHSyncA, t)?, &[(COUNTER_LOW, 0), (COUNTER_HIGH, otg.h_sync_end)])?;
+    plan.update(reg(OtgHBlankStartEnd, t)?, &[(COUNTER_LOW, otg.h_blank_start), (COUNTER_HIGH, otg.h_blank_end)])?;
+    plan.update(reg(OtgHSyncACntl, t)?, &[(SYNC_POL, otg.h_sync_negative as u32)])?;
+    plan.update(reg(OtgVTotal, t)?, &[(COUNTER_LOW, otg.v_total)])?;
+    plan.update(reg(OtgVTotalMin, t)?, &[(COUNTER_LOW, otg.v_total)])?;
+    plan.update(reg(OtgVTotalMax, t)?, &[(COUNTER_LOW, otg.v_total)])?;
+    plan.update(reg(OtgVSyncA, t)?, &[(COUNTER_LOW, 0), (COUNTER_HIGH, otg.v_sync_end)])?;
+    plan.update(reg(OtgVBlankStartEnd, t)?, &[(COUNTER_LOW, otg.v_blank_start), (COUNTER_HIGH, otg.v_blank_end)])?;
+    plan.update(reg(OtgVSyncACntl, t)?, &[(SYNC_POL, otg.v_sync_negative as u32)])?;
+    plan.update(reg(OtgInterlaceControl, t)?, &[(OTG_INTERLACE_ENABLE, 0)])?;
+    plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 0)])?;
+    plan.update(reg(OtgControl, t)?, &[(OTG_START_POINT_CNTL, 0), (OTG_FIELD_NUMBER_CNTL, 0)])?;
     // Global sync with no plane behind the pipe: VSTARTUP inside the vertical blank, after the sync.
     let vstartup = (otg.v_blank_end - otg.v_sync_end).clamp(1, 0x3FF);
-    plan.update(OtgVstartupParam.at(t), &[(VSTARTUP_START, vstartup)])?;
-    plan.update(OtgVupdateParam.at(t), &[(VUPDATE_OFFSET, 0), (VUPDATE_WIDTH, 1)])?;
-    plan.update(OtgVreadyParam.at(t), &[(VREADY_OFFSET, 1)])?;
+    plan.update(reg(OtgVstartupParam, t)?, &[(VSTARTUP_START, vstartup)])?;
+    plan.update(reg(OtgVupdateParam, t)?, &[(VUPDATE_OFFSET, 0), (VUPDATE_WIDTH, 1)])?;
+    plan.update(reg(OtgVreadyParam, t)?, &[(VREADY_OFFSET, 1)])?;
     let fp2 = (vstartup as i64 - 1 - otg.v_blank_end as i64).max(0) as u32;
-    plan.update(VtgControl.at(t), &[(VTG0_FP2, fp2), (VTG0_VCOUNT_INIT, otg.vcount_init)])?;
-    plan.update(OptcDataFormatControl.at(t), &[(OPTC_DATA_FORMAT, 0)])?;
-    plan.update(OtgHTimingCntl.at(t), &[(OTG_H_TIMING_DIV_BY2, 0)])?;
+    plan.update(reg(VtgControl, t)?, &[(VTG0_FP2, fp2), (VTG0_VCOUNT_INIT, otg.vcount_init)])?;
+    plan.update(reg(OptcDataFormatControl, t)?, &[(OPTC_DATA_FORMAT, 0)])?;
+    plan.update(reg(OtgHTimingCntl, t)?, &[(OTG_H_TIMING_DIV_BY2, 0)])?;
     Ok(())
 }
