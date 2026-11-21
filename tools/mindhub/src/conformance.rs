@@ -1,4 +1,4 @@
-//! The conformance suite (docs/hub/README.md, 10.3): drives a hub over `hub-api 1` and its pages, as devices, a
+//! The conformance suite (docs/hub/README.md, 10.3): drives a hub over `hub-api 2` and its pages, as devices, a
 //! browser, the agents and the admin do, and checks each answer. It needs the hub's admin key and three agent keys
 //! (intake, a track's, the integrator's), and a network that registered no key there within a day, as it registers
 //! three and checks that a rejection holds the fourth back. `mindhub conformance` runs it against any hub; the host
@@ -62,10 +62,10 @@ fn register(c: &mut Client, joining: Joining) -> std::io::Result<Reply> {
 fn new_user(c: &mut Client, name: &str) -> std::io::Result<Reply> { register(c, Joining::NewUser { display_name: name.into() }) }
 
 fn request(title: &str, visibility: Visibility, attachments: Vec<Attachment>) -> Request {
-    Request { client_id: hex(&util::random::<8>()), kind: Kind::Fault, title: title.into(), text: format!("Conformance: {title}"), visibility, security: false, attachments }
+    Request { client_id: hex(&util::random::<8>()), kind: Kind::Fault, title: title.into(), text: format!("Conformance: {title}"), visibility, security: false, named: false, attachments }
 }
 
-fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None } }
+fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn send_message(c: &mut Client, base: &str, id: i64, m: &Message) -> std::io::Result<Reply> {
     c.call("POST", &format!("{base}/requests/{id}/messages"), wire::encode_message(m).as_bytes())
@@ -107,7 +107,8 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     // The challenge, the board, unsigned and stale calls.
     let mut anon = s.device()?;
     let r = anon.plain("GET", "/hub/v1/challenge", &[], b"").map_err(io)?;
-    expect("a challenge", &r, 200, None)?;
+    let v = expect("a challenge", &r, 200, None)?;
+    if int(&v, &["work_bits"]).is_none() { return Err("the challenge's answer does not say the proof of work it asks".into()); }
     let r = anon.plain("GET", "/hub/v1/board", &[], b"").map_err(io)?;
     wire::read(&r.text(), wire::decode_board).map_err(|e| format!("the board's JSON: {e:?}"))?;
     s.ok("a challenge in every answer, and the board's JSON");
@@ -173,7 +174,7 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let big = vec![b' '; improve_proto::json::BODY_MAX + 1];
     let r = b.call("POST", "/hub/v1/requests", &big).map_err(io)?;
     if r.status != 413 { return fail("a body over 64 KiB", &r); }
-    let breq = request("B: the camera does not switch", Visibility::Public, vec![entry.clone()]);
+    let breq = Request { named: true, ..request("B: the camera does not switch", Visibility::Public, vec![entry.clone()]) };
     let v = expect("B's request", &b.call("POST", "/hub/v1/requests", wire::encode_request(&breq).as_bytes()).map_err(io)?, 201, None)?;
     let bid = int(&v, &["id"]).ok_or("no id")?;
     let v = expect("the same request again", &b.call("POST", "/hub/v1/requests", wire::encode_request(&breq).as_bytes()).map_err(io)?, 200, None)?;
@@ -190,6 +191,12 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     expect("an attachment", &put(&mut b, &log).map_err(io)?, 200, None)?;
     s.ok("an attachment's bytes checked against its SHA-256");
 
+    // A deletes its request, which no track took: gone from its list and from intake's queue (design 9).
+    let a_second_look = held_id;
+    expect("A deleting its request", &a.call("DELETE", &format!("/hub/v1/requests/{a_second_look}"), b"").map_err(io)?, 200, None)?;
+    expect("a deleted request read", &a.call("GET", &format!("/hub/v1/requests/{held_id}"), b"").map_err(io)?, 404, Some("request"))?;
+    s.ok("a request its user deleted before a track took it is gone");
+
     // R is rejected, and after a rejection this network waits for its next new key.
     let mut rj = s.device()?;
     let r_id = hex(&sign::id(&rj.public_key()));
@@ -204,15 +211,19 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     // The agents: intake asks, B answers, intake accepts, the track works, the integrator lands, B checks.
     let v = expect("intake's queue", &intake.call("GET", "/hub/agent/v1/queue", b"").map_err(io)?, 200, None)?;
     let queued: Vec<i64> = v.get("requests").and_then(Value::as_array).map(|l| l.iter().filter_map(|r| int(r, &["id"])).collect()).unwrap_or_default();
-    if !queued.contains(&bid) || !queued.contains(&held_id) { return Err("intake's queue lacks the new requests".into()); }
-    expect("a private request of another track", &track.call("GET", &format!("/hub/agent/v1/requests/{held_id}"), b"").map_err(io)?, 404, Some("request"))?;
+    if !queued.contains(&bid) || queued.contains(&held_id) { return Err("intake's queue lacks the new request, or holds the deleted one".into()); }
+    expect("a deleted request for an agent", &track.call("GET", &format!("/hub/agent/v1/requests/{held_id}"), b"").map_err(io)?, 404, Some("request"))?;
     expect("intake's question", &send_message(&mut intake, "/hub/agent/v1", bid, &message(MessageKind::Question, "Which cameras?")).map_err(io)?, 201, None)?;
     if state_of(&mut b, bid)? != "needs-info" { return Err("a question did not move the request to needs-info".into()); }
     let v = expect("B's thread", &b.call("GET", &format!("/hub/v1/requests/{bid}"), b"").map_err(io)?, 200, None)?;
     let qn = v.get("request").and_then(|r| r.get("thread")).and_then(Value::as_array)
         .and_then(|t| t.iter().find(|p| text(p, &["kind"]) == Some("question")).and_then(|p| int(p, &["n"]))).ok_or("the question is not in the thread")?;
-    let answer = Message { answers: Some(qn as u32), ..message(MessageKind::Answer, "Two USB cameras") };
-    expect("B's answer", &send_message(&mut b, "/hub/v1", bid, &answer).map_err(io)?, 201, None)?;
+    let lsusb = b"Bus 001 Device 002: ID 046d:0825 Webcam C270\nBus 001 Device 003: ID 0c45:6366 Microdia\n".to_vec();
+    let lsusb_entry = Attachment { kind: AttachmentKind::Text, name: "lsusb.txt".into(), size: lsusb.len() as u64, sha256: sha256(&lsusb) };
+    let answer = Message { answers: Some(qn as u32), attachments: vec![lsusb_entry], ..message(MessageKind::Answer, "Two USB cameras") };
+    let v = expect("B's answer", &send_message(&mut b, "/hub/v1", bid, &answer).map_err(io)?, 201, None)?;
+    let an = int(&v, &["n"]).ok_or("the answer's number")?;
+    expect("the answer's attachment", &b.call("PUT", &format!("/hub/v1/requests/{bid}/messages/{an}/attachments/0"), &lsusb).map_err(io)?, 200, None)?;
     if state_of(&mut b, bid)? != "new" { return Err("the answer did not take the request back".into()); }
     s.ok("a question and its answer, both ways");
     let task = format!("000-{}-9999", t.track_code);
@@ -220,17 +231,18 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let v = expect("B's trust", &b.call("GET", "/hub/v1/devices/me", b"").map_err(io)?, 200, None)?;
     if int(&v, &["user", "trust"]) != Some(32) { return Err("an acceptance did not raise the trust by 32".into()); }
     let board = wire::read(&anon.plain("GET", "/hub/v1/board", &[], b"").map_err(io)?.text(), wire::decode_board).map_err(|e| format!("{e:?}"))?;
-    if !board.iter().any(|e| e.id == bid as u64 && e.task == task && e.author.is_none()) { return Err("the board does not show the accepted request, unnamed".into()); }
+    if !board.iter().any(|e| e.id == bid as u64 && e.task == task && e.author.as_deref() == Some("Conformance B")) { return Err("the board does not show the accepted request with the name its user allowed".into()); }
     if board.iter().any(|e| e.id == held_id as u64) { return Err("the board shows a request that is not a task".into()); }
-    s.ok("an acceptance names the task, raises the trust, and the board shows it alone");
+    s.ok("an acceptance names the task, raises the trust, and the board shows it alone, with the name its user allowed");
+    expect("deleting an accepted request", &b.call("DELETE", &format!("/hub/v1/requests/{bid}"), b"").map_err(io)?, 409, Some("accepted"))?;
     expect("the track's move", &move_to(&mut track, "/hub/agent/v1", bid, "in-progress", &[]).map_err(io)?, 200, None)?;
     let result = Message { release: Some("202611210000".into()), ..message(MessageKind::Result, "Press n; the title names the camera") };
     expect("the track's result", &send_message(&mut track, "/hub/agent/v1", bid, &result).map_err(io)?, 201, None)?;
     expect("the track landing it itself", &move_to(&mut track, "/hub/agent/v1", bid, "landed", &[]).map_err(io)?, 409, Some("state"))?;
     expect("the integrator's landing", &move_to(&mut lander, "/hub/agent/v1", bid, "landed", &[]).map_err(io)?, 200, None)?;
-    let r = admin.call("POST", "/hub/admin/v1/delivered", br#"{"api":"hub-api 1","release":"202611210000","requests":[]}"#).map_err(io)?;
+    let r = admin.call("POST", "/hub/admin/v1/delivered", format!(r#"{{"api":"{API}","release":"202611210000","requests":[]}}"#).as_bytes()).map_err(io)?;
     expect("an empty delivery", &r, 200, None)?;
-    let body = format!(r#"{{"api":"hub-api 1","release":"202611210000","requests":[{bid}]}}"#);
+    let body = format!(r#"{{"api":"{API}","release":"202611210000","requests":[{bid}]}}"#);
     expect("the delivery", &admin.call("POST", "/hub/admin/v1/delivered", body.as_bytes()).map_err(io)?, 200, None)?;
     if state_of(&mut b, bid)? != "delivered" { return Err("the request is not delivered".into()); }
     expect("B's version", &b.call("POST", "/hub/v1/devices/me/version", &api_body(&[("version", "202611210000")])).map_err(io)?, 200, None)?;
@@ -240,7 +252,13 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     if state_of(&mut b, bid)? != "verified" { return Err("a works verdict did not verify the request".into()); }
     let r = track.call("GET", &format!("/hub/agent/v1/requests/{bid}/attachments/0"), b"").map_err(io)?;
     if r.status != 200 || r.body != log { return fail("the attachment for its track", &r); }
-    s.ok("in progress, landed, delivered, awaiting the check, verified; the track reads the attachment");
+    let r = track.call("GET", &format!("/hub/agent/v1/requests/{bid}/messages/{an}/attachments/0"), b"").map_err(io)?;
+    if r.status != 200 || r.body != lsusb { return fail("the answer's attachment for its track", &r); }
+    s.ok("in progress, landed, delivered, awaiting the check, verified; the track reads the request's and the answer's attachments");
+    let v = expect("B's export", &b.call("GET", "/hub/v1/me/export", b"").map_err(io)?, 200, None)?;
+    let exported = v.get("requests").and_then(Value::as_array).is_some_and(|l| l.iter().any(|r| int(r, &["id"]) == Some(bid)));
+    if !exported || text(&v, &["user", "display_name"]) != Some("Conformance B") { return Err("the export lacks the user or their request".into()); }
+    s.ok("a user's export holds their name and their requests");
 
     // Pairing: a device joins B by a code; a browser signs in by another; revoking ends both.
     let pair = |c: &mut Client| -> Result<String, String> {
@@ -260,6 +278,8 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let page = anon.plain("GET", "/hub/", &[("Cookie", session.clone())], b"").map_err(io)?;
     if page.status != 200 || !page.text().contains("Conformance B") { return fail("the user's page", &page); }
     let t_value = token(&page.text()).ok_or("the page's forms carry no token")?;
+    let r = anon.plain("GET", "/hub/export", &[("Cookie", session.clone())], b"").map_err(io)?;
+    if r.status != 200 || !r.text().contains("Conformance B") { return fail("the export from a browser", &r); }
     let comment = form(&[("t", "0"), ("kind", "comment"), ("text", "from a browser")]);
     let r = anon.plain("POST", &format!("/hub/requests/{bid}/messages"), &[("Cookie", session.clone())], &comment).map_err(io)?;
     if r.status != 403 { return fail("a form without its session's token", &r); }
@@ -288,7 +308,7 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
 
     // A negative trust reads, files nothing; -1023 is a ban.
     let set = |c: &mut Client, user: i64, trust: i64| c.call("POST", &format!("/hub/admin/v1/users/{user}/trust"),
-        format!(r#"{{"api":"hub-api 1","trust":{trust},"reason":"conformance"}}"#).as_bytes());
+        format!(r#"{{"api":"{API}","trust":{trust},"reason":"conformance"}}"#).as_bytes());
     expect("a negative trust set", &set(&mut admin, a_user, -5).map_err(io)?, 200, None)?;
     let r = a.call("POST", "/hub/v1/requests", wire::encode_request(&request("A read-only", Visibility::Public, Vec::new())).as_bytes()).map_err(io)?;
     expect("a request at a negative trust", &r, 403, Some("trust"))?;
@@ -300,5 +320,12 @@ pub fn run(t: &Target, log: &mut dyn FnMut(&str)) -> Check {
     let r = anon.plain("GET", "/hub/board", &[], b"").map_err(io)?;
     if r.status != 200 || !r.text().contains("B: the camera does not switch") { return fail("the board's page", &r); }
     s.ok("the board's page");
+
+    // B deletes their account: its devices revoked, the task it asked for stays on the board with no name.
+    expect("B's account deleted", &b.call("DELETE", "/hub/v1/me", b"").map_err(io)?, 200, None)?;
+    expect("a deleted account's device", &b.call("GET", "/hub/v1/devices/me", b"").map_err(io)?, 403, Some("revoked"))?;
+    let board = wire::read(&anon.plain("GET", "/hub/v1/board", &[], b"").map_err(io)?.text(), wire::decode_board).map_err(|e| format!("{e:?}"))?;
+    if !board.iter().any(|e| e.id == bid as u64 && e.author.is_none()) { return Err("a deleted account's task is not on the board without a name".into()); }
+    s.ok("a deleted account: its devices revoked, its task on the board with no name");
     Ok(())
 }

@@ -48,7 +48,7 @@ The design's server, its first form ([docs/hub/README.md](../docs/hub/README.md)
 
 ## Related
 
-[100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), [100003-APP-0148](../issues/100003-APP-0148-the-hubs-remaining-parts.md), [docs/hub/README.md](../docs/hub/README.md), [docs/hub/server.md](../docs/hub/server.md), [tools/httpd](../docs/update/server.md) (110).
+[100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), [100003-APP-0148](100003-APP-0148-the-hubs-remaining-parts.done), [docs/hub/README.md](../docs/hub/README.md), [docs/hub/server.md](../docs/hub/server.md), [tools/httpd](../docs/update/server.md) (110).
 
 ## Resolution
 
@@ -68,7 +68,7 @@ The design's server, its first form ([docs/hub/README.md](../docs/hub/README.md)
   - **`tests/conformance.rs`:** the suite's 16 checks on loopback and over TLS 1.3 with an Ed25519 and a P-256 key; a wrong pin refused; a second hub on the same data.
   - **`tests/http.rs`:** heads out of form, forms, networks, codes, versions, challenges.
   - The binary was run by hand: keys, `hub.conf`, `serve`, `admin-code` and `conformance` against it; the pages at phone width.
-- **Not done:** recorded in [100003-APP-0148](../issues/100003-APP-0148-the-hubs-remaining-parts.md):
+- **Not done:** recorded in [100003-APP-0148](100003-APP-0148-the-hubs-remaining-parts.done):
   - a user's export and deletion;
   - a verdict's attachments;
   - a name on the board by the user's leave;

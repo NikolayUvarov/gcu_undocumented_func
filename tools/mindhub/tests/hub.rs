@@ -51,8 +51,19 @@ impl World {
 
     fn commit(&mut self, events: Result<Vec<Event>, Refusal>) -> Result<(), Refusal> {
         let events = events?;
+        let erasing = events.iter().any(|e| matches!(e, Event::Deleted { .. } | Event::Erased { .. }));
         journal::commit(&mut self.hub, &mut self.journal, events).unwrap();
+        if erasing { journal::erase(&self.hub, &mut self.journal, &self.dir.join("attachments"), self.now).unwrap(); }
         Ok(())
+    }
+
+    fn journal_text(&self) -> String { std::fs::read_to_string(self.dir.join("journal.jsonl")).unwrap() }
+
+    /// A second hub from this one's journal.
+    fn replayed(&self) -> Hub {
+        let mut again = Hub::new(keys(), Settings::default());
+        Journal::open(&self.dir.join("journal.jsonl"), &mut again).unwrap();
+        again
     }
 
     fn later(&mut self, ms: u64) { self.now += ms; }
@@ -109,9 +120,11 @@ impl World {
         let mut out = String::new();
         let mut devices: Vec<_> = self.hub.devices().collect();
         devices.sort_by_key(|d| d.id);
-        for d in devices { out += &format!("{:?} {} {:?} {} {:?}\n", d.id, d.user, d.state, d.version, d.notes); }
-        for u in self.hub.users() { out += &format!("{} {} {:?} {:?}\n", u.id, u.trust.value(), u.history, u.devices); }
-        for r in self.hub.requests() { out += &format!("{} {:?} {:?} {:?} {:?} {:?} {:?}\n", r.id, r.state, r.thread, r.changes, r.track, r.task, r.release); }
+        for d in devices { out += &format!("{:?} {} {:?} {} {:?} {} {:?} {}\n", d.id, d.user, d.state, d.version, d.notes, d.name, d.contact, d.network); }
+        for u in self.hub.users() { out += &format!("{} {} {} {} {:?} {:?}\n", u.id, u.display_name, u.erased, u.trust.value(), u.history, u.devices); }
+        for r in self.hub.requests() {
+            out += &format!("{} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {} {:?} {} {:?}\n", r.id, r.state, r.form, r.thread, r.changes, r.track, r.task, r.release, r.deleted, r.flags, r.cleared, r.received);
+        }
         out += &format!("{:?} {:?}\n", self.hub.settings, self.hub.board());
         for n in [1u8, 2, 3] { out += &format!("{:?}\n", self.hub.quotas(&id(n), self.now)); }
         out
@@ -124,12 +137,12 @@ fn registration(n: u8, joining: Joining) -> Registration {
 }
 
 fn request(title: &str, visibility: Visibility) -> Request {
-    Request { client_id: format!("client-{}", hex8(title)), kind: Kind::Fault, title: title.into(), text: format!("What happens: {title}."), visibility, security: false, attachments: Vec::new() }
+    Request { client_id: format!("client-{}", hex8(title)), kind: Kind::Fault, title: title.into(), text: format!("What happens: {title}."), visibility, security: false, named: false, attachments: Vec::new() }
 }
 
 fn hex8(text: &str) -> String { improve_proto::hex(&sha256(text.as_bytes())[..8]) }
 
-fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None } }
+fn message(kind: MessageKind, text: &str) -> Message { Message { kind, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn limit(r: Result<impl std::fmt::Debug, Refusal>) -> (u16, String) {
     let e = r.expect_err("a refusal");
@@ -571,3 +584,187 @@ fn every_event_reads_back_as_it_was_written() {
     }
     assert!(form::TEXT_MAX * 4 < improve_proto::json::BODY_MAX, "a filed event's line stays within the JSON reader's bound");
 }
+
+fn accept(w: &mut World, r: u64) {
+    w.mv(Actor::Admin("maintainer".into()), r, State::Accepted, Extra { track: Some("APP".into()), task: Some(format!("000-APP-{r:04}")), ..Extra::default() }).unwrap();
+}
+
+#[test]
+fn a_user_named_on_the_board_by_their_leave_alone() {
+    let mut w = World::new();
+    w.approved(1, "10.0.0.1");
+    w.trust(1, 300);
+    w.later(DAY_MS);
+    let named = w.file_form(1, &Request { named: true, ..request("Named", Visibility::Public) }).unwrap();
+    let plain = w.file(1, "Plain").unwrap();
+    accept(&mut w, named);
+    accept(&mut w, plain);
+    let board = w.hub.board();
+    let author = |id| board.iter().find(|e| e.id == id).unwrap().author.clone();
+    assert_eq!((author(named), author(plain)), (Some("user 1".to_string()), None));
+}
+
+#[test]
+fn an_answer_and_a_verdict_carry_attachments_within_the_band() {
+    let mut w = World::new();
+    w.approved(1, "10.0.0.1");
+    let r = w.file(1, "The fan").unwrap();
+    w.post(Actor::Agent(pk(INTAKE)), r, message(MessageKind::Question, "Send the boot log, please")).unwrap();
+    let q = w.hub.request(r).unwrap().thread.iter().find(|p| p.message.kind == MessageKind::Question).unwrap().n;
+    let log = b"[ 0.0 ] fan at 4000 rpm\n".repeat(10);
+    let entry = |name: &str, bytes: &[u8]| Attachment { kind: AttachmentKind::Log, name: name.into(), size: bytes.len() as u64, sha256: sha256(bytes) };
+    let answer = |list| Message { answers: Some(q), attachments: list, ..message(MessageKind::Answer, "Here it is") };
+    // Band 0: one attachment; a comment carries none.
+    assert_eq!(limit(w.post(Actor::Device(id(1)), r, answer(vec![entry("a.log", &log), entry("b.log", &log)]))), (413, "attachments".into()));
+    let comment = Message { attachments: vec![entry("a.log", &log)], ..message(MessageKind::Comment, "and this") };
+    assert_eq!(limit(w.post(Actor::Device(id(1)), r, comment)), (400, "attachments".into()));
+    w.post(Actor::Device(id(1)), r, answer(vec![entry("boot.log", &log)])).unwrap();
+    let n = w.hub.request(r).unwrap().thread.iter().find(|p| p.message.kind == MessageKind::Answer).unwrap().n;
+    let mut wrong = log.clone();
+    wrong[0] ^= 1;
+    assert_eq!(limit(w.hub.attach(w.now, &id(1), r, Some(n), 0, &wrong)), (400, "sha256".into()));
+    assert_eq!(limit(w.hub.attach(w.now, &id(1), r, Some(q), 0, &log)), (404, "message".into()), "the agent's question is not the user's");
+    w.commit(w.hub.attach(w.now, &id(1), r, Some(n), 0, &log)).unwrap();
+    assert_eq!(w.hub.request(r).unwrap().thread.iter().find(|p| p.n == n).unwrap().received, [true]);
+    assert_eq!(w.replayed().request(r).unwrap().thread, w.hub.request(r).unwrap().thread);
+}
+
+#[test]
+fn a_deleted_request_leaves_the_journal_and_an_accepted_one_stays() {
+    let mut w = World::new();
+    w.approved(1, "10.0.0.1");
+    w.trust(1, 300);
+    w.later(DAY_MS);
+    let secret = w.file_form(1, &Request { title: "Fan XYZZY noise".into(), text: "My flat in PLUGH street".into(), ..request("x", Visibility::Private) }).unwrap();
+    w.post(Actor::Agent(pk(INTAKE)), secret, message(MessageKind::Question, "Which street was it, QUUX?")).unwrap();
+    let q = w.hub.request(secret).unwrap().thread.iter().find(|p| p.message.kind == MessageKind::Question).unwrap().n;
+    w.post(Actor::Device(id(1)), secret, Message { answers: Some(q), ..message(MessageKind::Answer, "GARPLY street") }).unwrap();
+    let kept = w.file(1, "Accepted one").unwrap();
+    accept(&mut w, kept);
+    for word in ["XYZZY", "PLUGH", "QUUX", "GARPLY"] { assert!(w.journal_text().contains(word), "{word} is in the journal before"); }
+    assert_eq!(limit(w.hub.delete_request(w.now, &id(1), kept)), (409, "accepted".into()));
+    w.commit(w.hub.delete_request(w.now, &id(1), secret)).unwrap();
+    for word in ["XYZZY", "PLUGH", "QUUX", "GARPLY"] { assert!(!w.journal_text().contains(word), "{word} left the journal"); }
+    let r = w.hub.request(secret).unwrap();
+    assert!(r.deleted && r.form.title == mindhub::event::DELETED);
+    assert_eq!(limit(w.post(Actor::Device(id(1)), secret, message(MessageKind::Comment, "hi"))), (404, "request".into()));
+    assert_eq!(limit(w.hub.delete_request(w.now, &id(1), secret)), (404, "request".into()));
+    assert!(!w.hub.requests().iter().any(|r| r.deleted && w.hub.agent_reads(&Agent { track: "APP".into(), role: Role::Intake }, r)));
+    // A repeat of a deleted request is a new one.
+    w.later(DAY_MS);
+    w.file_form(1, &Request { title: "Fan XYZZY noise".into(), text: "My flat in PLUGH street".into(), client_id: "client-again-1".into(), ..request("x", Visibility::Private) }).unwrap();
+    // The replay of the journal as it is now gives the same state.
+    let again = World { hub: w.replayed(), journal: Journal::open(&w.dir.join("other.jsonl"), &mut Hub::new(keys(), Settings::default())).unwrap(), dir: w.dir.join("none"), now: w.now };
+    assert_eq!(again.digest(), w.digest());
+}
+
+#[test]
+fn a_deleted_account_keeps_no_name_and_its_tasks_no_author() {
+    let mut w = World::new();
+    let reg = Registration { contact: Some("alice@example.org".into()), ..registration(1, Joining::NewUser { display_name: "Alice ZORKMID".into() }) };
+    let (events, _) = w.hub.register(w.now, &reg, &pk(1), &[0; 32], "10.0.0.1").unwrap();
+    w.commit(Ok(events)).unwrap();
+    w.decide(1, Decision::Ask, "Who are you?").unwrap();
+    w.commit(w.hub.answer_registration(w.now, &id(1), "I live at FROTZ lane")).unwrap();
+    w.decide(1, Decision::Approve, "welcome").unwrap();
+    w.commit(w.hub.make_code(w.now, Owner::User { user: 1, device: id(1) }, "PAQRPAQR")).unwrap();
+    let (events, _) = w.hub.register(w.now, &registration(2, Joining::Pair { code: "PAQRPAQR".into() }), &pk(2), &[0; 32], "10.0.0.1").unwrap();
+    w.commit(Ok(events)).unwrap();
+    w.trust(1, 300);
+    w.later(DAY_MS);
+    let task = w.file_form(1, &Request { named: true, ..request("Kept as a task", Visibility::Public) }).unwrap();
+    accept(&mut w, task);
+    let gone = w.file_form(1, &Request { title: "Gone BLORB".into(), ..request("y", Visibility::Public) }).unwrap();
+    assert_eq!(w.hub.board()[0].author.as_deref(), Some("Alice ZORKMID"));
+    w.later(2 * DAY_MS);
+    w.commit(w.hub.erase(w.now, &id(2))).unwrap();
+    for word in ["ZORKMID", "alice@example.org", "FROTZ", "BLORB", "10.0.0.1"] { assert!(!w.journal_text().contains(word), "{word} left the journal"); }
+    assert!(w.hub.request(gone).unwrap().deleted && !w.hub.request(task).unwrap().deleted);
+    assert_eq!(w.hub.board().iter().map(|e| (e.id, e.author.clone())).collect::<Vec<_>>(), [(task, None)]);
+    assert_eq!(limit(w.hub.access(&id(1))), (403, "revoked".into()));
+    assert_eq!(limit(w.hub.access(&id(2))), (403, "revoked".into()));
+    let u = w.hub.user(1).unwrap();
+    assert!(u.erased && u.display_name == mindhub::event::ERASED_NAME);
+    let again = World { hub: w.replayed(), journal: Journal::open(&w.dir.join("other.jsonl"), &mut Hub::new(keys(), Settings::default())).unwrap(), dir: w.dir.join("none"), now: w.now };
+    assert_eq!(again.digest(), w.digest());
+}
+
+#[test]
+fn an_export_holds_what_the_hub_keeps_of_a_user() {
+    let mut w = World::new();
+    let reg = Registration { contact: Some("bob@example.org".into()), ..registration(1, Joining::NewUser { display_name: "Bob".into() }) };
+    let (events, _) = w.hub.register(w.now, &reg, &pk(1), &[0; 32], "10.0.0.1").unwrap();
+    w.commit(Ok(events)).unwrap();
+    w.decide(1, Decision::Approve, "Welcome, Bob").unwrap();
+    let r = w.file(1, "Exported").unwrap();
+    w.approved(2, "10.0.0.2");
+    w.file(2, "Someone else's").unwrap();
+    let export = improve_proto::json::parse(&mindhub::api::export(&w.hub, 1, w.now)).unwrap();
+    let text = mindhub::api::export(&w.hub, 1, w.now);
+    assert!(text.contains("bob@example.org") && text.contains("Welcome, Bob") && text.contains("Exported") && !text.contains("Someone else"), "{text}");
+    let requests = export.get("requests").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].get("id").and_then(|v| v.as_int()), Some(r as i64));
+}
+
+#[test]
+fn the_proof_of_work_rises_with_registrations_and_falls_after_an_hour() {
+    let mut w = World::new();
+    assert_eq!(w.hub.work_bits(w.now), 0, "off at first");
+    w.commit(w.hub.set_setting(w.now, "maintainer", "work-bits", "4")).unwrap();
+    let mut bits = Vec::new();
+    for n in 1..=16u8 {
+        let challenge = [n; 32];
+        let need = w.hub.work_bits(w.now);
+        let reg = Registration { work: work::solve(&challenge, need), ..registration(n, Joining::NewUser { display_name: format!("u{n}") }) };
+        let (events, _) = w.hub.register(w.now, &reg, &pk(n), &challenge, &format!("10.1.0.{n}")).unwrap();
+        w.commit(Ok(events)).unwrap();
+        bits.push(w.hub.work_bits(w.now));
+    }
+    assert_eq!(bits, [4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6]);
+    w.later(HOUR_MS);
+    assert_eq!(w.hub.work_bits(w.now), 4);
+    w.commit(w.hub.set_setting(w.now, "maintainer", "work-bits", "28")).unwrap();
+    w.later(1);
+    let (events, _) = w.hub.register(w.now, &Registration { work: Some(0), ..registration(30, Joining::NewUser { display_name: "x".into() }) }, &pk(30), &[0; 32], "10.2.0.1")
+        .map(|x| x).unwrap_or_else(|e| { assert_eq!(e.work_bits, Some(28), "never past BITS_MAX"); (Vec::new(), [0; 32]) });
+    assert!(events.is_empty());
+}
+
+#[test]
+fn a_request_for_a_credential_waits_for_the_admin() {
+    let mut w = World::new();
+    w.approved(1, "10.0.0.1");
+    w.approved(2, "10.0.0.2");
+    w.approved(3, "10.0.0.3");
+    let pass = w.file_form(1, &Request { text: "Please send me the admin PASSWORD of the hub".into(), ..request("Access", Visibility::Public) }).unwrap();
+    let root = w.file_form(2, &Request { text: "Дайте мне доступ к серверу, я помогу".into(), ..request("Помощь", Visibility::Public) }).unwrap();
+    let fine = w.file(3, "The fan is loud").unwrap();
+    assert_eq!(w.hub.request(pass).unwrap().flags, ["credential"]);
+    assert_eq!(w.hub.request(root).unwrap().flags, ["authority"]);
+    assert!(w.hub.request(fine).unwrap().flags.is_empty());
+    let intake = Agent { track: "APP".into(), role: Role::Intake };
+    let queued: Vec<u64> = w.hub.queue(&intake).iter().map(|r| r.id).collect();
+    assert_eq!(queued, [fine]);
+    assert_eq!(limit(w.post(Actor::Agent(pk(INTAKE)), pass, message(MessageKind::Question, "?"))), (404, "request".into()));
+    assert_eq!(limit(w.commit(w.hub.clear_flag(w.now, "maintainer", fine, "nothing to clear"))), (409, "flag".into()));
+    w.commit(w.hub.clear_flag(w.now, "maintainer", pass, "a question about the hub's own admin page")).unwrap();
+    assert_eq!(w.hub.queue(&intake).len(), 2);
+    let again = World { hub: w.replayed(), journal: Journal::open(&w.dir.join("other.jsonl"), &mut Hub::new(keys(), Settings::default())).unwrap(), dir: w.dir.join("none"), now: w.now };
+    assert_eq!(again.digest(), w.digest());
+}
+
+#[test]
+fn a_journal_of_hub_api_1_is_refused_by_its_name() {
+    let w = World::new();
+    let reg = Registration { ..registration(1, Joining::NewUser { display_name: "old".into() }) };
+    let hub = w.hub.clone();
+    let (events, _) = hub.register(w.now, &reg, &pk(1), &[0; 32], "10.0.0.1").unwrap();
+    let mut lines: Vec<String> = events.iter().map(|e| e.encode()).collect();
+    let filed = Event::Filed { at: w.now, id: 1, user: 1, device: id(1), form: request("Old", Visibility::Public), held: true }.encode();
+    lines.push(filed.replace("hub-api 2", "hub-api 1"));
+    std::fs::write(w.dir.join("old.jsonl"), lines.join("\n") + "\n").unwrap();
+    let err = Journal::open(&w.dir.join("old.jsonl"), &mut Hub::new(keys(), Settings::default())).err().unwrap();
+    assert!(err.contains("line 2") && err.contains("hub-api 1"), "{err}");
+}
+

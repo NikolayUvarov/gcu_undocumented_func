@@ -38,7 +38,10 @@ pub fn open(data: &std::path::Path) -> Result<Shared, String> {
     if keys.admins.is_empty() { return Err("hub.conf names no admin: no one could decide a registration (mindhub key, then admin NAME KEY)".into()); }
     let mut hub = crate::hub::Hub::new(keys, settings);
     let journal = crate::journal::Journal::open(&data.join("journal.jsonl"), &mut hub)?;
-    Ok(Shared { hub, journal, challenges: api::Challenges::default(), attachments: data.join("attachments") })
+    let mut shared = Shared { hub, journal, challenges: api::Challenges::default(), attachments: data.join("attachments") };
+    // A crash between a deletion and its erasure left texts in the journal: they leave it now.
+    shared.erase().map_err(|e| format!("the deleted texts cannot leave the journal: {e}"))?;
+    Ok(shared)
 }
 
 /// Serves until the listener fails; a connection over the limits is answered 503 and closed.

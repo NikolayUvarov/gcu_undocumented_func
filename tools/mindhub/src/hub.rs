@@ -2,10 +2,11 @@
 //! clock of their own. A command reads the state and either refuses, naming its limit, or gives the events it makes;
 //! `apply` alone changes the state, and the journal's replay through it rebuilds the same state (MC-10.3).
 
-use crate::event::{Author, Decision, Event, Owner};
+use crate::event::{self, Author, Decision, Event, Owner};
 use crate::util::{at_least, hex, sha256, DAY_MS, HOUR_MS};
 use improve_proto::bucket::Bucket;
 use improve_proto::form::{self, BoardEntry, Joining, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::work::BITS_MAX;
 use improve_proto::state::{self, Role, State};
 use improve_proto::trust::{self, Access, Limits, Trust, BANDS, PENDING};
 use improve_proto::{repeat, sign, work};
@@ -23,6 +24,9 @@ pub const REGISTRATIONS_AFTER_REJECTION: usize = 1;
 pub const HELD_A_DAY: usize = 3;
 /// Codes typed wrong from one network in an hour before it waits.
 pub const SIGN_IN_FAILURES: usize = 10;
+/// New keys in an hour from all networks that raise the proof of work by a bit, and each doubling of them by one more
+/// (5.4; 100003-APP-0148).
+pub const WORK_RAISED_FROM: usize = 8;
 pub const CHECK_DAYS: u64 = 30;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +115,8 @@ pub struct TrustChange { pub at: u64, pub from: i16, pub to: i16, pub reason: St
 #[derive(Clone, Debug)]
 pub struct User {
     pub id: u64,
+    /// The user deleted their account (design 9): their name, contact and devices' answers are gone.
+    pub erased: bool,
     pub display_name: String,
     pub trust: Trust,
     pub history: Vec<TrustChange>,
@@ -122,7 +128,7 @@ pub struct User {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Post { pub n: u32, pub at: u64, pub author: Author, pub message: Message, pub answered: bool }
+pub struct Post { pub n: u32, pub at: u64, pub author: Author, pub message: Message, pub answered: bool, pub received: Vec<bool> }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change { pub at: u64, pub from: State, pub to: State, pub role: Role, pub author: Author, pub reason: String }
@@ -148,6 +154,11 @@ pub struct Item {
     pub before_question: Option<State>,
     /// The trust's raise for an acceptance was given.
     pub credited: bool,
+    /// Deleted by its user before it was accepted: its texts are gone, and it is shown to no one.
+    pub deleted: bool,
+    /// Why it asks for a credential or authority (`flag`), and whether the admin cleared it for the agents.
+    pub flags: Vec<&'static str>,
+    pub cleared: bool,
 }
 
 impl Item {
@@ -155,6 +166,10 @@ impl Item {
         self.thread.iter().any(|p| p.n == n && p.message.kind == MessageKind::Question && !p.answered)
     }
     fn open_questions(&self) -> usize { self.thread.iter().filter(|p| p.message.kind == MessageKind::Question && !p.answered).count() }
+    /// Flagged and not cleared: it waits for the admin, as a held request does.
+    pub fn waits_for_admin(&self) -> bool { !self.flags.is_empty() && !self.cleared && !self.deleted }
+    /// Its user may delete it: it was never accepted into a track's plan.
+    pub fn deletable(&self) -> bool { self.track.is_none() && !self.deleted }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,6 +222,8 @@ pub struct Hub {
     networks: HashMap<String, Network>,
     /// Filings by users below band 2 in the last hour.
     global: VecDeque<u64>,
+    /// New keys from every network in the last hour, which raise the proof of work.
+    recent: VecDeque<u64>,
     codes: HashMap<[u8; 32], Code>,
     sessions: HashMap<[u8; 32], Session>,
     /// Codes typed wrong, by network, in the last hour; not journaled, as a refusal changes no state.
@@ -221,7 +238,7 @@ fn within(times: &VecDeque<u64>, now: u64, window: u64) -> Vec<u64> { times.iter
 pub fn agent_author(key: &[u8; 32], track: &str) -> Author { Author::Agent { track: track.into(), id: hex(&sign::id(key)[..8]) } }
 
 fn message_text(text: &str) -> Result<(), Refusal> {
-    Message { kind: MessageKind::Comment, text: text.into(), answers: None, verdict: None, release: None }.check().map_err(form_refusal)
+    Message { kind: MessageKind::Comment, text: text.into(), answers: None, verdict: None, release: None, attachments: Vec::new() }.check().map_err(form_refusal)
 }
 
 fn reason_line(reason: &str) -> Result<(), Refusal> {
@@ -233,7 +250,7 @@ fn reason_line(reason: &str) -> Result<(), Refusal> {
 
 impl Hub {
     pub fn new(keys: Keys, settings: Settings) -> Hub {
-        Hub { keys, settings, devices: HashMap::new(), users: Vec::new(), requests: Vec::new(), networks: HashMap::new(), global: VecDeque::new(),
+        Hub { keys, settings, devices: HashMap::new(), users: Vec::new(), requests: Vec::new(), networks: HashMap::new(), global: VecDeque::new(), recent: VecDeque::new(),
               codes: HashMap::new(), sessions: HashMap::new(), failures: HashMap::new(), events: 0 }
     }
 
@@ -296,7 +313,7 @@ impl Hub {
     /// Whether an agent reads this request: never a held one; its own track's, intake what is in intake, the integrator
     /// what a track took, and anyone a public one that is not about security (7.1).
     pub fn agent_reads(&self, agent: &Agent, r: &Item) -> bool {
-        if r.state == State::Held { return false; }
+        if r.state == State::Held || r.deleted || r.waits_for_admin() { return false; }
         let public = r.form.visibility == Visibility::Public && !r.form.security;
         let own = match agent.role {
             Role::Intake => r.track.is_none() || r.track.as_deref() == Some(agent.track.as_str()),
@@ -308,7 +325,7 @@ impl Hub {
 
     /// An agent's queue: intake's new requests, a track's open ones, the integrator's in progress.
     pub fn queue(&self, agent: &Agent) -> Vec<&Item> {
-        self.requests.iter().filter(|r| match agent.role {
+        self.requests.iter().filter(|r| self.agent_reads(agent, r)).filter(|r| match agent.role {
             Role::Intake => r.state == State::New,
             Role::Integrator => r.state == State::InProgress,
             _ => r.track.as_deref() == Some(agent.track.as_str()) && !r.state.closed() && r.state != State::Held,
@@ -317,10 +334,24 @@ impl Hub {
 
     /// The board: what became a task, public and not about security, with no user named (6.4).
     pub fn board(&self) -> Vec<BoardEntry> {
-        self.requests.iter().filter(|r| r.state.on_board() && r.form.visibility == Visibility::Public && !r.form.security)
-            .filter_map(|r| Some(BoardEntry { id: r.id, title: r.form.title.clone(), kind: r.form.kind, track: r.track.clone()?, task: r.task.clone()?,
-                                              state: r.state, since_ms: r.since, release: r.release.clone(), author: None }))
+        self.requests.iter().filter(|r| r.state.on_board() && r.form.visibility == Visibility::Public && !r.form.security && !r.deleted)
+            .filter_map(|r| {
+                // The user's name with their leave alone, and none once they deleted their account.
+                let author = self.user(r.user).filter(|u| r.form.named && !u.erased).map(|u| u.display_name.clone());
+                Some(BoardEntry { id: r.id, title: r.form.title.clone(), kind: r.form.kind, track: r.track.clone()?, task: r.task.clone()?,
+                                  state: r.state, since_ms: r.since, release: r.release.clone(), author })
+            })
             .collect()
+    }
+
+    /// The proof of work a new key needs now: off while the admin's floor is 0; above it, a bit for WORK_RAISED_FROM new
+    /// keys in the last hour and one more for each doubling, up to BITS_MAX (5.4).
+    pub fn work_bits(&self, now: u64) -> u8 {
+        let floor = self.settings.work_bits;
+        if floor == 0 { return 0; }
+        let n = within(&self.recent, now, HOUR_MS).len();
+        let raised = if n < WORK_RAISED_FROM { 0 } else { (n / WORK_RAISED_FROM).ilog2() + 1 };
+        (floor as u32 + raised).min(BITS_MAX as u32) as u8
     }
 
     // ---- commands ----
@@ -340,7 +371,7 @@ impl Hub {
         if self.keys.admins.contains_key(signer) || self.keys.agents.contains_key(signer) {
             return Err(refuse(400, "public_key", "an admin's or an agent's key is not a device's"));
         }
-        let bits = self.settings.work_bits;
+        let bits = self.work_bits(now);
         if bits > 0 && !reg.work.is_some_and(|n| work::check(challenge, n, bits)) {
             return Err(Refusal { work_bits: Some(bits), ..refuse(401, "work", format!("a proof of work of {bits} bits over the challenge is asked")) });
         }
@@ -496,23 +527,61 @@ impl Hub {
         Ok((vec![Event::Filed { at: now, id, user: u.id, device: *device, form: form.clone(), held: pending }], id, false))
     }
 
-    /// An attachment's bytes, checked against its entry; storing them is the caller's, before the event is written.
-    pub fn attach(&self, now: u64, device: &[u8; 32], id: u64, n: u32, bytes: &[u8]) -> Result<Vec<Event>, Refusal> {
+    /// An attachment's bytes, checked against its entry: the request's own `n`th, or with `post` the `n`th of the
+    /// user's message there. Storing them is the caller's, before the event is written.
+    pub fn attach(&self, now: u64, device: &[u8; 32], id: u64, post: Option<u32>, n: u32, bytes: &[u8]) -> Result<Vec<Event>, Refusal> {
         let (_, d, _) = self.access(device)?;
-        let r = self.request(id).filter(|r| r.user == d.user).ok_or_else(|| refuse(404, "request", "no such request of this user"))?;
-        let entry = r.form.attachments.get(n as usize).ok_or_else(|| refuse(404, "attachment", "no such attachment in the request"))?;
-        if r.received[n as usize] { return Ok(Vec::new()); }
-        if r.state.closed() { return Err(refuse(409, "state", "the request is closed")); }
+        let r = self.request(id).filter(|r| r.user == d.user && !r.deleted).ok_or_else(|| refuse(404, "request", "no such request of this user"))?;
+        let (entries, received) = match post {
+            None => (&r.form.attachments, &r.received),
+            Some(p) => {
+                let p = r.thread.iter().find(|x| x.n == p && x.author == Author::User).ok_or_else(|| refuse(404, "message", "no such message of this user"))?;
+                (&p.message.attachments, &p.received)
+            }
+        };
+        let entry = entries.get(n as usize).ok_or_else(|| refuse(404, "attachment", "no such attachment there"))?;
+        if received[n as usize] { return Ok(Vec::new()); }
+        if r.state.closed() && post.is_none() { return Err(refuse(409, "state", "the request is closed")); }
         if bytes.len() as u64 != entry.size { return Err(refuse(400, "size", format!("the attachment is {} bytes, its entry says {}", bytes.len(), entry.size))); }
         if sha256(bytes) != entry.sha256 { return Err(refuse(400, "sha256", "the bytes do not match the entry's SHA-256")); }
-        Ok(vec![Event::Attached { at: now, id, n }])
+        Ok(vec![Event::Attached { at: now, id, post, n }])
+    }
+
+    /// A request deleted by its user, before it was accepted (design 9).
+    pub fn delete_request(&self, now: u64, device: &[u8; 32], id: u64) -> Result<Vec<Event>, Refusal> {
+        let (_, d, _) = self.access(device)?;
+        let r = self.request(id).filter(|r| r.user == d.user && !r.deleted).ok_or_else(|| refuse(404, "request", "no such request of this user"))?;
+        if !r.deletable() { return Err(refuse(409, "accepted", format!("request {id} was accepted as {}: its task stays; ask the admin", r.task.as_deref().unwrap_or("a task")))); }
+        Ok(vec![Event::Deleted { at: now, id, author: Author::User }])
+    }
+
+    /// A user's account deleted from one of their devices (design 9): every request not accepted deleted, every device
+    /// revoked, their names, contact and answers erased. Accepted requests stay, with no name.
+    pub fn erase(&self, now: u64, device: &[u8; 32]) -> Result<Vec<Event>, Refusal> {
+        let (_, d, u) = self.access(device)?;
+        if d.state != DeviceState::Approved { return Err(refuse(403, "pending", "a pending device deletes nothing: the admin's rejection does")); }
+        let mut out: Vec<Event> = self.requests.iter().filter(|r| r.user == u.id && r.deletable())
+            .map(|r| Event::Deleted { at: now, id: r.id, author: Author::User }).collect();
+        for id in &u.devices {
+            if matches!(self.devices[id].state, DeviceState::Pending | DeviceState::Approved) { out.push(Event::Revoked { at: now, device: *id, author: Author::User }); }
+        }
+        out.push(Event::Erased { at: now, user: u.id, author: Author::User });
+        Ok(out)
+    }
+
+    /// The admin clears a request's flag, with the reason: the agents read it from then on.
+    pub fn clear_flag(&self, now: u64, admin: &str, id: u64, reason: &str) -> Result<Vec<Event>, Refusal> {
+        reason_line(reason)?;
+        let r = self.request(id).filter(|r| !r.deleted).ok_or_else(|| refuse(404, "request", "no such request"))?;
+        if !r.waits_for_admin() { return Err(refuse(409, "flag", "the request is not flagged, or its flag was cleared")); }
+        Ok(vec![Event::Cleared { at: now, id, admin: admin.into(), reason: reason.into() }])
     }
 
     /// A message in a request's thread (6.2), and the moves it makes: a question to needs-info, the last answer back,
     /// a verdict to verified or reopened (6.3).
     pub fn post(&self, now: u64, by: &Actor, id: u64, message: &Message) -> Result<Vec<Event>, Refusal> {
         message.check().map_err(form_refusal)?;
-        let r = self.request(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
+        let r = self.request(id).filter(|r| !r.deleted).ok_or_else(|| refuse(404, "request", "no such request"))?;
         let (role, author) = match by {
             Actor::Device(device) => {
                 let (access, d, u) = self.access(device)?;
@@ -523,6 +592,7 @@ impl Hub {
                 };
                 if r.user != d.user { return Err(refuse(404, "request", "no such request of this user")); }
                 if !form::may_post(Role::User, message.kind) { return Err(refuse(403, "kind", format!("a user posts no {}", message.kind.name()))); }
+                form::attachments_within(&message.attachments, &limits).map_err(form_refusal)?;
                 let answer = message.kind == MessageKind::Answer;
                 if answer && !r.open_question(message.answers.unwrap_or(0)) { return Err(refuse(400, "answers", "answers names no open question of the thread")); }
                 if !answer {
@@ -591,7 +661,7 @@ impl Hub {
     /// A state's move by an agent or the admin (6.1, 7.2), checked by the state machine.
     pub fn move_request(&self, now: u64, by: &Actor, id: u64, to: State, reason: &str, extra: &Extra) -> Result<Vec<Event>, Refusal> {
         reason_line(reason)?;
-        let r = self.request(id).ok_or_else(|| refuse(404, "request", "no such request"))?;
+        let r = self.request(id).filter(|r| !r.deleted).ok_or_else(|| refuse(404, "request", "no such request"))?;
         let (role, author) = match by {
             Actor::Agent(key) => {
                 let agent = self.keys.agents.get(key).ok_or_else(|| refuse(403, "key", "not an agent's key"))?;
@@ -637,7 +707,7 @@ impl Hub {
         if release.is_empty() || release.len() > form::SHORT_MAX || !release.bytes().all(|b| b.is_ascii_graphic()) { return Err(refuse(400, "release", "a release's name, at most 32 characters")); }
         let mut out = Vec::new();
         for &id in ids {
-            let r = self.request(id).ok_or_else(|| refuse(404, "request", format!("no request {id}")))?;
+            let r = self.request(id).filter(|r| !r.deleted).ok_or_else(|| refuse(404, "request", format!("no request {id}")))?;
             if r.state != State::Landed { return Err(refuse(409, "state", format!("request {id} is {}, not landed", r.state.name()))); }
             out.push(Event::Moved { at: now, id, to: State::Delivered, role: Role::Hub, author: Author::Admin(admin.into()), reason: format!("release {release} carries it"),
                                     track: None, task: None, duplicate_of: None, release: Some(release.into()) });
@@ -697,13 +767,15 @@ impl Hub {
         match e {
             Event::Registered { at, key, name, kind, platform, version, network, user, display_name, contact, code } => {
                 if let Some(display_name) = display_name {
-                    self.users.push(User { id: *user, display_name: display_name.clone(), trust: Trust::new(0).unwrap(), history: Vec::new(), devices: Vec::new(),
+                    self.users.push(User { id: *user, erased: false, display_name: display_name.clone(), trust: Trust::new(0).unwrap(), history: Vec::new(), devices: Vec::new(),
                                            requests: Bucket::new(PENDING.burst, PENDING.requests_per_day, *at), messages: Bucket::new(BANDS[0].messages_per_day, BANDS[0].messages_per_day, *at),
                                            client_ids: HashMap::new(), repeats: HashMap::new() });
                 }
                 let id = sign::id(key);
                 self.users[*user as usize - 1].devices.push(id);
                 if let Some(c) = code { self.codes.get_mut(c).unwrap().used = true; } else {
+                    prune(&mut self.recent, *at, HOUR_MS);
+                    self.recent.push_back(*at);
                     let n = self.networks.entry(network.clone()).or_default();
                     prune(&mut n.registrations, *at, DAY_MS);
                     n.registrations.push_back(*at);
@@ -768,11 +840,18 @@ impl Hub {
                 let state = state::first(!*held);
                 let status = if *held { "held: the device waits for the admin's decision" } else { "new: in intake" };
                 let mut item = Item { id: *id, user: *user, device: *device, form: form.clone(), state, filed: *at, since: *at, received: vec![false; form.attachments.len()],
-                                      thread: Vec::new(), changes: Vec::new(), track: None, task: None, duplicate_of: None, release: None, before_question: None, credited: false };
-                item.thread.push(Post { n: 1, at: *at, author: Author::Hub, message: status_message(status.into()), answered: false });
+                                      thread: Vec::new(), changes: Vec::new(), track: None, task: None, duplicate_of: None, release: None, before_question: None, credited: false,
+                                      deleted: false, flags: crate::flag::reasons(&form.title, &form.text), cleared: false };
+                item.thread.push(Post { n: 1, at: *at, author: Author::Hub, message: status_message(status.into()), answered: false, received: Vec::new() });
                 self.requests.push(item);
             }
-            Event::Attached { id, n, .. } => { self.requests[*id as usize - 1].received[*n as usize] = true; }
+            Event::Attached { id, post, n, .. } => {
+                let r = &mut self.requests[*id as usize - 1];
+                match post {
+                    None => r.received[*n as usize] = true,
+                    Some(p) => r.thread.iter_mut().find(|x| x.n == *p).unwrap().received[*n as usize] = true,
+                }
+            }
             Event::Posted { at, id, author, message } => {
                 let r = &mut self.requests[*id as usize - 1];
                 if *author == Author::User && message.kind != MessageKind::Answer {
@@ -785,14 +864,14 @@ impl Hub {
                     if let Some(q) = r.thread.iter_mut().find(|p| Some(p.n) == message.answers) { q.answered = true; }
                 }
                 let n = r.thread.len() as u32 + 1;
-                r.thread.push(Post { n, at: *at, author: author.clone(), message: message.clone(), answered: false });
+                r.thread.push(Post { n, at: *at, author: author.clone(), message: message.clone(), answered: false, received: vec![false; message.attachments.len()] });
             }
             Event::Moved { at, id, to, role, author, reason, track, task, duplicate_of, release } => {
                 let r = &mut self.requests[*id as usize - 1];
                 let from = r.state;
                 r.changes.push(Change { at: *at, from, to: *to, role: *role, author: author.clone(), reason: reason.clone() });
                 let n = r.thread.len() as u32 + 1;
-                r.thread.push(Post { n, at: *at, author: Author::Hub, message: status_message(format!("{} -> {}: {} ({})", from.name(), to.name(), reason, author.text())), answered: false });
+                r.thread.push(Post { n, at: *at, author: Author::Hub, message: status_message(format!("{} -> {}: {} ({})", from.name(), to.name(), reason, author.text())), answered: false, received: Vec::new() });
                 if *to == State::NeedsInfo { r.before_question = Some(from); }
                 if *to == State::Accepted { r.credited = true; }
                 r.state = *to;
@@ -812,6 +891,29 @@ impl Hub {
             }
             Event::Setting { name, value, .. } => { self.settings.set(name, value)?; }
             Event::Version { device, version, .. } => { self.devices.get_mut(device).unwrap().version = version.clone(); }
+            Event::Deleted { id, .. } => {
+                // The same as the journal keeps after its texts are erased (`Event::redacted`), so a replay gives this.
+                let r = &mut self.requests[*id as usize - 1];
+                r.deleted = true;
+                r.form = event::redact_request(&r.form);
+                for p in r.thread.iter_mut().filter(|p| p.message.kind != MessageKind::Status) { p.message = event::redact_message(&p.message); }
+                r.flags.clear();
+                let user = r.user;
+                self.users[user as usize - 1].repeats.retain(|_, (request, _)| request != id);
+            }
+            Event::Erased { user, .. } => {
+                let u = &mut self.users[*user as usize - 1];
+                u.erased = true;
+                u.display_name = event::ERASED_NAME.into();
+                for id in u.devices.clone() {
+                    let d = self.devices.get_mut(&id).unwrap();
+                    d.name = event::ERASED_DEVICE.into();
+                    d.contact = None;
+                    d.network = event::ERASED_NETWORK.into();
+                    for n in d.notes.iter_mut().filter(|n| n.kind == "answer") { n.text = event::DELETED.into(); }
+                }
+            }
+            Event::Cleared { id, .. } => { self.requests[*id as usize - 1].cleared = true; }
         }
         self.events += 1;
         Ok(())
@@ -854,7 +956,15 @@ impl Hub {
                 self.user(*user).ok_or("no such user")?;
                 if form.check(&BANDS[7]).is_err() { return Err("the request is out of every bound".into()); }
             }
-            Event::Attached { id, n, .. } => if *n as usize >= request(*id)?.received.len() { return Err(format!("request {id} has no attachment {n}")); },
+            Event::Attached { id, post, n, .. } => {
+                let r = request(*id)?;
+                let count = match post { None => r.received.len(), Some(p) => r.thread.iter().find(|x| x.n == *p).map_or(0, |x| x.received.len()) };
+                if *n as usize >= count { return Err(format!("request {id} has no attachment {n} there")); }
+            }
+            Event::Deleted { id, .. } => if !request(*id)?.deletable() { return Err(format!("request {id} was accepted, or deleted already")); },
+            Event::Erased { user, .. } => if self.user(*user).ok_or("no such user")?.erased { return Err("the user is erased already".into()); },
+            // A replay of a journal whose texts were erased reads no flag where the live hub read one: the clearing fits.
+            Event::Cleared { id, .. } => if request(*id)?.deleted { return Err(format!("request {id} is deleted")); },
             Event::Posted { id, message, .. } => { request(*id)?; message.check().map_err(|e| format!("{e:?}"))?; }
             Event::Moved { id, to, role, .. } => {
                 let r = request(*id)?;
@@ -866,7 +976,7 @@ impl Hub {
     }
 }
 
-fn status_message(text: String) -> Message { Message { kind: MessageKind::Status, text, answers: None, verdict: None, release: None } }
+fn status_message(text: String) -> Message { Message { kind: MessageKind::Status, text, answers: None, verdict: None, release: None, attachments: Vec::new() } }
 
 fn same_owner(a: &Owner, b: &Owner) -> bool {
     match (a, b) {

@@ -1,4 +1,4 @@
-//! The conformance suite against `tools/mindhub` itself, on loopback and over TLS 1.3 with an Ed25519 and a P-256
+//! The conformance suite against `tools/mindhub` itself (hub-api 2), on loopback and over TLS 1.3 with an Ed25519 and a P-256
 //! key, the hub known by its pin; a wrong pin is refused, and the hub's data rebuilt by a restart serves the same.
 
 use ed25519_dalek::SigningKey;
@@ -62,7 +62,9 @@ fn the_suite_passes_on_loopback_and_a_restart_serves_the_same() {
     let mut admin = Client::new(&again, &[], key(1)).unwrap();
     let users = admin.call("GET", "/hub/admin/v1/users", b"").unwrap();
     assert_eq!(users.status, 200);
-    assert!(users.text().contains("Conformance B") && users.text().contains("\"trust\":-1023"), "{}", users.text());
+    // B deleted their account at the suite's end: no name in the list, none in the journal.
+    assert!(users.text().contains("Conformance A") && users.text().contains("\"trust\":-1023") && !users.text().contains("Conformance B"), "{}", users.text());
+    assert!(!journal.contains("Conformance B"), "an erased name left the journal");
     assert_eq!(std::fs::read_to_string(dir.0.join("journal.jsonl")).unwrap(), journal, "reading changed nothing");
 }
 

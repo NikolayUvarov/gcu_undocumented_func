@@ -1,6 +1,6 @@
-# The protocol's test vectors (100003-APP-0145)
+# The protocol's test vectors (100003-APP-0145, 0148)
 
-What a hub or a client of `hub-api 1` must give, in any language. `tests/proto.rs` makes each file and compares it; `IMPROVE_PROTO_WRITE_VECTORS=1 cargo test` writes them anew after a change the design allows.
+What a hub or a client of `hub-api 2` must give, in any language. `tests/proto.rs` makes each file and compares it; `IMPROVE_PROTO_WRITE_VECTORS=1 cargo test` writes them anew after a change the design allows.
 
 - **`signature.txt`:**
   - the key is Ed25519 from a seed of 32 bytes `0x2a`;
@@ -15,3 +15,5 @@ What a hub or a client of `hub-api 1` must give, in any language. `tests/proto.r
 - **`repeat.txt`:** the repeat digests of two requests: `Fan  NOISE` / `idle\n\nloud`, and `Тише` / `вентилятор`.
 - **`work.txt`:** the proof of work's first counter for a challenge of 32 bytes `0x03` at 12 bits.
 - **`request.json`:** a request in the API's one encoding.
+- **`message.json`:** a verdict with an attachment's entry, in the same encoding.
+- **`hub-api 1`** is refused by its name: its request had no `named` and its message no attachments (100003-APP-0148).
