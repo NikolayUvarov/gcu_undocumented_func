@@ -79,15 +79,38 @@ pub enum R {
     OppPipeControl, DpgControl, DpgDimensions, DpgOffsetSegment,
     DigFeCntl, DigBeCntl, OtgPixelRateCntl, OtgPhypllPixelRateCntl, PhypllPixclkResyncCntl,
     HpdIntStatus, HpdControl, DentistDispclkCntl,
+    // Read by step 1 only (213-DRV-0086): the rest of what `optc1_read_otg_state` reads, power, HUBP, DIG, aperture.
+    OtgVTotalControl, OtgVerticalInterrupt1Position, OtgVerticalInterrupt1Control, OtgVerticalInterrupt2Position,
+    OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
+    HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
+    DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
 }
+
+/// Every register of the map, for walks over all of them.
+pub const ALL: [R; 56] = {
+    use R::*;
+    [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
+     OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
+     OtgStatusPosition, OtgStatusFrameCount, OtgClockControl, OtgVstartupParam, OtgVupdateParam, OtgVreadyParam,
+     OptcDataSourceSelect, OptcDataFormatControl, OptcInputClockControl, VtgControl,
+     OppPipeControl, DpgControl, DpgDimensions, DpgOffsetSegment,
+     DigFeCntl, DigBeCntl, OtgPixelRateCntl, OtgPhypllPixelRateCntl, PhypllPixclkResyncCntl,
+     HpdIntStatus, HpdControl, DentistDispclkCntl,
+     OtgVTotalControl, OtgVerticalInterrupt1Position, OtgVerticalInterrupt1Control, OtgVerticalInterrupt2Position,
+     OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
+     HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
+     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase]
+};
 
 impl R {
     /// How many instances the block has: pipes for OTG/ODM/VTG/OPP/DPG/pixel rate, encoders for DIG, PHY PLL and HPD.
     pub const fn instances(self) -> u8 {
         use R::*;
         match self {
-            DigFeCntl | DigBeCntl | PhypllPixclkResyncCntl | HpdIntStatus | HpdControl => DIGS,
-            DentistDispclkCntl => 1,
+            DigFeCntl | DigBeCntl | DigBeEnCntl | PhypllPixclkResyncCntl | HpdIntStatus | HpdControl => DIGS,
+            DomainPgStatus => 2 * PIPES, // HUBP n is domain 2n, DPP n is 2n + 1 (dcn20_hubp_pg_control)
+            DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
+                | DcnVmAgpBase => 1,
             _ => PIPES,
         }
     }
@@ -114,8 +137,68 @@ impl R {
             PhypllPixclkResyncCntl => (1, if i < 4 { 0x40 + i } else { 0x4C }),
             HpdIntStatus => (2, 0x1F14 + 8 * i), HpdControl => (2, 0x1F16 + 8 * i),
             DentistDispclkCntl => (1, 0x64),
+            OtgVTotalControl => otg(0x09), OtgVerticalInterrupt1Position => otg(0x3A),
+            OtgVerticalInterrupt1Control => otg(0x3B), OtgVerticalInterrupt2Position => otg(0x3C),
+            OtgVerticalInterrupt2Control => otg(0x3D), OptcInputGlobalControl => (2, 0x1ACA + 0x10 * i),
+            DomainPgStatus => (2, 0x81 + 2 * i),
+            HubpSurfaceConfig => (2, 0x5E5 + 0xDC * i), HubpCntl => (2, 0x5F3 + 0xDC * i),
+            HubpreqSurfacePitch => (2, 0x607 + 0xDC * i), HubpreqPrimarySurfaceAddress => (2, 0x60A + 0xDC * i),
+            HubpreqPrimarySurfaceAddressHigh => (2, 0x60B + 0xDC * i),
+            DigBeEnCntl => (2, 0x20B0 + 0x100 * i),
+            DcnVmFbLocationBase => (2, 0x493), DcnVmFbLocationTop => (2, 0x494), DcnVmFbOffset => (2, 0x495),
+            DcnVmAgpBot => (2, 0x496), DcnVmAgpTop => (2, 0x497), DcnVmAgpBase => (2, 0x498),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
+    }
+}
+
+impl R {
+    /// The register's name in `dcn_2_1_0_offset.h`, without its block's instance prefix (OTG0_, HUBPREQ1_, ...).
+    pub const fn name(self) -> &'static str {
+        use R::*;
+        match self {
+            OtgHTotal => "OTG_H_TOTAL", OtgHBlankStartEnd => "OTG_H_BLANK_START_END", OtgHSyncA => "OTG_H_SYNC_A",
+            OtgHSyncACntl => "OTG_H_SYNC_A_CNTL", OtgHTimingCntl => "OTG_H_TIMING_CNTL", OtgVTotal => "OTG_V_TOTAL",
+            OtgVTotalMin => "OTG_V_TOTAL_MIN", OtgVTotalMax => "OTG_V_TOTAL_MAX", OtgVBlankStartEnd => "OTG_V_BLANK_START_END",
+            OtgVSyncA => "OTG_V_SYNC_A", OtgVSyncACntl => "OTG_V_SYNC_A_CNTL", OtgControl => "OTG_CONTROL",
+            OtgBlankControl => "OTG_BLANK_CONTROL", OtgInterlaceControl => "OTG_INTERLACE_CONTROL", OtgStatus => "OTG_STATUS",
+            OtgStatusPosition => "OTG_STATUS_POSITION", OtgStatusFrameCount => "OTG_STATUS_FRAME_COUNT",
+            OtgClockControl => "OTG_CLOCK_CONTROL", OtgVstartupParam => "OTG_VSTARTUP_PARAM", OtgVupdateParam => "OTG_VUPDATE_PARAM",
+            OtgVreadyParam => "OTG_VREADY_PARAM", OptcDataSourceSelect => "OPTC_DATA_SOURCE_SELECT",
+            OptcDataFormatControl => "OPTC_DATA_FORMAT_CONTROL", OptcInputClockControl => "OPTC_INPUT_CLOCK_CONTROL",
+            VtgControl => "VTG_CONTROL", OppPipeControl => "OPP_PIPE_CONTROL", DpgControl => "DPG_CONTROL",
+            DpgDimensions => "DPG_DIMENSIONS", DpgOffsetSegment => "DPG_OFFSET_SEGMENT", DigFeCntl => "DIG_FE_CNTL",
+            DigBeCntl => "DIG_BE_CNTL", OtgPixelRateCntl => "PIXEL_RATE_CNTL", OtgPhypllPixelRateCntl => "PHYPLL_PIXEL_RATE_CNTL",
+            PhypllPixclkResyncCntl => "PIXCLK_RESYNC_CNTL", HpdIntStatus => "DC_HPD_INT_STATUS", HpdControl => "DC_HPD_CONTROL",
+            DentistDispclkCntl => "DENTIST_DISPCLK_CNTL", OtgVTotalControl => "OTG_V_TOTAL_CONTROL",
+            OtgVerticalInterrupt1Position => "OTG_VERTICAL_INTERRUPT1_POSITION",
+            OtgVerticalInterrupt1Control => "OTG_VERTICAL_INTERRUPT1_CONTROL",
+            OtgVerticalInterrupt2Position => "OTG_VERTICAL_INTERRUPT2_POSITION",
+            OtgVerticalInterrupt2Control => "OTG_VERTICAL_INTERRUPT2_CONTROL",
+            OptcInputGlobalControl => "OPTC_INPUT_GLOBAL_CONTROL", DomainPgStatus => "PG_STATUS",
+            HubpSurfaceConfig => "DCSURF_SURFACE_CONFIG", HubpCntl => "DCHUBP_CNTL", HubpreqSurfacePitch => "DCSURF_SURFACE_PITCH",
+            HubpreqPrimarySurfaceAddress => "DCSURF_PRIMARY_SURFACE_ADDRESS",
+            HubpreqPrimarySurfaceAddressHigh => "DCSURF_PRIMARY_SURFACE_ADDRESS_HIGH", DigBeEnCntl => "DIG_BE_EN_CNTL",
+            DcnVmFbLocationBase => "DCN_VM_FB_LOCATION_BASE", DcnVmFbLocationTop => "DCN_VM_FB_LOCATION_TOP",
+            DcnVmFbOffset => "DCN_VM_FB_OFFSET", DcnVmAgpBot => "DCN_VM_AGP_BOT", DcnVmAgpTop => "DCN_VM_AGP_TOP",
+            DcnVmAgpBase => "DCN_VM_AGP_BASE",
+        }
+    }
+
+    /// The block's instance prefix, as in the header: OTG, ODM, VTG, OPP_PIPE, DPG, DIG, OTG (DCCG), PHYPLL, HPD,
+    /// DOMAIN, HUBP, HUBPREQ; empty for a register of one instance.
+    pub const fn block(self) -> &'static str {
+        use R::*;
+        match self {
+            OptcDataSourceSelect | OptcDataFormatControl | OptcInputClockControl | OptcInputGlobalControl => "ODM",
+            VtgControl => "VTG", OppPipeControl => "OPP_PIPE", DpgControl | DpgDimensions | DpgOffsetSegment => "DPG",
+            DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
+            DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl => "HUBP",
+            HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh => "HUBPREQ",
+            DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
+                | DcnVmAgpBase => "",
+            _ => "OTG",
+        }
     }
 }
 
@@ -179,6 +262,26 @@ pub mod field {
     pub const PHYPLL_DEEP_COLOR_CNTL: Field = f(4, 2);
     pub const DC_HPD_SENSE: Field = f(1, 1);
     pub const DENTIST_DISPCLK_WDIVIDER: Field = f(0, 7);
+    // Read by step 1.
+    pub const DOMAIN_PGFSM_PWR_STATUS: Field = f(30, 2); // 0 on, 2 off (PGFSM_POWER_ON, _OFF)
+    pub const DC_HPD_EN: Field = f(28, 1);
+    pub const DIG_SYMCLK_FE_ON: Field = f(24, 1);
+    pub const DIG_ENABLE: Field = f(0, 1);
+    pub const DIG_SYMCLK_BE_ON: Field = f(8, 1);
+    pub const HUBP_BLANK_EN: Field = f(0, 1);
+    pub const HUBP_TTU_DISABLE: Field = f(12, 1);
+    pub const SURFACE_PIXEL_FORMAT: Field = f(0, 7);
+    pub const ROTATION_ANGLE: Field = f(8, 2);
+    pub const PITCH: Field = f(0, 14);
+    pub const PRIMARY_SURFACE_ADDRESS_HIGH: Field = f(0, 16);
+    pub const VM_16MIB: Field = f(0, 24); // FB_BASE, FB_TOP, FB_OFFSET, AGP_BOT, AGP_TOP, AGP_BASE: bits 47:24
+    pub const OTG_PIXEL_RATE_SOURCE: Field = f(0, 2);
+    pub const DP_DTO_ENABLE: Field = f(4, 1);
+    pub const OTG_PHYPLL_PIXEL_RATE_SOURCE: Field = f(0, 3);
+    pub const OTG_PIXEL_RATE_PLL_SOURCE: Field = f(4, 1);
+    pub const PHYPLL_PIXCLK_ENABLE: Field = f(8, 1);
+    pub const DENTIST_DISPCLK_RDIVIDER: Field = f(8, 7);
+    pub const PGFSM_POWER_ON: u32 = 0;
 }
 
 /// VBIOS command tables first light calls, with the parameter revision DCN 2.1's VBIOS has.
