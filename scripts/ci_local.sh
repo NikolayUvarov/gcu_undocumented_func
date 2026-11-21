@@ -83,7 +83,7 @@ X86_GROUPS=(
     "x86: a release that loses the server, rolled back|$X86 --suites rollback"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,usbaudio,link,modes"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci,nnd"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci,nnd,iso"
     "x86: the window manager|$X86 --suites wm"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
     "x86: the updater and an update through the link|$X86 --suites updater,linkupdate"
