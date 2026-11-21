@@ -94,3 +94,14 @@ fn connected_station_role_afh_and_policy_match_linux() {
     assert_eq!(policy.bytes(), &[1,10,1,0,100,0,0x5a,0x5a,0x5a,0xea,0,0]); assert_eq!(policy.command().function,3);
     assert_eq!(Policy::Station.tdma(),[0;8]); assert!(p.policy(Policy::Station,Policy::Station).is_none());
 }
+
+// 213-DRV-0087: rtw89_fw_h2c_cxdrv_role_v2 for a station on 5 GHz channel 100, and OFF_EQ0's slot.
+#[test]
+fn a_5_ghz_station_role_and_off_eq0_match_linux(){
+    let p=profile();let role=p.driver_station(100);
+    assert_eq!(&role.bytes()[..10],&[1,64,1,9,2,0,0x41,0,1,100],"link mode BTC_WLINK_5G, band 1 in bits 6-7");
+    assert_eq!(role.bytes().len(),66);assert!(role.bytes()[10..].iter().all(|b|*b==0));
+    let policy=p.policy(Policy::NoLink,Policy::Station5g).unwrap();
+    assert_eq!(policy.bytes(),&[1,10,1,0,100,0,0xff,0xff,0xff,0xff,0,0]);assert_eq!(Policy::Station5g.tdma(),[0;8]);
+    assert!(p.policy(Policy::Station5g,Policy::Station5g).is_none());
+}

@@ -8,6 +8,7 @@ use service_ipc::{ipc,mem,dev,time,network};
 #[path="../libmind/src/idl/wire.rs"]pub mod wire;
 #[path="../libmind/src/idl/wlanhw.rs"]pub mod wlanhw;
 mod idl{pub use crate::{codec,wire,wlanhw};}
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path="../rtw89_wifi/src/service.rs"]mod service;
 #[path="../rtw89_wifi/src/receive_service.rs"]mod receive_service;
 #[path="../rtw89_wifi/src/country.rs"]mod country;
