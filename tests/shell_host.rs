@@ -6,7 +6,8 @@
 //! tally (shell/src/ping.rs, 000-APP-0095); `update`'s line and text (shell/src/updates.rs, 351-APP-0029); the badges of
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
 //! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112); `volume`, `mic` and data/sound.conf (shell/src/sound.rs,
-//! 000-APP-0076, 000-APP-0077); keystore's passphrase typed at the console (shell/src/passphrase.rs, 308-APP-0130).
+//! 000-APP-0076, 000-APP-0077); keystore's passphrase typed at the console (shell/src/passphrase.rs, 308-APP-0130);
+//! `install`'s words (shell/src/installer.rs, 352-APP-0157).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -59,6 +60,8 @@ mod voiceconf;
 mod nnrows;
 #[path = "../shell/src/sound.rs"]
 mod sound;
+#[path = "../shell/src/installer.rs"]
+mod installer;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -1044,4 +1047,28 @@ fn a_boot_services_line_that_ends_its_grant_is_named_before_it_is_added() {
     assert_eq!(note(&format!("listen shell tcp 22 from 10.0.0.0/8 {} {}", TERM_MAX, VOLUME_MAX), &services), None);
     // A term that is not a number is the broker's to refuse.
     assert_eq!(note("effector 10.0.2.2 tcp 443 soon", &services), None);
+}
+
+#[test]
+fn install_lists_shows_and_names_what_failed() {
+    use installer::*;
+    // 352-APP-0157: `install` alone lists, `install N` installs, anything else is the usage.
+    assert_eq!((parse(""), parse(" 2 "), parse("x"), parse("1 2")), (Ok(Asked::List), Ok(Asked::Disk(2)), Err(USAGE), Err(USAGE)));
+    let blank = Disk { number: 1, bus: 3, model: "", mib: 512, signature: "EMPTY", partitions: 0, words: "VIRTIO 512 EMPTY", refusal: 0 };
+    assert_eq!(line(&blank), "   1  VIRTIO  512 MIB  EMPTY  TO INSTALL: INSTALL 1, THEN TYPE VIRTIO 512 EMPTY");
+    assert_eq!(shown(&blank), "INSTALL: DISK 1: VIRTIO, 512 MIB, EMPTY");
+    let used = Disk { number: 2, bus: 1, model: "Samsung SSD 860", mib: 476940, signature: "1A2B3C4D", partitions: 3, words: "AHCI 476940 1A2B", refusal: 0 };
+    assert_eq!(shown(&used), "INSTALL: DISK 2: AHCI Samsung SSD 860, 476940 MIB, MBR 1A2B3C4D, 3 PARTITIONS: ITS 3 PARTITIONS AND ALL THEIR FILES ARE ERASED");
+    assert_eq!(erase_question(&used), "ERASE THE 3 PARTITIONS OF DISK 2?");
+    let live = Disk { number: 0, bus: 2, model: "", mib: 1024, signature: "0BADC0DE", partitions: 1, words: "USB 1024 0BAD", refusal: 1 };
+    assert_eq!(line(&live), "   0  USB  1024 MIB  MBR 0BADC0DE, 1 PARTITION  REFUSED: THE MEDIUM THIS LIVE SYSTEM BOOTED FROM");
+    assert_eq!((refusal(0), refusal(3), refusal(9)), (None, Some("PAST 2 TIB, WHERE A GPT IS NEEDED (NOT MADE YET)"), Some("REFUSED FOR A REASON THIS SHELL DOES NOT KNOW")));
+    assert_eq!((bus(0), bus(4), bus(5), bus(77)), ("ATA", "NVME", "OTHER", "OTHER"));
+    // An error before the writing leaves the disk as it was; one in the writing leaves it with no ESP's entry.
+    assert_eq!(error(3), "INSTALL: NOT INSTALLED: THE WORDS TYPED ARE NOT THE DISK'S");
+    assert_eq!(error(7), "INSTALL: NOT INSTALLED: COPYING THE BOOT VOLUME FAILED. THE DISK HAS NO ESP: INSTALL AGAIN");
+    for code in 0..=4 { assert!(!error(code).contains("NO ESP"), "{code}"); }
+    for code in 5..=15 { assert!(error(code).ends_with("THE DISK HAS NO ESP: INSTALL AGAIN"), "{code}"); }
+    assert_eq!(layout(1, 0x1A2B3C4D, [(2048, 196608), (198656, 65536), (264192, 784384)]),
+               "INSTALL: DONE ON DISK 1, MBR 1A2B3C4D: THE ESP AT SECTOR 2048 (196608 SECTORS), MIND LOG AT 198656 (65536), THE STORE AT 264192 (784384). TAKE THE LIVE MEDIUM OUT AND RESTART TO BOOT IT");
 }
