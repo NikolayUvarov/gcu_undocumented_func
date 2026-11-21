@@ -25,6 +25,31 @@ Each step ends with something a person or a log can check, and none of it is pro
 - [ ] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a model of the blocks.
 - [ ] With KRN's part: MIND Core's screen on both monitors.
 
+## Progress (2026-11-21)
+
+**The host-side parts, in module files for KRN's `display` crate to take in** (KRN makes the crate, its grant and its
+boot image, ABI 38; this branch adds no `Cargo.toml`, `main.rs` or linker script, so the two do not collide):
+
+- `display/src/timing.rs`: a mode's totals, refresh rate and TMDS clock, and the timing generator's register values for
+  it in the convention Linux programs and Display Core's dump shows; the inverse, for logging what the firmware left.
+- `display/src/edid.rs`: EDID 1.3/1.4 and its CTA-861 extension, with no allocation: identity, name, range limits,
+  detailed timings, VICs, the HDMI 1.4 and HDMI Forum blocks; the sink's TMDS limit; the largest timing within a clock.
+- `display/src/dcn.rs`: DCN 2.1's registers as BAR 5 offsets (segments, blocks, instance strides), the fields first
+  light writes, the three VBIOS command tables it calls with their parameter bytes, and `first_light`, the ordered plan
+  of step 3 (the DPG's colour squares on a second pipe), which refuses the firmware's pipe and PHY.
+- `tests/display_host.rs`, 13 cases, run by `scripts/host_tests.sh` with no line of its own: the timing arithmetic
+  (CTA 1080p60; the Ryzen's two monitors, whose EDID timings give exactly the OTG values Display Core dumped under
+  Linux), the parser on synthetic EDIDs (the monitors' own bytes are not kept) and on damaged ones, the register
+  addresses against the header's instance 1, and the plan run against a model of the blocks: the firmware's registers
+  never written and unchanged, the timing and wiring written, the order (clocks, pixel clock, timing, pattern, start,
+  front end, back end, PHY), the tables' parameter bytes, and the refusals.
+
+Tested on LEG9 only: the 13 cases pass, and the three modules build as `#![no_std]` with `-D warnings`. Nothing of it
+has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md)),
+not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command tables need an interpreter (or their
+writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core
+(step 1, with KRN's grant).
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
