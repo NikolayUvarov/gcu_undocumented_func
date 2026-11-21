@@ -52,14 +52,20 @@ fn addresses_hex_and_durations() {
 
 #[test]
 fn the_requests_that_wait_for_the_user() {
-    assert_eq!(waiting::read(&waiting::text(&[1, 4])), Some(vec![1, 4]), "read back as written");
-    assert_eq!(waiting::read(&waiting::text(&[])), Some(vec![]));
-    assert_eq!(waiting::read("# a comment\n7 3 3\n"), Some(vec![3, 7]), "ascending, each once");
-    assert_eq!(waiting::read(""), Some(vec![]));
+    use waiting::Waiting;
+    let w = |change, ids: &[u64]| Some(Waiting { change, ids: ids.to_vec() });
+    assert_eq!(waiting::read(&waiting::text(3, &[1, 4])), w(3, &[1, 4]), "read back as written");
+    assert_eq!(waiting::read(&waiting::text(4, &[])), w(4, &[]));
+    assert!(waiting::text(4, &[]).contains("\nchange 4\n"), "{}", waiting::text(4, &[]));
+    assert_eq!(waiting::read("# a comment\n7 3 3\n"), w(0, &[3, 7]), "ascending, each once; no change line is change 0");
+    assert_eq!(waiting::read(""), w(0, &[]));
     assert_eq!(waiting::read("1 two"), None);
     assert_eq!(waiting::read("0"), None, "no request 0");
-    assert_eq!(waiting::read(&(1..100).map(|n| n.to_string()).collect::<Vec<_>>().join(" ")).unwrap().len(), waiting::MAX);
-    assert!(waiting::text(&(1..100).collect::<Vec<_>>()).len() < waiting::BYTES, "its text fits what the readers read");
+    assert_eq!(waiting::read("change x\n1"), None, "a change that is not a count");
+    assert_eq!(waiting::read(&(1..100).map(|n| n.to_string()).collect::<Vec<_>>().join(" ")).unwrap().ids.len(), waiting::MAX);
+    assert!(waiting::text(u64::MAX, &(1..100).collect::<Vec<_>>()).len() < waiting::BYTES, "its text fits what the readers read");
+    // The same set gone and back between two looks reads as another change (round 167's failure on a fast machine).
+    assert_ne!(waiting::read(&waiting::text(5, &[1])), waiting::read(&waiting::text(7, &[1])));
     assert_eq!(waiting::notice(&[]), None);
     assert_eq!(waiting::notice(&[1]).unwrap(), "IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)");
     assert_eq!(waiting::notice(&[1, 4]).unwrap(), "IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)");

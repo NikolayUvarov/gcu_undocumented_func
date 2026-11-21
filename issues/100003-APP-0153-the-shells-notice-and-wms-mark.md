@@ -45,6 +45,14 @@
 - **Tested** in this container, x86_64, 4 CPUs:
   - `tests/improve_host.rs` (4 tests) and `tests/wm_host.rs` (48) pass;
   - the QEMU suite `hub` passes with the checks above.
+- **Returned by round 167** (`LANDING/2026-11-21T2133Z-KRN-round-5667eb96.md`): on the gate's machines `hub_check` waited in vain for the shell's line after the track's proposal, 3 runs of 3.
+  - **Why:** the shell read the file only while no program was in front. Under KVM the answer, the two `watch`, the export, the acceptance and the proposal took less than one 5 s look. So the shell never saw the empty set between, and the waiting request #1 looked unchanged.
+  - **Reproduced here** with the look set to 20 s, longer than that stretch: the same line failed.
+  - **The fix:**
+    - the file carries `change N`, the count of `improve`'s writes, so a set gone and back reads as a change;
+    - the shell reads the file whether a program runs or not, keeps a change that waits to be said, and says it at the first moment nothing is in the way, looking every 0.5 s meanwhile;
+    - each change it reads is in the system log (`[SHELL] IMPROVE: data/improve/waiting CHANGE n: m REQUESTS WAIT`).
+  - With the 20 s look the suite then passed, and with 5 s again.
 - **Left:**
   - the MacBook Pro's run;
   - `wm`'s window of `improve` and the phone's screen (with `MOB`), stage 6's other parts, numbered when they start.
