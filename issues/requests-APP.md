@@ -73,7 +73,7 @@ Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-a
 
 ## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
 
-Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.
+Numbered on 2026-11-04 as [308-APP-0122](../issues-done/308-APP-0122-a-recovery-key-shown-once-and-typed-back.done): a program with a window of its own, `recovery`, and `--key-file` for the tests.
 
 ## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
 
