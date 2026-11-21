@@ -14305,6 +14305,8 @@ def effector_update_suite(args):
         assert steps and [n for at, n in steps if at < confirmed][-1:] == ["accepted"] and len(steps) <= 8, (steps, init_log[-2500:])
         require(log, f"EFFECTOR: UPDATE {on} TO VERSION 6: THE MACHINE RESTARTED")
         require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
+        # 801-EFF-0039: slot B's agent started on trial, so the journal it shares with slot A was not compacted then.
+        require(log, "EFFECTOR: JOURNAL: NOT COMPACTED ON A TRIAL BOOT; THE FIRST START AFTER THE TRIAL IS CONFIRMED COMPACTS IT")
         result = server.operation(on)
         assert result["status"] == "completed" and result["result"]["stdout"] == "updated 6, slot B confirmed", result
         # One cut try, then the rest asked with Range from what the gateway held: a whole number of its pieces.

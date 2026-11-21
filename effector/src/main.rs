@@ -1445,11 +1445,17 @@ fn machine(agent: &mut Agent) -> Option<String> {
 }
 
 #[inline(never)]
-fn recover(agent: &Agent) -> (Vec<session::Record>, Vec<bool>) {
+fn recover(agent: &Agent, on_trial: bool) -> (Vec<session::Record>, Vec<bool>) {
     // A rewrite cut between removing the journal and renaming its new form: the new form is whole (it was flushed).
     let (path, new) = (agent.path("journal"), agent.path("journal.new"));
-    if File::open(&path).is_err() && File::open(&new).is_ok() { let _ = fs::rename(&new, &path); }
-    let _ = fs::remove(&new);
+    let only_new = File::open(&path).is_err() && File::open(&new).is_ok();
+    // On a trial boot the files are the slot before's too, and nothing it reads changes (801 S3, 801-EFF-0039): the
+    // journal is read where it lies, and the first start after the trial is confirmed tidies it.
+    let path = if on_trial { if only_new { new } else { path } } else {
+        if only_new { let _ = fs::rename(&new, &path); }
+        let _ = fs::remove(&new);
+        path
+    };
     if File::open(&path).is_err() { return (Vec::new(), Vec::new()); }
     // Never read as empty: a journal too large to read refuses the start, so no saved answer is forgotten.
     let Some(bytes) = read_file(&path, JOURNAL_MAX) else { fail(format_args!("JOURNAL REFUSED: OVER {} BYTES OR UNREADABLE", JOURNAL_MAX)) };
@@ -1538,7 +1544,9 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
             mind::println!("EFFECTOR: NEW AGENT ID {}", id);
         }
     }
-    let (records, done) = recover(&agent);
+    // A boot on trial, not confirmed yet (init.wit's `boot`): the journal is the slot before's as well (801-EFF-0039).
+    let on_trial = matches!(init::boot(Endpoint(SLOT_LIFECYCLE)), Ok(Ok(b)) if b.trial && !b.confirmed);
+    let (records, done) = recover(&agent, on_trial);
     let count = records.len();
     let session = match Session::restore(&agent.agent_id, &records, &done, now() as u64) { Ok(s) => Box::new(s), Err(e) => fail(format_args!("SESSION: {:?}", e)) };
     agent.executed_total = read_file(&agent.path("executed"), 24).and_then(|b| core::str::from_utf8(&b).ok().and_then(|t| t.trim().parse().ok())).unwrap_or(0);
@@ -1555,8 +1563,13 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
             None => { mind::println!("EFFECTOR: {}/update IS MALFORMED OR ANOTHER AGENT'S: REMOVED", agent.dir); let _ = fs::remove(&agent.path("update")); }
         }
     }
-    // Compacted at each start: each record once, with one done line (a redelivered answer adds another).
-    if count > 0 && !agent.rewrite_journal(&session) { mind::println!("EFFECTOR: JOURNAL: NOT COMPACTED, KEPT AS IT WAS"); }
+    // Compacted at each start: each record once, with one done line (a redelivered answer adds another). Not on a trial
+    // boot, whose compaction would rewrite what the slot before reads (801 S3, 801-EFF-0039).
+    if count > 0 && on_trial {
+        mind::println!("EFFECTOR: JOURNAL: NOT COMPACTED ON A TRIAL BOOT; THE FIRST START AFTER THE TRIAL IS CONFIRMED COMPACTS IT");
+    } else if count > 0 && !agent.rewrite_journal(&session) {
+        mind::println!("EFFECTOR: JOURNAL: NOT COMPACTED, KEPT AS IT WAS");
+    }
     mind::println!("EFFECTOR: AGENT {} TO {}{} ({} SAVED RESULTS, {} TO ACKNOWLEDGE)", agent.agent_id, agent.config.host(), agent.config.base_path(), count, waiting);
 
     (agent, session, run_for)

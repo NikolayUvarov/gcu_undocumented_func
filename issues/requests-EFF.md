@@ -91,18 +91,3 @@ The EFF track numbers its own tasks, so a request from another track waits here 
   5. Tests: a host test of the rule (the threshold, the floor, 2099); the `effector` suite with the guest's clock 3 h ahead and at 2000-01-01, the clock read back within a few seconds of the fixture's after the first answer, and the log line.
 - **What it trusts.** The server, or whoever holds its pinned key, can move the clock forward without limit and back to the floor ([clocks.md](../docs/profile/clocks.md), "The Effector server's time"): a memory domain's term in mode `forget` can then pass. If EFF wants the owner to be able to switch it off, a policy line (for example `clock keep`) would do; KRN does not ask for one.
 - **Docs.** `docs/effector/README.md`'s table of the session's grants can then say `rtc` with the setting badge, and what the agent does with it.
-
-### No rewrite of the agent's journal on a trial boot (KRN, 2026-11-19, for 801's S3)
-
-- **What round 149's gate showed** (x32, the `rollback` suite, x86; the candidate changed only `tests/qemu_smoke.py`'s store check): `AssertionError: [('the trial changed what slot A reads', ['system/effector/journal.new'])]`.
-  - Slot B's trial left `system/effector/journal.new` on the disk, and `system/effector/journal` as it was.
-  - The group passed when it ran again alone, and in every gate before.
-- **Where it comes from.** The agent compacts its journal at each start (`effector/src/main.rs`, `start()`: `rewrite_journal`, "Compacted at each start").
-  - The rewrite writes `journal.new`, removes `journal` and renames the new file into its place.
-  - A `journal.new` left beside an unchanged `journal` means the removal or the rename did not take. The trial's service lines are not on the serial console, so which one is not known.
-  - Slot A's agent then removes `journal.new` at its start (`recover()`), so its records were not lost here.
-- **Why it matters for S3.** On a trial boot, `system/effector` holds slot A's journal. A compaction there rewrites what slot A reads, and a cut one leaves its pieces. If the compaction drops a line, slot A comes back to a journal the trial changed.
-- **What is asked:**
-  1. On a boot on trial (init's `boot_slot`, or the updater's state the agent already reads for `update_step`), leave the journal as it is: no compaction, and no file in `system/effector` other than what the trial must add. Compact at the first start after the trial is confirmed.
-  2. Say in the log line when the compaction is left for later.
-  3. The `rollback` suite already checks the result; a host or `effector` suite check that a trial's start writes no `journal.new` would show it without the 600 s trial.
