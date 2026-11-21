@@ -166,6 +166,7 @@ USER_CRATES=(
     "wifi:wifi:wifi.elf"
     "recovery:recovery:recovery.elf"
     "camera:camera:camera.elf"
+    "improve/app:improve:improve.elf"
     "efivar:efivar:efivar.elf"
     "dictate:dictate:dictate.elf"
     "speak:speak:speak.elf"
@@ -186,7 +187,8 @@ declare -A SEEN=()
         crate_dir=${entry%%:*}
         [ -n "${SEEN[$crate_dir]:-}" ] && continue
         SEEN[$crate_dir]=1
-        printf '%s\t%s\t%s\n' "$crate_dir" "$BUILD_SCRIPT_DIR/$crate_dir" "cargo build --release"
+        # A crate below a directory (improve/app) logs as improve-app.log.
+        printf '%s\t%s\t%s\n' "${crate_dir//\//-}" "$BUILD_SCRIPT_DIR/$crate_dir" "cargo build --release"
     done
 } | run_jobs "$JOB_LOGS" "$JOBS"
 

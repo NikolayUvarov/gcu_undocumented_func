@@ -1276,3 +1276,58 @@ DHCP's exchange is data both ways over the CCMP-protected link.
 **To harden later:** `KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES`, `KEEP_LATE` and `RESTART_AFTER_FAILURE`. Each is a constant with its strict path beside it; the host cases run both where the path is the driver's own.
 
 **What this shows:** that machine, that AP and those builds only (MC-12.1).
+
+## The link that carried 19 KB/s and broke every few minutes: four causes in the driver (2026-11-21)
+
+**What was reported.** Two `update_agent` deliveries of a 30 MB bundle to the Ryzen failed in the download: one stalled, one ended with `BODY: Closed`. The maintainer asked why and for a fix.
+
+**The reference, Linux on the same machine and access point (`rtw89_8852be`, the same day):**
+
+| Network | What Linux used | 6 MB from the LAN |
+|---|---|---|
+| 5 GHz, channel 100 (`…:8C`) | VHT 80 MHz, RSSI −66 dBm | 16.4 MB/s |
+| 2.4 GHz, channel 8 (`…:88`), the one MIND Core joins | HT 20 MHz, RSSI −62 dBm, SNR 13 to 16 | 480 to 826 KB/s |
+
+On the 2.4 GHz network Linux's pings to the access point took 41 ms on average and up to 333 ms. So the channel is crowded, and the driver has no 5 GHz, HT or aggregation yet: its ceiling there is far under Linux's.
+
+**MIND Core before the change:** 6 MB did not arrive in two minutes, at about 19 KB/s. The sender's kernel showed a TCP round trip of 300 to 900 ms (17 ms at the least) and one retransmission a second.
+
+**The causes, each measured on the Ryzen with a bench build:**
+
+1. **A late frame stopped the driver.** A frame whose release did not come 1.1 s after its submission ended the service with `TransmitTimeout`, and `init` started a fresh driver. With the wait raised, every such frame was released, 0.1 to 1.4 s after its submission, and most were acknowledged: the hardware holds a frame while the channel is taken. Each stop made `netstack` drop the address and abort the connections (`CARD 2 LINK DOWN: ADDRESS DROPPED, 1 CONNECTIONS ABORTED`), which is what cut the agent's downloads. Under load it happened once in 2 to 5 minutes.
+2. **No RTS.** Linux asks for RTS before every frame to one station (`rtw89_build_txwd_info4`), by the hardware's thresholds; this driver's descriptor never did. Of the tries of frames of 400 bytes and more, 46 % went unacknowledged at 24 Mb/s and 13 % at 12 Mb/s; with RTS, 16 % at 24 Mb/s.
+3. **The service's step took 20 to 33 ms.** The liveness checks and the coexistence reconcile ran for every packet read, 0.8 ms of a poll's 0.9 ms, and on this channel about a thousand foreign frames a second pass the hardware's filter. A step read up to 32 packets and handed the station one frame, so a frame waited 20 to 200 ms in the driver, and 9.6 s of every 10 went to polling.
+4. **Frames for the station were dropped in the driver.** The coexistence reconcile reads the receive queue to its end and keeps four frames; the rest of a burst it dropped (`pressure`). With the service's own four-frame buffer full, the step's 32 polls dropped up to 31 more.
+
+**The change:**
+- `txdesc.rs`: RTS for a frame to one station, the hardware's RTS always on, as Linux.
+- `service.rs`:
+  - `LATE_MS` is 5 s, and the release of a late frame is logged with its time;
+  - a step drains the receive queue by the receive alone (`poll_more`), up to 64 packets, into a buffer of 16 frames;
+  - the checks and the reconcile follow every 10 ms, once the queue is read empty, and after 100 ms in any case;
+  - with the buffer full the queue is left unread.
+- `data_mode.rs`, `btc_session.rs`: `poll_more`, a poll without the checks, with the receive queue read or left alone.
+
+**After it, the same build as in this commit, the Ryzen on Wi-Fi alone:**
+- 6 MB from the LAN in 23.8, 20.9 and 17.0 s: 252 to 353 KB/s. The round trip the sender saw: 88 to 138 ms, 3 ms at the least.
+- The sender was held by the receiver's window for a third to a half of each transfer, so part of the limit is now above the driver.
+- Ten log uploads through the Effector server, one after another: all ten, in 151 s. Before, eight took 482 to 697 s, and one or two of them timed out. In the six minutes of that run the driver did not stop and the receiver did not stall; 31 frames were late, the longest released after 315 ms.
+- **The delivery that had failed went through.** With this driver started in place of the release's (`replace`), `update_agent` put release 202611211156 (a 29.6 MB bundle, this driver in it) on the Ryzen through the server: started 11:57:52 UTC, the machine back in Linux by 12:02:06 with the slot written, `TRIAL BOOT CONFIRMED` and `updated 202611211156, slot B confirmed` at 12:02:41. One delivery.
+
+**Tried and taken back:**
+- **BTG put back after the calibration.** The last TSSI sample leaves the BTG receive path off, and Linux's coexistence turns it on again (its registers `0x4738`, `0x4AA4`, `0x980`, `0x49C4`, `0xC6C` say so). Done here, the receiver went silent for 10 s three times in 4 minutes (`RECEIVE STALLED`); without it, not once in 12 minutes. The coexistence here does not do all that Linux's does around BTG.
+- **TSSI tracking released after the calibration** (`TXPW_RSTB` bit 30, as Linux has it in steady state): no gain, and 14 firmware recoveries in 12 minutes against 5 without it. The power reports (`0x1C60`) show the loop converged either way, to values close to Linux's.
+
+**Compared with Linux's registers and found the same:** the transmit power tables (`0xD200` to `0xD3FF`), the calibration results (`0x8100` to `0x82FF`, but for one power scaling field that Linux's DPK tracking writes).
+
+**Different from Linux and not changed here:**
+- the EDCA parameters are the hardware's defaults (AIFS 43 µs; Linux set 70 µs for this network's 20 µs slot);
+- the port is set as "no link", and its TSF is not synchronised to the access point's;
+- no DIG: the packet detection floor stays at its lowest, where Linux had raised it by 18 dB beside this access point;
+- no CFO tracking.
+
+**Still seen:** the firmware's recoveries (`FIRMWARE RECOVERY`, CMAC error bit 3), a few in ten minutes, each outlasted. Their cause is not known.
+
+**What this shows:** that machine, that access point and its channel that afternoon, and these builds (MC-12.1). The figures are of runs, not of a proof (MC-12.2).
+
+**What would raise the rate further,** none of it done or promised by a date (MC-12.3): 5 GHz, where Linux has 16 MB/s on this network; HT with aggregation; DIG.

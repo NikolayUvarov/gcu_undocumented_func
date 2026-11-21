@@ -1,6 +1,6 @@
 # 352-UPD-0048 — The installer: MIND Core onto a disk of the machine it runs on, from the ISO or from a card
 
-**Type:** `installer` service, `shell` command · **Owner:** `UPD` (the kernel session), with `PRT` (disk tools, 212) and `KRN` (`init`'s list) · **Priority:** P2 · **Status:** in progress (the service made in 352-KRN-0269, 2026-11-21) · **Blocked by:** [352-KRN-0269](352-KRN-0269-the-installer-service.md) (the service, in `vfs_server`), the shell's `install` command (requested of `APP`, [requests-APP.md](requests-APP.md)) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-9.4, MC-12.1, MC-12.3
+**Type:** `installer` service, `shell` command · **Owner:** `UPD` (the kernel session), with `PRT` (disk tools, 212) and `KRN` (`init`'s list) · **Priority:** P2 · **Status:** in progress (the service made in 352-KRN-0269, 2026-11-21) · **Blocked by:** [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done) (the service, in `vfs_server`), the shell's `install` command (requested of `APP`, [requests-APP.md](requests-APP.md)) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-9.4, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -69,7 +69,7 @@ A model and a serial number are asked of `DRV` for `block.wit` when the first re
 
 ## Progress (2026-11-21)
 
-**The service side is [352-KRN-0269](352-KRN-0269-the-installer-service.md),** on `claude/352-KRN-0269-installer-service`. It follows the design above, with these changes:
+**The service side is [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done),** on `claude/352-KRN-0269-installer-service`. It follows the design above, with these changes:
 - **The store's partition is left blank and named in the new ESP's `store.txt`.** No superblock is written, so the store makes itself there at its first start, by its own layout, and the installer holds no copy of `STO`'s format.
 - **`vfs_server` writes the table and `MIND LOG` itself.** It does so with its own FAT code, so 212's service is not needed for this layout.
 - **On a live boot, `init` gives the store no disk and `vfs_server` every disk whole.** Without this, an empty VirtIO disk would be the store's.

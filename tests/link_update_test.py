@@ -82,6 +82,28 @@ def test_follow():
     assert line == "5.170 [UPDATER] SLOT A CONFIRMED ON THE DISK" and said.count("5.170 [UPDATER] RECORD") == 1, (line, said)
 
 
+def test_a_read_cut_short_is_not_the_next_boot():
+    """000-LNK-0049 (the DEXP, 2026-11-20): as the machine restarted for the trial, a read of the log came back cut
+    short. It began at the boot's start and ended before the last line read, so it was taken for the next boot's log,
+    and the confirmation of the update before, in it, for this one's."""
+    old = ("0.138 init: [INIT] LAUNCH: MANIFEST 9fcd SLOT B ON TRIAL\n8.621 updater: [UPDATER] SLOT B ON TRIAL, VERSION 6\n"
+           "26.676 updater: [UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT\n63.588 wifi: x\n")
+    staged = old + "727.707 updater: [UPDATER] CHECK stable: VERSION 7, MINIMUM 1; RUNNING 6\n737.740 updater: [UPDATER] FETCH: VERSION 7 STAGED IN SLOT A: 111 FILES\n"
+    cut = old[:-9]  # the same log from its start, its last line cut
+    boot = ("0.138 init: [INIT] LAUNCH: MANIFEST 1558 SLOT A ON TRIAL\n11.570 updater: [UPDATER] SLOT A ON TRIAL, VERSION 7\n"
+            "28.533 updater: [UPDATER] SLOT A CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT\n")
+    line, said = follow([staged, cut, None, boot], before=old, version=7)
+    assert line.startswith("28.533 updater: [UPDATER] SLOT A CONFIRMED"), (line, said)
+    assert not any("SLOT B CONFIRMED" in s for s in said), said
+    # A confirmation of another slot than the one staged, or in a boot that tries another version, is not this
+    # update's, even in a log that is the next boot's: the machine fell back, and no confirmation of this release comes.
+    back = "0.140 init: [INIT] LAUNCH: MANIFEST 9fcd SLOT B\n9.000 updater: [UPDATER] SLOT B ON TRIAL, VERSION 6\n27.000 updater: [UPDATER] SLOT B CONFIRMED ON THE DISK\n"
+    line, said = follow([staged, back], before=old, version=7)
+    assert line.startswith("error: no confirmation"), (line, said)
+    assert lu.within(["a", "b"], ["x", "a", "b", "c"]) and lu.within(["a", "b"], ["a", "bcd"]) and not lu.within(["a", "c"], ["a", "b", "c"])
+    assert not lu.within([], ["a"]) and not lu.within(["a", "b", "c"], ["a", "b"])
+
+
 class Recorded:
     """A link that answers `log` with `text` and records what is put."""
     def __init__(self, text):

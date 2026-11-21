@@ -30,3 +30,27 @@ A USB adapter or a Wi-Fi link comes and goes while the system runs. The default 
 ### Acceptance criteria
 
 In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards get leases. Removing the USB device through QMP moves the default to the VirtIO card; adding it back gives it a lease again. `ip` shows each step.
+
+## `parse.json`: strings longer than 512 bytes (for 100003-APP-0151)
+
+**Recorded by:** the tools track (APP), 2026-11-21, for MIND Hub's client on MIND Core ([100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 4; [docs/hub/README.md](../docs/hub/README.md)).
+
+### Problem
+
+- **`improve` on MIND Core reads the hub's JSON through `parse`** (MC-11.11). It holds its own long-term Ed25519 key and a network grant, so it must not parse the hub's answers itself.
+- **`parse.wit`'s `json` gives each value's text as `Text<512>`.** A string longer than 512 bytes refuses the whole document (`json::Malformed` in `parse/src/main.rs`).
+- **The hub's texts are longer.** `hub-api 2` holds request texts and messages up to 8 KiB, and a body up to 64 KiB (`improve/proto`'s `form::TEXT_MAX`, `json::BODY_MAX`). So a thread with one long message cannot be read on MIND Core.
+
+### What would serve (a proposal; the network track decides)
+
+Either of these would serve; `improve` takes whichever the track chooses:
+
+- **A string's text in pieces:** a call `json-text(text, index, offset)` gives up to 512 bytes of value `index`'s decoded string from `offset`, with its whole length. `json` then gives a long string's first 512 bytes and its length, and no longer refuses the document.
+- **Or continuation values:** a long string's text split over several values of a new kind that follow it.
+
+Bounds: a document up to 64 KiB, as `hub-api 2`'s body. The keys stay within 64 bytes, as `hub-api` keys are.
+
+### Acceptance criteria
+
+- A JSON document with a string of 8 KiB, multi-byte UTF-8 included, read back whole through `parse`.
+- A string split inside a UTF-8 sequence is never given as text.

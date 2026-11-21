@@ -9,6 +9,8 @@ pub const SUBCLASS_CONTROL: u8 = 1;
 pub const SUBCLASS_STREAMING: u8 = 2;
 
 const CS_INTERFACE: u8 = 0x24;
+const CS_ENDPOINT: u8 = 0x25;
+const EP_GENERAL: u8 = 1;
 const AS_FORMAT_TYPE: u8 = 2;
 const FORMAT_TYPE_I: u8 = 1;
 
@@ -29,6 +31,9 @@ pub struct Setting {
     pub sync: u8,
     /// An asynchronous OUT endpoint's feedback endpoint (bSynchAddress) and its packet, if the setting has it.
     pub feedback: Option<(u8, u16)>,
+    /// The endpoint takes its sampling frequency by request (its class descriptor's bmAttributes bit 0): a device that
+    /// offers several rates there is told that 48 kHz comes, or it plays at the rate it had.
+    pub rated: bool,
 }
 
 impl Setting {
@@ -51,6 +56,7 @@ pub fn parse(config: &[u8]) -> Option<Function> {
     let (mut number, mut alternate, mut subclass) = (0u8, 0u8, 0u8);
     let mut format: Option<u8> = None; // the channels of a usable format type I
     let mut data: Option<Setting> = None;
+    let mut last = false; // the endpoint descriptor just read is `data`'s: its class descriptor may follow
     let mut at = 0;
     while at + 2 <= config.len() {
         let length = config[at] as usize;
@@ -59,6 +65,7 @@ pub fn parse(config: &[u8]) -> Option<Function> {
         match d[1] {
             4 if length >= 9 => {
                 finish(&mut data, &mut function);
+                last = false;
                 (number, alternate) = (d[2], d[3]);
                 subclass = if d[5] == CLASS_AUDIO { d[6] } else { 0 };
                 format = None;
@@ -74,6 +81,7 @@ pub fn parse(config: &[u8]) -> Option<Function> {
             5 if length >= 7 && subclass == SUBCLASS_STREAMING && alternate != 0 => {
                 let (address, attributes, packet, interval) = (d[2], d[3], u16::from_le_bytes([d[4], d[5]]), d[6]);
                 let synch = if length >= 9 { d[8] } else { 0 };
+                last = false;
                 if attributes & 3 != 1 { at += length; continue; }
                 // The feedback endpoint the data endpoint before it names (bSynchAddress); UAC1 marks it no other way.
                 if let Some(s) = data.as_mut().filter(|s| s.feedback.is_some_and(|f| f.0 == address)) { s.feedback = Some((address, packet)); }
@@ -81,10 +89,12 @@ pub fn parse(config: &[u8]) -> Option<Function> {
                 else if let Some(channels) = format {
                     if data.is_none() {
                         data = Some(Setting { interface: number, alternate, channels, endpoint: address, packet, interval, sync: attributes >> 2 & 3,
-                                              feedback: (synch != 0 && address & 0x80 == 0).then_some((synch, 0)) });
+                                              feedback: (synch != 0 && address & 0x80 == 0).then_some((synch, 0)), rated: false });
+                        last = true;
                     }
                 }
             }
+            CS_ENDPOINT if last && length >= 4 && d[2] == EP_GENERAL => { if let Some(s) = data.as_mut() { s.rated = d[3] & 1 != 0; } }
             _ => {}
         }
         at += length;

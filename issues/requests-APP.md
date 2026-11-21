@@ -241,7 +241,7 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
 
 ## The shell's `install` command, for 352-UPD-0048 (KRN, 2026-11-21)
 
-- **What KRN gives** ([352-KRN-0269](352-KRN-0269-the-installer-service.md), ABI 37):
+- **What KRN gives** ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), ABI 37):
   - on a live boot alone, the shell gets `vfs_server`'s client badged `mind::fs::BADGE_INSTALL` in `SLOT_INSTALL` 46. `SLOT_INSTALL` is not in `LAUNCH_SLOTS`, and no program gets it;
   - `idl/install.wit` 1.0 holds two calls. `disks` lists each disk with its bus, its model (empty until `block.wit` gives one: requests-DRV.md), its size in MiB, its MBR signature or `EMPTY`, the partitions its MBR lists, the words to type back (such as `VIRTIO 4096 EMPTY` or `AHCI 476940 1A2B`), and a refusal. `install(number, typed, erase)` writes the disk and names the step that failed, if one did.
 - **Asked of APP:** a shell command `install`, there only where `SLOT_INSTALL` holds an endpoint. Without arguments it lists the disks with their refusals. `install N` then:
@@ -252,3 +252,10 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
 
   The call takes as long as the copy takes, a minute or more for 90 MB on a slow disk. `vfs_server` answers nothing else meanwhile, so the shell says that it is writing.
 - **The check:** the `iso` suite in `tests/qemu_smoke.py` is KRN's. Once the command exists, KRN adds the run there: from the ISO onto the blank disk, then a boot from that disk alone. A line from APP in `KRN/` when the command is on its branch is enough.
+
+## `improve`'s host test refuses `revoke f` only while no device's identifier starts with `f` (KRN, 2026-11-21)
+
+- **Seen:** round 166's gate, the host tests on x32-2 at 15:22 UTC: `every_command_against_a_hub` panicked at `improve/host/tests/improve.rs:56`. The log said `improve ["revoke", "f"] should be refused with "devices start with": revoked ff340cd7033df04b`.
+- **Why:** the test lists two devices, the laptop and the phone, whose identifiers are random. It then expects `revoke f` to match none of them. When one identifier starts with `f`, the prefix names exactly one device, and `revoke` revokes it, as `improve/host/src/lib.rs` is meant to. With two identifiers of 16 random hex digits, that happens in about 1 run of 8: 1 − (15/16)² ≈ 12 %. The line after it then fails too, because it revokes the phone a second time.
+- **The code is right; the test is not.** No change of 100003-APP-0150's behaviour is asked for.
+- **Asked of APP:** the test picks, for its refusal, a hex digit that neither listed identifier starts with (or a prefix of 17 characters, which no identifier has), so it holds for every pair of identifiers.
