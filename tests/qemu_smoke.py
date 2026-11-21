@@ -12241,14 +12241,14 @@ def parser_restart_check(vm, stall, body):
 
 def stalled_stream_check(vm, pause, body):
     """801-NET-0088: a stream that stops while its client keeps reading is named once in netstack's log after 5 s with
-    nothing, with the socket's peer, state and queue (a 64 KiB window, empty: nothing arrived), and again when its
+    nothing, with the socket's peer, state and queue (a 128 KiB window since 801-NET-0092, empty: nothing arrived), and again when its
     bytes come on the same connection; the file is whole."""
     url = f"http://10.0.2.2:{pause.server_address[1]}"
     started = time.monotonic()
     require(vm.command(f"run download ram:p.bin {url}/p.bin &"), "NAME=download BACKGROUND")
     assert pause.sent.wait(30), pause.ranges
     stalled = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:(\d+): NOTHING RECEIVED FOR (\d+) MS WHILE ITS CLIENT READS "
-                         r"\(ESTABLISHED, QUEUE 0 OF 65536, 0 BYTES UNSENT\)")
+                         r"\(ESTABLISHED, QUEUE 0 OF 131072, 0 BYTES UNSENT\)")
     # Only this server's connection: an earlier check's held stream may have been named too.
     ours = lambda log: [m for m in stalled.finditer(log) if int(m[2]) == pause.server_address[1]]
     log = ""  # `logs` gives the lines since its last call: they are kept here
