@@ -3,7 +3,8 @@
 // improve (100003-APP-0151; docs/hub/README.md, 2 and 9): MIND Hub's client on MIND Core, a console program with the
 // design's commands. Its authority is what the design gives it: a flow grant to the hub (a host it does not name is
 // asked of the user, socket.wit 2.8), TLS to the hub's pinned key with no device certificate, its own Ed25519 key as
-// its own secret in keystore (SLOT_SECRETS), its own directory for the hub's address and pins (SLOT_OWN). It holds a
+// its own secret in keystore (SLOT_SECRETS), its own directory for the hub's address and pins (SLOT_OWN), and the
+// user's files its launcher lends, read for an attachment and written by an export (REQUEST_FILES). It holds a
 // long-term key and the network, so the hub's answers are parsed by `parse` (MC-11.11), and their tree is checked with
 // improve/proto's forms. Each call is signed over a challenge the hub gave in the body of `GET challenge`.
 extern crate alloc;
@@ -14,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::json::{self, Flat, FlatKind, Value};
 use improve_proto::{sign, wire, work};
 use mind::abi::{BootInfo, SLOT_NETWORK, SLOT_PARSE, SLOT_SECRETS, SLOT_TLS};
@@ -24,7 +25,7 @@ use mind::idl::{keystore, parse, socket, tls};
 use mind::ipc::Endpoint;
 use words::Config;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS | REQUEST_OWN);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS | REQUEST_OWN | REQUEST_FILES);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -42,10 +43,12 @@ const USAGE: &str = "usage: improve COMMAND
   setup NAME ADDRESS|dns PORT PIN [PIN]   the hub, known by its TLS key's SPKI SHA-256; this device's key
   register \"DISPLAY NAME\" [--name DEVICE] | register --pair CODE [--name DEVICE]
   status | answer \"TEXT\"
-  new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--yes]
-  list | show N | reply N \"TEXT\" [--answer Q] | check N works|partly|does-not-work RELEASE \"TEXT\"
+  new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--attach KIND:FILE]... [--yes]
+  list | show N | watch [--once]
+  reply N \"TEXT\" [--answer Q [--attach KIND:FILE]...] | check N works|partly|does-not-work RELEASE \"TEXT\" [--attach KIND:FILE]...
   version RELEASE                         the release this machine runs, told to the hub
-  devices | pair | revoke DEVICE | delete N";
+  devices | pair | revoke DEVICE | delete N | export FILE
+  (an attachment's KIND: log, hardware, screenshot or text)";
 
 fn now() -> usize { mind::time::uptime_ms() }
 
@@ -232,6 +235,19 @@ impl Hub {
         Ok((c, v.get("work_bits").and_then(Value::as_int).unwrap_or(0).clamp(0, work::BITS_MAX as i64) as u8))
     }
 
+    /// A call signed over a fresh challenge, its answer's bytes as they came; a challenge gone stale is taken again once.
+    #[inline(never)]
+    fn call_raw(&mut self, method: Method, path: &str, body: &[u8], kind: &str) -> Result<(u16, Vec<u8>), String> {
+        for attempt in 0..2 {
+            let (challenge, _) = self.challenge()?;
+            let header = sign::header(&self.key, method.name(), path, body, &challenge).map_err(|e| format!("{e:?}"))?;
+            let (status, bytes) = self.exchange(method, path, &[("Content-Type", kind), (sign::HEADER, &header)], body)?;
+            if status == 401 && attempt == 0 && self.tree(&bytes).ok().as_ref().and_then(error) == Some("challenge") { continue; }
+            return Ok((status, bytes));
+        }
+        unreachable!()
+    }
+
     /// A call signed over a fresh challenge; a challenge gone stale is taken again once.
     #[inline(never)]
     fn call(&mut self, method: Method, path: &str, body: &[u8]) -> Result<Answer, String> {
@@ -301,6 +317,42 @@ fn hex(bytes: &[u8]) -> String { improve_proto::hex(bytes) }
 
 fn number(text: &str) -> Result<u64, String> { text.parse().map_err(|_| format!("{text:?} is not a request's number")) }
 
+/// The largest file an attachment is read from: the largest band's bound (the hub narrows it to the user's).
+const ATTACHMENT_MAX: usize = 8 << 20;
+
+/// The attachments `--attach KIND:FILE` names, read from the files the launcher lends, with their entries.
+fn attachments(args: &[String]) -> Result<Vec<(Attachment, Vec<u8>, String)>, String> {
+    let mut out = Vec::new();
+    for spec in args.windows(2).filter(|w| w[0] == "--attach").map(|w| w[1].as_str()) {
+        let (kind, path) = spec.split_once(':').ok_or("--attach takes KIND:FILE")?;
+        let kind = AttachmentKind::from_name(kind).ok_or("an attachment's kind is log, hardware, screenshot or text")?;
+        let file = mind::fs::File::open(path).map_err(|e| format!("{path}: {e:?}"))?;
+        if file.size() > ATTACHMENT_MAX { return Err(format!("{path}: over {ATTACHMENT_MAX} bytes")); }
+        let mut bytes = alloc::vec![0u8; file.size()];
+        let n = file.read_at(0, &mut bytes).map_err(|e| format!("{path}: {e:?}"))?;
+        bytes.truncate(n);
+        let name: String = path.rsplit('/').next().unwrap_or(path).trim_start_matches('.').chars().take(64).collect();
+        let name = if name.is_empty() { String::from("attachment") } else { name };
+        out.push((Attachment { kind, name, size: bytes.len() as u64, sha256: mind::sha256::digest(&bytes) }, bytes, String::from(path)));
+    }
+    Ok(out)
+}
+
+/// What leaves the machine, each attachment with its kind, name, size and SHA-256, then the person's yes.
+fn shown(files: &[(Attachment, Vec<u8>, String)], yes: bool) -> bool {
+    for (a, _, path) in files { mind::println!("  attachment: {} {} ({} bytes, sha256 {}) from {path}", a.kind.name(), a.name, a.size, hex(&a.sha256)); }
+    confirm(yes)
+}
+
+/// The attachments' bytes after the request or the message that names them.
+fn put_files(hub: &mut Hub, base: &str, files: &[(Attachment, Vec<u8>, String)]) -> Result<(), String> {
+    for (i, (a, bytes, _)) in files.iter().enumerate() {
+        let (status, body) = hub.call_raw(Method::Put, &format!("{base}/attachments/{i}"), bytes, "application/octet-stream")?;
+        if status != 200 { return Err(format!("{}: {}", a.name, refusal(&Answer { status, body: hub.tree(&body).unwrap_or(Value::Null) }))); }
+    }
+    Ok(())
+}
+
 /// The person's yes before anything leaves the machine (design 9): `--yes` for a script.
 fn confirm(yes: bool) -> bool {
     if yes { return true; }
@@ -366,12 +418,16 @@ fn run(args: &[String]) -> Result<(), String> {
                 visibility: if has("--private") || security { Visibility::Private } else { Visibility::Public },
                 security, named: has("--named"), attachments: Vec::new(),
             };
+            let files = attachments(args)?;
+            let form = Request { attachments: files.iter().map(|(a, _, _)| a.clone()).collect(), ..form };
             mind::println!("a {} request, {}{}{}: {}\n{}", kind.name(), form.visibility.name(), if security { ", about security" } else { "" },
                            if form.named { ", your name on the board" } else { "" }, form.title, form.text);
-            if !confirm(has("--yes")) { mind::println!("not sent"); return Ok(()); }
+            if !shown(&files, has("--yes")) { mind::println!("not sent"); return Ok(()); }
             let mut hub = Hub::open()?;
             let v = hub.expect(Method::Post, "/hub/v1/requests", wire::encode_request(&form).as_bytes(), &[200, 201])?;
-            mind::println!("request {}: {}", n(&v, "id"), s(&v, "state"));
+            let id = n(&v, "id");
+            put_files(&mut hub, &format!("/hub/v1/requests/{id}"), &files)?;
+            mind::println!("request {id}: {}{}", s(&v, "state"), if files.is_empty() { String::new() } else { format!(", {} attachments sent", files.len()) });
             Ok(())
         }
         Some("list") => {
@@ -410,13 +466,25 @@ fn run(args: &[String]) -> Result<(), String> {
                 Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's number")?), verdict: None, release: None, attachments: Vec::new() },
                 None => Message { kind: MessageKind::Comment, text, answers: None, verdict: None, release: None, attachments: Vec::new() },
             };
-            post(id, message)
+            post(id, message, args)
         }
         Some("check") => {
             let id = number(word(1, "the request's number")?)?;
             let verdict = Verdict::from_name(word(2, "the verdict")?).ok_or("a verdict is works, partly or does-not-work")?;
             post(id, Message { kind: MessageKind::Verdict, text: String::from(word(4, "what you saw")?), answers: None, verdict: Some(verdict),
-                               release: Some(String::from(word(3, "the release you checked on")?)), attachments: Vec::new() })
+                               release: Some(String::from(word(3, "the release you checked on")?)), attachments: Vec::new() }, args)
+        }
+        Some("watch") => watch(has("--once")),
+        Some("export") => {
+            // The hub's answer as it came, into the user's file: nothing of it is parsed here.
+            let path = word(1, "the file")?;
+            let mut hub = Hub::open()?;
+            let (status, bytes) = hub.call_raw(Method::Get, "/hub/v1/me/export", b"", "application/json")?;
+            if status != 200 { return Err(refusal(&Answer { status, body: hub.tree(&bytes).unwrap_or(Value::Null) })); }
+            let mut file = mind::fs::File::create(path).map_err(|e| format!("{path}: {e:?}"))?;
+            file.write_at(0, &bytes).map_err(|e| format!("{path}: {e:?}"))?;
+            mind::println!("exported to {path} ({} bytes): all the hub keeps of you", bytes.len());
+            Ok(())
         }
         Some("version") => {
             let mut hub = Hub::open()?;
@@ -460,12 +528,44 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn post(id: u64, message: Message) -> Result<(), String> {
+fn post(id: u64, message: Message, args: &[String]) -> Result<(), String> {
+    let files = attachments(args)?;
+    let message = Message { attachments: files.iter().map(|(a, _, _)| a.clone()).collect(), ..message };
     message.check().map_err(|e| format!("the message is out of its bounds: {e:?}"))?;
+    if !files.is_empty() {
+        mind::println!("a {} on request {id}: {}", message.kind.name(), message.text);
+        if !shown(&files, args.iter().any(|a| a == "--yes")) { mind::println!("not sent"); return Ok(()); }
+    }
     let mut hub = Hub::open()?;
     let v = hub.expect(Method::Post, &format!("/hub/v1/requests/{id}/messages"), wire::encode_message(&message).as_bytes(), &[201])?;
-    mind::println!("message #{} on request {id}; the request is {}", n(&v, "n"), s(&v, "state"));
+    let m = n(&v, "n");
+    put_files(&mut hub, &format!("/hub/v1/requests/{id}/messages/{m}"), &files)?;
+    mind::println!("message #{m} on request {id}; the request is {}", s(&v, "state"));
     Ok(())
+}
+
+/// News since the last look, kept in its own directory as `seen`: a request that changed, a question that waits.
+/// `--once` looks once; otherwise it looks at the hub's interval until Esc.
+fn watch(once: bool) -> Result<(), String> {
+    let mut since: i64 = { let mut b = [0u8; 24]; mind::fs::own::read("seen", &mut b).ok().and_then(|n| core::str::from_utf8(&b[..n]).ok()?.trim().parse().ok()).unwrap_or(0) };
+    let mut hub = Hub::open()?;
+    loop {
+        let me = hub.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?;
+        let v = hub.expect(Method::Get, &format!("/hub/v1/requests?since={}", since + 1), b"", &[200])?;
+        let changed = list(&v, "requests");
+        for r in changed {
+            let question = if flag(r, "open_question") { ", a question waits for you" } else { "" };
+            mind::println!("request {}: {}{question} (improve show {})", n(r, "id"), s(r, "state"), n(r, "id"));
+            since = since.max(n(r, "since_ms"));
+        }
+        if changed.is_empty() && once { mind::println!("no news"); }
+        let _ = mind::fs::own::write("seen", format!("{since}").as_bytes());
+        if once { return Ok(()); }
+        // The hub's interval, with Esc ending the wait.
+        let poll_ms = (n(&me, "poll_s").clamp(10, 3600) as usize) * 1000;
+        let until = now() + poll_ms;
+        while now() < until { mind::input::wait_or_exit(250); }
+    }
 }
 
 /// The hub's address and pins into the program's own directory, and its key, made once, into keystore.
@@ -494,7 +594,9 @@ fn setup(args: &[String]) -> Result<(), String> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("improve — MIND Hub's client: requests to the agents who build MIND Core, their questions and your check.\nUsage: improve setup | register | status | answer | new | list | show N | reply N | check N | version | devices | pair | revoke | delete N\n(improve with no command names each one's words)");
+    mind::about!("improve — MIND Hub's client: requests to the agents who build MIND Core, their questions and your check.\nUsage: improve setup | register | status | answer | new | list | show N | watch | reply N | check N | version | devices | pair | revoke | delete N | export FILE\n(improve with no command names each one's words)");
+    // The user's files through the client the launcher lent (REQUEST_FILES), which may write where improve's own may not.
+    if mind::dev::cap_info(mind::abi::SLOT_FILE).0 == mind::abi::CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(mind::abi::SLOT_FILE)); }
     let args = match words::split(mind::process::args_str()) {
         Ok(a) => a,
         Err(why) => { mind::println!("improve: {why}"); mind::process::exit_with(1) }
