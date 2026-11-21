@@ -10448,8 +10448,8 @@ def tone_power(samples, rate, start, hz, seconds=0.04):
     return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
 
 
-# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra", C, G and C as the gateway's tones, then
-# E falling to E flat as beep's own samples, then the timpani's C and G (beep/src/notes.rs).
+# beep's default sound (551-APP-0149): the opening of "Also sprach Zarathustra" as beep's own samples: C, G and C, E
+# falling to E flat, then the timpani's C and G (beep/src/notes.rs).
 BEEP_OPENING = ((262, 0.4), (392, 0.4), (523, 0.6), (659, 0.15), (622, 0.6))
 
 
@@ -10672,7 +10672,7 @@ def audio_suite(vm, wav):
     assert power(middle, 880) > 5 * power(middle, 440)
     peak = lambda part: max(abs(left[i]) for i in part)
     below = 20 * math.log10(peak(notes[int(len(notes) * 0.7):]) / max(peak(tone), 1))
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra (the gateway's tones, then client PCM) in captured audio; "
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, beep's opening of Also sprach Zarathustra as client PCM in captured audio; "
           f"beep's notes (440 Hz, a pause, 880 Hz) without a screen, and on the left or the right alone; the levels at 0 dB, the master's {levels[1]} settings, a plain client refused setting them; "
           f"wm's test tone at {lower} %, its peak {below:.1f} dB below beep's 880 Hz at 100 %", flush=True)
 
