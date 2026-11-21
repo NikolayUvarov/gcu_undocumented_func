@@ -1,6 +1,6 @@
 # 352-KRN-0269 — The installer's service: `install.wit` in `vfs_server`, and `SLOT_INSTALL` for the shell on a live boot
 
-**Type:** `vfs_server`, `init`, IDL (`install.wit` 1.0), ABI 37 · **Owner:** `KRN` (the kernel session), for `UPD`'s 352-UPD-0048 · **Priority:** P2 · **Status:** in progress (2026-11-21) · **Blocked by:** [352-KRN-0268](352-KRN-0268-the-live-volume-in-memory.md) (the live volume in memory, ABI 36) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-12.3, MC-12.4
+**Type:** `vfs_server`, `init`, IDL (`install.wit` 1.0), ABI 37 · **Owner:** `KRN` (the kernel session), for `UPD`'s 352-UPD-0048 · **Priority:** P2 · **Status:** in progress (made, 2026-11-21) · **Blocked by:** [352-KRN-0268](352-KRN-0268-the-live-volume-in-memory.md) (the live volume in memory, ABI 36) · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-3.12, MC-9.1, MC-9.3, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -51,6 +51,21 @@ A slot of the shell's is part of the ABI (`common/abi.rs`), so this is a `KRN` t
 **Not covered:**
 - an install run through the shell's command, in QEMU (with `APP`'s command, 352-UPD-0048's criteria);
 - a real machine (MC-12.1).
+
+## Progress (2026-11-21)
+
+**Made** on `claude/352-KRN-0269-installer-service`, on 352-KRN-0268's branch, as the plan says. ABI 37 also raises `CAP_SLOTS` to 111, so 64 dynamic slots stay beside the fixed ones.
+
+**Runs in this session's container** (QEMU 8.2.2, OVMF and AAVMF):
+- `tests/install_host.rs`: 6 of 6;
+- every plain `tests/*_host.rs` and `tests/runtime.rs` (47), and the IDL fuzzer with `install`;
+- the `iso` suite, x86 (4 CPUs) and aarch64, PASS. From a CD-ROM, `vfs_server` offers the blank 512 MiB disk (`ATA 512 EMPTY` on x86, `VIRTIO 512 EMPTY` on aarch64); from a USB disk, it refuses the stick as the live medium. `init` says the block store gets no disk, and that the shell gets the installer's client;
+- x86's `services`, `vfs`, `store`, `shell` and `boot` suites, PASS. No other boot changes: a blank VirtIO disk is still the store's.
+- aarch64's `aarch64_smoke.py` (boot and fault containment), PASS.
+
+**Left:**
+- the gate's groups;
+- the install itself in QEMU, with `APP`'s command (352-UPD-0048).
 
 ## Related
 

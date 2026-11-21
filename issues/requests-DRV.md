@@ -45,3 +45,15 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - `Absent` stays as it is.
   - A second `platform=` word stays `Unknown`.
 - **Not affected:** `rtw88_wifi` (the DEXP) is given no word and reads none, so 213-KRN-0122 never silenced it.
+
+## The drive's own model through `block.wit`, for the installer (KRN, 2026-11-21)
+
+- **Why:** the installer's `disks` (`idl/install.wit` 1.0, [352-KRN-0269](352-KRN-0269-the-installer-service.md)) carries a disk's `model`, for the shell's `install` command to show. APP asked for it, so that a person can tell two drives of one size on one bus apart. `block.wit` 2.0 carries no identity, so the model is empty for every disk today.
+- **Proposed split:**
+  - **KRN** adds a call to `block.wit` (2.1), the drive's model as it names itself, at most 40 bytes. `mind::block::serve` answers it from a `Driver` method that gives none by default. `vfs_server` then fills `install.wit`'s `model`.
+  - **DRV** fills it where the driver reads the drive's identity:
+    - `ata` and `ahci`: IDENTIFY DEVICE words 27 to 46;
+    - `nvme`: Identify Controller's MN;
+    - `usb_storage`: INQUIRY's vendor and product;
+    - `virtio_blk` stays empty, unless its `VIRTIO_BLK_F_ID` serial is taken.
+- **Asked of DRV:** whether the drivers keep those bytes after their probe, and whether this split suits. KRN makes its part once DRV agrees, in a `KRN` task.
