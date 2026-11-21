@@ -34,6 +34,39 @@ Every MIND Core disk is written by another machine: a Linux or Windows host writ
    - on a board or phone, the eMMC is booted by its U-Boot or Tow-Boot, which [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md)'s entry names.
 6. **The shell's `install` command** shows the list and asks for the confirmation. The live system of 352-UPD-0047 starts it.
 
+## Design (2026-11-21), from what 352-UPD-0047 and 352-KRN-0268 now give
+
+A plan to be checked as it is made, not a guarantee (MC-12.3).
+
+**What the live system has:**
+- its boot volume in slots, read-only in memory, served by `ramdisk#2`;
+- a live updater that fills no slot;
+- `vfs_server` holding the write clients of every other disk.
+
+**Where the writing happens.** A change to a disk goes through one service (212 step 2), and `vfs_server` already holds the disks' write clients.
+- So `vfs_server` serves a new interface, `idl/install.wit` 1.0, to a client badged `BADGE_INSTALL`.
+- `init` mints that client on a live boot alone, for the shell's `install` command.
+- The interface's calls:
+  - `disks`: each disk `vfs_server` holds, with its bus, its size, and its MBR signature or `EMPTY`. The live medium is marked refused, since it holds the volume the loader verified;
+  - `install(disk, typed)`: the steps below, answered with the step that failed, if one did.
+
+**What `install` writes:**
+1. **An MBR** (a GPT past 2 TiB, 212 step 3).
+2. **Partition 1, the ESP:** the live volume sector for sector, read from `ramdisk#2`, its hidden sectors set to the new start.
+   - These are the same bytes the loader verified, so slot A is the release's own files, signed.
+   - `make_iso.py` sizes that FAT volume for two slots, so the installed disk has room for the updater's slot B.
+3. **`MIND LOG`,** formatted by `vfs_server`'s own FAT writer (`fat::format`) with its label.
+4. **The store's partition** with its superblock, as `make_usb_image.py` writes it.
+5. **A flush,** then the MBR read back.
+
+The ESP's entry is written last, so a disk cut short has no ESP and the firmware does not boot it (plan step 4).
+
+**What is typed back,** as the drivers say nothing of a disk's model or serial number today (`block.wit` 2.0 has no identity):
+- the bus and the size in MiB;
+- the first four hex digits of the MBR signature, or `EMPTY`.
+
+A model and a serial number are asked of `DRV` for `block.wit` when the first real machine shows they are needed.
+
 ## Acceptance criteria
 
 - [ ] **QEMU, x86-64 and aarch64:**
