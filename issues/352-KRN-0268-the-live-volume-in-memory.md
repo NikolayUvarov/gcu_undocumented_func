@@ -44,9 +44,10 @@ The ABI changes only in `KRN` tasks (AGENTS.md section 1), so this is the kernel
 
 **Runs in this session's container** (QEMU 8.2.2; OVMF and AAVMF; `main` 03c88c5144 built for both):
 - the `iso` suite, x86 (4 CPUs) and aarch64, each PASS: from a CD-ROM and from a USB disk, `BOOT: THE VOLUME READ INTO MEMORY: 65536 KB`, then `[RAMDISK] THE BOOT VOLUME IN MEMORY: 65536 KB, READ-ONLY` and `[VFS] MOUNTED FAT16 FROM RAM AT LBA 0 (READ-ONLY DEVICE)`;
-- x86's `services`, `shell`, `vfs` and `tools` suites, each PASS, `ramdisk#2` not started there.
+- x86's `services`, `shell`, `vfs` and `tools` suites, each PASS, `ramdisk#2` not started there;
+- x86's `boot` and `memory` suites (4 CPUs), and aarch64's `normal` and `devicetree` suites, each PASS.
 
-The gate's groups on both architectures are left.
+The gate's groups on both architectures are left: the branch is in the landing queue.
 
 ## Related
 

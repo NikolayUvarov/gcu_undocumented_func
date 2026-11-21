@@ -4362,7 +4362,7 @@ def iso_suite(args):
         volume.unlink()
         blank = temp / "blank.img"
         with blank.open("wb") as f:
-            f.truncate(16 << 20)
+            f.truncate(512 << 20)  # sparse: room for the installer's layout (352-KRN-0269)
         cd = iso.relative_to(ROOT).as_posix().replace(",", ",,")
         # x86: an IDE CD-ROM on the PC's own controller; aarch64's virt has none, so a SCSI CD-ROM on virtio-scsi.
         drive = ["-drive", f"file={cd},format=raw,media=cdrom,readonly=on,if=none,id=cd"]
@@ -4380,7 +4380,8 @@ def iso_suite(args):
                 assert re.search(r"BOOT: VOLUME EL TORITO PARTITION \d+ AT LBA \d+\n", log), (what, log[-3000:])
                 require(log, f"BOOT: THE VOLUME READ INTO MEMORY: {kb} KB")
                 require(vm.service_logs("ramdisk#2", "[RAMDISK] THE BOOT VOLUME IN MEMORY"), f"[RAMDISK] THE BOOT VOLUME IN MEMORY: {kb} KB, READ-ONLY")
-                vfs = vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM RAM AT LBA 0")
+                # Read once (a read drains the service's log): its last line at the start is the update zone's.
+                vfs = vm.service_logs("vfs_server", "[VFS] NO UPDATE ZONE: A LIVE BOOT")
                 require(vfs, "[VFS] MOUNTED FAT16 FROM RAM AT LBA 0 (READ-ONLY DEVICE)")
                 require(vfs, "READ INTO MEMORY, AND THE MANIFEST THE BOOTLOADER VERIFIED")
                 require(vm.command("run files &"), "PID=1 NAME=files BACKGROUND")
@@ -4395,13 +4396,25 @@ def iso_suite(args):
                 vm.command("kill 1")
                 require(vm.command("write data/probe.txt live"), "READ-ONLY DEVICE")
                 require(vm.service_logs("updater", "NO SLOT TO FILL"), "[UPDATER] A LIVE SYSTEM: ITS VOLUME IS READ-ONLY IN MEMORY, NO SLOT TO FILL")
+                # 352-KRN-0269: the store takes no disk, vfs_server holds the blank one for the installer and the live medium
+                # as refused, and the shell gets the installer's client.
+                installer = vfs
+                require(installer, "[VFS] INSTALLER: A LIVE BOOT, 1 DISKS HELD FOR THE SHELL'S INSTALL")
+                if what == "a CD-ROM":
+                    require(installer, f"[VFS] INSTALLER: DISK 1: {'ATA' if args.arch == 'x86_64' else 'VIRTIO'} 512 EMPTY, None")
+                else:
+                    assert re.search(r"\[VFS\] INSTALLER: DISK 1: USB \d+ [0-9A-F]{4}, Live", installer), installer[-2000:]
+                started = vm.service_logs("init", "THE SHELL GETS THE INSTALLER'S CLIENT")
+                require(started, "[INIT] A LIVE BOOT: NO DISK OR PARTITION FOR THE BLOCK STORE, WHICH RUNS ON RAMDISK#1")
+                require(started, "[INIT] A LIVE BOOT: THE SHELL GETS THE INSTALLER'S CLIENT")
             finally:
                 vm.close()
         with iso.open("rb") as f:
             assert hashlib.sha256(f.read()).hexdigest() == digest, "the ISO changed"
     print(f"PASS: the hybrid ISO ({digest[:16]}, {args.arch}) boots as a CD-ROM and as a USB disk through El Torito; its loader reads "
           f"and checks the kernel and the services, then the whole volume ({kb} KB) into memory, which ramdisk#2 serves "
-          "read-only and vfs_server mounts as the boot volume; programs run from it, a write is refused, the ISO unchanged", flush=True)
+          "read-only and vfs_server mounts as the boot volume; programs run from it, a write is refused, the store takes no disk, "
+          "the installer holds the blank disk and refuses the live medium; the ISO unchanged", flush=True)
 
 
 def ahci_suite(vm):
