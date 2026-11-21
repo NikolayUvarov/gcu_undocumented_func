@@ -47,6 +47,8 @@ const SIGNALS_MS:u64=60_000;
 // the first HOLES_PROBED of a run are logged with the registers, and the minute's line has them on its first minute
 // and every PROBE_MINUTES after.
 const HOLE_MS:u64=1000;
+// While no beacon of the BSS reaches the host, a hole by frames: idle gaps of a second or so are no hole.
+const FRAMES_HOLE_MS:u64=3000;
 const HOLES_PROBED:u32=12;
 const PROBE_MINUTES:u32=10;
 
@@ -292,7 +294,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let(c,channel)=(self.data().counts(),self.data().channel());
         let bssid=self.data().filter().map_or([0;6],|f|f.bssid());
         let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
-            ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
+            ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,
+            refused:(self.minutes==1&&c.refused.count!=0).then_some(c.refused),sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe};
         if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
     }
     // The counts now, for a hole's lines.
@@ -319,8 +322,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if self.event.is_some(){return}
         let d=|a:u64,b:u64|a.saturating_sub(b);
         let(by_beacons,last)=if self.heard_bss{(true,self.beacons)}else{(false,self.frames_seen)};
+        let limit=if by_beacons{HOLE_MS}else{FRAMES_HOLE_MS};
         match self.hole{
-            None if now.saturating_sub(last.1)>=HOLE_MS=>{
+            None if now.saturating_sub(last.1)>=limit=>{
                 let n=self.holes.0.saturating_add(1);self.holes.0=n;let(was,mark,since)=(last.2,self.marks(),last.1);
                 let probe=(n<=HOLES_PROBED).then(||self.data().probe());let bssid=self.data().current_filter().bssid();
                 self.event=Some(Event::Hole{n,channel:self.data().channel(),bssid,by_beacons,ms:now.saturating_sub(since),wifi:d(mark.wifi,was.wifi),

@@ -71,17 +71,19 @@ impl core::fmt::Debug for Snapshot{
 /// window's indirect read, as the coexistence reconcile makes it:
 /// - MAC: SYS_FUNC_EN in 0x0, the coexistence control byte in 0x73, the scoreboard; HALT_H2C/C2H and their controls,
 ///   WCPU_FW_CTRL; the RXQ and RPQ rings' indexes (host in bits 0-11, hardware in 16-27: equal, nothing was fed);
-///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_ISR; MACID pause and sleep, CTN_TXEN and CTN_DRV_TXEN (transmit paused);
-///   CMAC_ERR_ISR, RX_ERR_FLAG, RX_FLTR_OPT; the pollution 0xC67C; Linux's coexistence monitor set for the 8852B
+///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_ISR; MACID pause and sleep, CTN_TXEN (transmit paused); port 0's PORT_CFG
+///   (net type, BSSID fit, TSF update); CMAC_ERR_ISR, RX_ERR_FLAG, RX_FLTR_OPT, the CTRL/MGNT/DATA type filters (two
+///   bits a subtype: 1 to the host, 2 to the WLAN CPU) and BCN_PSR_RPT; the pollution 0xC67C; Linux's coexistence
+///   monitor set for the 8852B
 ///   (rtw89_btc_8852b_mon_reg: 0xCEF4, 0xD200, 0xD220, 0xDA10-0xDA4C); DMA_STOP and INIT_CONFIG.
 /// - BB: the same monitor set's 0x980, 0x4738, 0x4688, 0x4694; DIG's PD lower bound (0x4860, 0x4B64) and initial
 ///   LNA/TIA/RXB gains (0x472C, 0x4A80, 0x473C, 0x46A8); the EDCCA level (0x4884) and its reports (0x1738, 0x173C);
 ///   TX collision (0xC70); CCK (0x700) and the CCK path (0x2344), as the channel stage sets them.
 /// - RF of both paths: mode (0x00), channel (0x18), VCO (0xB2) and the synthesizer's lock (0xC5 bit 15).
 /// - The LTE window's SW_CFG_1: the grants the coexistence writes. All ones: not read.
-pub const PROBE_MAC:[usize;34]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8524,
-    0x9eb0,0xc2c0,0xc348,0xc398,0xc164,0xc800,0xce20,0xc67c,0xcef4,0xd200,0xd220,0xda10,0xda20,0xda24,0xda28,0xda2c,0xda30,
-    0xda34,0xda4c,fwcmd::DMA_STOP];
+pub const PROBE_MAC:[usize;38]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8524,
+    0x9eb0,0xc2c0,0xc348,0xc400,0xc164,0xc800,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,0xda20,
+    0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
 pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
     0xc70,0x700,0x2344];
 pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
@@ -133,7 +135,10 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused}
+/// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
@@ -147,6 +152,8 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
             let m=frame.mpdu();let beacon=m.len()>=24&&m[0]==0x80;
             if !filter.accepts(m){
                 self.counts.filtered=self.counts.filtered.saturating_add(1);
+                let r=&mut self.counts.refused;
+                if r.count<r.frames.len()&&m.len()>=24{r.frames[r.count]=(m.len() as u16,m[..24].try_into().unwrap());r.count+=1;}
                 if beacon{self.counts.other_beacons=self.counts.other_beacons.saturating_add(1);}return Ok(true)
             }
             if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}

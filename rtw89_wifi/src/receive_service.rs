@@ -64,11 +64,12 @@ pub enum Event {
     Signals { channel: u8, kept: u64, measured: u32, late: u32, unmatched: u32 },
     /// In data mode, every minute (213-DRV-0090), since the admission: the Wi-Fi frames received, those kept for the
     /// station, filtered out, invalid and dropped with the inbox full; the PPDU status reports; the beacons of the
-    /// station's filter's `bssid`, and the other beacons the filter refused;
+    /// station's filter's `bssid`, and the other beacons the filter refused (and on the first minute, the first frames it
+    /// refused);
     /// the sends answered, acknowledged and late; the holes and the longest. The registers on the first minute and every
     /// tenth (service.rs's PROBE_MINUTES), for a good link's.
     Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64,
-        bssid: [u8; 6], other_beacons: u64, sent: u64,
+        bssid: [u8; 6], other_beacons: u64, refused: Option<data_mode::Refused>, sent: u64,
         acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe> },
     /// The `n`-th hole (213-DRV-0090): no beacon of the joined `bssid` for `ms` (`by_beacons`), or, while none of its beacons
     /// reaches the host, no Wi-Fi frame at all; since its last one, the Wi-Fi frames, those kept, the PPDU reports and the
