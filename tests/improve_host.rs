@@ -1,9 +1,12 @@
 //! Host tests of `improve`'s words on MIND Core (improve/app/src/words.rs, 100003-APP-0151): a command line split,
-//! quoted words whole; the hub's configuration read and written back; addresses, hex and durations.
+//! quoted words whole; the hub's configuration read and written back; addresses, hex and durations. The requests that
+//! wait for the user, as improve keeps them for the shell and wm (improve/app/src/waiting.rs, 100003-APP-0153).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../improve/app/src/words.rs"]
 mod words;
+#[path = "../improve/app/src/waiting.rs"]
+mod waiting;
 
 use words::*;
 
@@ -45,4 +48,22 @@ fn addresses_hex_and_durations() {
     assert_eq!(hex32(&"0F".repeat(32)), None, "lower case alone");
     assert_eq!(hex32("0f"), None);
     assert_eq!((duration(5), duration(61), duration(7322)), ("5 s".into(), "2 min".into(), "2 h 2 min".into()));
+}
+
+#[test]
+fn the_requests_that_wait_for_the_user() {
+    assert_eq!(waiting::read(&waiting::text(&[1, 4])), Some(vec![1, 4]), "read back as written");
+    assert_eq!(waiting::read(&waiting::text(&[])), Some(vec![]));
+    assert_eq!(waiting::read("# a comment\n7 3 3\n"), Some(vec![3, 7]), "ascending, each once");
+    assert_eq!(waiting::read(""), Some(vec![]));
+    assert_eq!(waiting::read("1 two"), None);
+    assert_eq!(waiting::read("0"), None, "no request 0");
+    assert_eq!(waiting::read(&(1..100).map(|n| n.to_string()).collect::<Vec<_>>().join(" ")).unwrap().len(), waiting::MAX);
+    assert!(waiting::text(&(1..100).collect::<Vec<_>>()).len() < waiting::BYTES, "its text fits what the readers read");
+    assert_eq!(waiting::notice(&[]), None);
+    assert_eq!(waiting::notice(&[1]).unwrap(), "IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)");
+    assert_eq!(waiting::notice(&[1, 4]).unwrap(), "IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)");
+    assert!(waiting::notice(&(1..=9).collect::<Vec<_>>()).unwrap().ends_with("#8 … (improve list)"));
+    assert_eq!((waiting::mark(&[]), waiting::mark(&[2, 5]).unwrap()), (None, String::from(" HUB 2 ")));
+    assert_eq!(waiting::said(&[2]), "MIND Hub: a request waits for you (#2): improve list in the shell");
 }

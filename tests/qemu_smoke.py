@@ -10552,7 +10552,8 @@ def hub_check(args, disk):
     (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
     question answered in its thread; the release that carries it not on the machine yet, then on it, and the user's
     verdict (6.3); a wrong pin refused; a thread with a text past 512 bytes named as unread until NET's change to
-    `parse` (requests-NET.md)."""
+    `parse` (requests-NET.md). The requests that wait for the user (100003-APP-0153): the shell says them above its
+    first prompt and when improve saw them change, and wm marks them in its top bar."""
     work = Path(tempfile.mkdtemp(prefix="mind-hub-"))
     target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
     subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
@@ -10589,10 +10590,14 @@ def hub_check(args, disk):
     sensors = "fan1: 4200 RPM\nfan2: 0 RPM\n"
     (disk / "fan.log").write_text(fan_log)
     (disk / "sensors.txt").write_text(sensors)
+    # What waited when improve last looked, in an earlier boot: said above the first prompt (100003-APP-0153).
+    (disk / "data/improve").mkdir(parents=True, exist_ok=True)
+    (disk / "data/improve/waiting").write_text("# an earlier look\n7 3\n")
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
+        vm.logged("IMPROVE: 2 REQUESTS WAIT FOR YOU: #3 #7 (improve list)", 0)
         require(vm.command("improve", timeout=30), "usage: improve COMMAND")
         require(vm.command("improve status", timeout=30), "no hub yet: improve setup")
         out = vm.command(f"improve setup mind.test 10.0.2.2 {port} {pin}", timeout=60)
@@ -10610,7 +10615,11 @@ def hub_check(args, disk):
         assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
         assert call("admin", "GET", "/hub/admin/v1/requests/1/attachments/0") == f"200\n{fan_log}\n", "the attachment's bytes as the machine read them"
         call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
+        since = len(vm.log)
         require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
+        # The shell says the change above its prompt within its 5 s, as improve kept it.
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        require(vm.command("cat data/improve/waiting", timeout=30), "\n1\n")
         out = vm.command("improve show 1", timeout=60)
         require_all(out, "#1 Fan noise", "needs-info", "One fan or two?", "waits for your answer")
         question = re.search(r"#(\d+) question", out)[1]
@@ -10635,11 +10644,29 @@ def hub_check(args, disk):
         require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the hub does not know the release this machine runs")
         require(vm.command("improve version 202611201200", timeout=60), "the hub knows this machine runs 202611201200")
         require(vm.command("improve show 1", timeout=60), f"your machine does not have release {release} yet (it runs 202611201200): update apply, or wait for the update")
+        since = len(vm.log)
         require(vm.command(f"improve version {release}", timeout=60), f"the hub knows this machine runs {release}")
+        # Nothing waited after the answer; the check waits now, and the shell says it again.
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        # wm's mark at its top bar's right end, with no battery here (100003-APP-0153).
+        since = len(vm.log)
+        vm.send("wm\n")
+        vm.expect("[WM] READY", timeout=180)
+        vm.logged("[WM] HUB: REQUESTS THAT WAIT FOR THE USER: 1", since)
+        time.sleep(1)
+        top = screen_text(vm)[0]
+        vm.serial(enter=False)
+        assert top.rstrip().endswith("HUB 1"), top
+        since = len(vm.log)
+        vm.hmp("sendkey alt-q")
+        vm.serial(enter=False)
+        vm.logged("SHELL RESUMED.", since)
         require(vm.command("improve watch --once", timeout=60), "request 1: awaiting-check, it waits for your check")
         require(vm.command("improve list", timeout=60), "Fan noise  [waits for your check]")
         require(vm.command("improve show 1", timeout=60), f"release {release} is on this machine: check it, improve check 1 works|partly|does-not-work")
         require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the request is verified")
+        out = vm.command("cat data/improve/waiting", timeout=30)
+        assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
         # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
         # The admin's comment, which a verified request still takes.
@@ -10657,8 +10684,9 @@ def hub_check(args, disk):
         shutil.rmtree(work, ignore_errors=True)
     print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
           "approved by the admin, a request filed with a log attached, the agents' question answered with a file, news watched, the export "
-          "written into ram:, the release that carries it not on the machine, then on it, and the user's verdict on it; a wrong pin refused; a text past 512 bytes named as unread "
-          "until NET's change to parse (100003-APP-0151)", flush=True)
+          "written into ram:, the release that carries it not on the machine, then on it, and the user's verdict on it; what waits for "
+          "the user said by the shell above its first prompt and when it changed, and marked by wm (100003-APP-0153); a wrong pin refused; a text past 512 bytes named as unread "
+          "until NET's change to parse (100003-APP-0151, 0153)", flush=True)
 
 
 def tone_power(samples, rate, start, hz, seconds=0.04):
@@ -16902,6 +16930,18 @@ def wm_suite(vm):
         while extra in state()[2]:
             wait()
         assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        # The Run window's history (000-APP-0154): kept in data/wm-run.txt, and ↑ brings "clock" back to run again.
+        until("[WM] RUN HISTORY: 1 LINES KEPT IN data/wm-run.txt")
+        keys("esc")
+        keys("alt-r", "up", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        again = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={again}")
+        keys("alt-w", text=f"CLOSE {again}")
+        until(f"GONE {again}")
+        while again in state()[2]:
+            wait()
         screen = screen_text(vm)
         vm.serial(enter=False)
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
@@ -16910,7 +16950,8 @@ def wm_suite(vm):
         assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
         print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
               "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
-              "window to the front, Alt+W closes one and the list follows", flush=True)
+              "window to the front, Alt+W closes one and the list follows; the Run window's history brings a line back "
+              "(000-APP-0154)", flush=True)
 
     # The desktop background (000-APP-0047, 000-APP-0050): data/wm.conf says none (the ░ cells as before) or an image
     # (BMP, PNG or JPEG); without it the default, a slowly moving pattern with the time, the date and the CPU load over

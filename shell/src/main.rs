@@ -18,6 +18,7 @@ mod flowask;
 mod flowctl;
 mod grantterm;
 mod hostname;
+mod improvenote;
 mod keymap;
 mod modectl;
 mod modes;
@@ -190,6 +191,7 @@ struct Shell {
     safe: safe::Safe, // what the boot's log said of a safe start (000-APP-0086)
     shot: Option<(u64, String)>, // a screenshot `-d` asked for: when, and its file (empty: a free name) (000-APP-0089)
     nn: nnclients::Badges, nn_due: u64, // the badged clients of `nnd` lent, and when their retirements are next tended (262-APP-0112)
+    improve: improvenote::Seen, // MIND Hub's requests that wait for the user, as last said (100003-APP-0153)
     asking: Option<flowctl::Asking>, flow_due: u64, // a program's question about a flow shown, and when the broker is next asked (000-APP-0120)
     secret: Option<secretctl::Typing>, // a console program's secret line being typed (000-APP-0126)
     pass: passctl::State, // keystore's passphrase typed, and the boot's wait for it looked for (308-APP-0130)
@@ -1799,7 +1801,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, domain: None, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None, screened: None, clip: clipctl::Clip::new() })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None, nn: nnclients::Badges::new(), nn_due: 0, improve: improvenote::Seen::new(), asking: None, flow_due: 0, secret: None, pass: passctl::State::new(mind::time::uptime_ms() as u64), gone_front: None, screened: None, clip: clipctl::Clip::new() })
 }
 
 mind::entry!(main);
@@ -1833,6 +1835,8 @@ fn main(info: &'static BootInfo) {
     if let Some(notice) = shell.safe.notice() { let _ = writeln!(shell.term, "{}", notice); mind::println!("[SHELL] {}", notice); }
     // A mode that runs the Effector agent, said above the first prompt (750-EFF-0013).
     modectl::notice(&mut shell);
+    // MIND Hub's requests that wait for the user, as improve last saw them (100003-APP-0153).
+    improvenote::first(&mut shell);
     // An edit of the Effector policy a restart cut, finished or undone (801-APP-0140).
     policyctl::recover();
     shell.beat.0 = shell.term.position().line;
@@ -1947,6 +1951,8 @@ fn main(info: &'static BootInfo) {
         if now >= shell.nn_due { shell.nn_due = now + if nnctl::tend(&mut shell.nn) { 100 } else { 1000 }; }
         // A running program's question about a flow, for the user (000-APP-0120).
         flowctl::tend(&mut shell, now);
+        // MIND Hub's requests that wait for the user, when improve saw them change (100003-APP-0153).
+        improvenote::tend(&mut shell, now);
         // A secret line whose program ended or stopped waiting (000-APP-0126).
         secretctl::tend(&mut shell);
         // The boot's wait for keystore's passphrase, and its prompt after keystore's wait (308-APP-0130).
