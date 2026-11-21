@@ -32,6 +32,13 @@ pub const API: &str = "hub-api 2";
 /// attachments on a message (100003-APP-0148).
 pub const RETIRED: &[&str] = &["hub-api 1"];
 
+/// Whether a machine that runs `version` has `release` (6.3): two releases of digits alone and of one length, such as
+/// `202611211200`, compare as numbers; any other two only when they are the same.
+pub fn runs_release(version: &str, release: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if digits(version) && digits(release) && version.len() == release.len() { version >= release } else { version == release }
+}
+
 /// A day on the hub's clock, in milliseconds.
 pub const DAY_MS: u64 = 86_400_000;
 

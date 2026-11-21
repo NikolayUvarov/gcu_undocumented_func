@@ -10550,19 +10550,21 @@ def slot_applications_check(args):
 def hub_check(args, disk):
     """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
     (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
-    question answered in its thread; a wrong pin refused; a thread with a text past 512 bytes named as unread until
-    NET's change to `parse` (requests-NET.md)."""
+    question answered in its thread; the release that carries it not on the machine yet, then on it, and the user's
+    verdict (6.3); a wrong pin refused; a thread with a text past 512 bytes named as unread until NET's change to
+    `parse` (requests-NET.md)."""
     work = Path(tempfile.mkdtemp(prefix="mind-hub-"))
     target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
     subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
     mindhub = str(target / "release" / "mindhub")
     _certificates(work)
     pin = _spki_pin(work / "server.pem")
-    keys = {name: work / f"{name}.key" for name in ("admin", "intake")}
+    keys = {name: work / f"{name}.key" for name in ("admin", "intake", "track", "lander")}
     public = {name: subprocess.run([mindhub, "key", str(path)], check=True, capture_output=True, text=True).stdout.strip() for name, path in keys.items()}
     data = work / "data"
     data.mkdir()
-    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\n")
+    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\nagent APP track {public['track']}\n"
+                                   f"agent KRN integrator {public['lander']}\n")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -10622,8 +10624,26 @@ def hub_check(args, disk):
         require(vm.command("improve watch --once", timeout=60), "no news")
         require(vm.command("improve export ram:hub.json", timeout=60), "exported to ram:hub.json (")
         require_all(vm.command("cat ram:hub.json", timeout=30), '"display_name":"QEMU tester"', '"title":"Fan noise"')
+        # The user's check (6.3): accepted, worked, landed and delivered in a release; not on the machine until it runs it.
+        release = "202611211200"
+        call("intake", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"accepted","reason":"a fan","track":"APP","task":"000-APP-9999"}')
+        call("track", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"in-progress","reason":"working"}')
+        call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"result","text":"The fan curve is gentler","release":"' + release + '"}')
+        call("lander", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 2","to":"landed","reason":"round 1"}')
+        call("admin", "POST", "/hub/admin/v1/delivered", '{"api":"hub-api 2","release":"' + release + '","requests":[1]}')
+        require(vm.command("improve show 1", timeout=60), f"release {release} carries it; the hub does not know the release this machine runs: improve version RELEASE")
+        require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the hub does not know the release this machine runs")
+        require(vm.command("improve version 202611201200", timeout=60), "the hub knows this machine runs 202611201200")
+        require(vm.command("improve show 1", timeout=60), f"your machine does not have release {release} yet (it runs 202611201200): update apply, or wait for the update")
+        require(vm.command(f"improve version {release}", timeout=60), f"the hub knows this machine runs {release}")
+        require(vm.command("improve watch --once", timeout=60), "request 1: awaiting-check, it waits for your check")
+        require(vm.command("improve list", timeout=60), "Fan noise  [waits for your check]")
+        require(vm.command("improve show 1", timeout=60), f"release {release} is on this machine: check it, improve check 1 works|partly|does-not-work")
+        require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the request is verified")
+        assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
         # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
+        # The admin's comment, which a verified request still takes.
+        call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
         require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
@@ -10637,7 +10657,7 @@ def hub_check(args, disk):
         shutil.rmtree(work, ignore_errors=True)
     print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
           "approved by the admin, a request filed with a log attached, the agents' question answered with a file, news watched, the export "
-          "written into ram:; a wrong pin refused; a text past 512 bytes named as unread "
+          "written into ram:, the release that carries it not on the machine, then on it, and the user's verdict on it; a wrong pin refused; a text past 512 bytes named as unread "
           "until NET's change to parse (100003-APP-0151)", flush=True)
 
 

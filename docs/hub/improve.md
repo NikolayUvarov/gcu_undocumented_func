@@ -1,6 +1,6 @@
 # `improve`: on any computer, and on MIND Core
 
-**Version:** 2 (2026-11-21): MIND Core's `improve` (section 5, 100003-APP-0151); 1 (2026-11-21) · **Tasks:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done), [100003-APP-0151](../../issues/100003-APP-0151-improve-on-mind-core.md) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
+**Version:** 3 (2026-11-21): the user's check of the result on MIND Core; 2 (2026-11-21): MIND Core's `improve` (section 5, 100003-APP-0151); 1 (2026-11-21) · **Tasks:** [100003-APP-0150](../../issues-done/100003-APP-0150-improve-on-a-host.done), [100003-APP-0151](../../issues/100003-APP-0151-improve-on-mind-core.md) · **Design:** [README.md](README.md), sections 2, 4 and 10 · **Owner:** tools track (`APP`)
 
 `improve` is MIND Hub's client for a computer that is not a MIND machine: Linux, macOS, any Unix. Through it a person files a request, answers the agents' questions and gives the verdict on the result. It also lists, pairs and revokes the person's devices. It speaks `hub-api 2` to a hub of `tools/mindhub`, signing each call with a key of its own. A browser does the same through the hub's pages; a MIND machine will do it with its own `improve` (stage 4), with the same commands.
 
@@ -94,12 +94,17 @@ improve reply 1 'Two fans, one stopped' --answer 2
   - Each one is shown before it is sent, with its kind, name, size and SHA-256, and its bytes go after its request or message.
 - **`watch [--once]`:** the news since the last look (kept as `seen` in its own directory), at the hub's interval, until Esc.
 - **`export FILE`:** all the hub keeps of the user, written as the hub sent it into a user's file such as `ram:hub.json`. Nothing of it is parsed on the machine, so its length is the answer's bound, 64 KiB.
-- **The version:** `improve version RELEASE` tells the hub the release this machine runs, so that a request a release carries awaits the user's check.
+- **The version:** `improve version RELEASE` tells the hub the release this machine runs, as `update status` names it, so that a request a release carries awaits the user's check.
+- **The check of the result** (design 6.3):
+  - `show N` of a delivered request says whether the release that carries it is on this machine. If it is not: `your machine does not have release 202611211200 yet (it runs 202611201200): update apply, or wait for the update`. If the hub does not know what the machine runs, it says to tell it with `improve version`.
+  - Once the machine runs it, the request waits for the check. `list` marks it, `watch` names it, and `show N` names the command.
+  - `improve check N works|partly|does-not-work "WHAT YOU SAW"` gives the verdict on the release this machine runs, as the hub knows it; `--release R` names another.
 - **Its check:** the QEMU suite `hub` (in the x86 network group) runs it against `tools/mindhub` on the host, over TLS by the hub's pin.
   - It goes from setup and registration through the admin's approval to a request with a log attached, the agents' question and its answer with a file, `watch`, the export, and a wrong pin.
+  - Then the agents accept, work and land the request, and the admin delivers it in a release. `improve` says the machine does not run it, at an unknown version and at an older one. At that release the check waits, and the user's `works` verifies the request, with that release in the verdict.
   - The admin and intake read the attached bytes back. `tests/improve_host.rs` tests its words.
 - **Not yet:**
   - **Long texts.** A thread with a text past 512 bytes, or an answer past 16 KiB, is named as unread: `parse` reads no longer string or document yet (`issues/requests-NET.md`).
-  - **The running release:** not taken from the updater by itself.
+  - **The running release:** not taken from the updater by itself. That needs a client of the updater that may only read its state, which `improve` does not get yet ([requests-UPD.md](../../issues/requests-UPD.md#a-client-of-the-updater-that-may-only-read-its-state-for-100003-app-0151)); until then the user tells it with `improve version`.
   - **Notices:** the shell's notice and `wm`'s mark are stage 6.
 
