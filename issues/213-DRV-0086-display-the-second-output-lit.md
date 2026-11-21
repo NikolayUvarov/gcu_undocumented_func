@@ -139,14 +139,16 @@ does any of these, that is the stage's failure whatever the log says, and the ru
 | 2 pixel clock | dark | `S2 TABLE 12 DONE: n STEPS, n CALLS, n US OF DELAYS, n WRITES`, `S2 PIXEL CLOCK DONE; ...` |
 | 3 timing | dark | `S3 TIMING DONE; ...` |
 | 4 test pattern | dark | `S4 TEST PATTERN DONE; ...` |
-| 5 start | dark (the pipe runs, but nothing drives the PHY yet) | `S5 ... SHOWED ITS STATUS`, `S5 OTG1 COUNTED n FRAMES IN n MS`, `S5 START DONE; ...` |
+| 5 start | dark (the pipe runs, but nothing drives the PHY yet) | `S5 ... SHOWED ITS STATUS`, `S5 OTGn COUNTED n FRAMES IN n MS`, `S5 START DONE; ...` |
 | 6 front end | dark | `S6 TABLE 4 DONE: ...`, `S6 FRONT END DONE; ...` |
 | 7 back end | dark | `S7 BACK END DONE; ...` |
 | 8 PHY | **the monitor wakes and shows the engine's colour squares**, a grid of coloured squares filling a 1920x1080 picture (its menu may say 1920x1080 at 60 Hz) | `S8 TABLE 76 DONE: ...`, `S8 PHY DONE; ...`, `STEP 3 STOPPED AFTER STAGE 8 OF 8 AS THIS BUILD ALLOWS` |
 
 A stage that fails logs `Sn NAME FAILED: <why>; UNDOING STAGES n TO 1`, then each stage's `Un ... UNDONE: n WRITES
 RESTORED`, then `STEP 3 FAILED AT STAGE n AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED`;
-HDMI-A-1 stays dark. A stage that stops at the build's count leaves its writes in place until the next boot.
+HDMI-A-1 stays dark. A stage that stops at the build's count leaves its writes in place; whether the next boot's
+firmware clears them is not known. Step 3 starts from what step 1 reads either way: should a stopped run leave its OTG
+running, the next boot refuses with `2 TIMING GENERATORS RUN, NOT ONE` (safe, but the next stage then needs a cold start).
 
 **Open:** the carve-out's place in the memory map and the frame pool (for step 4's framebuffer, not step 3): the
 hardware report that lists the map could not be had yet; it comes with the first boot after the stick is rewritten.
