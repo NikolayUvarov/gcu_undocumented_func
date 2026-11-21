@@ -56,9 +56,11 @@ safe for MIND Core, and the memory a second framebuffer needs. In short:
   uses, its surface address and `DCN_VM_FB_LOCATION_*`, DISPCLK. The two ways: a read under MIND Core by `display` with
   KRN's grant (proposed as seven batches of registers that Display Core itself reads, in the hwdocs file), or Linux once
   without `amdgpu`. The first waits for KRN's grant and the owner session's word.
-- **To KRN**: `S/handoff/request-KRN-MON.md` and `facts-for-KRN.md` (the command register 0x0006 as the firmware leaves
-  it, from Linux's own `enabling device (0006 -> 0007)`; BAR 5; BAR 0 over the carve-out as the place for a second
-  framebuffer, which the engine scans with no page table).
+- **To KRN** (passed on by the owner session): the facts KRN asked for (the command register 0x0006 as the firmware
+  leaves it, from Linux's own `enabling device (0006 -> 0007)`; BAR 5 memory, 32-bit, not prefetchable, 512 KiB; BAR 0
+  over the carve-out as the place for a second framebuffer, which the engine scans with no page table, confidence
+  medium), and a request: BAR 5 uncached, the VBIOS image from the ACPI VFCT table read-only, a BAR 0 range after the
+  GOP's framebuffer mapped write-combined, and a versioned interface for the compositor's second screen.
 
 **The hang, as it happened (2026-11-21).** At 13:25 UTC the Ryzen was switched from MIND Core to Linux under the lease;
 at 13:27:35 a script ran as root through the Effector agent. In this order it read: `uname`, `/proc/cmdline`,
