@@ -173,6 +173,15 @@ class EffectorServerTests(unittest.TestCase):
         with self.assertRaises(http.client.IncompleteRead):
             self.request("GET", route)
         self.assertEqual(self.request("GET", route)[1], data)
+        # 801-EFF-0037: the rest from a byte on, as http.ServeContent gives it, a cut inside it too, and past the end 416.
+        status, body, headers = self.request("GET", route, headers={"Range": "bytes=27-"})
+        self.assertEqual((status, body, headers["Content-Range"]), (206, data[27:], f"bytes 27-{len(data) - 1}/{len(data)}"))
+        self.assertEqual(self.fixture.requests[-1]["range"], 27)
+        self.fixture.inject("/api/commands/file", "cut_download", 1000)
+        with self.assertRaises(http.client.IncompleteRead):
+            self.request("GET", route, headers={"Range": "bytes=27-"})
+        self.assertEqual(self.request("GET", route, headers={"Range": "bytes=1000-"})[1], data[1000:])
+        self.assertEqual(self.request("GET", route, headers={"Range": f"bytes={len(data)}-"})[0], 416)
 
     def test_an_update_bundle_is_served_for_its_command(self):
         self.heartbeat()

@@ -43,6 +43,11 @@ const BODY_MAX: usize = 16384;
 // A request waits this long for a byte: TCP resends a segment lost twice at 3 s (1 + 2 s, smoltcp's RTO), so a burst of
 // Wi-Fi loss would otherwise cost a new connection and TLS handshake every few seconds (DRV, 2026-10-23).
 const REQUEST_MS: usize = 10_000;
+// A download's body may pause longer than a short request: a TCP retransmission after a loss can (801-EFF-0037).
+const BODY_MS: usize = 60_000;
+// A cut download goes on from the bytes the gateway holds, this many times, after a pause that doubles from this.
+const RESUMES: u32 = 5;
+const RESUME_PAUSE_MS: usize = 2000;
 const CONNECT_MS: u32 = 10_000;
 const RECONNECT_MAX_MS: usize = 30_000;
 const PIECE: usize = 32768; // the gateway's transfers move this much a call
@@ -315,6 +320,9 @@ struct Agent {
     vfs_checked_at: usize, // when vfs_server's PID is asked again, while the journal cannot be written
     problem: String, // why it did not since, for the log
     quiet_until: usize, // after that heartbeat no other goes, nor a poll, until the restart or this time
+    range_from: Option<u64>, // the next request asks the body from this byte on (801-EFF-0037)
+    downloading: Option<String>, // the command whose download holds the connection: heartbeats go aside (801-EFF-0038)
+    aside_at: usize, // when the next heartbeat aside of a download is due
 }
 
 impl Agent {
@@ -392,29 +400,69 @@ impl Agent {
         let agent_id = self.agent_id.clone();
         let mut buffer = core::mem::take(&mut self.body);
         buffer.clear();
-        let result = (|| {
-            let url = Url::parse(&text).ok()?;
-            let connection = self.connect()?;
+        let from = self.range_from.take();
+        let range = from.map(|n| alloc::format!("bytes={}-", n));
+        let (mut connected, mut fit) = (false, true);
+        let result = 'request: {
+            let Ok(url) = Url::parse(&text) else { break 'request None };
+            // The connection is the request's while it runs, so a download's heartbeats can go on another (801-EFF-0038).
+            if self.connect().is_none() { break 'request None }
+            let Some(mut connection) = self.connection.take() else { break 'request None };
+            connected = true;
+            // A download's body may pause longer than a short request (801-EFF-0037).
+            connection.transport().idle_ms = if sink.is_some() { BODY_MS } else { REQUEST_MS };
             let mut parser = mind::parse::Service(PARSER);
             // `token none`: the server asks no agent token, so none is sent.
-            let all = [("Content-Type", content_type), ("X-Effector-Agent-ID", agent_id.as_str()), ("Authorization", authorization.as_str())];
-            let headers = if send_token { &all[..] } else { &all[..2] };
-            let sent = connection.request(method, &url, headers, body, &mut parser, false);
-            let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", method.name(), route, e); return None; } };
-            let status = response.status;
-            clock_from(response.head.date);
-            let mut chunk = [0u8; 2048];
-            loop {
-                match response.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) if sink.is_some() && status == 200 => if !(sink.as_mut().unwrap())(&chunk[..n]) { return None; },
-                    Ok(n) if buffer.len() + n <= BODY_MAX => buffer.extend_from_slice(&chunk[..n]),
-                    Ok(_) => { mind::println!("EFFECTOR: {} ANSWER OVER {} BYTES", route, BODY_MAX); return None; }
-                    Err(e) => { mind::println!("EFFECTOR: {} BODY: {:?}", route, e); return None; }
+            let mut headers = alloc::vec![("Content-Type", content_type), ("X-Effector-Agent-ID", agent_id.as_str())];
+            if send_token { headers.push(("Authorization", authorization.as_str())); }
+            if let Some(r) = &range { headers.push(("Range", r.as_str())); }
+            let got = match connection.request(method, &url, &headers, body, &mut parser, false) {
+                Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", method.name(), route, e); None }
+                Ok(mut response) => 'answer: {
+                    let mut status = response.status;
+                    clock_from(response.head.date);
+                    // Asked from byte `n`: a 206 must start there; a 200 is the whole, whose first `n` bytes are held already.
+                    let mut skip = match (from, status, response.head.range) {
+                        (Some(n), 206, Some(http::Range::Bytes { start, .. })) if start == n => 0,
+                        (Some(n), 200, _) => n,
+                        (Some(n), 206, other) => {
+                            mind::println!("EFFECTOR: {} ASKED FROM BYTE {}, ANSWERED {:?}", route, n, other);
+                            fit = false;
+                            break 'answer Some(416);
+                        }
+                        _ => 0,
+                    };
+                    if status == 206 && from.is_some() { status = 200; }
+                    let mut chunk = [0u8; 2048];
+                    loop {
+                        let n = match response.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(e) => { mind::println!("EFFECTOR: {} BODY: {:?}", route, e); break 'answer None }
+                        };
+                        let held = (skip.min(n as u64)) as usize;
+                        skip -= held as u64;
+                        let data = &chunk[held..n];
+                        if sink.is_some() && status == 200 {
+                            if !data.is_empty() && !(sink.as_mut().unwrap())(data) { break 'answer None }
+                            self.aside();
+                        } else if buffer.len() + data.len() <= BODY_MAX {
+                            buffer.extend_from_slice(data);
+                        } else {
+                            mind::println!("EFFECTOR: {} ANSWER OVER {} BYTES", route, BODY_MAX);
+                            break 'answer None;
+                        }
+                    }
+                    Some(status)
                 }
+            };
+            // Back in its place if it can carry the next request and no heartbeat aside took the place meanwhile.
+            if got.is_some() && fit && connection.open() && self.connection.is_none() {
+                connection.transport().idle_ms = REQUEST_MS;
+                self.connection = Some(connection);
             }
-            Some(status)
-        })();
+            got
+        };
         self.body = buffer;
         // Any answer shows the path to the server works; after a long silence the log says it is back (801-EFF-0028).
         match result {
@@ -423,7 +471,7 @@ impl Agent {
                 if silent_s >= 60 { mind::println!("EFFECTOR: THE SERVER ANSWERS AGAIN, AFTER {} S ({})", silent_s, self.problem); }
                 self.answered_at = now();
             }
-            None if self.connection.is_some() => self.problem = alloc::format!("{} {}: NO ANSWER", method.name(), route),
+            None if connected => self.problem = alloc::format!("{} {}: NO ANSWER", method.name(), route),
             None => {}
         }
         if result.is_none() { self.connection = None; }
@@ -950,7 +998,7 @@ impl Agent {
             Ok(Err(e)) => return Final::Failed(failure(e)),
             Err(_) => return Final::Failed(Failure::Unsupported),
         };
-        let result = self.download(id, size, handle);
+        let result = self.download(id, size, handle, o.deadline_ms);
         match result.and_then(|()| match gateway::deliver_commit(GATEWAY, handle) { Ok(Ok(d)) => Ok(d), Ok(Err(e)) => Err(failure(e)), Err(_) => Err(Failure::Io) }) {
             Ok(d) => {
                 // The answer names the file as the gateway read it back (750-EFF-0021); delivered either way.
@@ -966,46 +1014,90 @@ impl Agent {
     /// The command's file from `/api/commands/file`, written into the gateway's incoming transfer `handle` in its pieces,
     /// in order; more than `size` bytes is `digest`.
     #[inline(never)]
-    fn download(&mut self, id: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
+    fn download(&mut self, id: &str, size: u64, handle: u32, deadline_ms: u64) -> Result<(), session::Failure> {
         let query = alloc::format!("?agent_id={}&command_id={}", self.agent_id, id);
-        self.fetch_into("/api/commands/file", &query, size, handle)
+        self.fetch_into(id, "/api/commands/file", &query, size, handle, deadline_ms)
     }
 
     /// `route`'s body into the gateway's incoming transfer `handle` in its pieces, in order; more than `size` is `digest`.
+    /// A cut goes on from the bytes the gateway holds with `Range`, up to `RESUMES` times within the command's time; the
+    /// gateway checks the whole's SHA-256 as before (801-EFF-0037). Heartbeats go on aside meanwhile (801-EFF-0038).
     #[inline(never)]
-    fn fetch_into(&mut self, route: &str, query: &str, size: u64, handle: u32) -> Result<(), session::Failure> {
+    fn fetch_into(&mut self, id: &str, route: &str, query: &str, size: u64, handle: u32, deadline_ms: u64) -> Result<(), session::Failure> {
         use session::Failure;
         let (mut piece, mut offset, mut failed) = (Vec::with_capacity(PIECE), 0u64, None);
-        let status = {
-            let mut sink = |data: &[u8]| -> bool {
-                for b in data.chunks(PIECE) {
-                    if offset + (piece.len() + b.len()) as u64 > size { failed = Some(Failure::Digest); return false; }
-                    let room = PIECE - piece.len();
-                    piece.extend_from_slice(&b[..b.len().min(room)]);
-                    if piece.len() == PIECE {
-                        match gateway::write(GATEWAY, handle, offset, &piece) {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); failed = Some(failure(e)); return false; }
-                            Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); failed = Some(Failure::Io); return false; }
+        self.downloading = Some(String::from(id));
+        self.aside_at = now() + session::HEARTBEAT_MS as usize;
+        let mut resumed = 0;
+        let result = loop {
+            // What the gateway holds is where the next try begins; a piece not yet written to it is fetched again.
+            piece.clear();
+            self.range_from = (offset > 0).then_some(offset);
+            let status = {
+                let mut sink = |data: &[u8]| -> bool {
+                    for b in data.chunks(PIECE) {
+                        if offset + (piece.len() + b.len()) as u64 > size { failed = Some(Failure::Digest); return false; }
+                        let room = PIECE - piece.len();
+                        piece.extend_from_slice(&b[..b.len().min(room)]);
+                        if piece.len() == PIECE {
+                            match gateway::write(GATEWAY, handle, offset, &piece) {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); failed = Some(failure(e)); return false; }
+                                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); failed = Some(Failure::Io); return false; }
+                            }
+                            offset += PIECE as u64;
+                            piece.clear();
+                            piece.extend_from_slice(&b[b.len().min(room)..]);
                         }
-                        offset += PIECE as u64;
-                        piece.clear();
-                        piece.extend_from_slice(&b[b.len().min(room)..]);
                     }
-                }
-                true
+                    true
+                };
+                self.send(Method::Get, route, query, "application/json", None, Some(&mut sink))
             };
-            self.send(Method::Get, route, query, "application/json", None, Some(&mut sink))
+            match (status, failed) {
+                (_, Some(f)) => break Err(f),
+                (Some(200), None) if !piece.is_empty() => break match gateway::write(GATEWAY, handle, offset, &piece) {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); Err(failure(e)) }
+                    Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); Err(Failure::Io) }
+                },
+                (Some(200), None) => break Ok(()),
+                // Cut: no answer, or the body stopped. Again from what the gateway holds, after a pause.
+                (None, None) if resumed < RESUMES => {
+                    let pause = RESUME_PAUSE_MS << resumed;
+                    resumed += 1;
+                    if now() as u64 + pause as u64 >= deadline_ms {
+                        mind::println!("EFFECTOR: {}: THE DOWNLOAD CUT AT {} OF {} BYTES, AND THE COMMAND'S TIME IS UP", id, offset, size);
+                        break Err(Failure::Upload);
+                    }
+                    mind::println!("EFFECTOR: {}: THE DOWNLOAD CUT AT {} OF {} BYTES: GOING ON FROM THERE IN {} S ({} OF {})", id, offset, size, pause / 1000, resumed, RESUMES);
+                    self.pause_aside(pause);
+                }
+                (None, None) => { mind::println!("EFFECTOR: {}: THE DOWNLOAD CUT AT {} OF {} BYTES, {} TIMES: GIVEN UP", id, offset, size, RESUMES + 1); break Err(Failure::Upload) }
+                (Some(status), None) => { mind::println!("EFFECTOR: {}: {} ANSWERED {}", id, route, status); break Err(Failure::Upload) }
+            }
         };
-        match (status, failed) {
-            (_, Some(f)) => Err(f),
-            (Some(200), None) if !piece.is_empty() => match gateway::write(GATEWAY, handle, offset, &piece) {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(e)) => { mind::println!("EFFECTOR: THE GATEWAY REFUSED {} BYTES AT {}: {:?}", piece.len(), offset, e); Err(failure(e)) }
-                Err(e) => { mind::println!("EFFECTOR: THE GATEWAY DID NOT ANSWER A WRITE AT {}: {:?}", offset, e); Err(Failure::Io) }
-            },
-            (Some(200), None) => Ok(()),
-            _ => Err(Failure::Upload),
+        self.downloading = None;
+        result
+    }
+
+    /// A heartbeat while a download holds the connection, on one of its own, on the session's period (801-EFF-0038, 750's
+    /// independent heartbeat): the server sees the agent busy with the command, not gone.
+    fn aside(&mut self) {
+        if now() < self.aside_at || self.downloading.is_none() { return; }
+        self.aside_at = now() + session::HEARTBEAT_MS as usize;
+        let id = self.downloading.clone().unwrap_or_default();
+        let waiting = session::Id::command(&id).ok();
+        let _ = self.heartbeat(false, waiting);
+    }
+
+    /// A pause before a cut download goes on: heartbeats aside go on, and init's stop notice ends it at once.
+    fn pause_aside(&mut self, ms: usize) {
+        let until = now() + ms;
+        while now() < until {
+            if workers::stop_marked().is_some() { self.stop_now(None); }
+            self.aside();
+            mind::time::sleep(100);
         }
     }
 
@@ -1028,7 +1120,7 @@ impl Agent {
                 Ok(Ok(h)) => h, Ok(Err(e)) => return Err(package_failure(e)), Err(_) => return Err(Failure::Unsupported),
             };
             let route = alloc::format!("/api/deployment/download/{}", package_id);
-            if let Err(f) = self.fetch_into(&route, "", p.size, handle) { let _ = gateway::close(GATEWAY, handle); return Err(f); }
+            if let Err(f) = self.fetch_into(id, &route, "", p.size, handle, o.deadline_ms) { let _ = gateway::close(GATEWAY, handle); return Err(f); }
             match gateway::package_commit(GATEWAY, handle) {
                 Ok(Ok(r)) => Ok(r),
                 Ok(Err(e)) => Err(package_failure(e)),
@@ -1077,7 +1169,7 @@ impl Agent {
             Err(_) => return Final::Failed(Failure::Unsupported),
         };
         mind::println!("EFFECTOR: {}: A RELEASE OF {} BYTES TO THE UPDATER", id, size);
-        if let Err(f) = self.download(id, size, handle) { let _ = gateway::close(GATEWAY, handle); return Final::Failed(f); }
+        if let Err(f) = self.download(id, size, handle, o.deadline_ms) { let _ = gateway::close(GATEWAY, handle); return Final::Failed(f); }
         let staged = match gateway::update_commit(GATEWAY, handle) {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => return self.update_answer(id, 1, &alloc::format!("not staged: {}", reason(e)), reason(e)),
@@ -1410,7 +1502,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let hostname = String::from(config.hostname());
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), own_hostname: hostname.clone(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
-        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0,
+        load: None, load_at: 0, busy_since: None, held: None, running: None, update: None, restart_at: None, quiet_until: 0, range_from: None, downloading: None, aside_at: 0,
         answered_at: now(), problem: String::from("NOT CONNECTED YET"), step: None, pool: Box::new(workers::Pool::new()), fallback: String::new(), journal_problem: String::new(), vfs_pid: vfs_pid(), degraded: false, vfs_checked_at: 0 });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {

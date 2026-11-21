@@ -14272,6 +14272,8 @@ def effector_update_suite(args):
         logged(vm, "effector", "EFFECTOR: CONNECTED TO 10.0.2.2", 120)
         on = server.queue(agent, "update_agent", payload, program="MIND Core")
         server.publish(bundle, command_id=on, bundle=True)
+        # 801-EFF-0037: the body cut once halfway; the agent goes on from the bytes the gateway holds.
+        server.inject("/api/commands/file", "cut_download", len(bundle) // 2)
         started = time.monotonic()
         logged(vm, "effector", f"EFFECTOR: {on}: A RELEASE OF {len(bundle)} BYTES TO THE UPDATER", 180)
         # No shell command meanwhile: the download, the staging and the restart come on their own. An answer before the
@@ -14305,7 +14307,15 @@ def effector_update_suite(args):
         require(log, f"EFFECTOR: {on}: updated 6, slot B confirmed")
         result = server.operation(on)
         assert result["status"] == "completed" and result["result"]["stdout"] == "updated 6, slot B confirmed", result
-        assert len(downloads(on)) == 1, downloads(on)
+        # One cut try, then the rest asked with Range from what the gateway held: a whole number of its pieces.
+        got = downloads(on)
+        assert len(got) == 2 and "range" not in got[0] and got[1]["status"] == 206, got
+        held = got[1]["range"]
+        assert 0 < held <= len(bundle) // 2 and held % 32768 == 0 and "done" in got[1], got
+        # 801-EFF-0038: the heartbeat went on while the rest downloaded, on the session's period (1.5 s).
+        window = (got[1]["at"], got[1]["done"])
+        aside = [r for r in list(server.requests) if r["method"] == "POST" and "/api/heartbeat" in r["path"] and window[0] <= r["at"] <= window[1]]
+        assert window[1] - window[0] < 4 or len(aside) >= (window[1] - window[0]) // 3, (window[1] - window[0], len(aside))
         require(logged(vm, "updater", "[UPDATER] SLOT B CONFIRMED ON THE DISK", 120), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         # The agent removed its kept answer last, which leaves the volume marked changed until a flush.
         require(vm.command("sync"), "OK")
@@ -14325,7 +14335,8 @@ def effector_update_suite(args):
     print("PASS: effector-update with remote-update on: the agent downloads release 6's bundle into the gateway, which "
           "streams it to the updater; release 6 is staged in slot B and applied, the machine restarts into slot B on trial, "
           "init confirms it on the agent's accepted (its steps logged as they changed, 801-KRN-0242), and once it is confirmed the "
-          "agent answers the command it kept across the restart: completed, updated 6, slot B confirmed", flush=True)
+          "agent answers the command it kept across the restart: completed, updated 6, slot B confirmed; the download, cut once "
+          "halfway, went on from the bytes the gateway held with Range (801-EFF-0037), with heartbeats meanwhile (801-EFF-0038)", flush=True)
 
 
 def effector_packages_check(vm, server, agent, until, args):

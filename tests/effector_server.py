@@ -164,7 +164,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _dispatch(self):
         fixture = self.server.fixture
-        self.record = {"method": self.command, "path": self.path[:4096], "status": 0}
+        self.record = {"method": self.command, "path": self.path[:4096], "status": 0, "at": time.monotonic()}
         with fixture.lock:
             fixture.requests.append(self.record)
             down = time.monotonic() < fixture.down_until
@@ -308,25 +308,48 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _download(self, data, fault):
         if data is None:
             self._error(404, "fixture file not published")
-        elif fault and fault.kind == "cut_download":
-            self.record["status"] = 200
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
+            return
+        # `Range: bytes=N-` (801-EFF-0037), as the server's http.ServeContent answers it: 206 with the rest, or 416.
+        start, asked = 0, self.headers.get("Range")
+        if asked is not None:
+            match = re.fullmatch(r"bytes=(\d+)-", asked.strip())
+            if not match:
+                raise ValueError("fixture range not understood")
+            start = int(match[1])
+            self.record["range"] = start
+            if start >= len(data):
+                self.record["status"] = 416
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(data)}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        status, part = (206, data[start:]) if asked is not None else (200, data)
+        if fault and fault.kind == "cut_download":
+            # The body stops after `value` bytes of the file (or half of it), and the connection closes.
+            self.record["status"] = status
+            self.send_response(status)
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
+            self.send_header("Content-Length", str(len(part)))
             self.end_headers()
-            self.wfile.write(data[:max(0, min(len(data) - 1, int(fault.value or len(data) // 2)))])
+            self.wfile.write(part[:max(0, min(len(part) - 1, int(fault.value or len(data) // 2) - start))])
             self.wfile.flush()
             self.close_connection = True
         else:
             # The agent streams a download into its gateway as it reads (a release into the updater): a slow reader,
             # given a minute for each 64 KiB, since one TLS write is timed whole.
             self.connection.settimeout(60)
-            self.record["status"] = 200
-            self.send_response(200)
+            self.record["status"] = status
+            self.send_response(status)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(data)))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
+            self.send_header("Content-Length", str(len(part)))
             self.end_headers()
-            for at in range(0, len(data), 65536):
-                self.wfile.write(data[at:at + 65536])
+            for at in range(0, len(part), 65536):
+                self.wfile.write(part[at:at + 65536])
+            self.record["done"] = time.monotonic()
 
     def _post(self):
         fixture = self.server.fixture

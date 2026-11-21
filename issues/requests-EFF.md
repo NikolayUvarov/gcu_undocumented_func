@@ -92,11 +92,6 @@ The EFF track numbers its own tasks, so a request from another track waits here 
 - **What it trusts.** The server, or whoever holds its pinned key, can move the clock forward without limit and back to the floor ([clocks.md](../docs/profile/clocks.md), "The Effector server's time"): a memory domain's term in mode `forget` can then pass. If EFF wants the owner to be able to switch it off, a policy line (for example `clock keep`) would do; KRN does not ask for one.
 - **Docs.** `docs/effector/README.md`'s table of the session's grants can then say `rtc` with the setting badge, and what the agent does with it.
 
-### The heartbeat throughout an update's download (KRN, 2026-11-17, for 801's S5 and S7)
-
-- **What the DEXP showed** (801, "The DEXP's first release through Effector"): from the moment `update_agent` was taken (21:25:36 UTC) the server saw no heartbeat for about 8 minutes, until the agent's `shutting_down` at 21:33:55. The bundle was 29 MB over the DEXP's Wi-Fi.
-- **What is asked:** the heartbeat goes on, on its own schedule, while a bundle downloads and streams to the updater, as 750's "independently scheduled heartbeat" says; the update state in it (`receiving`) if the contract has the field. A test in the `effector-update` suite: with the fixture's download slowed to take longer than two heartbeat periods, the fixture still receives a heartbeat in each period.
-
 ### No rewrite of the agent's journal on a trial boot (KRN, 2026-11-19, for 801's S3)
 
 - **What round 149's gate showed** (x32, the `rollback` suite, x86; the candidate changed only `tests/qemu_smoke.py`'s store check): `AssertionError: [('the trial changed what slot A reads', ['system/effector/journal.new'])]`.
@@ -111,14 +106,3 @@ The EFF track numbers its own tasks, so a request from another track waits here 
   1. On a boot on trial (init's `boot_slot`, or the updater's state the agent already reads for `update_step`), leave the journal as it is: no compaction, and no file in `system/effector` other than what the trial must add. Compact at the first start after the trial is confirmed.
   2. Say in the log line when the compaction is left for later.
   3. The `rollback` suite already checks the result; a host or `effector` suite check that a trial's start writes no `journal.new` would show it without the 600 s trial.
-
-### A cut archive download goes on from where it stopped (KRN, 2026-11-19, for 801's S7 and S8)
-
-- **What the DEXP showed** (801-NET-0088): six of the day's ten downloads of a 29 MB release failed. Each was cut after 184 to 439 s with `EFFECTOR: /api/commands/file BODY: Transport`, and the command ended `upload`. The four taken lasted about 9 minutes each.
-  - In the ten seconds before each cut the radio's traffic fell, so the stream stopped for 10 s. `Link::receive` waits `REQUEST_MS` (10 s) for a byte, in a body as in a short request.
-  - Each try then started again from the first byte, so each needed 9 minutes with no stall of 10 s.
-- **What NET does** (801-NET-0088): a larger TCP receive window and a log line naming a stall. Neither makes a cut impossible on a radio link.
-- **What is asked:**
-  1. A cut archive download goes on from the bytes already written to the gateway, with a `Range: bytes=N-` request (`http::get` takes an offset and checks `206` and `Content-Range`), a bounded number of times within the command's time. The archive's SHA-256 is checked over the whole as now.
-  2. A body read waits longer than a short request's 10 s, for example 60 s, as a TCP retransmission after a loss can take longer.
-  3. Each resumed try is logged with its offset. A test in the `effector-update` suite has the fixture cut the body once halfway: the agent goes on from there and the update is taken.

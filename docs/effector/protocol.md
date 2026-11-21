@@ -127,7 +127,7 @@ machine, and the server's health check is answered. Everything 1.2 did stays.
      `remote-update` is on, before anything reaches the updater, which asks `init` again itself. A refusal is `failed`
      with `denied`, before a byte is downloaded;
   2. the bundle is downloaded straight into the gateway, which streams it to the updater: nothing of it lands in a file
-     the agent or the gateway writes;
+     the agent or the gateway writes. A cut download goes on from the bytes the gateway holds (see "Downloads" below);
   3. the updater checks it as any source (the channel with the release key, the manifest with the boot key, each file,
      the floor) and stages the release in the other slot. A refusal is `failed` with the updater's reason (`digest`,
      `signature`, `older`, `expired`, `malformed`); a `version` other than the one staged is `failed` with `version`,
@@ -146,6 +146,16 @@ machine, and the server's health check is answered. Everything 1.2 did stays.
     if the updater's state cannot be read.
 - **Meanwhile** the heartbeat says the agent is busy with the command, as for any answer that waits, and no other
   command is taken.
+
+**Downloads** (`deliver_file`, `update_agent`, `deploy`; 801-EFF-0037, 0038):
+
+- **A body may pause for 60 s** before the agent counts it cut. A short request waits 10 s.
+- **A cut download goes on** from the bytes the gateway already holds, a whole number of its 32 KiB pieces, with `Range: bytes=N-`:
+  - up to 5 times, after pauses of 2, 4, 8, 16 and 32 s, and never past the command's time;
+  - a `206` must start at byte N; a `200` is the whole file, whose first N bytes are skipped;
+  - the gateway checks the whole file's size and SHA-256 at the commit, as before;
+  - each try is logged: `EFFECTOR: <id>: THE DOWNLOAD CUT AT <N> OF <size> BYTES: GOING ON FROM THERE IN <s> S (<try> OF 5)`.
+- **The heartbeat goes on meanwhile,** every 1.5 s on a connection of its own, saying the agent is busy with the command. It also goes on during the pauses.
 
 `effector-agent 1.0` is the name of this MIND subset, not a version field that
 the existing server negotiates. The server publishes a build identity and an
@@ -214,9 +224,9 @@ refused. Missing required fields never acquire permissive defaults.
 | GET `/api/commands/poll?agent_id=ID` | Add `at_capacity=1` while busy | `200 {"commands":[...],"parallel_limit":1}`; activation or update gates may return no commands. |
 | GET `/api/commands/stream?agent_id=ID` | `Accept: text/event-stream` | `200`, an SSE wake-up stream; fetch actual commands through poll. |
 | POST `/api/commands/ack` | `command_id` and **string** `result` | `200 {"status":"ok"}` accepts the saved result. |
-| GET `/api/commands/file?agent_id=ID&command_id=CMD` | A sent `deliver_file` command | `200` bytes, checked against the command's size and SHA-256. |
+| GET `/api/commands/file?agent_id=ID&command_id=CMD` | A sent `deliver_file` or `update_agent` command; after a cut, `Range: bytes=N-` | `200` bytes, or `206` from byte N with its `Content-Range`, checked whole against the command's size and SHA-256. |
 | POST `/api/commands/file?agent_id=ID&command_id=CMD&sha256=HEX` | A sent `collect_file` command; raw bytes, not JSON | `201` artifact metadata, then ACK the operation. |
-| GET `/api/deployment/download/PACKAGE` | A permitted `deploy` command | `200` package bytes. Verify the signed MIND package inside it before installation. |
+| GET `/api/deployment/download/PACKAGE` | A permitted `deploy` command; after a cut, `Range: bytes=N-` | `200` package bytes, or `206` from byte N. Verify the signed MIND package inside it before installation. |
 | POST `/api/deployment/result` | Agent/package/operation, exit code, bounded output, timestamps and `success` | `200 {"status":"ok"}`; report the command result through ACK too. |
 | POST `/api/telemetry` | `X-Effector-Agent-ID: ID`, schema 1 samples | `204`, no body; optional after the basic agent works. |
 
