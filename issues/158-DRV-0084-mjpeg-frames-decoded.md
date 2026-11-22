@@ -114,6 +114,8 @@ This holds for that machine, those cameras and that release (MC-12.1).
   - The decoder dequantizes with each picture's own tables; it has no standard quantization table.
   - The zigzag order is Figure A.6.
 - **Not recorded before:** 502d9a4f2 landed in round 169 without this record.
+- **The careful reading** (the owner session, 2026-11-22): a rewrite that keeps the IJG's constants, passes and shortcuts counts as "part of the source code" under the IJG's condition (1). So `LICENSES/IJG-README-6b.txt` holds the README of libjpeg 6b, unaltered. It came from `https://www.ijg.org/files/jpegsrc.v6b.tar.gz`, SHA-256 `75c3ec24…e35d`, which is in THIRD_PARTY.md whole.
+- **The maintainer is asked** to confirm that this meets the IJG's terms, or to say what else he wants (`issues-human/README.md`, section 17). It is a legal question.
 
 ## Related
 

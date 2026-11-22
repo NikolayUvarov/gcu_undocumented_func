@@ -252,3 +252,19 @@ Main task [307](../issues/307-the-stores-own-partition.md), its third criterion:
 
 Done when both machines' notes are in 307. The profile's Article 4 row then says what each machine reaches.
 
+
+## 17. The IJG's terms for the JPEG code's two rewrites (a legal question)
+
+Two files in `main` derive from the Independent JPEG Group's libjpeg release 6b by rewrite. They were rewritten in Rust from memory of the C, not copied. Their constants, passes and shortcuts are the IJG's:
+
+- `libmind/src/jpeg.rs`, the encoder (issue 093, in `main` since 2026-10-06): its forward DCT (`jfdctint.c`) and its quality scaling (`jcparam.c`);
+- `libmind/src/jpegdec.rs`, the decoder (158-DRV-0084, in `main` since round 169): its inverse DCT (`jidctint.c`).
+
+Neither was recorded as third-party code until 158-DRV-0084's record of 2026-11-22. That record reads the IJG's condition (1), the README to be included where source is distributed, as applying to such a rewrite, and so it holds:
+- `THIRD_PARTY.md`, which every image carries: an entry with the source, the tarball's SHA-256, which of our files derive from which of theirs, what was changed, and the sentence "this software is based in part on the work of the Independent JPEG Group";
+- `LICENSES/IJG.txt`: the same, as a notice;
+- `LICENSES/IJG-README-6b.txt`: the 6b README, unaltered, whose LEGAL ISSUES section holds the terms.
+
+- [ ] **Confirm** that this meets the IJG's terms as you read them, **or say what else you want**. For instance: a rewrite of both DCTs from the published algorithm (Loeffler, Ligtenberg and Moschytz, 1989) instead of IJG's code, or another wording of the record.
+
+Done when your answer is noted here and in 158-DRV-0084.
