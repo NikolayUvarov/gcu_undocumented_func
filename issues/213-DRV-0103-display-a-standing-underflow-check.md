@@ -78,6 +78,64 @@ its clear bit, as the hardware does, and gives the ODM's live bit a window of it
 
 **Not shown:** anything of it on the hardware, and the cost of four reads a second there.
 
+## For a successor (state on 2026-11-22, evening)
+
+This replaces the section of the same name in 213-DRV-0095, which describes the state before 0098.
+
+**The branches,** DRV's, each in its own worktree of the owner session's:
+
+| Branch | Head | What | Lands |
+|---|---|---|---|
+| `claude/213-DRV-0095-display-the-monitors-own-mode` | 1e148b81f | the EDID's mode (0095), on 0092's | in the integrator's candidate |
+| `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | after 0095; request posted |
+| `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | d5585699d | `HOTPLUG` (code 5e63d41b4, on a71a47b83; then text) | after 0098 and its hardware run |
+| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, on 5e63d41b4) | after 0096 and its run |
+
+**The switches in `display/src/main.rs`.** All are committed off, so the committed `display` maps, reads and writes
+nothing.
+- **From 0086 to 0095** (0095's section): `BATCHES_ALLOWED` (11 for all), `STAGES_ALLOWED` (16 for all), `EDID_ALLOWED`
+  (needs 11 batches), `HDMI_SIGNALLING`, `MODE_FROM_EDID` (needs `EDID_ALLOWED`) and `UNDO_AFTER_STAGES`.
+- **`SURVEY_ORDER`** (0098): true gives the survey's order of boots 70 to 81; false, the committed value, gives the
+  production order.
+- **`HOTPLUG`** (0096): HPD 1 followed after the stages.
+  - It needs `STAGES_ALLOWED` above 0 and not `UNDO_AFTER_STAGES`.
+  - It is not on the bench until the maintainer is at the monitor. What HPD 1 does in the monitor's standby is not
+    known (0096, "A monitor in standby").
+- **`STANDING_CHECK`** (this task) needs stage 15 or 16 in place and not `UNDO_AFTER_STAGES`. It works with `HOTPLUG`
+  on or off.
+- **`SHORT_WATCH`** (this task): the watch of 60 frames, only with `STANDING_CHECK`. The build refuses it otherwise.
+- **The bench of boots 84 to 91:**
+  - `BATCHES_ALLOWED` 11 and `STAGES_ALLOWED` 16;
+  - `EDID_ALLOWED`, `HDMI_SIGNALLING` and `MODE_FROM_EDID` true;
+  - `UNDO_AFTER_STAGES` and `SURVEY_ORDER` false.
+
+  The release after them adds `STANDING_CHECK` true, with `SHORT_WATCH` and `HOTPLUG` false.
+
+**The host cases:**
+- **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 110 cases on this
+  branch's code.
+- **With `MIND_AMD_VBIOS`** naming the Ryzen's VBIOS image (never in the repository; the owner session keeps a copy),
+  they also run the Ryzen's own tables.
+- **The full suite:** `scripts/host_tests.sh` runs them all. On LEG9 its ssh tests need
+  `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd`.
+
+**The hardware evidence:**
+- **The survey's order:** boots 70 to 81 (0092, 0095).
+- **The production order:** boots 84 to 89 and 91, release of a71a47b83, 6.16 to 6.18 s from `display`'s start to
+  the offer, every watch clean (0098's table). The owner session keeps the whole boot logs under its handoff
+  directory, `mon/prod/`. A second series of the same `display` code (a Wi-Fi fix in the image) began at 14:25 UTC
+  into the same place.
+
+**What waits:**
+- **For the maintainer:**
+  - 0096's run at the monitor, with the questions on standby in its issue;
+  - his decision on 0099's proposal;
+  - 0097's cold path, which is his decision;
+  - his look at the 3440x1440 picture (0095's criterion 4).
+- **For the owner session:**
+  - this task's bench run, then `SHORT_WATCH`'s value;
+  - closing 0098 once it has landed.
+
 ## Acceptance criteria
 
 - [x] Host cases: nothing for an hour; an underflow after the offer caught within a second and undone as the watch does,
