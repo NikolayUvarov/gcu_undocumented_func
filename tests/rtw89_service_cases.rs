@@ -816,7 +816,12 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
     let Some(Event::Traffic{tx,..})=traffic else{panic!("no traffic line")};
     assert_eq!((tx.late,tx.first_try,tx.not_acked,tx.busy,tx.answered_late,tx.parked),(10,10,0,1,10,0),"{tx:?}");
-    assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");assert!(tx.median_hold_ms>=90,"{tx:?}");
+    assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");
+    // 213-DRV-0104: the two sends in time binned by their answer's time, every arrival after the first by its gap since
+    // the answer before it (13 arrivals: ten late, one refused, two in time), and the busiest second.
+    assert_eq!((tx.answer_ms.iter().sum::<u32>(),tx.gap_ms.iter().sum::<u32>()),(2,12),"{tx:?}");
+    assert!(tx.answer_ms[..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
+    assert!(tx.peak_sends>=2&&tx.peak_sends<=13,"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
     assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
     let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};
     drop(service);clean();
