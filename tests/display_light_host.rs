@@ -163,6 +163,9 @@ struct Engine {
     refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
     // Time the log spent (the survey's pacing, `Paced`), added to the clock at the next access (213-DRV-0098).
     pace: Option<Rc<Cell<u64>>>,
+    // Live bits, not latched: at the first offset, the second's bits read as set from the third microsecond to the fourth
+    // (OPTC_UNDERFLOW_OCCURRED_CURRENT beside the latched OCCURRED_STATUS, 213-DRV-0103).
+    window: Vec<(u32, u32, u64, u64)>,
 }
 impl Engine { fn catch_up(&mut self) { if let Some(p) = &self.pace { self.clock += p.replace(0); } } }
 impl Screens for Engine {
@@ -202,6 +205,7 @@ impl Bus for Engine {
         for &(at, bits) in &self.set { if at == o { v |= bits; } }
         for &(at, ack) in &self.follow { if at == o { v = (v & !ack) | ((v & (ack >> 1)) << 1); } }
         for &(at, bits, from) in &self.timed { if at == o && self.clock >= from { v |= bits; } }
+        for &(at, bits, from, to) in &self.window { if at == o && (from..to).contains(&self.clock) { v |= bits; } }
         for &(at, bits, src, mask) in &self.derived {
             if at == o { let s = if src == o { *self.regs.get(&o).unwrap_or(&0) } else { *self.regs.get(&src).unwrap_or(&0) }; v = if s & mask != 0 { v | bits } else { v & !bits }; }
         }
@@ -1901,4 +1905,168 @@ fn hpd_followed_on_the_model_an_unplug_takes_back_a_plug_runs_steps_1_to_4_again
     let again: Vec<Ev> = e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
     assert_eq!(again, first);
     assert_eq!(f.state(), hpd::State::Lit);
+}
+
+// --- the standing check (213-DRV-0103) ---
+
+// All sixteen stages at 3440x1440 on `e`, with a watch of `frames`: the run kept for the check, and the clock at the offer.
+fn lit_on<'a>(e: &mut Engine, img: &'a [u8], frames: u32) -> (Lit<'a>, u64) {
+    let (outcome, lit, log) = light_up(wide().with_watch(frames), img, e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(6)..]);
+    let offered = e.clock;
+    (lit, offered)
+}
+
+// The check once a second for `seconds` (display's loop, on the model's clock): the lines it logged, and the second
+// and failure of the first finding, which it then undoes as display does.
+fn standing_for(e: &mut Engine, lit: &mut Lit, offered: u64, seconds: u64) -> (Vec<String>, Option<(u64, Failure)>) {
+    let mut log = Log(vec![]);
+    let mut account = light::Standing::new(e.clock);
+    for second in 1..=seconds {
+        e.clock += light::STANDING_US;
+        if let Err(why) = light::standing_check(&lit.l, e, &lit.journal, &mut account, &mut log) {
+            let since = e.clock - offered;
+            assert!(light::standing_undo(&lit.l, e, &mut lit.interp, &mut lit.journal, 16, why, since, &mut log));
+            return (log.0, Some((second, why)));
+        }
+    }
+    (log.0, None)
+}
+
+#[test]
+fn the_standing_check_finds_nothing_for_an_hour_says_so_every_ten_minutes_and_writes_nothing() {
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let made = writes(&e).len();
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 3600);
+    assert_eq!(found, None);
+    assert_eq!(writes(&e).len(), made, "the check wrote");
+    assert!(!e.ev.contains(&Ev::Gone));
+    assert_eq!(log, vec!["S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE".to_string(); 6]);
+    // A check kept from running for three seconds shows in the next line's longest time.
+    let mut account = light::Standing::new(e.clock);
+    let mut out = Log(vec![]);
+    for k in 1..=600u64 {
+        e.clock += if k == 300 { 3 * light::STANDING_US } else { light::STANDING_US };
+        light::standing_check(&lit.l, &mut e, &lit.journal, &mut account, &mut out).unwrap();
+    }
+    // 598 checks fill the ten minutes with the three seconds lost.
+    assert_eq!(out.0, ["S15 STANDING CHECK: 598 CHECKS IN 10 MIN, THE LONGEST 3000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE"]);
+}
+
+#[test]
+fn an_underflow_10_s_after_the_offer_is_caught_within_a_second_and_undone_as_the_watch_undoes_the_mark_kept() {
+    let img = good();
+    let (cntl1, dpg1, mark) = (reg(R::HubpCntl, 1), reg(R::DpgControl, 1), reg(R::OtgVerticalInterrupt2Position, 1));
+    let mut e = engine();
+    e.frame_us = DP2;
+    e.regs.insert(cntl1, 0x000F_001B); // HUBP1 blanked, as step 1 read it on the Ryzen
+    let before = e.regs.clone();
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    // HUBP1's underflow status latched 10.4 s after the offer, as the hardware latches it until its clear bit.
+    e.timed.push((cntl1, 1 << 28, offered + 10_400_000));
+    let made = e.ev.len();
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 60);
+    let (second, why) = found.expect("not caught");
+    assert_eq!(second, 11, "caught at the first check after it");
+    assert!(matches!(why, Failure::Underflow { offset, .. } if offset == cntl1), "{:?}", why);
+    // The watch's own undo: the pattern on and HUBP1 blanked first, then screen_gone, then 14 to 1.
+    let after: Vec<Ev> = e.ev[made..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Gone)).cloned().collect();
+    assert!(matches!(after[0], Ev::Write(o, v) if o == dpg1 && v & 1 == 1), "{:?}", &after[..3]);
+    assert!(matches!(after[1], Ev::Write(o, v) if o == cntl1 && v & 1 == 1), "{:?}", &after[..3]);
+    assert_eq!(after[2], Ev::Gone);
+    let line = log.iter().find(|x| x.starts_with("S15 STANDING CHECK: AN UNDERFLOW AT 0EE3C")).expect("its line");
+    assert!(line.contains(" 11 S AFTER THE OFFER; STAGE 15'S WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING 16 (SCREEN_GONE) AND STAGES 14 TO 1"), "{}", line);
+    assert_eq!(log.last().unwrap(), "STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT");
+    let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
+    // Stage 15 at once, then 16 (screen_gone), then 14 to 1.
+    assert_eq!(undone, [15u8, 16].into_iter().chain((1..=14).rev()).collect::<Vec<u8>>());
+    // Every register as before step 3 but the mark, which stays: a start again runs no stage.
+    restored_but(&e, &before, &[]);
+    assert_eq!(e.regs[&mark], light::RESTART_MARK);
+    let (outcome, _, _) = light_up(wide(), &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+    for x in &log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+}
+
+#[test]
+fn the_firmwares_underflow_and_a_request_timeout_are_caught_alike() {
+    let img = good();
+    let (cntl0, cntl1) = (reg(R::HubpCntl, 0), reg(R::HubpCntl, 1));
+    for (at, bits, want) in [(cntl0, 1u32 << 28, format!("AN UNDERFLOW AT {:05X}", cntl0)), (cntl1, 2 << 20, format!("A REQUEST TIMEOUT AT {:05X}", cntl1))] {
+        let mut e = engine();
+        e.frame_us = DP2;
+        let before = e.regs.clone();
+        let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+        e.timed.push((at, bits, offered + 3_500_000));
+        let (log, found) = standing_for(&mut e, &mut lit, offered, 10);
+        assert_eq!(found.map(|f| f.0), Some(4), "{:#?}", log);
+        assert!(log.iter().any(|x| x.starts_with(&format!("S15 STANDING CHECK: {}", want))), "{} {:#?}", want, log);
+        assert_eq!(e.ev.iter().filter(|x| **x == Ev::Gone).count(), 1);
+        restored_but(&e, &before, &[at]);
+    }
+}
+
+#[test]
+fn an_odm_underflow_that_is_over_within_the_second_is_still_caught_by_its_latched_status() {
+    // OPTC_UNDERFLOW_OCCURRED_STATUS (bit 10) is latched until OPTC_UNDERFLOW_CLEAR (bit 12); _OCCURRED_CURRENT (bit 13)
+    // is live (dcn_2_1_0_sh_mask.h; Display Core reads the status, then clears it). An underflow of 100 ms between two
+    // checks: the live bit is back to 0 at the check, the latched one is not.
+    let img = good();
+    let odm1 = reg(R::OptcInputGlobalControl, 1);
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let t = offered + 5_200_000;
+    e.timed.push((odm1, 1 << 10, t));
+    e.window.push((odm1, 1 << 13, t, t + 100_000));
+    let checked_at = offered + 6_000_000;
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 10);
+    assert_eq!(found.map(|f| f.0), Some(6));
+    assert!(matches!(found.unwrap().1, Failure::Underflow { offset, value } if offset == odm1 && value & 1 << 10 != 0 && value & 1 << 13 == 0), "{:?}", found);
+    assert!(checked_at > t + 100_000, "the live bit was over before the check");
+    assert!(log.iter().any(|x| x.starts_with(&format!("S15 STANDING CHECK: AN UNDERFLOW AT {:05X}", odm1))), "{:#?}", log);
+}
+
+#[test]
+fn an_underflow_one_frame_after_the_watch_ends_is_caught_within_a_second_with_either_watch() {
+    let img = good();
+    let (cntl1, dpg1) = (reg(R::HubpCntl, 1), reg(R::DpgControl, 1));
+    for frames in [light::WATCH_FRAMES, light::SHORT_WATCH_FRAMES] {
+        let mut e = engine();
+        e.frame_us = DP2;
+        let before = e.regs.clone();
+        // Latched one frame after the watch's last, counted from the pattern going off.
+        e.arm.push((dpg1, 1, cntl1, 1 << 28, (frames as u64 + 1) * DP2));
+        let (outcome, mut lit, log) = light_up(wide().with_watch(frames), &img, &mut e, 16);
+        assert_eq!(outcome, Outcome::Stopped { done: 16 }, "the watch of {} saw it: {:#?}", frames, &log[log.len().saturating_sub(6)..]);
+        assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK DONE") && x.contains(&format!("WATCHED {} FRAMES IN ", frames))), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+        let offered = e.clock;
+        let (_, found) = standing_for(&mut e, &mut lit, offered, 5);
+        assert_eq!(found.map(|f| f.0), Some(1), "watch {}", frames);
+        restored_but(&e, &before, &[cntl1]);
+    }
+}
+
+#[test]
+fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+    assert_eq!((l.watch_frames, light::WATCH_FRAMES, light::SHORT_WATCH_FRAMES), (300, 300, 60));
+    assert_eq!(l.with_watch(1000).watch_frames, 300, "never longer than the watch was");
+    let short = wide().with_watch(light::SHORT_WATCH_FRAMES);
+    let mut e = engine();
+    e.frame_us = DP2;
+    let img = good();
+    let (outcome, _, log) = light_up(short, &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let watched = log.iter().find(|x| x.starts_with("S15 WATCHED ")).unwrap();
+    assert!(watched.starts_with("S15 WATCHED 60 FRAMES OF OTG1 IN "), "{}", watched);
+    assert_eq!(log.iter().filter(|x| x.starts_with("S15 FRAMES ")).count(), 1, "one line of 60 marks");
+    // The build refuses a short watch without the check: main.rs's const assertion, which no host case can build.
+    let main = include_str!("../display/src/main.rs");
+    assert!(main.contains("const _: () = assert!(!SHORT_WATCH || STANDING_CHECK"));
+    assert!(main.contains("const STANDING_CHECK: bool = false;") && main.contains("const SHORT_WATCH: bool = false;"));
 }
