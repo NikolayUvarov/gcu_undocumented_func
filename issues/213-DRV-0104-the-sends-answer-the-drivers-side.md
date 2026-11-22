@@ -330,6 +330,96 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **Host case** `service_probes_and_places_releases_only_with_the_minute_detail`: without the switch, no probe of the held frame or the in-time one and no release placed in the beacon interval; with it, both probes and the releases placed. The minute's late and tried sends are counted either way. The held-frame case raises the switch.
 - The 40 `rtw89_*_host.rs` files pass: 4890 cases, 0 failed. `02_build.sh` builds.
 
+**2026-11-22, boot 99's figures for the tight poll, and the late wake-ups under uploads** (the cable's pieces at 18:23 and 18:28 UTC and its tail at 18:42, joined: 25 minute lines to 1512.7 s; counted by `tight.py` and `paired.py --kind tight`, /home/un/.local/share/mind-bench/wifi/; their output in S/handoff/wifi/boot99/tight.txt and paired.txt):
+- **What the minutes held:** 12 OFF and 12 ON after the partial first. The owner's pings fell in 7 minutes (137 to 394 s, 704 to 746 s), CAM's two cameras streamed at 465 to 650 s (two whole minutes, two at the edges), and 17 uploads of 225,391 bytes ran at 796 to 1506 s, 16 of them the owner's load from 18:31:42 UTC.
+- **The in-time answer by size,** pooled, the four camera minutes left out. The share answered within 2 / 4 / 6 / 10 ms:
+
+  | Size | OFF | ON |
+  |---|---|---|
+  | under 200 B | 0 / 23 / 81 / 93% of 1664 | 56 / 73 / 75 / 91% of 1678 |
+  | 200 to 1000 B | 0 / 17 / 73 / 86% of 882 | 40 / 67 / 70 / 86% of 872 |
+  | over 1000 B | 0 / 17 / 67 / 83% of 2998 | 27 / 61 / 63 / 86% of 2483 |
+
+- **The final submission,** the same minutes:
+  - **To its fetch seen:** ON, 92 to 95% within 250 µs. OFF, none within 750 µs, 11 to 15% within 2 ms and 96 to 97% within 4 ms: the next step's look, early when a request ended its wait.
+  - **From the fetch to the release seen, ON:** under 200 B, 50% within 250 µs, 69% within 750 µs, 78% within 2 ms. Over 1000 B, 6%, 47% and 70%; 26% after 4 ms and 7% after 10 ms.
+  - OFF puts 78 to 92% in the first bin: the fetch and the release are seen at the same poll, which says nothing of the hardware.
+- **The record corrected.** The section above says small frames were released within 250 µs of the fetch and full-size ones mostly within 250 to 750 µs. Over the whole boot, half the small ones were and under half the full-size ones.
+  - About 30% of full-size frames were not released within the tight poll's 2 ms. Their releases fall in the loop's bins again (4 to 6 ms: 336 of 2488), and 7% after 10 ms.
+  - So their release came somewhere between 2 ms and the time it was seen. For a third of full frames on this channel, the 2 ms window is too short.
+- **The gap from an answer to the next send:** within 2 ms, 28% OFF and 18% ON; at 10 to 12 ms (wlan's POLL_MS), 14 and 17%; at 30 ms or more, 29 and 32%. A sooner answer still meets wlan's tick and TCP's turn.
+- **The uploads,** machine-timed (the gateway's `open-file … admitted` to the agent's `COMPLETED`):
+  - OFF: 9, median 3.5 s, mean 4.2 s. ON: 6, median 4.6 s, mean 4.7 s. SD 1.1 s, rank-sum p 0.48. Two straddled a boundary (4.4 and 4.6 s). None failed.
+  - So no effect is shown. About 1.8 s could have been resolved.
+  - 225,391 bytes in 3.0 to 6.2 s is 36 to 75 KB/s, faster than boot 95's median of 4.9 s and boot 96's 8.1 s for the same file: the hour again.
+  - The owner's times for the same 16 uploads, from this PC (load-boot-99.tsv), were 9.9 to 23.4 s. The machine's part was 3 to 6 s. The rest lies outside the Ryzen: the Effector server is on the Internet (hesere.uz), not on the LAN.
+- **The pings,** median of each run of 200: ON 9.2 to 20.1 ms (13.3 the median of the runs), OFF 5.6 to 25.1 ms (14.7). The three OFF runs at 704 to 720 s had medians of 5.6 to 6.0 ms, and the four after them 12.6 to 15.2 ms. So whatever moves a ping's median, it is not the tight poll.
+- **Late frames:** 0.004 a send in both kinds (21 of 5864 OFF, 23 of 5346 ON); busy refusals 11 and 8.
+- **The driver's CPU:**
+  - ON minutes made 1,623 to 10,723 tight polls (median 5,008), 11.1 a send. At their pace of 100 µs that is about 0.8% of one CPU at the median and 1.8% at the most.
+  - The steps' work over 5 ms: 14 to 191 a minute in ON minutes, the longest 6.8 ms, against 0 or 1 in OFF minutes (the longest 5.1 ms).
+  - The light poll's own reads are not timed. A `ps` at the start and end of an ON and an OFF minute would give the CPU time itself.
+- **The late wake-ups by what the minute held** (the SERVICE STEPS line, either kind of minute):
+
+  | Minutes | n | Waits over 5 ms a minute | Over 10 ms | The longest | Sends a minute |
+  |---|---|---|---|---|---|
+  | quiet | 3 | 311 to 402 (median 384) | 214 to 268 | 18.5 to 19.3 ms | 151 |
+  | pings | 7 | 345 to 431 (373) | 237 to 311 | 18.0 to 20.6 ms | 949 |
+  | uploads | 11 | 301 to 431 (369) | 229 to 317 | 18.3 to 19.4 ms | 404 |
+  | cameras, whole minutes | 2 | 0 and 0 | 0 and 0 | 3.0 and 3.2 ms | 146 and 148 |
+  | cameras, the edges | 2 | 194 and 144 | 129 and 102 | 18.0 and 18.4 ms | 155 and 147 |
+
+  - **An upload load alone does not make the waits punctual; the cameras' streams did.** The uploads keep wlan, netstack and tls busy and the driver sending 400 frames a minute, and the waits stay as on the quiet machine.
+  - What the camera minutes add that the uploads do not is not shown by these lines. usb_host answering bulk transfers from its loop (000-DRV-0101) is one candidate: a task that hardly idles.
+- **A start failure, apart:** at 5.6 s the first `rtw89_wifi` stopped in the receive-only stage, `Radio(Listen(Permit(Register(Fault { kind: Timeout, register: 4112 }))))`: a read of DMA_STOP (0x1010) outran its budget. The device stopped cleanly, `init` started a fresh driver at 5.6 s, and it came up. That path (phy.rs, listen.rs) is not changed by this branch. Boots 93, 95, 96 and 98 each started the driver once.
+- **Not shown:** another boot, hour, access point or machine (MC-12.1, 12.9); an upload effect smaller than about 1.8 s; the cause of the wake-ups.
+
+**2026-11-22, the uplink over the LAN with nothing listening on the Ryzen** (reading only; nothing run):
+- **Why:** every upload measured so far went through the Effector server, which is on the Internet (hesere.uz), over TLS. Boot 99's machine-timed uploads took 3 to 6 s for 225 KB, and the gap to the next send was 30 ms or more for a third of sends: TCP's turn over that path, which a LAN measurement would take out.
+- **The tool exists: `netbench <a.b.c.d>:<port> [MiB]`** (issue 106, `netbench/src/main.rs`, in the image). It connects out, so nothing listens on the Ryzen:
+  - DOWN: the server sends n MiB over TCP; UP: netbench sends n MiB and the server answers `OK` once it has them all; then 500 UDP round trips of 64 bytes; then the stack's checksum loop.
+  - Each phase prints its rate in KiB/s and the CPU that `netstack` and the card drivers spent per MiB, from `sysmon`: `NETBENCH UP 4194304 BYTES … MS … KIB/S NETSTACK … US/MIB DRIVERS … US/MIB`.
+  - **Its DRIVERS figure counts `virtio_net` alone** (`cpu()`, netbench/src/main.rs:34). On the Ryzen it reads 0; `wlan` and `rtw89_wifi` are not counted. That is a change in netbench, NET's (issue 106), not ours.
+- **This PC's side:** `/home/un/.local/share/mind-bench/wifi/benchsrv.py PORT` is `tests/qemu_smoke.py`'s `_Bench` and `_bench_server` on a fixed port (TCP and a UDP echo on the same number), with a line for each connection as this end saw it. Tested on 127.0.0.1 only: 1 MiB each way and a datagram echoed. LEG9 is 192.168.2.211 on the LAN; WSL's TCP port 8724 was reachable from the Ryzen under Linux (putsrv.py). Whether UDP is reachable the same way is not known.
+- **What it needs on the Ryzen,** each the owner's:
+  1. Two lines of the network policy, as the QEMU suite writes them (qemu_smoke.py:16833): `netbench 192.168.2.211 tcp 8725 600 100000000` and `netbench 192.168.2.211 udp 8725`. `netpolicy add <line>` asks at the console (Y). The link's client may not change the policy; the link's console in the owner's `link-console` mode may (docs/network/policy.md:128).
+  2. `netbench 192.168.2.211:8725 4` typed at the console's shell, which starts it with the flow grant. `submit run` from the cable gives a program no network grant, so it would print `NETBENCH CONNECT: NO GRANT`.
+  3. Its lines go to the system log too, read over the cable as now.
+- **With no typing at all,** the link's shell runs `ping`: `ping -f -s 1472 -c 500 <host>` sends the next request at its reply, one full frame at a time. That gives a frame's round trip, not a stream's rate (boot 99's runs: medians 6 to 25 ms). Whether this PC answers ICMP echo through Windows' firewall is not known; the gateway 192.168.2.1 does.
+- **Not a tool to write:** netbench is the smallest that measures a stream. Only its driver count wants changing, and that is NET's.
+
+## For a successor (state on 2026-11-22, 19:15 UTC)
+
+`S` is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad. Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s and [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md)'s sections "For a successor".
+
+**Branches** (both pushed):
+- `claude/213-DRV-0102-floor-and-answer` (worktree S/a-wifi2): main 7346ab3d5 merged at afb343dfc; MINUTE_DETAIL at 4abae4eaa; then text only (this section, boot 99's figures, the LAN uplink). The landing candidate. On 4abae4eaa, LEG9: `02_build.sh` success; the full `scripts/host_tests.sh` with MIND_SSHD exit 0, 265 Rust result lines, 6687 passed, 0 failed, 22 ignored (its log: /home/un/.local/share/mind-bench/wifi/full-4abae4eaa.log). The owner posts the landing request.
+- `claude/213-DRV-0104-begin-light` (worktree S/a-wifi3): on 4abae4eaa, the receive-to-dispatch and dispatch-to-submission lines (1c4673e60) and BEGIN_LIGHT with its alternation (8e8bbbced), the landing branch's text merged in after. The 40 `rtw89_*_host.rs` files (4891 cases) and the build only; not run on the Ryzen.
+
+**The switches as committed:** `service::PORT_AS_LINUX` true; `LATE_ANSWER` NotAcknowledged; `SEND_BEHIND_LATE`, `SEND_BEHIND_LATE_ALTERNATES`, `POLL_TIGHT_WHILE_PENDING`, `POLL_TIGHT_ALTERNATES`, `BEGIN_LIGHT`, `BEGIN_LIGHT_ALTERNATES` false; `detection_floor::DETECTION_FLOOR_AS_LINUX`, `DETECTION_FLOOR_ALTERNATES` false; `receive_service::MINUTE_DETAIL` false; `mac::HALT_INTERRUPT_AS_LINUX` false. **A bench image raises MINUTE_DETAIL,** or none of the minute lines the scripts read is printed.
+
+**The next bench run proposed** (the owner's to take): the begin-light head with MINUTE_DETAIL, POLL_TIGHT_WHILE_PENDING and BEGIN_LIGHT_ALTERNATES true. The tight poll in every minute takes the loop's 4 to 6 ms out of the answer, so ON and OFF minutes differ in the begin alone. Read DISPATCH TO SUBMISSION and RECEIVE TO DISPATCH by kind, then the in-time answers: `tight.py LOG --kind light` labels the minutes by the LIGHT label of the DISPATCH TO SUBMISSION line.
+
+**Tools** (/home/un/.local/share/mind-bench/wifi/, kept across restarts):
+- `tight.py LOG [--cameras A-B] [--pings RUNS.tsv]...`: the tight poll's paired figures and the waits by what the minute held (boot 99's output: S/handoff/wifi/boot99/tight.txt);
+- `perminute.py LOG`: the driver's lines and bytes a minute;
+- `benchsrv.py PORT`: netbench's server on this PC (below);
+- `paired.py`, `join_cable.py`, `boot-report.sh` as before.
+
+**Open, in order:**
+1. The landing (the owner's).
+2. The BEGIN_LIGHT run above, then the in-time answers.
+3. The tight window: about 30% of full-size frames were released after its 2 ms (boot 99). A longer TIGHT_US catches them at more spin; a punctual wake-up (KRN's) catches them without.
+4. `advance` makes the full checks and the reconcile, then the reconcile again, every step a send is pending, and `progress` calls it twice a step. A light `advance` within CHECK_MS is the lever after BEGIN_LIGHT. Not written.
+5. The LAN uplink with netbench (below), the owner's to run.
+6. NET's answers on steps 1 to 3.
+
+**Traps:**
+- The full host suite compiles the worktree's files as they are: change nothing there while it runs.
+- The host model's receive waits its whole 2 ms with a request queued, so FOUND WAITING is 0 in host cases.
+- In host cases with the frame buffer full, a release is read only on the RPQ-alone path (`service.rpq_alone()`).
+- `pkill -f` with a pattern that the shell's own command line holds kills that shell.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
