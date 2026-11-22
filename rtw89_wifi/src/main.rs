@@ -312,7 +312,7 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
-        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e, polls: [q, p], tx } => {
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e, polls: [q, p], tx, floor } => {
             if let Some(r) = refused { for (n, (length, head)) in r.frames[..r.count].iter().enumerate() {
                 mind::println!("[RTW89] REFUSED FRAME {} OF THE FIRST {}: {} BYTES, {:02X?}", n + 1, r.count, length, head);
             } }
@@ -328,6 +328,12 @@ fn served(event: receive_service::Event) {
                 channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
+            let [pd, cck, limit, edcca] = floor.registers;
+            mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; SET AS LINUX: {} (213-DRV-0102)",
+                channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, if floor.set { "YES" } else { "NO" });
+            let r = floor.ppdu_rssi;
+            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
+            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {} (213-DRV-0102)", channel, &r[9..], floor.unparsed);
             let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
             mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
                 channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
@@ -386,6 +392,12 @@ fn served(event: receive_service::Event) {
                 channel, path, c.dpk_txagc, c.dpk_thermal, c.dpk_correlation, c.dpk_dc[0], c.dpk_dc[1], dpk_gain_scale,
                 if c.dpk_ok() { "PASS" } else { "FAIL" }, c.tssi_alignment, c.tssi_reports);
         },
+        receive_service::Event::FloorSet { channel, dbm, measured, ofdm_pd, cck_pd, edcca, written, registers: [pd, cck, limit, level] } =>
+            mind::println!("[RTW89] DETECTION FLOOR ON {} AS LINUX FOR THE AP AT {} DBM ({} BEACONS): OFDM PD {} (-{} DBM), CCK PD {:02X} ({} DBM), EDCCA {} ({} DBM){}; 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X} (213-DRV-0102)",
+                channel, dbm, measured, ofdm_pd, 102 - 2 * i16::from(ofdm_pd), cck_pd, cck_pd as i8, edcca, i16::from(edcca) - 128,
+                if written { "" } else { ", NOT AS WRITTEN" }, pd, cck, limit, level),
+        receive_service::Event::FloorRefused { channel } =>
+            mind::println!("[RTW89] DETECTION FLOOR NOT SET ON CHANNEL {}: ITS VALUES ARE KNOWN FOR 2.4 GHZ 20 MHZ ONLY (213-DRV-0102)", channel),
         receive_service::Event::SerStep { count, from, to, since_us, polls: [q, p] } =>
             mind::println!("[RTW89] SER_DBG_INFO STEP {}: {:08X} -> {:08X}, SEEN {} US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {} (213-DRV-0091)",
                 count, from, to, since_us, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting),
