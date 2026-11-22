@@ -136,6 +136,8 @@ struct Engine {
     regs: HashMap<u32, u32>, clock: u64, ev: Vec<Ev>, frames: u32, frames_move: bool,
     // After a write to the first offset, the model sets the second to the third: the firmware's pipe changed by the hardware.
     hook: Option<(u32, u32, u32)>,
+    // After a write to the first offset that clears the bits of the second, the model sets the third to the fourth.
+    clear_hook: Option<(u32, u32, u32, u32)>,
     // Statuses the hardware sets: bits that read as set, and acknowledge bits that read as their request bit (one lower).
     set: Vec<(u32, u32)>, follow: Vec<(u32, u32)>,
     // Status bits that read as set while bits of a register (the same or another) are set: (at, bits, source, mask).
@@ -187,6 +189,7 @@ impl Poke for Engine {
             else if (0..4).any(|t| reg(R::OtgControl, t) == o) { (v & !0x1_0000) | (v & 1) << 16 } else { v };
         self.regs.insert(o, v);
         if let Some((at, target, value)) = self.hook { if at == o { self.regs.insert(target, value); } }
+        if let Some((at, mask, target, value)) = self.clear_hook { if at == o && v & mask == 0 { self.regs.insert(target, value); } }
         for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); self.derived.retain(|s| s.0 != status); } }
         if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
     }
@@ -512,9 +515,11 @@ fn stages_9_and_10_measure_the_firmwares_clock_derive_pipe_1_and_draw_the_pictur
 fn stage_9_on_what_boot_70_read_takes_its_reference_clock_from_per_htotal() {
     // Boot 70's pipe 0: its REF_FREQ_TO_PIX_FREQ gives 43.8 MHz, its PER_HTOTAL Display Core's formula at 48 MHz, the
     // crystal through REFCLK_CNTL 0 and the timer's divider 1. Pipe 1 then gets what Display Core would program.
+    // Boot 71 (release 202611220554) read the same values and ran stages 9 and 10 on them.
     let l = step4(Some(boot70_reference()));
     let mut e = engine();
     e.frame_us = 16_674; // DP-2 at 59.973 Hz, as boot 70 counted
+    e.regs.insert(reg(R::HubpCntl, 1), 0x000F_001B); // HUBP1 blanked, as step 1 read it
     let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
     assert_eq!(outcome, Outcome::Stopped { done: 15 }, "{:#?}", log.iter().filter(|x| x.starts_with("S9") || x.starts_with("STEP")).collect::<Vec<_>>());
     let s9: Vec<&String> = log.iter().filter(|x| x.starts_with("S9 ")).collect();
@@ -531,6 +536,12 @@ fn stage_9_on_what_boot_70_read_takes_its_reference_clock_from_per_htotal() {
     assert_eq!((g(R::HubpreqRefFreqToPixFreq, 1), g(R::HubpreqDstDimensions, 1), g(R::HubpreqPerLineDelivery, 1)), (169_466, 182_044, 620));
     assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1) & 0x7F_FFFF, 21_183);
     assert_eq!((g(R::MpccTopSel, 1), g(R::MpccBotSel, 1), g(R::MpccOppId, 1), g(R::MpcOutMux, 1)), (1, 0xF, 1, 1));
+    // HUBP1's CNTL: stage 13 keeps it blanked (VREADY 0, as the firmware's), stage 15 unblanks it; the pattern then off.
+    let cntl: Vec<u32> = writes(&e).into_iter().filter(|x| x.0 == reg(R::HubpCntl, 1)).map(|x| x.1).collect();
+    assert_eq!(cntl, [0x000F_001B, 0x000F_001A]);
+    assert!(log.iter().any(|x| x == "S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)"));
+    assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919"));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 15 AS THIS BUILD ALLOWS"));
 }
 
 #[test]
@@ -568,7 +579,11 @@ fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares()
     }
     for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
     // The log: the pitch, and no new underflow twice.
-    assert!(log.iter().any(|x| x == "S13 PITCH FIELD 1919 (1920 PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP0 HOLDS 2560"));
+    assert!(log.iter().any(|x| x == "S13 PITCH FIELD 1919 (1920 PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP0 HOLDS 2560 FOR ITS 2560 PIXELS"));
+    // The pitch read back just after it is written, and logged with its field.
+    let pitch = log.iter().position(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919").expect("the read-back");
+    assert!(log[pitch - 1].starts_with("S13 WROTE HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F"));
+    assert!(log.iter().any(|x| x == "S13 WILL READ HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C BACK"));
     assert_eq!(log.iter().filter(|x| x.starts_with("S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1")).count(), 2);
     // The attached HUBP is watched until stage 10, then is step 4's own.
     for n in 5..=15u8 { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED", n))), n <= 10, "stage {}", n); }
@@ -588,6 +603,14 @@ fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares()
     let before = e.regs.clone();
     assert_eq!(run_light(&l, &good(), &mut e, 15, true).0, Outcome::Undone { done: 15 });
     restored_but(&e, &before, &[]);
+    // A register that does not keep what was written (as if it rounded the pitch): said, with both fields; not a failure.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let at = reg(R::HubpreqSurfacePitch, 1);
+    e.hook = Some((at, at, 0x780));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 00000780, NOT 0000077F AS WRITTEN: FIELD 1920, NOT 1919"));
 }
 
 #[test]
@@ -601,6 +624,44 @@ fn an_underflow_at_stage_15_fails_and_is_undone_whole_and_a_busy_mpcc_stops_step
     let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
     match outcome { Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == reg(R::HubpCntl, 1) => {}, o => panic!("{:?} {:#?}", o, &log[log.len().saturating_sub(12)..]) }
     assert!(log.iter().any(|x| x == "STEP 3 FAILED AT STAGE 15 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    // At once: stage 15's writes put back, last first, before any line, then named; then stages 14 to 1.
+    let failed = log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).unwrap();
+    assert!(log[failed].ends_with("; ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING STAGES 14 TO 1"), "{}", log[failed]);
+    let found = log[..failed].iter().rposition(|x| x.starts_with("S15 ")).unwrap();
+    assert!(log[found + 1..failed].iter().all(|x| x.starts_with("U15 ")), "{:#?}", &log[found..failed]);
+    assert!(log[found + 1].starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL AT 0EE3C = ") && log[found + 1].ends_with(" AT ONCE"), "{:#?}", &log[found..failed]);
+    assert_eq!(log.iter().filter(|x| x.starts_with("U15 RESTORED")).count(), 1, "the pattern was still on: one write to put back");
+    assert!(log[failed + 1..].iter().any(|x| x.starts_with("U14 RESTORED")));
+    // The writes in order, with HUBP1's status read as underflowing once its surface is set (stage 13), its CNTL kept:
+    // the unblank, then at once HUBP1's CNTL as stage 13 left it.
+    let cntl = reg(R::HubpCntl, 1);
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.derived.push((cntl, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0));
+    assert!(matches!(run_light(&l, &good(), &mut e, 15, false).0, Outcome::Failed { stage: 15, why: Failure::Underflow { .. } }));
+    let pipe_1 = |e: &Engine| -> Vec<(u32, u32)> {
+        let w: Vec<(u32, u32)> = writes(e).into_iter().filter(|x| x.0 == cntl || x.0 == reg(R::DpgControl, 1)).collect();
+        w[w.iter().position(|x| x.0 == cntl).unwrap()..].to_vec() // from stage 13's
+    };
+    let w = pipe_1(&e);
+    assert_eq!((w[1].0, w[1].1, w[2]), (cntl, w[0].1 & !0x1001, (cntl, w[0].1)), "unblanked, then put back at once: {:X?}", w);
+    // The underflow after the pattern is off: both writes put back at once, the pattern first, then HUBP1's CNTL.
+    let flag = 0xF_FFF0;
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.clear_hook = Some((reg(R::DpgControl, 1), 1, flag, 1));
+    e.derived.push((cntl, 1 << 28, flag, 1));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { .. } }), "{:?}", outcome);
+    let failed = log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED")).unwrap();
+    let names: Vec<&String> = log[..failed].iter().filter(|x| x.starts_with("U15 RESTORED")).collect();
+    assert_eq!(names.len(), 2, "{:#?}", names);
+    assert!(names[0].starts_with("U15 RESTORED DPG1_DPG_CONTROL") && names[1].starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL"), "{:#?}", names);
+    let w = pipe_1(&e);
+    let off = w.iter().position(|x| x.0 == reg(R::DpgControl, 1) && x.1 & 1 == 0).unwrap();
+    let stage_13 = w.iter().find(|x| x.0 == cntl).unwrap().1;
+    assert_eq!((w[off + 1].0, w[off + 1].1 & 1, w[off + 2]), (reg(R::DpgControl, 1), 1, (cntl, stage_13)), "the pattern on, then HUBP1's CNTL: {:X?}", w);
+    restored_but(&e, &before, &[flag]);
     restored_but(&e, &before, &[reg(R::HubpCntl, 1)]);
     assert_eq!(e.regs[&reg(R::DpgControl, 1)] & 1, before.get(&reg(R::DpgControl, 1)).copied().unwrap_or(0) & 1);
     // Pipe 1's MPCC or its OPP's mux in use: stage 9 is not ready, says which and with what values, and stops with first
