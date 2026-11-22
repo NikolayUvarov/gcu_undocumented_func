@@ -609,9 +609,12 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         self.queue.park().map_err(|e|Failure{stage:Stage::Runtime,cause:Cause::Tx(e),shutdown:None})?;self.tx_deadline=None;Ok(())
     }
     /// 213-DRV-0104: the parked frame's release, if it came (the rings are read by the steps' polls, as for any send).
+    /// With a send pending, `advance` made the checks and the reconcile this step, and only a recovery is looked for.
     pub(crate) fn parked_release(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;
+            let deadline=if self.queue.pending_request(){deadline}else{let d=self.live(deadline)?;self.reconcile(d)?;d};
+            let deadline=self.outlast_ser(deadline,true)?;
             if !self.queue.parked(){return Ok(None)}
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.parked_release(&mut window);self.session.last=window.last;

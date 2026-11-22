@@ -142,7 +142,7 @@ This issue is the driver's side of each, and what the driver can mend alone now.
 - **`DataSession`:** `park()` (the data mode's TX deadline cleared with it), and `parked_release()` under the same live, reconcile and OUTLAST_SER prologue as `advance`.
 - **`Service`:**
   - With `SEND_BEHIND_LATE`, a send arriving while the pending one was answered late parks that one and begins behind it. Otherwise, as before, it is answered `busy`.
-  - Each step settles the parked frame's release before the pending one's, by `finish_parked`. A parked frame not released by its deadline (LATE_MS) stops the service as TransmitTimeout, as a late one does.
+  - Each step settles the parked frame's release after the pending one's, by `finish_parked`. With a send pending, `advance` has made the checks and the reconcile in that step, so the parked release looks only for a recovery (OUTLAST_SER). With none pending it makes the full prologue, as `advance` would. So a parked frame adds two register reads a step and the queue's own index reads, not a second set of checks. A parked frame not released by its deadline (LATE_MS) stops the service as TransmitTimeout, as a late one does.
   - A parked release is counted as a late frame's in the minute (late, first try, never, hold, phase) and logged as LATE FRAME WAS RELEASED. That accounting is shared with `finish_send` (`late_released`, `release_phase`).
   - The link, the port, the floor and a new filter's unlink wait for no frame pending or parked.
 - **Host cases:**

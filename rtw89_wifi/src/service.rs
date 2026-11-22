@@ -310,8 +310,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         // 213-DRV-0104: a parked frame not released in LATE_MS stops the service, as a late one does.
         if self.parked.as_ref().is_some_and(|p|now>=p.deadline.saturating_add(grace_ms(p,self.owner.as_deref().unwrap()))){
             return Err(Fatal::TransmitTimeout(self.data().transmit_seen()))}
-        if self.parked.is_some(){self.finish_parked()?}
         if self.pending.is_some(){self.finish_send()?}
+        if self.parked.is_some(){self.finish_parked()?}
         // 213-DRV-0091: the frame buffer's full spells.
         let full=self.frames.count==FRAMES;let w=&mut self.tx_watch;
         match(full,w.full_since){
@@ -336,8 +336,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             self.checked=Some(now);let received=self.data().poll_packets(WORK_US).map_err(Fatal::Radio)?;self.collect(received[0])?;
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
-        if self.parked.is_some(){self.finish_parked()?}
         if self.pending.is_some(){self.finish_send()?}
+        if self.parked.is_some(){self.finish_parked()?}
         self.tell_link()?;self.set_floor();
         self.listened(now)?;self.holes(now);self.signals(now);
         let waiting=self.frames.count as u32;
@@ -362,7 +362,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             else{self.late_released(pending.began,done.acked,attempts,now);}
         }Ok(())
     }
-    // 213-DRV-0104: the parked frame's release, counted as a late frame's (its send was answered at its deadline).
+    // 213-DRV-0104: the parked frame's release, after the pending one's in a step, counted as a late frame's.
     fn finish_parked(&mut self)->Result<(),Fatal>{
         let Some(done)=self.data().parked_release(WORK_US).map_err(Fatal::Radio)? else{return Ok(())};
         let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
