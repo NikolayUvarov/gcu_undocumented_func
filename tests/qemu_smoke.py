@@ -1727,6 +1727,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     hostname_check(vm)
+    screen_check(vm)
     secret_line_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
@@ -2917,6 +2918,28 @@ def hostname_check(vm):
     require(vm.command("rm data/machine"), "OK")
     print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
           "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
+
+
+def screen_check(vm):
+    """213-APP-0158: `screen second` with no second screen (QEMU's display is one) says so; `screen second stretch` is
+    taken for the screens offered later and kept in data/displays.txt; a restarted shell sets it again from the file."""
+    require(vm.command("screen second"), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE")
+    require(vm.command("screen second wide"), "SCREEN: SCREEN SECOND SHOWS THE SECOND SCREEN; SCREEN SECOND KEEP|STRETCH")
+    out = vm.command("screen second stretch")
+    require_all(out, "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt", "SCREEN: NO SECOND SCREEN")
+    require(vm.command("cat data/displays.txt"), "second stretch")
+    shell = vm.services()["shell"]
+    vm.collect()
+    vm.send(f"kill {shell}\n", raw=True)
+    vm.expect("MIND> ", timeout=60, after=f"kill {shell}")
+    deadline = time.monotonic() + 30
+    while "THE SECOND SCREEN'S FIT FROM data/displays.txt: STRETCH" not in (log := vm.command("dmesg -s shell", raw=True)):
+        assert time.monotonic() < deadline, log[-1500:]
+        time.sleep(1)
+    require(vm.command("screen second keep"), "(SECOND KEEP), KEPT IN data/displays.txt")
+    require(vm.command("rm data/displays.txt"), "OK")
+    print("PASS: screen (213-APP-0158): no second screen said; stretch taken and kept in data/displays.txt, set again by a "
+          "restarted shell; keep back; a fit it does not know refused", flush=True)
 
 
 def secret_line_check(vm):
