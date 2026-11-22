@@ -27,6 +27,17 @@ With 0094's step 2 the IN rings stay full through such waits, but the playback (
 - [ ] On the Ryzen, run D again (`audiostub duplex 300 0` with one log read in its middle): no dry playback ring in the read.
 - [ ] The cable's throughput before and after, measured as a log read of a known size timed, shows the link no slower. Holds for that machine, that converter and that release (MC-12.1).
 
+## Progress (2026-11-22)
+
+- **Written:** 4416ff9c7. The host case passes.
+- **The throughput before,** for the comparison: release 202611221044, whose `usb_serial` writes whole, 10:55 UTC, under a lease, nothing replaced.
+  - Five reads of the same 137 818 bytes of the Ryzen's log over the cable (`effector485 … log from=0 max_bytes=200000`, timed on LEG9) took 4.97, 4.98, 5.00, 7.74 and 7.91 s.
+  - That is 27.6 KB/s for the three steady ones; the two slow ones look like the cable tool's own overhead.
+  - The same five reads go after a release with the pieces.
+- **Not yet on the Ryzen:**
+  - the cable's PC end (COM22) was lost at about 11:23 UTC and needs the maintainer;
+  - the STM-Speaker board left the Ryzen at 11:16:42 UTC, so run D waits for it to come back.
+
 ## Related
 
 - [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md): its step 4.
