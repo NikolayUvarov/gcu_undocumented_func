@@ -43,6 +43,21 @@ A mirror of the first screen comes first; an extended screen comes later, with `
 
 **Not covered:** whether the second screen tears, and how much; the frame timing is the next step if it does.
 
+## Progress (2026-11-22)
+
+**Made** on `claude/213-KRN-0272-a-second-screen-for-the-compositor`. It is in `fast-test` (d410b274a4) for DRV's run on the Ryzen.
+
+**Runs in this session's container** (QEMU 8.2.2, OVMF):
+- `tests/compositor_mirror_host.rs`: 3 of 3;
+- the IDL fuzzer with `display` 1.3: 3 of 3;
+- the x86 build, and the aarch64 build of `compositor` and `init`;
+- x86's `boot`, `display`, `services`, `shell` and `windows` suites on 4 CPUs: 49 PASS, no failure, 3 SKIP for stand-ins not built. No second screen is offered there, and the compositor's screen is unchanged on VGA std, virtio-vga and ramfb.
+
+**Left:**
+- the gate's groups;
+- DRV's run on the Ryzen;
+- the docs criterion, met by docs/idl and docs/api on the branch.
+
 ## Related
 
 [213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
