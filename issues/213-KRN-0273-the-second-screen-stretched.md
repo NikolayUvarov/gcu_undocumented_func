@@ -33,7 +33,7 @@ This task is the first two. The extended desktop needs `wm` and is [177-KRN-0274
 
 - [x] `tests/compositor_mirror_host.rs`: a stretched picture fills the second screen on the Ryzen's shapes and others, each axis on its own; the kept one is 1.3's.
 - [x] The IDL fuzzer with `display` 1.4 (`Fit`, `Mirror`).
-- [ ] Builds for x86 and aarch64; every gate group passes on both architectures (no second screen in any).
+- [x] Builds for x86 and aarch64; every gate group passes on both architectures (no second screen in any).
 - [ ] **On the Ryzen** (MC-12.1), after APP's command:
   - the shell's `stretch` logs `MIRROR FIT STRETCH … AT 1920X1080 FROM 0,0`;
   - the maintainer sees the first screen fill the second monitor, the marks on it;
@@ -41,6 +41,18 @@ This task is the first two. The extended desktop needs `wm` and is [177-KRN-0274
 - [x] docs/idl and docs/api say what changed.
 
 **Not covered:** how a stretched picture looks (the first screen's 16:10 on 16:9 is squeezed); that is the owner's choice.
+
+## Landed (2026-11-22)
+
+In `main` since round 171 (3879683b05, `LANDING/2026-11-22T1222Z-KRN-landed-3879683b.md` on `internal-dev-messages`), with DRV's 213-DRV-0092 (`display` puts MIND Core's screen on the second output) and APP's 158-APP-0152. The gate passed all groups on both architectures.
+
+One group failed once and passed alone on x32: `x86: services, storage, audio`, in `gateway_stub_check`. The cause was the check's own race: it began to sample the Effector mark after a dmesg read that took longer than the red's 6 s. Nothing in this task's code was involved; the fix is 000-KRN-0275, on `claude/000-KRN-0275-the-remote-marks-check-from-the-restart`.
+
+**Left:**
+- APP's shell command (`issues/requests-APP.md`);
+- the Ryzen run.
+
+A stick written from `main` carries the compositor's part.
 
 ## Related
 
