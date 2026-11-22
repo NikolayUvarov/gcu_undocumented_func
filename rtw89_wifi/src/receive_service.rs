@@ -1,12 +1,13 @@
 //! wlanhw.wit 2.0 served receive-only on the startup session, before any channel is calibrated (213-KRN-0123's gate).
 //! Every channel is tuned passively, so the station's scans hear them all. Nothing is sent until a country is applied:
 //! the first `send` but a probe request on a channel it allows calibrates that channel and hands the endpoint to the data
-//! service.
+//! service. On a channel the country keeps listen-only (radar or NO-IR), only a frame to an access point whose beacon was
+//! heard on it since the tune admits it (213-DRV-0087); nothing is sent there before, not even the calibration's bursts.
 
-use crate::{args::Platform, board::Board, btc_session::{DeviceIo, Inbox, Session, connection, data_mode, listen::{self, Cause}},
+use crate::{args::Platform, band, board::Board, btc_session::{DeviceIo, Inbox, Session, connection, data_mode, listen::{self, Cause, Order}},
     channel_power::Constraints, channel_rfk, country::{Limits, Refusal}, download::{self, DefaultTables}, frames, initial_phy,
     native_dma::Queues, phy::{Phy, channel::{self, Policy, Rule, calibration_policy::{PlatformInput, Resolved}}},
-    phycap::Capabilities, post_mac, rx, rxdesc, service, station::{self, Filter}};
+    phycap::Capabilities, post_mac, ppdu, rx, rxdesc, service, station::{self, Filter}};
 use crate::io::{self, Fault, FaultKind};
 use mind::{idl::{codec::List, wire, wlanhw}, ipc::Endpoint, sys, time};
 
@@ -33,8 +34,9 @@ pub enum Event {
     /// registers a data mode's stop reports, as they are now.
     Admitted { channel: u8, registers: crate::btc_session::Snapshot },
     /// A scan the station ended (its filter left `all-beacons`): its passive tunes, the longest, the frames kept for the
-    /// station and those dropped because four were already waiting.
-    Scanned { tunes: u32, longest_us: u64, kept: u32, dropped: u32 },
+    /// station and those dropped because four were already waiting; of the PPDU status reports, those that gave a kept
+    /// frame its signal, came after the station had taken it, or followed no kept frame (213-DRV-0087).
+    Scanned { tunes: u32, longest_us: u64, kept: u32, dropped: u32, measured: u32, late: u32, unmatched: u32 },
     /// The data mode outlasted the firmware's n-th recovery (data_mode's OUTLAST_SER): SER_DBG_INFO and CMAC_ERR_ISR
     /// then, when the BB was out of reset, whether the driver restored the scheduler after `waited_us` or the firmware did,
     /// and whether it was found right after a coexistence reconcile.
@@ -51,6 +53,38 @@ pub enum Event {
     Stalled { channel: u8, quiet_ms: u64, frames: u64, sent: u32, acked: u32 },
     /// `count` unicast sends in a row not acknowledged over `ms`; the last frame heard `heard_ms` ago. Logged once a run.
     Unheard { channel: u8, count: u32, ms: u64, heard_ms: u64 },
+    /// A send refused on a listen-only channel (213-DRV-0087): no beacon of its receiver heard there since the tune, or a
+    /// probe request; logged once a tune.
+    ListenOnly { channel: u8, receiver: [u8; 6], heard: usize },
+    /// An access point first heard on a 5 GHz channel in this run (213-DRV-0087), the first HEARD_LOGGED of them.
+    Heard5 { channel: u8, bssid: [u8; 6] },
+    /// The receiver a send was refused for on a listen-only channel (`ListenOnly`), heard there `tune_ms` after the tune and
+    /// `send_ms` after the refused send (213-DRV-0087): how long the station has to wait before it may send.
+    ListenHeard { channel: u8, bssid: [u8; 6], tune_ms: u64, send_ms: u64 },
+    /// In data mode, once a minute while they change (service.rs's SIGNALS_MS), since the admission: the frames kept for
+    /// the station, and of the PPDU status reports those that gave one its signal, came after it was handed on, or
+    /// followed no kept frame (213-DRV-0087).
+    Signals { channel: u8, kept: u64, measured: u32, late: u32, unmatched: u32 },
+    /// In data mode, every minute (213-DRV-0090), since the admission: the Wi-Fi frames received, those kept for the
+    /// station, filtered out, invalid and dropped with the inbox full; the PPDU status reports; the beacons of the
+    /// station's filter's `bssid`, and the other beacons the filter refused (and on the first minute, the first frames it
+    /// refused);
+    /// the sends answered, acknowledged and late; the holes and the longest. The registers on the first minute and every
+    /// tenth (service.rs's PROBE_MINUTES), for a good link's.
+    Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64,
+        bssid: [u8; 6], other_beacons: u64, refused: Option<data_mode::Refused>, sent: u64,
+        acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe> },
+    /// The `n`-th hole (213-DRV-0090): no beacon of the joined `bssid` for `ms` (`by_beacons`), or, while none of its beacons
+    /// reaches the host, no Wi-Fi frame at all; since its last one, the Wi-Fi frames, those kept, the PPDU reports and the
+    /// frames dropped with the inbox full, the sends answered and acknowledged, and whether one is pending; the registers,
+    /// for the first service.rs's HOLES_PROBED.
+    Hole { n: u32, channel: u8, bssid: [u8; 6], by_beacons: bool, ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64,
+        pending: bool, probe: Option<data_mode::Probe> },
+    /// The firmware told of the station's link (213-DRV-0091): connected to `bssid` as `aid` (join info and address CAM as
+    /// INFRA), or no link again (None); `was`, the AID before; the registers just before and after, the first two times.
+    Linked { channel: u8, bssid: [u8; 6], aid: Option<u16>, was: Option<u16>, before: Option<data_mode::Probe>, after: Option<data_mode::Probe> },
+    /// The `n`-th hole closed by a beacon, `ms` after the last one before it; the counts since it opened; the registers.
+    HoleEnded { n: u32, ms: u64, wifi: u64, kept: u64, ppdu: u64, pressure: u64, sent: u64, acked: u64, probe: Option<data_mode::Probe> },
 }
 
 #[derive(Debug)]
@@ -76,8 +110,23 @@ struct Waiter { call: wire::Call, deadline: u64 }
 #[derive(Clone, Copy, Default)]
 struct Tally { tunes: u32, longest_us: u64, kept: u32, dropped: u32 }
 
-/// What a request asks of the radio beyond its reply: a passive tune, answered after it, or the admission of a channel.
-pub(crate) enum Ask { Tune(u8, wire::Call), Admit(u8) }
+/// What a request asks of the radio beyond its reply: a passive tune, answered after it, or the admission of a channel,
+/// with the access point heard there when the country keeps it listen-only.
+pub(crate) enum Ask { Tune(u8, wire::Call), Admit(u8, Option<Heard>) }
+
+/// An access point whose beacon or probe response was received on `channel` since the last tune, `at_ms` the latest.
+/// Only the receive path makes one; it is the evidence a listen-only channel needs before anything is sent there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Heard { channel: u8, bssid: [u8; 6], at_ms: u64 }
+// Read by the host cases.
+#[allow(dead_code)]
+impl Heard {
+    pub(crate) fn channel(&self) -> u8 { self.channel }
+    pub(crate) fn bssid(&self) -> [u8; 6] { self.bssid }
+    pub(crate) fn at_ms(&self) -> u64 { self.at_ms }
+}
+const HEARD: usize = 16;
+const HEARD_LOGGED: usize = 16;
 
 fn address(value: u64) -> [u8; 6] { core::array::from_fn(|i| (value >> (40 - 8 * i)) as u8) }
 fn packed(value: [u8; 6]) -> u64 { value.into_iter().fold(0, |word, byte| (word << 8) | u64::from(byte)) }
@@ -90,6 +139,15 @@ pub(crate) struct ReceiveOnly {
     narrow: bool, narrowing: Option<bool>,
     // A channel the client set: until then `info` says 0, how wlan tells a restarted radio (550-NET-0061).
     set: bool,
+    // The access points heard on `channel` since its tune (213-DRV-0087), and whether a refusal was logged since.
+    heard: [Option<Heard>; HEARD], told: bool,
+    // When the last tune ended, the receiver of a send refused on this listen-only channel since and when, and its
+    // first beacon after, to be logged (213-DRV-0087).
+    tuned_ms: u64, refused: Option<([u8; 6], u64)>, refused_heard: Option<(u8, [u8; 6], u64, u64)>,
+    // The 5 GHz access points logged so far (Event::Heard5), and those heard since the last step, not yet logged.
+    logged: [(u8, [u8; 6]); HEARD_LOGGED], logged_count: usize, fresh: [Option<(u8, [u8; 6])>; 4],
+    // The frame kept last, for the report that follows it (213-DRV-0087).
+    signal: ppdu::Matcher,
 }
 
 impl ReceiveOnly {
@@ -98,7 +156,8 @@ impl ReceiveOnly {
         Self { mac, channel, filter: Filter::new(mac, true, [0; 6], [0; 6]), limits: None, settings: 0, admits, ask: None,
             frames: [[0; FRAME_BYTES]; FRAMES], lengths: [0; FRAMES], head: 0, count: 0, dropped: 0,
             waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default(),
-            narrow: false, narrowing: None, set: false }
+            narrow: false, narrowing: None, set: false, heard: [None; HEARD], told: false, tuned_ms: 0, refused: None, refused_heard: None,
+            logged: [(0, [0; 6]); HEARD_LOGGED], logged_count: 0, fresh: [None; 4], signal: ppdu::Matcher::default() }
     }
     pub(crate) fn limits(&self) -> Option<&Limits> { self.limits.as_ref() }
     /// The `set-country` requests taken so far, which number the next.
@@ -112,22 +171,53 @@ impl ReceiveOnly {
     pub(crate) fn take_ask(&mut self) -> Option<Ask> { self.ask.take() }
     /// The passive tune `Ask::Tune` asked for is done, in `took_us`: frames heard before it are of another channel.
     pub(crate) fn tuned(&mut self, channel: u8, took_us: u64) {
-        self.channel = channel; self.set = true; self.head = 0; self.count = 0;
+        self.channel = channel; self.set = true; self.head = 0; self.count = 0; self.heard = [None; HEARD]; self.told = false;
+        self.tuned_ms = time::monotonic_ns() / 1_000_000; self.refused = None;
+        self.signal.forget();
         self.tally.tunes = self.tally.tunes.saturating_add(1); self.tally.longest_us = self.tally.longest_us.max(took_us);
     }
     /// Before the data service takes the endpoint: every waiter answered, no frame kept.
     pub(crate) fn hand_over(&mut self) {
         for waiter in &mut self.waiters { if let Some(waiter) = waiter.take() { let _ = wlanhw::reply_wait(waiter.call, 0); } }
-        self.head = 0; self.count = 0;
+        self.head = 0; self.count = 0; self.signal.forget();
     }
-    // A country is applied, and it lets this radio send on `channel`.
-    fn sends_on(&self, channel: u8) -> bool {
-        self.admits && self.limits.as_ref().and_then(|l| l.applied(channel)).is_some_and(|a| !a.listen)
+    // A country is applied and lets this radio send on `channel`: freely, or on a listen-only channel to `receiver` alone,
+    // an access point heard there since the tune (wlanhw 1.2: no probe request). Ok carries that access point, if needed.
+    fn sends_on(&self, channel: u8, receiver: [u8; 6]) -> Result<Option<Heard>, ()> {
+        let applied = self.limits.as_ref().filter(|_| self.admits).and_then(|l| l.applied(channel)).ok_or(())?;
+        if !applied.listen { return Ok(None); }
+        self.heard.iter().flatten().find(|h| h.channel == channel && h.bssid == receiver).copied().map(Some).ok_or(())
+    }
+    #[cfg(test)]
+    pub(crate) fn heard(&self) -> impl Iterator<Item = &Heard> { self.heard.iter().flatten() }
+    // A beacon or probe response of a BSS (its source is the BSSID) is evidence that its access point is on this channel.
+    fn hear(&mut self, mpdu: &[u8]) {
+        if mpdu.len() < 24 || !matches!(mpdu[0], 0x80 | 0x50) || mpdu[10..16] != mpdu[16..22] { return; }
+        let bssid: [u8; 6] = mpdu[16..22].try_into().unwrap();
+        let at_ms = time::monotonic_ns() / 1_000_000;
+        let heard = Heard { channel: self.channel, bssid, at_ms };
+        if let Some((receiver, sent_ms)) = self.refused.filter(|(r, _)| *r == bssid) {
+            self.refused = None;
+            self.refused_heard = Some((self.channel, receiver, at_ms.saturating_sub(self.tuned_ms), at_ms.saturating_sub(sent_ms)));
+        }
+        if let Some(slot) = self.heard.iter_mut().find(|h| h.is_some_and(|h| h.bssid == bssid) || h.is_none()) { *slot = Some(heard); }
+        let new = (self.channel, bssid);
+        if self.channel > 14 && self.logged_count < HEARD_LOGGED && !self.logged[..self.logged_count].contains(&new)
+            && !self.fresh.contains(&Some(new)) {
+            if let Some(slot) = self.fresh.iter_mut().find(|f| f.is_none()) { *slot = Some(new); }
+        }
     }
 
-    fn take(&mut self, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8]) {
+    fn take(&mut self, order: Order, channel: rx::Channel, packet: rxdesc::Packet, buffer: &[u8]) {
+        // A report's signal goes on the frame just before it, while the station has not taken that frame yet.
+        if let Order::Report(frame) = order {
+            if let Some((at, signal)) = self.signal.report(frame, packet, buffer) { self.frames[at][frames::SIGNAL] = signal; }
+            return;
+        }
+        let Order::Frame(number) = order else { return };
         if channel != rx::Channel::Rxq || packet.kind != rxdesc::TYPE_WIFI { return; }
         let Ok(frame) = frames::from_packet(packet, buffer) else { return };
+        if self.set { self.hear(frame.mpdu()); }
         if !self.filter.accepts(frame.mpdu()) { return; }
         if self.count == FRAMES {
             self.dropped = self.dropped.saturating_add(1); self.tally.dropped = self.tally.dropped.saturating_add(1); return;
@@ -135,11 +225,12 @@ impl ReceiveOnly {
         let at = (self.head + self.count) % FRAMES;
         if let Ok(length) = frame.write(self.channel, self.filter.all_beacons(), &mut self.frames[at]) {
             self.lengths[at] = length; self.count += 1; self.tally.kept = self.tally.kept.saturating_add(1);
+            self.signal.kept(number, at, buffer);
         }
     }
     fn progress<B: DeviceIo>(&mut self, session: &mut Session<'_, '_, '_, B>, now: u64) -> Result<(), Stop> {
         for _ in 0..POLLS {
-            let (received, _) = session.poll_frames(|c, p, b| self.take(c, p, b)).map_err(Stop::Radio)?;
+            let (received, _) = session.poll_frames(|o, c, p, b| self.take(o, c, p, b)).map_err(Stop::Radio)?;
             if received == [false, false] { break; }
         }
         let waiting = self.count as u32;
@@ -163,12 +254,14 @@ impl ReceiveOnly {
         self.limits = Some(taken);
     }
     fn info(&self) -> wlanhw::Info {
-        // Its own channels are 1 to 13 at 20 MHz (wlanhw.wit 2.0), each tuned passively; an applied country leaves its own.
+        // Its own channels are 1 to 13 and the 5 GHz ones at 20 MHz (wlanhw.wit 2.0, 213-DRV-0087), each tuned passively;
+        // an applied country leaves its own.
         let mut channels = List::default();
         match &self.limits { Some(limits) if self.admits => for ch in limits.channels() { channels.push(ch); },
-            _ => for ch in 1..=13 { channels.push(ch); } }
-        let mut supported = List::default(); for ch in 1..=13 { supported.push(ch); }
-        wlanhw::Info { mac: packed(self.mac), bands: mind::network::BAND_2GHZ | mind::network::BAND_2GHZ_OFDM,
+            _ => for ch in band::SUPPORTED { channels.push(ch); } }
+        let mut supported = List::default(); for ch in band::SUPPORTED { supported.push(ch); }
+        let bands = mind::network::BAND_2GHZ | mind::network::BAND_2GHZ_OFDM | mind::network::BAND_5GHZ;
+        wlanhw::Info { mac: packed(self.mac), bands,
             channels, supported, frame_max: frames::FRAME_MAX as u16, channel: if self.set { self.channel } else { 0 } }
     }
 
@@ -178,6 +271,12 @@ impl ReceiveOnly {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVE, POLL_MS);
         let now = time::monotonic_ns() / 1_000_000;
         if now < self.last_ms { self.fail(Stop::Clock) } else { self.last_ms = now; if let Err(e) = self.progress(session, now) { self.fail(e) } }
+        for fresh in &mut self.fresh {
+            let Some((channel, bssid)) = fresh.take() else { continue };
+            if self.logged_count < HEARD_LOGGED { self.logged[self.logged_count] = (channel, bssid); self.logged_count += 1; }
+            events(Event::Heard5 { channel, bssid });
+        }
+        if let Some((channel, bssid, tune_ms, send_ms)) = self.refused_heard.take() { events(Event::ListenHeard { channel, bssid, tune_ms, send_ms }); }
         match received {
             Ok(request) => self.dispatch(request, now, events),
             Err(sys::Error::Other(code)) if code == mind::abi::ERR_TIMEOUT => {}
@@ -197,7 +296,7 @@ impl ReceiveOnly {
             wlanhw::Request::SetChannel { channel } => {
                 if channel == self.channel { self.set = true; let _ = wlanhw::reply_set_channel(call, Ok(())); return }
                 let left = self.limits.as_ref().filter(|_| self.admits).is_none_or(|l| l.applied(channel).is_some());
-                if !(1..=13).contains(&channel) || !left || self.ask.is_some() {
+                if band::band(channel).is_none() || !left || self.ask.is_some() {
                     let _ = wlanhw::reply_set_channel(call, Err(wlanhw::Error::Invalid)); return
                 }
                 // Answered after the passive tune, which the serving loop runs.
@@ -206,13 +305,13 @@ impl ReceiveOnly {
                 self.ask = Some(Ask::Tune(channel, call));
             }
             wlanhw::Request::SetFilter { filter } => {
-                let tally = core::mem::take(&mut self.tally);
+                let (tally, signals) = (core::mem::take(&mut self.tally), core::mem::take(&mut self.signal.signals));
                 if self.filter.all_beacons() && !filter.all_beacons {
-                    let Tally { tunes, longest_us, kept, dropped } = tally;
-                    events(Event::Scanned { tunes, longest_us, kept, dropped });
+                    let (Tally { tunes, longest_us, kept, dropped }, ppdu::Signals { measured, late, unmatched }) = (tally, signals);
+                    events(Event::Scanned { tunes, longest_us, kept, dropped, measured, late, unmatched });
                 }
                 self.filter = Filter::new(self.mac, filter.all_beacons, address(filter.bssid), address(filter.own));
-                self.head = 0; self.count = 0;
+                self.head = 0; self.count = 0; self.signal.forget();
                 // A network's filter narrows the hardware's too, as Linux's outside a scan: the scan's let the whole busy
                 // channel through, and the firmware's recovery then reset the BB under the calibration (the Ryzen, 2026-11-08).
                 if self.narrow == filter.all_beacons { self.narrow = !filter.all_beacons; self.narrowing = Some(self.narrow); }
@@ -227,15 +326,22 @@ impl ReceiveOnly {
             wlanhw::Request::Send { frame, .. } => {
                 let probe = frame.first().is_some_and(|control| control & 0xfc == 0x40);
                 if !probe && self.set && self.limits.is_none() && self.admits { self.world(events); }
-                let admit = !probe && self.set && self.sends_on(self.channel) && self.ask.is_none();
+                let receiver: [u8; 6] = frame.get(4..10).and_then(|r| r.try_into().ok()).unwrap_or([0xff; 6]);
+                let allowed = if probe || !self.set { Err(()) } else { self.sends_on(self.channel, receiver) };
+                let admit = allowed.is_ok() && self.ask.is_none();
                 let _ = wlanhw::reply_send(call, Err(if admit { wlanhw::Error::Busy } else { wlanhw::Error::Failed }));
-                if admit { self.ask = Some(Ask::Admit(self.channel)); }
+                if let (true, Ok(heard)) = (admit, allowed) { self.ask = Some(Ask::Admit(self.channel, heard)); }
+                let listen = self.limits.as_ref().filter(|_| self.admits).and_then(|l| l.applied(self.channel)).is_some_and(|a| a.listen);
+                if allowed.is_err() && listen && self.set && !self.told {
+                    self.told = true; events(Event::ListenOnly { channel: self.channel, receiver, heard: self.heard.iter().flatten().count() });
+                    self.refused = Some((receiver, now));
+                }
             }
             wlanhw::Request::Receive => {
                 if self.count == 0 { let _ = wlanhw::reply_receive(call, Err(wlanhw::Error::Empty)); return }
                 let at = self.head;
                 let _ = wlanhw::reply_receive(call, Ok(&self.frames[at][..self.lengths[at]]));
-                self.head = (at + 1) % FRAMES; self.count -= 1;
+                self.head = (at + 1) % FRAMES; self.count -= 1; self.signal.handed(at);
             }
             wlanhw::Request::Wait => {
                 let count = self.count as u32;
@@ -311,12 +417,12 @@ pub(crate) fn platform_input(platform: Platform<'_>) -> PlatformInput {
 
 /// Admission up to the data mode, on the live PHY of `prepare_receive`, as connection::run's order: the station's country
 /// on `channel`, tuned to initiate radiation, granted, calibrated (IQK, TSSI, DPK) and its station prepared with the
-/// station's `filter`.
+/// station's `filter`. A listen-only channel needs `heard`, an access point heard on it, before any of that transmits.
 pub(crate) fn calibrate<B: DeviceIo>(phy: &mut Phy<'_, Session<'_, '_, '_, B>>, board: &Board, caps: &Capabilities,
-    tables: &DefaultTables, prepared: &initial_phy::Prepared, limits: &Limits, channel: u8, platform: PlatformInput, filter: Filter)
-    -> Result<(channel::Tuned, channel_rfk::Completed, station::Prepared), connection::Failure> {
+    tables: &DefaultTables, prepared: &initial_phy::Prepared, limits: &Limits, channel: u8, heard: Option<&Heard>,
+    platform: PlatformInput, filter: Filter) -> Result<(channel::Tuned, channel_rfk::Completed, station::Prepared), connection::Failure> {
     use connection::Failure as F;
-    let applied = limits.applied(channel).filter(|a| !a.listen)
+    let applied = limits.applied(channel).filter(|a| !a.listen || heard.is_some_and(|h| h.channel == channel))
         .ok_or(F::Admission(channel::calibration_policy::Error::Passive))?;
     let rule = Rule::station(limits.code(), limits.version(), channel, applied.eirp_half_dbm, false);
     let resolved = Resolved::resolve(board, rule, platform).map_err(F::Admission)?;
@@ -366,7 +472,7 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
             None => {}
             Some(Ask::Tune(channel, call)) => {
                 let start = time::monotonic_ns();
-                let tuned = Policy::passive(board, 2407 + 5 * u16::from(channel)).map_err(|_| None)
+                let tuned = Policy::passive(board, band::center_mhz(channel).unwrap_or(0)).map_err(|_| None)
                     .and_then(|policy| channel::run(&mut phy, board, &prepared.prefix, &prepared.paths, &tables, &policy).map_err(Some));
                 match tuned {
                     Ok(_) => {
@@ -380,15 +486,16 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
                     }
                 }
             }
-            Some(Ask::Admit(channel)) => break channel,
+            Some(Ask::Admit(channel, heard)) => break (channel, heard),
         }
     };
+    let (admit, heard) = admit;
     service.hand_over();
     let failed = |failure| Stop::Admission(Admission { channel: admit, failure });
     let Some(limits) = service.limits() else { return Stop::Clock };
     let Some(admitted) = limits.applied(admit) else { return Stop::Clock };
-    let (tuned, calibrated, station) = match calibrate(&mut phy, board, caps, &tables, &prepared, limits, admit, platform,
-        service.filter()) {
+    let (tuned, calibrated, station) = match calibrate(&mut phy, board, caps, &tables, &prepared, limits, admit, heard.as_ref(),
+        platform, service.filter()) {
         Ok(done) => done, Err(failure) => return failed(failure),
     };
     if let Some(cap) = tuned.cap() { events(Event::Capped { channel: admit, maximum: cap.maximum, limit: cap.limit }); }
@@ -401,7 +508,9 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
     events(Event::Admitted { channel: admit, registers: data.registers() });
     let stop = match service::Service::new(&mut data) {
         Ok(served) => {
-            let stopped = served.under(admitted.eirp_half_dbm, service.settings()).run(&mut events);
+            let served = served.under(admitted.eirp_half_dbm, service.settings());
+            let served = match heard { Some(h) if admitted.listen => served.listening_to(h.bssid, h.at_ms), _ => served };
+            let stopped = served.run(&mut events);
             Stop::Data(Data { failure: stopped.failure, shutdown: stopped.shutdown, registers: stopped.owner.snapshot(), changes: stopped.changes })
         }
         Err(error) => Stop::Ipc(error),

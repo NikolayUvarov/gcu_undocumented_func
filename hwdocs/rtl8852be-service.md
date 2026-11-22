@@ -24,8 +24,25 @@ coordinator and KRN endpoint/configuration grants remain separate prerequisites.
   checked final firmware count, after RPQ and descriptor consumption agree,
   becomes `sent.attempts`; group addressing retains `acked=false`.
 - `receive` uses the real retained RX descriptor and `frames::from_packet` to
-  remove the FCS and write the existing eight-byte header. Signal zero means
-  unmeasured. Channel and scan flag describe the admitted receive epoch.
+  remove the FCS and write the existing eight-byte header. Channel and scan flag
+  describe the admitted receive epoch.
+- The header's signal (byte 2, minus dBm) comes from the frame's PPDU status
+  report (213-DRV-0087, `ppdu.rs`). The report must follow the frame in the
+  receive queue with the frame's PPDU count and rate (Linux's
+  `rtw89_core_rx_ppdu_match`) while the frame is still unread. Zero means
+  unmeasured: no such report came, or it came after the station took the frame.
+  A frame whose report may still follow waits for it in the inbox, until a poll
+  finds the ring empty or, when the step's polls run out, until the next step.
+  The service logs at most once a minute what became of the reports since the
+  admission (`[RTW89] SIGNAL ON CHANNEL c SINCE THE ADMISSION: ...`).
+- Holes (213-DRV-0090): the data mode counts the joined BSS's beacons as the
+  ring gives them. A second without one, once one was heard, opens a hole and
+  its next beacon closes it. Both ends are logged (`[RTW89] HOLE n ...`) with the
+  counts since the other end, and, for the first twelve, with the registers of
+  `data_mode::PROBE_*` (MAC, BB, both RF paths, the coexistence's grants). Every
+  minute `[RTW89] TRAFFIC ON c: ...` gives the counts since the admission, and on
+  its first minute and every tenth the same registers for a good link. These
+  are diagnostics: no hole changes what the driver does.
 - `attach` and `kick` return invalid, as the existing BCM adapter does: this
   slice uses `receive` and implements no shared ring.
 
@@ -153,8 +170,8 @@ It then serves `wlanhw` 2.0, receive-only (as of 2026-11-08):
 |---|---|
 | `info` | `channels` 1–13 before a country, those its limits leave after; `supported` 1–13 |
 | `set-channel` | any of those channels, tuned passively (`channel::run` under `Policy::passive`) and answered after the tune; others `invalid` |
-| `set-filter` | the station filter applied in software over the scan filter. When it ends a scan (`all-beacons` set, then cleared), the service logs `[RTW89] SCAN: n PASSIVE TUNES, THE LONGEST t US; k FRAMES KEPT, d DROPPED` |
-| `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted |
+| `set-filter` | the station filter applied in software over the scan filter. When it ends a scan (`all-beacons` set, then cleared), the service logs `[RTW89] SCAN: n PASSIVE TUNES, THE LONGEST t US; k FRAMES KEPT, d DROPPED; SIGNAL ON m OF THEM, l REPORTS AFTER THE STATION TOOK THE FRAME, u UNMATCHED (213-DRV-0087)` |
+| `receive`, `wait` | the frames that filter accepts, with the 8-byte header; four held, more dropped and counted. The signal is written into a stored frame when its PPDU status report follows it before the station takes it (213-DRV-0087) |
 | `send` | `failed` on a listen-only channel and for a probe request. Before a country, the first other send takes the world rules (`00`, 801-DRV-0071). Otherwise `busy`, and that channel is admitted (below) |
 | `attach`, `kick` | `invalid`; a ring capability is dropped |
 | `set-country` | checked by `country::Limits`: `invalid` when malformed. Otherwise logged as taken, and applied (answered with `info`). Until 801-DRV-0071 an `unknown` platform word made it `failed`; that word is now held back (801 S5) |

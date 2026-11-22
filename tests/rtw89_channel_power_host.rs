@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path="../rtw89_wifi/src/io.rs"]mod io;
 #[path="../rtw89_wifi/src/registers.rs"]mod registers;
 #[path="../rtw89_wifi/src/power.rs"]mod power;
@@ -106,4 +107,44 @@ fn an_unknown_countrys_cap_is_its_maximum_less_three_half_db_steps(){
     // A lower EIRP than the tables is the maximum itself: the cap is 3 below it.
     let low=Constraints{per_ntx:[20,20],per_path:[63,63]};
     assert_eq!(unknown_country(Group::WORLDWIDE,6,low).unwrap(),(Constraints{per_ntx:[17,17],per_path:[63,63]},[20,20]));
+}
+
+// 213-DRV-0087: a 5 GHz channel's image, as Linux's rtw89_phy_set_txpwr_* and rtw8852bx_set_tx_shape write it.
+#[test]
+fn five_gigahertz_images_have_no_cck_shape_and_take_the_5_ghz_tables(){
+    let open=Constraints{per_ntx:[63,63],per_path:[40,40]};
+    let image=build(Group::FCC,100,open).unwrap();let writes=image.writes();assert_eq!(writes.len(),50);
+    assert_eq!(writes.iter().filter(|w|(0x12300..=0x1231c).contains(&w.at)).count(),0,"no DFIR on 5 GHz");
+    for(start,end,count)in[(0xd2c0,0xd2e8,11),(0xd2ec,0xd338,20),(0xd33c,0xd368,12)]{
+        assert_eq!(writes.iter().filter(|w|(start..=end).contains(&w.at)).count(),count);
+    }
+    // CCK's by-rate is the 2.4 GHz table's; OFDM and MCS are the 5 GHz table's (equal on this chip).
+    assert_eq!(word(&image,0xd2c0),0x28282828);assert_eq!(word(&image,0xd2c8),0x24262828);assert_eq!(word(&image,0xd2d4),0x1a1c1e20);
+    assert_eq!(word(&image,0xd204),0,"the 5 GHz rate offsets are zero");
+    assert_eq!(word(&image,0x14494),3<<24,"FCC's OFDM shape on 5 GHz");
+    assert_eq!(word(&build(Group::ETSI,100,open).unwrap(),0x14494),0);
+    // One TX: CCK20 and CCK40 have no 5 GHz limit (0); OFDM non-beamformed is FCC's 76 quarter-dBm on channel 100.
+    let page=word(&image,0xd2ec).to_le_bytes();assert_eq!([page[0],page[2]],[0,0]);
+    assert_eq!(word(&image,0xd2f0).to_le_bytes()[0],38);
+    let mcs=channel_policy::default_limit_5g(0,1,2,false,Group::FCC,100).unwrap().quarter_dbm>>1;
+    assert_eq!(word(&image,0xd2f0).to_le_bytes()[2] as i8,mcs);
+    let ru=channel_policy::default_ru_5g(0,1,Group::FCC,100).unwrap().quarter_dbm>>1;
+    assert_eq!(word(&image,0xd33c),ru as u8 as u32);
+    for ch in [34,38,65,145,178]{assert_eq!(build(Group::FCC,ch,open).unwrap_err(),Error::Index);}
+}
+#[test]
+fn a_5_ghz_maximum_leaves_cck_out(){
+    let world=Constraints{per_ntx:[40,40],per_path:[63,63]};
+    for channel in band::CHANNELS_5G{
+        let most=maximum(Group::WORLDWIDE,channel,world).unwrap();
+        let image=build(Group::WORLDWIDE,channel,world).unwrap();
+        let rates:Vec<i8>=(0..11).flat_map(|i|word(&image,0xd2c0+4*i).to_le_bytes()).map(|b|b as i8).collect();
+        for streams in 1..=2usize{
+            let page:Vec<i8>=(0..10).flat_map(|i|word(&image,0xd2ec+40*(streams-1)+4*i).to_le_bytes()).map(|b|b as i8).collect();
+            let mcs=if streams==1{&rates[12..28]}else{&rates[28..44]};
+            let top=rates[4..12].iter().map(|v|(*v).min(page[4])).chain(mcs.iter().map(|v|(*v).min(page[6]))).max().unwrap();
+            assert_eq!(most[streams-1],top,"channel {channel}, {streams} TX");
+        }
+        let(capped,_)=unknown_country(Group::WORLDWIDE,channel,world).unwrap();assert_eq!(capped.per_ntx,[most[0]-3,most[1]-3]);
+    }
 }

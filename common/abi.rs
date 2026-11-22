@@ -189,7 +189,7 @@ pub const SYSCALL_ENDPOINT_CREATE: usize = 12;
 pub const SYSCALL_SPAWN: usize = 13;
 pub const SYSCALL_CAP_DROP: usize = 14;
 pub const SYSCALL_MEM_SHARE: usize = 15;
-pub const SYSCALL_MEM_MAP: usize = 16;
+pub const SYSCALL_MEM_MAP: usize = 16; // an MMIO range inside the boot framebuffer's memory BAR maps write-combining on x86 (213-KRN-0271), other MMIO uncached
 pub const SYSCALL_PORT_IN: usize = 17;
 pub const SYSCALL_PORT_OUT: usize = 18;
 pub const SYSCALL_IRQ_WAIT: usize = 19;
@@ -355,6 +355,10 @@ pub const SLOT_AUDIO: usize = 4;
 pub const SLOT_LOADER: usize = 5;
 pub const SLOT_TTS: usize = 6;
 // Service capability slots: served endpoint, devices, IRQ, DMA/frame, privilege.
+// For display (213-KRN-0271): SLOT_DEV0 the Radeon's display engine registers, SLOT_DEV1 the SMU mailbox's page (both of
+// BAR 5, not its MSI-X table), SLOT_MEM BAR 0 past the GOP's screen, and SLOT_IRQ the VBIOS image, the ACPI VFCT table
+// read-only (the display has no interrupt of its own), and SLOT_DISPLAY its client of the compositor badged
+// mind::display::BADGE_SCREEN, which offers the compositor the second screen (display.wit 1.3, 213-KRN-0272).
 pub const SLOT_SERVICE: usize = 1;
 pub const SLOT_DEV0: usize = 2;
 pub const SLOT_DEV1: usize = 3;
@@ -568,7 +572,7 @@ pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_PORTS: usize = 2; // base, count: only legacy ranges from the platform profile
 pub const PLATFORM_IRQ: usize = 3; // line of a platform device: x86's ISA 1..15 except the cascade (2); none on aarch64 (a node's: PLATFORM_NODE_IRQ)
-pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range or MMIO
+pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range (I/O and memory decoding, mastering) or MMIO (memory decoding, mastering; I/O decoding as found, 213-KRN-0271)
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime

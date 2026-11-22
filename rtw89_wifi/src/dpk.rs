@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2019-2022 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
-//! Private initial 2 GHz/20 MHz DPK engine; typed admission is required; no native calibration-power provider exists.
+//! Private 20 MHz DPK engine, 2.4 and 5 GHz (213-DRV-0087); typed admission is required; no native calibration-power provider exists.
 
-use crate::{board::Board,btc_context::Initialized,dack::{self,BtcNotice,Calibration,RfkState},dpk_tables as tables,
+use crate::{band::{self,Band},board::Board,btc_context::Initialized,dack::{self,BtcNotice,Calibration,RfkState},dpk_tables as tables,
     io::{self,Fault,FaultKind,RegisterIo,TimedIo},phy::{self,Phy,State,PHY_BASE,channel},rxdck::RxdckIo,tssi};
 
 const RF_MASK:u32=0xfffff;
@@ -47,7 +47,7 @@ fn verified(bus:&mut impl RegisterIo,at:u32,mask:u32,value:u32)->io::Result<()>{
 // Written back unread, as Linux's _rfk_restore_rf_reg (see iqk::restore_registers).
 fn rf_restore(bus:&mut impl RegisterIo,path:u8,at:u32,value:u32)->io::Result<()>{phy::rf_write_masked(bus,path,at,RF_MASK,value)?;bus.delay_us(0)}
 fn table(bus:&mut impl RegisterIo,values:&[(u32,u32,u32)])->io::Result<()>{for &(at,mask,value)in values{field(bus,at,mask,value)?;}bus.delay_us(0)}
-fn notice(state:RfkState)->BtcNotice{BtcNotice{calibration:Calibration::Dpk,state,phy_map:0x10}}
+fn notice(band:Band,state:RfkState)->BtcNotice{BtcNotice{calibration:Calibration::Dpk,state,phy_map:0x10|(band as u8)<<6}}
 fn scheduler(bus:&mut impl RxdckIo,budget:u32)->io::Result<()>{
     let start=bus.now_us();bus.scheduler_zero(budget)?;
     let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0xc348,0))?;
@@ -127,19 +127,25 @@ fn gain_scale(bus:&mut impl RegisterIo)->io::Result<u8>{
         for at in [0x81bc,0x82bc]{let actual=read(bus,at,0x7fffff)?;if actual!=0x7f7f7f{return Err(fault(at,actual));}}Ok(0x7f)
     }else{Ok(0x5b)}
 }
-fn path(bus:&mut impl RegisterIo,path:u8,scale:u8,pending:&mut bool)->io::Result<PathResult>{
+// _dpk_main for one path at 20 MHz: _dpk_rf_setting's band branch (RR_RXBB's attenuator on 2.4 GHz; RR_RXA2's, the A-band
+// LNA, XALNA2 and IQGEN on 5 GHz) and _dpk_idl_mpa's MDPD order (2 on 5 GHz below 80 MHz, else 0).
+fn path(bus:&mut impl RegisterIo,band:Band,path:u8,scale:u8,pending:&mut bool)->io::Result<PathResult>{
     let base=u32::from(path)<<8;
     phy::rf_write_masked(bus,path,5,1,0)?;phy::rf_write_masked(bus,path,0x10005,1,0)?;
     field(bus,0x8008,u32::MAX,0x80)?;field(bus,0x8088,u32::MAX,0x807f030a)?;field(bus,0x8120+base,u32::MAX,0xce000a08)?;
     txagc(bus,path,0x38,pending)?;
-    for(at,mask,value)in [(0,RF_MASK,0x50220),(0x83,255,0xf2),(0xdf,1<<12,1),(0x9e,1<<8,1),(0xde,4,1),(0x1a,0x7000,1),(0x1a,0xc00,0),
-        (0x8f,0xc00,3),(0x93,15,0),(0x92,1,0),(0x92,1,1)]{phy::rf_write_masked(bus,path,at,mask,value)?;}
+    let setting:&[(u32,u32,u32)]=if band==Band::Ghz5{&[(0,RF_MASK,0x50220),(0x8c,0xfe00,5),(0xdf,1<<12,1),(0x9e,1<<8,1),
+        (0x8b,RF_MASK,0x920fc),(0x90,RF_MASK,0x2c0),(0x97,RF_MASK,0x38800)]}
+        else{&[(0,RF_MASK,0x50220),(0x83,255,0xf2),(0xdf,1<<12,1),(0x9e,1<<8,1)]};
+    for &(at,mask,value)in setting.iter().chain([(0xde,4,1),(0x1a,0x7000,1),(0x1a,0xc00,0),
+        (0x8f,0xc00,3),(0x93,15,0),(0x92,1,0),(0x92,1,1)].iter()){phy::rf_write_masked(bus,path,at,mask,value)?;}
     bus.delay_us(1_000)?;field(bus,0x806c,6,1)?;one_shot(bus,path,0x16,pending)?;rxagc(bus,path,pending)?;
     field(bus,0x81ac+base,0xff000000,0x90)?;
     let mut result=PathResult::default();result.txagc=agc(bus,path,&mut result,pending)?;
     for value in [1,0,1]{phy::rf_write_masked(bus,path,0x42,1<<19,value)?;}bus.delay_us(200)?;
     result.thermal=phy::rf_read(bus,path,0x42,0x7e)?as u8;
-    field(bus,0x80a0,3,0)?;field(bus,0x80a0,0x1f00,3)?;field(bus,0x8070,0xf0000000,1)?;one_shot(bus,path,0x11,pending)?;
+    let (order,normalize,manual)=if band==Band::Ghz5{(2,0,0)}else{(0,3,1)};
+    field(bus,0x80a0,3,order)?;field(bus,0x80a0,0x1f00,normalize)?;field(bus,0x8070,0xf0000000,manual)?;one_shot(bus,path,0x11,pending)?;
     phy::rf_write_masked(bus,path,0,0xf0000,3)?;
     field(bus,0x8104+base,1<<8,0)?;field(bus,0x81c4+base,0x3f00,u32::from(result.txagc))?;field(bus,0x81b4+base,0x1ff0000,0x78)?;
     field(bus,0x81dc+base,1<<16,1)?;field(bus,0x81dc+base,1<<16,0)?;
@@ -190,26 +196,27 @@ fn cleanup(bus:&mut impl RegisterIo,saved:&Saved,changed:bool,failure:&mut Failu
 
 fn engine(bus:&mut impl RxdckIo,admission:Admission,start:u64)->Result<ResultData,Failure>{
     let mut failure=Failure::guard(fault(0,0));
-    if !(1..=13).contains(&admission.channel)||admission.tssi!=[true;2]{return Err(failure);}
+    let Some(band)=band::band(admission.channel)else{return Err(failure)};
+    if admission.tssi!=[true;2]{return Err(failure);}
     let mut saved=Saved::default();let mut changed=false;let mut btc=false;let mut stopped=false;
     let mut paused=false;let mut resumed=false;let mut pending=false;
     let result=(||{
         failure.stage=Stage::Guard;let left=remaining(bus,start)?;status(&mut TimedIo::new(bus,u64::from(left)))?;
         let left=remaining(bus,start)?;let scale=gain_scale(&mut TimedIo::new(bus,u64::from(left)))?;
-        failure.stage=Stage::BtcStart;let left=remaining(bus,start)?;btc=true;dack::notify(bus,notice(RfkState::Start),left.min(100_000))?;
+        failure.stage=Stage::BtcStart;let left=remaining(bus,start)?;btc=true;dack::notify(bus,notice(band,RfkState::Start),left.min(100_000))?;
         failure.stage=Stage::SchedulerPause;let left=remaining(bus,start)?;scheduler(bus,left.min(1_000_000))?;paused=true;
         let left=remaining(bus,start)?;let mut timed=TimedIo::new(bus,u64::from(left));status(&mut timed)?;
         for path in 0..2{failure.stage=if path==0{Stage::WaitA}else{Stage::WaitB};wait_rx(&mut timed,path)?;}
         failure.stage=Stage::Backup;save(&mut timed,&mut saved,admission.tssi)?;
         failure.stage=Stage::Afe;changed=true;table(&mut timed,tables::AFE)?;
         let mut paths=[PathResult::default();2];
-        for p in 0..2{failure.stage=if p==0{Stage::PathA}else{Stage::PathB};paths[p]=path(&mut timed,p as u8,scale,&mut pending)?;}
+        for p in 0..2{failure.stage=if p==0{Stage::PathA}else{Stage::PathB};paths[p]=path(&mut timed,band,p as u8,scale,&mut pending)?;}
         failure.stage=Stage::Restore;restore(&mut timed,&saved)?;
         failure.stage=Stage::SchedulerRestore;let left=remaining(bus,start)?;resumed=true;
         if let Err(error)=scheduler(bus,left.min(1_000_000)){failure.scheduler_restore=Some(error);return Err(error)}
         let left=remaining(bus,start)?;status(&mut TimedIo::new(bus,u64::from(left)))?;
         failure.stage=Stage::BtcStop;let left=remaining(bus,start)?;stopped=true;
-        if let Err(error)=dack::notify(bus,notice(RfkState::Stop),left.min(100_000)){failure.btc_stop=Some(error);return Err(error)}
+        if let Err(error)=dack::notify(bus,notice(band,RfkState::Stop),left.min(100_000)){failure.btc_stop=Some(error);return Err(error)}
         remaining(bus,start)?;Ok(ResultData{channel:admission.channel,gain_scale:scale,paths})
     })();
     match result{
@@ -221,7 +228,7 @@ fn engine(bus:&mut impl RxdckIo,admission:Admission,start:u64)->Result<ResultDat
             if btc&&pending{failure.radio_stop=phy::disable_bb_rf(bus).err();}
             if paused&&!resumed{failure.scheduler_restore=scheduler(bus,1_000_000).err();}
             if btc{failure.scheduler_status=status(&mut TimedIo::new(bus,80_000)).err();if !pending{failure.radio_stop=phy::disable_bb_rf(bus).err();}}
-            if btc&&!stopped{failure.btc_stop=dack::notify(bus,notice(RfkState::Stop),100_000).err();}Err(failure)}
+            if btc&&!stopped{failure.btc_stop=dack::notify(bus,notice(band,RfkState::Stop),100_000).err();}Err(failure)}
     }
 }
 

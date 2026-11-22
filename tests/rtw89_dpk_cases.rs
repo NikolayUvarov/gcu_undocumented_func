@@ -137,7 +137,7 @@ fn failed_final_scheduler_or_btc_stop_never_restores_after_released_grant(){for 
     let e=run(&mut d,admission()).unwrap_err();assert_eq!(e.stage,if mode!=0{Stage::BtcStop}else{Stage::SchedulerRestore});assert_eq!(d.schedulers.len(),2);
     if mode==0{paired(&d);off(&d);assert!(!e.disable_skipped&&!e.restore_skipped);}
     else{
-        assert_eq!(d.btc.len(),2);assert_eq!(d.btc[0].0,notice(RfkState::Start));assert_eq!(d.btc[1].0,notice(RfkState::Stop));
+        assert_eq!(d.btc.len(),2);assert_eq!(d.btc[0].0,notice(Band::Ghz2,RfkState::Start));assert_eq!(d.btc[1].0,notice(Band::Ghz2,RfkState::Stop));
         assert!(d.writes[d.btc[1].1..].iter().all(|(at,_)|matches!(*at,2|0x2f0|0x270)));radio_off(&d);
         assert!(e.disable_skipped&&e.restore_skipped&&!e.nctl_uncertain);assert_eq!(e.disable,[None;2]);assert!(e.radio_stop.is_none());
         assert_eq!(e.cause.kind,if mode==1{FaultKind::PowerState}else{FaultKind::Timeout});assert!(e.btc_stop.is_some());
@@ -148,3 +148,21 @@ fn failed_final_scheduler_or_btc_stop_never_restores_after_released_grant(){for 
 fn invalid_initial_input_is_rejected_before_register_access(){for input in [Admission{channel:14,tssi:[true;2]},Admission{channel:6,tssi:[true,false]}]{let mut d=Device::new();assert_eq!(run(&mut d,input).unwrap_err().stage,Stage::Guard);assert!(d.writes.is_empty()&&d.btc.is_empty());assert_eq!(d.now,0);}}
 #[test]
 fn frozen_clock_still_bounds_missing_completion_poll(){let mut d=Device::new();d.frozen=true;d.missing_first=Some(1);let e=run(&mut d,admission()).unwrap_err();assert_eq!(e.cause.kind,FaultKind::Timeout);assert!(d.writes.len()<300);off(&d);paired(&d);}
+
+// 213-DRV-0087: channel 100: _dpk_rf_setting's 5 GHz branch, _dpk_idl_mpa's order 2, the notices' band, RF restored.
+#[test]
+fn a_5_ghz_channel_takes_the_a_band_rf_setting_and_mdpd_order_two(){
+    let mut d=Device::new();let original=Device::new();
+    let data=run(&mut d,Admission{channel:100,tssi:[true;2]}).unwrap();assert_eq!(data.channel,100);
+    for((notice,_),state)in d.btc.iter().zip([RfkState::Start,RfkState::Stop]){assert_eq!(*notice,BtcNotice{calibration:Calibration::Dpk,state,phy_map:0x50});}
+    let rf_writes:Vec<(u32,u32,u32)>=d.writes.iter().filter(|w|w.0==0x10370).map(|w|((w.1>>28)&1,(w.1>>20)&255,w.1&0xfffff)).collect();
+    for path in 0..2u32{
+        let to=|reg:u32|rf_writes.iter().filter(|(p,r,_)|*p==path&&*r==reg).map(|(_,_,v)|*v).collect::<Vec<_>>();
+        assert!(to(0x8b).contains(&0x920fc)&&to(0x90).contains(&0x2c0)&&to(0x97).contains(&0x38800),"path {path}: A-band LNA, XALNA2, IQGEN");
+        assert!(!to(0x83).iter().any(|v|v&255==0xf2),"no 2.4 GHz RXBB attenuator");
+        for at in RF{if at<256{assert_eq!(d.rf[path as usize][at as usize],original.rf[path as usize][at as usize],"RF {at:x} restored");}}
+    }
+    let orders:Vec<u32>=d.writes.iter().filter(|(at,_)|*at==0x180a0).map(|(_,v)|v&3).collect();
+    assert!(orders.len()>=2&&orders.iter().all(|v|*v==2),"MDPD order 2 on both paths: {orders:?}");restored(&d,&original);
+    for channel in [14,34,178]{let mut d=Device::new();assert_eq!(run(&mut d,Admission{channel,tssi:[true;2]}).unwrap_err().stage,Stage::Guard);assert!(d.writes.is_empty());}
+}

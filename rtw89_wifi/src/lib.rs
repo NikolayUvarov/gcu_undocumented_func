@@ -3,6 +3,7 @@
 //! RTL8852BE firmware, bounded device initialization and retained DMA helpers.
 
 pub mod args;
+pub mod band;
 pub mod board;
 pub mod calibration;
 pub mod channel_policy;
@@ -75,6 +76,8 @@ pub(crate) mod station;
 
 #[allow(dead_code)]
 pub(crate) mod frames;
+
+pub(crate) mod ppdu;
 
 #[allow(dead_code)]
 pub(crate) mod service;

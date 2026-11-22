@@ -49,6 +49,11 @@ pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32,pub 
 trait PacketHandler{
     fn btc_event(&mut self,_:&[u8],_:Option<u32>)->Result<bool,crate::btc_context::Error>{Ok(false)}
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,Error>;
+    /// The receive queue's `number`-th Wi-Fi frame (213-DRV-0087), for a handler that keeps frames and matches reports.
+    fn frame(&mut self,now:u64,_number:u64,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,Error>{self.packet(now,rx::Channel::Rxq,packet,buffer,full)}
+    /// A PPDU status report, in the receive queue's order: `frame` numbers the Wi-Fi frame just before it, None if
+    /// another report came between. Unmatched ones are dropped.
+    fn report(&mut self,_frame:Option<u64>,_packet:rxdesc::Packet,_buffer:&[u8]){}
 }
 struct RetainAll;
 impl PacketHandler for RetainAll{
@@ -61,6 +66,8 @@ pub struct Session<'a,'command,'receive,B> {
     bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,mode:data_mode::Mode,
     inbox:Option<&'a mut Inbox>,terminal_copy:Option<inbox::Metadata>,firmware:download::Ready,scratch:&'a mut[u8],engine:h2c::Engine,failed:Option<Error>,counts:Counts,
     pub(crate) btc:Option<crate::btc_context::Context>,btc_event_error:Option<crate::btc_context::Error>,events:[[u8;EVENT_BYTES];EVENT_SLOTS],lengths:[usize;EVENT_SLOTS],event_head:usize,event_count:usize,last:u64,
+    // The receive queue's Wi-Fi frames so far, the last one's number until a report follows it, and the inbox's signals.
+    frames:u64,last_frame:Option<u64>,signals:crate::ppdu::Matcher,
 }
 impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     /// Startup diagnostic only: packets outside command/BTC handling are counted and discarded before data service exists.
@@ -75,7 +82,8 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         receiving.validate(bus,queue,rings,left as u32).map_err(Error::Permit)?;
         let now=bus.now_us(); if now<start { return Err(Error::Clock); } if now-start>=10_000 { return Err(Error::Timeout); }
         Ok(Self { bus,queue,rings,receiving,mode:data_mode::Mode::Startup,firmware,scratch,engine:h2c::Engine::new(now),failed:None,counts:Counts::default(),
-            inbox:None,terminal_copy:None,btc:None,btc_event_error:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
+            inbox:None,terminal_copy:None,btc:None,btc_event_error:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now,
+            frames:0,last_frame:None,signals:crate::ppdu::Matcher::default() })
     }
     /// The caller owns the storage; no large runtime inbox is placed in the Session or allocated per packet.
     /// A bank is single-use for a firmware session and remains inspectable after terminal errors.
@@ -94,7 +102,11 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     pub fn pending_packets(&self)->usize { self.inbox.as_ref().map_or(0,|inbox|inbox.pending()) }
     /// The record remains borrowed until processed; consume only after its actual owner accepts it.
     pub fn packet(&self)->Option<inbox::Record<'_>> { self.inbox.as_ref()?.front() }
-    pub fn consume_packet(&mut self) { if let Some(inbox)=self.inbox.as_mut(){inbox.consume();} }
+    pub fn consume_packet(&mut self) { if let Some(inbox)=self.inbox.as_mut(){if inbox.pending()!=0{self.signals.handed(inbox.head());}inbox.consume();} }
+    /// The oldest record is a frame whose report may still follow (213-DRV-0087).
+    pub(crate) fn awaits_signal(&self)->bool { self.inbox.as_ref().is_some_and(|inbox|inbox.pending()!=0&&self.signals.waits(inbox.head())) }
+    /// What became of the reports that followed the inbox's frames.
+    pub(crate) fn signals(&self)->crate::ppdu::Signals { self.signals.signals }
     /// Overflow is terminal: scratch cannot be reused, so the first record beyond the bank remains inspectable too.
     pub fn overflow_packet(&self)->Option<inbox::Record<'_>> {
         if self.failed!=Some(Error::InboxOverflow){return None}self.terminal_packet()
@@ -103,7 +115,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     /// This diagnostic record may also be in the bank and does not assert successful RX descriptor release.
     pub fn terminal_packet(&self)->Option<inbox::Record<'_>> {
         self.failed?;let metadata=self.terminal_copy?;
-        Some(inbox::Record{metadata,buffer:&self.scratch[..metadata.packet.offset+metadata.packet.length]})
+        Some(inbox::Record{metadata,buffer:&self.scratch[..metadata.packet.offset+metadata.packet.length],signal:0})
     }
     /// Read at most one packet per hardware channel; command ACK and BTC routes stay active between commands.
     pub fn poll_packets(&mut self,timeout_us:u32)->Result<[bool;2],Error> {
@@ -164,18 +176,22 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
             data_mode::Mode::Data(layout)=>{self.receiving.validate_data(self.bus,self.queue,self.rings,layout,budget).map_err(Error::Permit)?;},
         }Ok(())
     }
-    fn retain(&mut self,channel:rx::Channel,packet:rxdesc::Packet)->Result<(),Error> {
-        let Some(inbox)=self.inbox.as_mut() else{return Ok(())};
+    // The inbox's slot of the packet; None without an inbox, which drops it.
+    fn retain(&mut self,channel:rx::Channel,packet:rxdesc::Packet)->Result<Option<usize>,Error> {
+        let Some(inbox)=self.inbox.as_mut() else{return Ok(None)};
         let metadata=inbox::Metadata{channel,packet};
         match inbox.push(metadata,self.scratch){
-            Ok(())=>Ok(()),
+            Ok(at)=>Ok(Some(at)),
             Err(inbox::Error::Full)=>Err(Error::InboxOverflow),
             Err(inbox::Error::Packet)=>Err(Error::Malformed),
         }
     }
     fn dispatch(&mut self,channel:rx::Channel,packet:rxdesc::Packet,deadline:u64,handler:&mut impl PacketHandler)->Result<(),Error>{
-        let now=self.now()?;let handled=handler.packet(now,channel,packet,self.scratch,self.pending_packets()==inbox::SLOTS)?;
-        self.left(deadline)?;if !handled{self.retain(channel,packet)?;}Ok(())
+        let now=self.now()?;let full=self.pending_packets()==inbox::SLOTS;
+        let frame=channel==rx::Channel::Rxq&&packet.kind==rxdesc::TYPE_WIFI;
+        let handled=if frame{handler.frame(now,self.frames,packet,self.scratch,full)?}else{handler.packet(now,channel,packet,self.scratch,full)?};
+        self.left(deadline)?;
+        if !handled{if let (Some(at),true)=(self.retain(channel,packet)?,frame){self.signals.kept(self.frames,at,self.scratch);}}Ok(())
     }
     fn receive_one_with(&mut self,channel:rx::Channel,deadline:u64,handler:&mut impl PacketHandler)->Result<bool,Error> {
         let left=self.left(deadline)?;
@@ -186,12 +202,17 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
             rx::Outcome::Empty=>return Ok(false),rx::Outcome::Dropped(_)=>return Err(Error::Malformed),rx::Outcome::Packet(p)=>p,
         };
         self.left(deadline)?;
-        // RXQ type 1 is source PPDU status; retain no uninterpreted telemetry as application control traffic.
-        if channel==rx::Channel::Rxq&&packet.kind==1{
+        // RXQ type 1 is source PPDU status, never retained: its signal goes on the frame just before it, if that was kept
+        // (213-DRV-0087), the inbox's here and a handler's by the handler.
+        if channel==rx::Channel::Rxq&&packet.kind==crate::ppdu::TYPE{
             packet.bytes(self.scratch).ok_or(Error::Malformed)?;
             self.counts.ppdu_reports=self.counts.ppdu_reports.saturating_add(1);
+            let frame=self.last_frame.take();
+            if let Some(inbox)=self.inbox.as_mut(){if let Some((at,signal))=self.signals.report(frame,packet,self.scratch){inbox.mark(at,signal);}}
+            handler.report(frame,packet,self.scratch);
             self.left(deadline)?;self.terminal_copy=None;return Ok(true)
         }
+        if channel==rx::Channel::Rxq&&packet.kind==rxdesc::TYPE_WIFI{self.frames=self.frames.wrapping_add(1);self.last_frame=Some(self.frames);}
         if packet.kind!=rxdesc::TYPE_C2H {
             self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);self.dispatch(channel,packet,deadline,handler)?;
             self.left(deadline)?;self.terminal_copy=None;return Ok(true);
@@ -324,6 +345,12 @@ impl<B:DeviceIo> crate::rxdck::RxdckIo for Session<'_,'_,'_,B> {
         })();
         match result{Ok(())=>Ok(()),Err(error)=>self.fail::<()>(error).map_err(fault)}
     }
+}
+
+#[cfg(test)]
+impl<'a,'command,'receive,B> Session<'a,'command,'receive,B>{
+    /// The modelled device under a session, for cases that inject what the air would bring.
+    pub(crate) fn device_for_test(&mut self)->&mut B{self.bus}
 }
 
 #[cfg(test)]

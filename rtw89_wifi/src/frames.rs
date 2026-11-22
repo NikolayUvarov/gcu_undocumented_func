@@ -6,6 +6,8 @@ use crate::rxdesc;
 
 pub(crate) const FRAME_MAX: usize = 2346;
 pub(crate) const HEADER_BYTES: usize = 8;
+/// The header's byte for the signal (wlanhw.wit): minus dBm, 0 not measured; its PPDU status report fills it (213-DRV-0087).
+pub(crate) const SIGNAL: usize = 2;
 const RATES: [u8; 12] = [2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,7 +21,8 @@ impl Frame<'_> {
 
     /// The admitted channel must remain stable from reception through delivery; drain old frames before retuning.
     pub(crate) fn write(&self, channel: u8, all_beacons: bool, output: &mut [u8]) -> Result<usize, Error> {
-        if !(1..=14).contains(&channel) { return Err(Error::Channel); }
+        // 2.4 GHz 1 to 14, and the radio's 5 GHz channels (213-DRV-0087).
+        if !(1..=14).contains(&channel) && crate::band::band(channel).is_none() { return Err(Error::Channel); }
         let length = HEADER_BYTES + self.mpdu.len();
         if output.len() < length { return Err(Error::Output); }
         output[..HEADER_BYTES].copy_from_slice(&[(self.mpdu.len() & 255) as u8, (self.mpdu.len() >> 8) as u8,

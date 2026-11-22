@@ -15,7 +15,8 @@ fn service_info_advertises_only_the_actual_admitted_2g20_channel(){run(0,true,tr
     ipc::reset();let mut service=Service::new(data).unwrap();let id=ipc::buffer(1,&[]);assert!(service.step());
     let(words,bytes)=ipc::response(id).unwrap();assert_eq!(words[0]&255,0);let mut r=Reader::new(&bytes[..words[0]>>16]);
     let info=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());assert_eq!(info.mac,0x020304050607);
-    assert_eq!(info.bands,5);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
+    // bands 7 since 213-DRV-0087: 2.4 GHz, its OFDM, and 5 GHz; the radio's own channels include the 5 GHz ones.
+    assert_eq!(info.bands,7);assert_eq!(info.supported.len(),41);assert_eq!(info.channels.as_slice(),&[6]);assert_eq!(info.channel,6);assert_eq!(info.frame_max,2346);
     assert_eq!(ipc::dropped(id),1);let stopped=service.stop();assert!(stopped.failure.is_none());clean();
 });}
 
@@ -360,4 +361,153 @@ fn service_a_run_of_unacknowledged_sends_is_logged_once(){run(0,true,true,|data,
     // An acknowledgement ends the run; the next run is logged again.
     c.borrow_mut().unacked=false;let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());words(sent);
     let stopped=service.stop();assert!(stopped.failure.is_none());clean();
+});}
+
+// 213-DRV-0087: in data mode on a listen-only channel (100 here), sends go to the admitted access point alone while its
+// beacon is heard: no probe request, nothing to another receiver, nothing after LISTEN_BEACON_MS of silence; no CCK rate.
+#[test]
+fn service_on_a_listen_only_channel_sends_to_the_heard_access_point_alone(){run_at(5500,0,true,true,|data,c|{
+    ipc::reset();let now=ipc::clock()/1_000_000;let ap=[2,1,1,1,1,1];
+    let mut service=Service::new(data).unwrap().listening_to(ap,now);
+    let info=ipc::buffer(1,&[]);assert!(service.step());let(w,b)=ipc::response(info).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let info=wlanhw::Info::decode(&mut r).unwrap();assert_eq!((info.channel,info.bands),(100,7));
+    let cck=ipc::buffer(4,&body(&frame(),2,1));assert!(service.step());error(cck,wlanhw::Error::Invalid);
+    let mut probe=frame();probe[0]=0x40;probe[4..10].fill(0xff);
+    let id=ipc::buffer(4,&body(&probe,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    let mut other=frame();other[4..10].copy_from_slice(&[2,9,9,9,9,9]);
+    let id=ipc::buffer(4,&body(&other,12,1));assert!(service.step());error(id,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,0,"nothing published for the refused sends");
+    let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let info=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(words(sent)[1],0,"to the access point: sent");ipc::response(info).unwrap();
+    assert_eq!(c.borrow().published,1);
+    // Its beacon unheard for longer than the station's silence: nothing more is sent there.
+    ipc::advance(crate::service::LISTEN_BEACON_MS+1);
+    let late=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(late,wlanhw::Error::Failed);
+    assert_eq!(c.borrow().published,1);drop(service);clean();
+});}
+
+// 213-DRV-0087: a frame waits in the inbox for its PPDU status report while the drain goes on, and the station gets it
+// with its signal; a report after the frame was handed on, or after another frame, is counted and put on none.
+fn header(service:&mut Service<'_,'_,'_,'_,'_,'_,'_,Device>)->Vec<u8>{
+    let id=ipc::buffer(5,&[]);assert!(service.step());let(w,b)=ipc::response(id).unwrap();let mut r=Reader::new(&b[..w[0]>>16]);
+    let received=codec::decode_bytes::<2354>(&mut r).unwrap();assert!(r.done());received[..8].to_vec()
+}
+#[test]
+fn service_a_frame_carries_the_signal_of_the_report_after_it(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},ppdu::Signals,receive_service::Event,service::QUIET_MS};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let mut own=packet();own.extend_from_slice(&[0;4]);let report=bytes(FIVE);
+    let mut foreign=packet();foreign[4..10].copy_from_slice(&[2,8,7,6,5,4]);foreign.extend_from_slice(&[0;4]);
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),report.clone()];
+    let first=header(&mut service);assert_eq!((first[2],first[3],first[4]),(63,6,12),"-63 dBm, channel 6, 6 Mb/s");
+    // Alone in the ring: handed on when the drain finds it empty; the report a step later is late.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4)];assert_eq!(header(&mut service)[2],0);
+    c.borrow_mut().buffers=vec![report.clone()];assert!(service.step());
+    // A frame the filter drops comes between: the report is that frame's.
+    c.borrow_mut().buffers=vec![buffer(&own,1,4),buffer(&foreign,1,4),report.clone()];assert_eq!(header(&mut service)[2],0);
+    // Logged once a minute while it changes, frames coming meanwhile.
+    let mut logged=None;
+    for n in 0..8u64{c.borrow_mut().incoming.push(packet());ipc::advance(QUIET_MS-100);assert!(service.step());
+        if let Some(event)=service.take_event(){logged=Some((n,event));break}}
+    let Some((n,Event::Signals{channel:6,kept,measured:1,late:1,unmatched:1}))=logged else{panic!("no signal line: {logged:?}")};
+    assert_eq!(kept,3+n+1);
+    let stopped=service.stop();assert!(stopped.failure.is_none());
+    assert_eq!(stopped.owner.counts().signals,Signals{measured:1,late:1,unmatched:1});assert_eq!(stopped.owner.counts().filtered,1);clean();
+});}
+
+// 213-DRV-0090: a second with no beacon of the joined BSS, once one was heard, is a hole: logged when it opens and when
+// its next beacon closes it, with the counts since and the registers; every minute a line of the traffic.
+fn bss_beacon()->Vec<u8>{
+    let mut f=vec![0x80,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff,2,9,8,7,6,5,2,9,8,7,6,5,0x10,0];
+    f.extend_from_slice(&[0;8]);f.extend_from_slice(&[100,0,0x11,4,0,3,b'n',b'e',b't']);f
+}
+#[test]
+fn service_a_missed_beacon_opens_a_hole_and_the_next_one_closes_it(){run(0,true,true,|data,c|{
+    use crate::{btc_session::data_mode::{PROBE_MAC,PROBE_RF},receive_service::Event};
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    // No beacon heard yet: no hole, however long.
+    ipc::advance(1500);assert!(service.step());assert!(service.take_event().is_none());
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());assert!(service.take_event().is_none());
+    // Then only frames to this station, for 1.2 s.
+    let mut events=vec![];
+    for _ in 0..3{c.borrow_mut().incoming.push(packet());ipc::advance(400);assert!(service.step());events.extend(service.take_event());}
+    let [Event::Hole{n:1,channel:6,bssid,ms,wifi:3,kept:3,pending:false,probe:Some(probe),..}]=events.as_slice()else{panic!("no hole: {events:?}")};
+    assert_eq!(*bssid,[2,9,8,7,6,5]);assert!((1000..1300).contains(ms),"{ms} ms");
+    let at=|address:usize|probe.mac[PROBE_MAC.iter().position(|&a|a==address).unwrap()];
+    assert_eq!(at(0xc348)&0xffff,0x10f,"the scheduler as admitted");
+    let rx=at(0x1050);assert_eq!(rx&0xfff,(rx>>16)&0xfff,"the receive ring read to its end");
+    let rf18=PROBE_RF.iter().position(|&a|a==0x18).unwrap();assert_eq!(probe.rf[0][rf18]&0xff,6,"RF 0x18 on channel 6");
+    // Its next beacon closes it; another hole is counted from it.
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());
+    let Some(Event::HoleEnded{n:1,ms,wifi,kept,probe:Some(_),..})=service.take_event()else{panic!("no end")};
+    assert!((1200..1300).contains(&ms),"{ms} ms");assert_eq!((wifi,kept),(1,1));
+    // The minute's line: its one hole and the longest, and a good link's registers on its first.
+    let mut traffic=None;let mut other=vec![];
+    for _ in 0..70{c.borrow_mut().incoming.push(bss_beacon());ipc::advance(900);assert!(service.step());
+        match service.take_event(){Some(e@Event::Traffic{..})=>{traffic=Some(e);break},Some(e)=>other.push(e),None=>{}}}
+    assert!(other.is_empty(),"{other:?}");
+    let Some(Event::Traffic{channel:6,holes:1,longest_ms,probe:Some(_),beacons,..})=traffic else{panic!("no traffic line")};
+    assert_eq!(longest_ms,ms);assert!(beacons>=60);drop(service);clean();
+});}
+// While no beacon of the BSS reaches the host (the Ryzen, 2026-11-21: none counted in data mode), 3 s with no Wi-Fi frame
+// at all is a hole, closed by the next frame (a second or so of an idle link is none); a refused beacon of another network
+// is counted on the minute's line, and the first minute's line has the refused frames' headers.
+#[test]
+fn service_with_no_beacon_of_its_bss_a_second_without_any_frame_is_a_hole(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    let mut other=bss_beacon();other[10..22].copy_from_slice(&[2,7,7,7,7,7,2,7,7,7,7,7]);
+    c.borrow_mut().incoming.extend([packet(),other]);assert!(service.step());assert!(service.take_event().is_none());
+    ipc::advance(1500);assert!(service.step());assert!(service.take_event().is_none(),"1.5 s idle is no hole");
+    ipc::advance(1600);assert!(service.step());
+    let Some(Event::Hole{n:1,by_beacons:false,ms,kept:0,probe:Some(_),..})=service.take_event()else{panic!("no hole by frames")};
+    assert!((3100..3200).contains(&ms),"{ms} ms");
+    c.borrow_mut().incoming.push(packet());assert!(service.step());
+    let Some(Event::HoleEnded{n:1,ms,kept:1,..})=service.take_event()else{panic!("no end")};assert!((3100..3200).contains(&ms));
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{beacons:0,other_beacons:1,bssid:[2,9,8,7,6,5],holes:1,refused:Some(refused),..})=traffic else{panic!("{traffic:?}")};
+    assert_eq!(refused.count,1);assert_eq!(refused.frames[0].1[..2],[0x80,0]);assert_eq!(refused.frames[0].1[16..22],[2,7,7,7,7,7]);
+    drop(service);clean();
+});}
+
+// 213-DRV-0091: the access point's association response tells the firmware of the link: the join info connected as
+// INFRA, then the address CAM as INFRA with the AID (Linux's rtw89_core_sta_link_assoc); its deauthentication, and a
+// new filter, tell it of no link again.
+fn to_station(subtype:u8,body:&[u8])->Vec<u8>{
+    let mut f=vec![subtype<<4,0,0,0,2,3,4,5,6,7,2,9,8,7,6,5,2,9,8,7,6,5,0x20,0];f.extend_from_slice(body);f.extend_from_slice(&[0;4]);f
+}
+#[test]
+fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    let h2c=|c:&std::rc::Rc<std::cell::RefCell<Control>>,class:u8|c.borrow().normal_packets.iter().filter(|p|(p[0]&3,p[0]>>2,p[1])==(1,class,0))
+        .map(|p|p[8..].to_vec()).collect::<Vec<_>>();
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    let(joins,cams)=(h2c(c,8).len(),h2c(c,6).len());
+    // A refused association (status 17) tells nothing.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,17,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(service.take_event().is_none());assert_eq!((h2c(c,8).len(),h2c(c,6).len()),(joins,cams));
+    // Status 0, AID 1.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{channel:6,bssid:[2,9,8,7,6,5],aid:Some(1),was:None,before:Some(_),after:Some(_)})=service.take_event()else{panic!("no link")};
+    let(join,cam)=(h2c(c,8),h2c(c,6));assert_eq!((join.len(),cam.len()),(joins+1,cams+1));
+    assert_eq!(join.last().unwrap()[..4],[0,0,0,6],"OP 0, NET_TYPE INFRA, WIFI_ROLE STATION");
+    let cam=cam.last().unwrap();let w=|i:usize|u32::from_le_bytes(cam[4*i..4*i+4].try_into().unwrap());
+    assert_eq!(((w(2)>>1)&3,w(9)&0xfff,w(13)&1),(2,1,1),"NET_TYPE INFRA, AID 1, the BSSID valid");
+    assert_eq!(cam[22..28],[2,9,8,7,6,5]);
+    // Its deauthentication: no link again.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(12,&[3,0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{aid:None,was:Some(1),before:Some(_),after:Some(_),..})=service.take_event()else{panic!("no unlink")};
+    assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4],"OP 1, NO_LINK");
+    let cam=h2c(c,6);let cam=cam.last().unwrap();let w2=u32::from_le_bytes(cam[8..12].try_into().unwrap());assert_eq!((w2>>1)&3,0);
+    // Linked again, then a new filter: no link first, then the filter's own CAM entry.
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(3,&[0x11,4,0,0,2,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(2),..})));
+    let joins=h2c(c,8).len();let id=ipc::buffer(3,&filter(true));assert!(service.step());assert_eq!(words(id),[0,0]);
+    assert_eq!(h2c(c,8).len(),joins+1);assert_eq!(h2c(c,8).last().unwrap()[..4],[0,1,0,4]);
+    drop(service);clean();
 });}

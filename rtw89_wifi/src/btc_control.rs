@@ -60,7 +60,8 @@ impl WlanShadow {
 impl Default for WlanShadow { fn default() -> Self { Self::new() } }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Antenna { Initial, NoLink, Rfk, WlanOnly }
+/// `Wlan5g` is Linux's BTC_ANT_W5G (213-DRV-0087): WLAN's grant forced high, Bluetooth's left to hardware, no pollution table.
+pub enum Antenna { Initial, NoLink, Rfk, WlanOnly, Wlan5g }
 
 /// Actual pre-transition registers, retained for a failed transition's independent restoration attempt.
 #[derive(Debug)]
@@ -77,6 +78,8 @@ fn ready(bus: &mut impl RegisterIo) -> io::Result<()> {
     }
     Err(Fault::new(FaultKind::Timeout, LTE_CTRL, 0))
 }
+/// The LTE window's SW_CFG_1, the grants the coexistence writes (213-DRV-0090's probe).
+pub(crate) fn lte_grants(bus: &mut impl RegisterIo) -> io::Result<u32> { lte_read(bus) }
 fn lte_read(bus: &mut impl RegisterIo) -> io::Result<u32> {
     ready(bus)?; bus.write32(LTE_CTRL, 0x800f0038)?;
     let value = io::read32(bus, LTE_RDATA)?;
@@ -130,7 +133,7 @@ pub fn antenna(bus: &mut impl RegisterIo, desired: Antenna, timeout_us: u32) -> 
 
 /// The actual packet owner keeps its live permit; source BT RFK running defers antenna writes without blocking common actions.
 pub(crate) fn antenna_runtime(bus:&mut impl RegisterIo,desired:Antenna,timeout_us:u32)->io::Result<bool>{
-    if !matches!(desired,Antenna::NoLink|Antenna::WlanOnly){return Err(Fault::new(FaultKind::PowerState,SCOREBOARD,0))}
+    if !matches!(desired,Antenna::NoLink|Antenna::WlanOnly|Antenna::Wlan5g){return Err(Fault::new(FaultKind::PowerState,SCOREBOARD,0))}
     antenna_inner(bus,desired,timeout_us,true).map(|result|result.is_some())
 }
 fn antenna_inner(bus:&mut impl RegisterIo,desired:Antenna,timeout_us:u32,runtime:bool)->io::Result<Option<BtState>>{
@@ -140,8 +143,8 @@ fn antenna_inner(bus:&mut impl RegisterIo,desired:Antenna,timeout_us:u32,runtime
     if runtime&&bt.running_rfk{timed.delay_us(0)?;return Ok(None)}
     if bt.running_rfk || !runtime&&bt.requests_rfk { return Err(Fault::new(FaultKind::PowerState, SCOREBOARD, 0x60)); }
     let grants = match desired { Antenna::NoLink => 0,
-        Antenna::Initial if bt.enabled => 0xdd00dd00, _ => 0x77007700 };
-    let pollution = if matches!(desired,Antenna::Rfk|Antenna::WlanOnly) { 0x100 } else { 0x166 };
+        Antenna::Initial if bt.enabled => 0xdd00dd00, Antenna::Wlan5g => 0x33003300, _ => 0x77007700 };
+    let pollution = if matches!(desired,Antenna::Rfk|Antenna::WlanOnly|Antenna::Wlan5g) { 0x100 } else { 0x166 };
     // The initial source path writes grants first; no-link and RFK select WLAN control first.
     if matches!(desired,Antenna::Initial|Antenna::WlanOnly) { lte_write(&mut timed, grants)?; control(&mut timed, true)?; }
     else { control(&mut timed, true)?; lte_write(&mut timed, grants)?; }

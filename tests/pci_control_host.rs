@@ -24,6 +24,20 @@ fn registers_only_stop_and_dma_preserve_status_and_other_command_bits() {
 }
 
 #[test]
+fn a_memory_grant_leaves_io_decoding_as_found() {
+    // The Ryzen's Radeon as its firmware leaves it (213-KRN-0271): memory and mastering on, I/O off.
+    let mut pci = Pci { value: 0x0010_0006, written: vec![], refuse: false };
+    assert!(transition(&mut pci, Mode::Memory));
+    assert_eq!(pci.value, 0x0010_0006);
+    let mut pci = Pci { value: 0x0010_0401, written: vec![], refuse: false };
+    assert!(transition(&mut pci, Mode::Memory));
+    assert_eq!(pci.value, 0x0010_0407);
+    let mut pci = Pci { value: 0x0010_0400, written: vec![], refuse: false };
+    assert!(transition(&mut pci, Mode::Memory));
+    assert_eq!((pci.value, pci.written.as_slice()), (0x0010_0406, &[0x0406][..]));
+}
+
+#[test]
 fn a_controller_that_keeps_mastering_is_not_reported_stopped() {
     let mut pci = Pci { value: 7, written: vec![], refuse: true };
     assert!(!transition(&mut pci, Mode::Stopped));

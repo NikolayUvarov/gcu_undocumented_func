@@ -83,7 +83,7 @@ fn every_command_against_a_hub() {
     let device = out.split_whitespace().nth(1).unwrap().trim_end_matches(':').to_string();
     let devices = api(&mut admin, "GET", "/hub/admin/v1/devices", "");
     let full = devices.split('"').find(|w| w.starts_with(&device) && w.len() == 64).unwrap().to_string();
-    let decide = |c: &mut Client, d: &str, text: &str| api(c, "POST", &format!("/hub/admin/v1/devices/{full}/decision"), &format!(r#"{{"api":"hub-api 2","decision":"{d}","text":"{text}"}}"#));
+    let decide = |c: &mut Client, d: &str, text: &str| api(c, "POST", &format!("/hub/admin/v1/devices/{full}/decision"), &format!(r#"{{"api":"hub-api 3","decision":"{d}","text":"{text}"}}"#));
     decide(&mut admin, "ask", "Which laptop is it?");
     let out = ok(&ann, &["status"]);
     assert!(out.contains("pending") && out.contains("Ann") && out.contains("question: Which laptop is it?"), "{out}");
@@ -108,7 +108,7 @@ fn every_command_against_a_hub() {
 
     // The list, a question in the thread, and its answer.
     assert!(ok(&ann, &["list"]).contains("Fan noise"));
-    api(&mut intake, "POST", "/hub/agent/v1/requests/1/messages", r#"{"api":"hub-api 2","kind":"question","text":"One fan or two?"}"#);
+    api(&mut intake, "POST", "/hub/agent/v1/requests/1/messages", r#"{"api":"hub-api 3","kind":"question","text":"One fan or two?"}"#);
     assert!(ok(&ann, &["list"]).contains("[a question for you]"));
     let out = ok(&ann, &["show", "1"]);
     assert!(out.contains("needs-info") && out.contains("One fan or two?") && out.contains("waits for your answer") && out.contains("attachment: log fan.log"), "{out}");
@@ -136,7 +136,10 @@ fn every_command_against_a_hub() {
     assert_eq!(out.lines().count(), 2, "{out}");
     assert!(out.contains("laptop") && out.contains("phone") && out.contains("(this one)"), "{out}");
     let phone = out.lines().find(|l| l.contains("phone")).unwrap().split_whitespace().next().unwrap().to_string();
-    refused(&ann, &["revoke", "f"], "devices start with");
+    // A prefix that names no device: a hex digit neither identifier starts with, whatever the two are (100003-APP-0156).
+    let firsts: Vec<char> = out.lines().filter_map(|l| l.chars().next()).collect();
+    let none = "0123456789abcdef".chars().find(|c| !firsts.contains(c)).unwrap().to_string();
+    refused(&ann, &["revoke", &none], "0 devices start with");
     assert!(ok(&ann, &["revoke", &phone[..10]]).contains("revoked"));
     refused(&ann2, &["status"], "revoked");
 
@@ -167,4 +170,38 @@ fn a_flagged_request_says_it_waits_and_usage_is_named() {
     assert!(ok(&dir, &["show", "1"]).contains("it waits for the admin"));
     refused(&dir, &["frobnicate"], "usage: improve");
     refused(&dir, &["new", "--bogus"], "no flag --bogus");
+}
+
+#[test]
+fn a_proposal_answered_from_the_command_line() {
+    // hub-api 3 (100003-APP-0155): the track's proposal shown as waiting; accepted with no words; corrected with them.
+    let root = temp();
+    let url = hub(&root.0);
+    let (mut admin, mut intake, mut track) = (Client::new(&url, &[], key(1)).unwrap(), Client::new(&url, &[], key(2)).unwrap(), Client::new(&url, &[], key(3)).unwrap());
+    let dir = root.0.join("cleo");
+    ok(&dir, &["setup", "--hub", &url]);
+    let out = ok(&dir, &["register", "--display-name", "Cleo"]);
+    let device = out.split_whitespace().nth(1).unwrap().trim_end_matches(':').to_string();
+    let full = api(&mut admin, "GET", "/hub/admin/v1/devices", "").split('"').find(|w| w.starts_with(&device) && w.len() == 64).unwrap().to_string();
+    api(&mut admin, "POST", &format!("/hub/admin/v1/devices/{full}/decision"), r#"{"api":"hub-api 3","decision":"approve","text":"Welcome"}"#);
+    ok(&dir, &["new", "--title", "Two cameras", "--text", "Switching between them", "--yes"]);
+    api(&mut intake, "POST", "/hub/agent/v1/requests/1/state", r#"{"api":"hub-api 3","to":"accepted","reason":"cameras","track":"APP","task":"158-APP-9999"}"#);
+    let first = api(&mut track, "POST", "/hub/agent/v1/requests/1/messages", r#"{"api":"hub-api 3","kind":"proposal","text":"A key n to the next camera"}"#);
+    let p = first.split("\"n\":").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap().to_string();
+    assert!(ok(&dir, &["list"]).contains("[a proposal for you]"));
+    let out = ok(&dir, &["show", "1"]);
+    assert!(out.contains(&format!("(waits for your answer: improve reply 1 --answer {p} --accept, or improve reply 1 TEXT --answer {p} --correct|--decline)")), "{out}");
+    assert!(ok(&dir, &["watch", "--once"]).contains("a proposal waits for you"));
+    refused(&dir, &["reply", "1", "--accept"], "name it with --answer");
+    refused(&dir, &["reply", "1", "x", "--answer", &p, "--accept", "--decline"], "one of --accept");
+    refused(&dir, &["reply", "1", "--answer", &p, "--correct"], "the text is missing");
+    refused(&dir, &["reply", "1", "Yes", "--answer", &p], "400 consent");
+    ok(&dir, &["reply", "1", "--answer", &p, "--accept"]);
+    assert!(!ok(&dir, &["list"]).contains("[a proposal for you]"));
+    assert!(ok(&dir, &["show", "1"]).contains(&format!("answer to #{p}, accepting it")));
+    let second = api(&mut track, "POST", "/hub/agent/v1/requests/1/messages", r#"{"api":"hub-api 3","kind":"proposal","text":"And Shift+n back"}"#);
+    let p2 = second.split("\"n\":").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap().to_string();
+    ok(&dir, &["reply", "1", "Not Shift+n: p", "--answer", &p2, "--correct"]);
+    let thread = api(&mut track, "GET", "/hub/agent/v1/requests/1", "");
+    assert!(thread.contains(&format!(r#""answers":{p2},"consent":"correct""#)) && thread.contains(&format!(r#""answers":{p},"consent":"accept""#)), "{thread}");
 }

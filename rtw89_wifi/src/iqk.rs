@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2019-2022 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
-//! Private initial 2 GHz/20 MHz wideband IQK; no native calibration-TX policy provider exists yet.
+//! Private 20 MHz wideband IQK, 2.4 and 5 GHz (213-DRV-0087); no native calibration-TX policy provider exists yet.
 
-use crate::{board::Board,btc_context::Initialized,dack::{self,Band,BtcNotice,Calibration,RfkState},
+use crate::{band,board::Board,btc_context::Initialized,dack::{self,Band,BtcNotice,Calibration,RfkState},
     io::{self,Fault,FaultKind,RegisterIo,TimedIo},iqk_tables as table,phy::{self,Phy,State},rxdck::{self,RxdckIo}};
 
 const BASE:usize=0x10000;
@@ -50,8 +50,10 @@ fn bb(bus:&mut impl RegisterIo,at:usize,mask:u32,value:u32)->io::Result<()>{
 fn read_bb(bus:&mut impl RegisterIo,at:usize)->io::Result<u32>{io::read32(bus,BASE+at)}
 fn rf(bus:&mut impl RegisterIo,path:u8,at:u32,mask:u32,value:u32)->io::Result<()>{phy::rf_write_masked(bus,path,at,mask,value)}
 fn table(bus:&mut impl RegisterIo,rows:&[(usize,u32,u32)])->io::Result<()>{for &(at,mask,value) in rows{bb(bus,at,mask,value)?;}Ok(())}
-fn notice(state:RfkState)->BtcNotice{BtcNotice{calibration:Calibration::Iqk,state,phy_map:if matches!(state,RfkState::OneshotStart|RfkState::OneshotStop){0x13}else{0x10}}}
-fn notify(bus:&mut impl RxdckIo,state:RfkState,start:u64)->io::Result<()>{let timeout=left(bus,start)?.min(100_000);dack::notify(bus,notice(state),timeout)}
+// rtw89_btc_phymap: PHY 0, paths A and B for a one-shot, and the band in bits 6-7.
+fn notice(band:Band,state:RfkState)->BtcNotice{BtcNotice{calibration:Calibration::Iqk,state,
+    phy_map:if matches!(state,RfkState::OneshotStart|RfkState::OneshotStop){0x13}else{0x10}|(band as u8)<<6}}
+fn notify(bus:&mut impl RxdckIo,band:Band,state:RfkState,start:u64)->io::Result<()>{let timeout=left(bus,start)?.min(100_000);dack::notify(bus,notice(band,state),timeout)}
 fn status(bus:&mut impl RegisterIo)->io::Result<()>{
     let value=io::read32(bus,0xc348)?;if value&0xffff!=0{return Err(bad(0xc348,value));}
     io::poll32(bus,0xc6ec,1<<7,0,8,80_000)?;bus.delay_us(0)
@@ -116,15 +118,20 @@ fn setup(bus:&mut impl RegisterIo,path:u8)->io::Result<()>{
     rf(bus,path,5,1,0)?;rf(bus,path,0x10005,1,0)?;
     bus.write32(BASE+0x8008,0x80)?;bus.write32(BASE+0x8088,0x81ff010a)
 }
-fn lok(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
-    clocks(bus,false)?;let offset=usize::from(path)<<8;
+// _lok_res_table and _iqk_txk_setting: the LOK table's band entry, then the band's TX path (XALNA2 and the TX gain
+// attenuators on 2.4 GHz; XGLNA2 and BIASA on 5 GHz).
+fn lok(bus:&mut impl RegisterIo,band:Band,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
+    clocks(bus,false)?;let offset=usize::from(path)<<8;let five=band==Band::Ghz5;
     for ibias in 1..=3{
         result.lok_attempts=ibias;
-        for (at,mask,value) in [(0xef,RF_MASK,2),(0x33,RF_MASK,0),(0x3f,RF_MASK,u32::from(ibias)),(0xef,RF_MASK,0),
-            (0x7c,1<<5,1),(0x90,0x300,0),(0x51,1<<19,0),(0x51,1<<11,0),(0x52,1<<11,1),(0x55,31,0),
-            (0xef,4,1),(0x33,255,0),(0,0xffff0,0x403e)]{rf(bus,path,at,mask,value)?;}
+        for (at,mask,value) in [(0xef,RF_MASK,2),(0x33,RF_MASK,u32::from(five)),(0x3f,RF_MASK,u32::from(ibias)),(0xef,RF_MASK,0),(0x7c,1<<5,1)]{
+            rf(bus,path,at,mask,value)?;
+        }
+        let setting:&[(u32,u32,u32)]=if five{&[(0x85,3,0),(0x60,7,1),(0x55,31,0),(0xef,4,1),(0x33,255,0x80),(0,0xffff0,0x403e)]}
+            else{&[(0x90,0x300,0),(0x51,1<<19,0),(0x51,1<<11,0),(0x52,1<<11,1),(0x55,31,0),(0xef,4,1),(0x33,255,0),(0,0xffff0,0x403e)]};
+        for &(at,mask,value) in setting{rf(bus,path,at,mask,value)?;}
         bus.delay_us(1)?;bb(bus,0x802c,0xfff,0x21)?;
-        rf(bus,path,0x11,3,0)?;rf(bus,path,0x11,0x70,6)?;
+        rf(bus,path,0x11,3,0)?;rf(bus,path,0x11,0x70,if five{4}else{6})?;
         for (i,(kind,tg,iqp)) in [(0x100,0,9),(0x300,0x12,0x24),(0x200,0,9),(0x300,0x12,0x24)].into_iter().enumerate(){
             rf(bus,path,0x11,0x1f000,tg)?;bus.write32(BASE+0x81cc+offset,iqp)?;
             if kind==0x200{bb(bus,0x802c,0xfff,0x21)?;}
@@ -137,9 +144,11 @@ fn lok(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut bool
         if !result.lok_range_fail{break;}
     }Ok(())
 }
-fn tx(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
+// _txk_group_sel: the band's track range, BB gain and ITQT (_g_ and _a_ tables; the power range is 0 on both).
+fn tx(bus:&mut impl RegisterIo,band:Band,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
     let offset=usize::from(path)<<8;
-    for (group,(track,gain,iqp)) in [(4,8,9),(4,14,0x12),(6,6,0x1b),(6,14,0x24)].into_iter().enumerate(){
+    let groups=if band==Band::Ghz5{[(3,8,0x12),(3,14,0x12),(6,6,0x12),(6,14,0x1b)]}else{[(4,8,9),(4,14,0x12),(6,6,0x1b),(6,14,0x24)]};
+    for (group,(track,gain,iqp)) in groups.into_iter().enumerate(){
         rf(bus,path,0x11,3,0)?;rf(bus,path,0x11,0x70,track)?;rf(bus,path,0x11,0x1f000,gain)?;
         bus.write32(BASE+0x81cc+offset,iqp)?;bb(bus,0x8154+offset,0x100,1)?;bb(bus,0x8154+offset,0x10,1)?;
         bb(bus,0x8154+offset,4,0)?;bb(bus,0x8154+offset,3,group as u32)?;bb(bus,0x8010,255,0)?;
@@ -148,12 +157,16 @@ fn tx(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut bool)
     }
     bb(bus,0x8124+offset,0xf00,if result.tx_fail.iter().any(|v|*v){0}else{5})
 }
-fn rx(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
-    clocks(bus,true)?;let offset=usize::from(path)<<8;
-    rf(bus,path,0,0xf0000,12)?;rf(bus,path,0x20,1<<8,1)?;
+// _iqk_rxk_setting and _rxk_group_sel: RXK's band select, then each group's gain and attenuators (RR_RXBB's C2G and
+// C1G on 2.4 GHz, RR_RXA2's HATT and CC2 on 5 GHz).
+fn rx(bus:&mut impl RegisterIo,band:Band,path:u8,result:&mut PathResult,pending:&mut bool)->io::Result<()>{
+    clocks(bus,true)?;let offset=usize::from(path)<<8;let five=band==Band::Ghz5;
+    rf(bus,path,0,0xf0000,12)?;rf(bus,path,0x20,if five{1<<7}else{1<<8},1)?;
     let channel=phy::rf_read(bus,path,0x18,RF_MASK)?;rf(bus,path,0x1f,RF_MASK,channel)?;
-    for (group,(gain,c2,c1)) in [(0x212,0,3),(0x21c,0,3),(0x350,0x28,2),(0x360,0x5f,1)].into_iter().enumerate(){
-        rf(bus,path,0,0x3ff0,gain)?;rf(bus,path,0x83,0x1fc00,c2)?;rf(bus,path,0x83,0x300,c1)?;
+    let (groups,at,masks)=if five{([(0x190,0x0f,3),(0x198,0x0f,1),(0x350,0x3f,0),(0x352,0x7f,0)],0x8c,[0x7f,0x180])}
+        else{([(0x212,0,3),(0x21c,0,3),(0x350,0x28,2),(0x360,0x5f,1)],0x83,[0x1fc00,0x300])};
+    for (group,(gain,c2,c1)) in groups.into_iter().enumerate(){
+        rf(bus,path,0,0x3ff0,gain)?;rf(bus,path,at,masks[0],c2)?;rf(bus,path,at,masks[1],c1)?;
         bb(bus,0x8154+offset,0x100,1)?;bb(bus,0x8154+offset,0x10,0)?;bb(bus,0x8154+offset,7,group as u32)?;
         result.rx_fail[group]=shot(bus,path,0xb00,pending)?;
         bb(bus,0x9fe0,1<<(16+group+usize::from(path)*4),u32::from(result.rx_fail[group]))?;
@@ -180,41 +193,44 @@ fn restore(bus:&mut impl RegisterIo,path:u8,result:&mut PathResult,pending:&mut 
 }
 
 fn engine(bus:&mut impl RxdckIo,channel:u8,start:u64)->core::result::Result<[PathResult;2],Failure>{
+    let band=band::band(channel).ok_or_else(||Failure::guard(bad(0,u32::from(channel))))?;
+    // RF18 as the channel stage left it: the channel and, on 5 GHz, both band fields.
+    let rf18=u32::from(channel)|if band==Band::Ghz5{0x10100}else{0};
     let mut stage=Stage::BtcStart;let mut outer=false;let mut outer_stopped=false;let mut outer_error=None;
     let mut nested=false;let mut nested_error=None;let mut paused=false;let mut resumed=false;let mut resume_error=None;
     let mut saved=None;let mut pending=false;let mut results=[PathResult::default();2];let mut fail_count=0;
     let result=(||{
-        outer=true;notify(bus,RfkState::Start,start)?;
+        outer=true;notify(bus,band,RfkState::Start,start)?;
         stage=Stage::Pause;let timeout=left(bus,start)?.min(1_000_000);scheduler(bus,timeout)?;paused=true;
         stage=Stage::Wait;let remaining=left(bus,start)?;let mut timed=TimedIo::new(bus,u64::from(remaining));
         wait(&mut timed,0)?;wait(&mut timed,1)?;
         stage=Stage::Init;timed.write32(BASE+0x9fe0,0)?;
         for path in 0..2u8{
-            stage=Stage::NestedStart;nested=true;notify(bus,RfkState::OneshotStart,start)?;
+            stage=Stage::NestedStart;nested=true;notify(bus,band,RfkState::OneshotStart,start)?;
             let remaining=left(bus,start)?;let mut timed=TimedIo::new(bus,u64::from(remaining));
             let actual=phy::rf_read(&mut timed,path,0x18,RF_MASK)?;
-            if actual&0x3e3ff!=u32::from(channel){return Err(bad(0x18,actual));}
+            if actual&0x3e3ff!=rf18{return Err(bad(0x18,actual));}
             let _synth=read_bb(&mut timed,0x35c)?&0xc00;
             bb(&mut timed,0x9fe0,0xff000000,0x2a)?;
-            for (mask,value) in [(15,0),(0xf0,0),(0xff00,u32::from(channel))]{bb(&mut timed,0x9fe4,mask<<(path*16),value)?;}
+            for (mask,value) in [(15,band as u32),(0xf0,0),(0xff00,u32::from(channel))]{bb(&mut timed,0x9fe4,mask<<(path*16),value)?;}
             stage=Stage::Backup;saved=Some(backup(&mut timed,path)?);
             stage=Stage::Setup;setup(&mut timed,path)?;
             let result=&mut results[path as usize];
-            stage=Stage::Lok;lok(&mut timed,path,result,&mut pending)?;
-            stage=Stage::Tx;tx(&mut timed,path,result,&mut pending)?;
-            stage=Stage::Rx;rx(&mut timed,path,result,&mut pending)?;
+            stage=Stage::Lok;lok(&mut timed,band,path,result,&mut pending)?;
+            stage=Stage::Tx;tx(&mut timed,band,path,result,&mut pending)?;
+            stage=Stage::Rx;rx(&mut timed,band,path,result,&mut pending)?;
             stage=Stage::Report;report(&mut timed,path,result,&mut fail_count)?;
             stage=Stage::Restore;restore(&mut timed,path,result,&mut pending)?;
             restore_registers(&mut timed,saved.unwrap())?;saved=None;
             timed.delay_us(0)?;
             stage=Stage::NestedStop;nested=false;
-            if let Err(e)=notify(bus,RfkState::OneshotStop,start){nested_error=Some(e);return Err(e);}
+            if let Err(e)=notify(bus,band,RfkState::OneshotStop,start){nested_error=Some(e);return Err(e);}
         }
         stage=Stage::Resume;let timeout=left(bus,start)?.min(1_000_000);resumed=true;
         if let Err(e)=scheduler(bus,timeout){resume_error=Some(e);return Err(e);}
         if results.iter().any(PathResult::failed){stage=Stage::Quality;return Err(bad(BASE+0x8008,1));}
         stage=Stage::BtcStop;outer_stopped=true;
-        if let Err(e)=notify(bus,RfkState::Stop,start){outer_error=Some(e);return Err(e);}
+        if let Err(e)=notify(bus,band,RfkState::Stop,start){outer_error=Some(e);return Err(e);}
         left(bus,start)?;Ok(results)
     })();
     match result{
@@ -225,8 +241,8 @@ fn engine(bus:&mut impl RxdckIo,channel:u8,start:u64)->core::result::Result<[Pat
             let scheduler_restore=if paused&&!resumed{scheduler(bus,1_000_000).err()}else{resume_error};
             let scheduler_status=if outer{status(&mut TimedIo::new(bus,80_000)).err()}else{None};
             let radio_stop=early_radio.unwrap_or_else(||if outer{phy::disable_bb_rf(bus).err()}else{None});
-            let nested_stop=if nested{dack::notify(bus,notice(RfkState::OneshotStop),100_000).err()}else{nested_error};
-            let btc_stop=if outer&&!outer_stopped{dack::notify(bus,notice(RfkState::Stop),100_000).err()}else{outer_error};
+            let nested_stop=if nested{dack::notify(bus,notice(band,RfkState::OneshotStop),100_000).err()}else{nested_error};
+            let btc_stop=if outer&&!outer_stopped{dack::notify(bus,notice(band,RfkState::Stop),100_000).err()}else{outer_error};
             Err(Failure{stage,cause,channel_rx:None,results,nctl_uncertain:pending,register_restore,scheduler_restore,scheduler_status,radio_stop,nested_stop,btc_stop})
         }
     }
@@ -238,12 +254,13 @@ pub(crate) fn run<B:RxdckIo>(phy:&mut Phy<'_,B>,board:&Board,tuned:&phy::channel
     initialized:&Initialized,authority:phy::channel::CalibrationTransmit)->core::result::Result<Completed,Failure>{
     let attempt=phy.attempt();let session=phy.bus_between_stages().command_session();
     if phy.state()!=State::ChannelTuned||!initialized.matches(attempt,session)
-        ||tuned.attempt!=attempt||tuned.session!=session||!(1..=13).contains(&tuned.channel)
+        ||tuned.attempt!=attempt||tuned.session!=session||band::band(tuned.channel).is_none()
         ||!authority.matches(tuned,phy::channel::CalibrationEngine::Iqk){return Err(Failure::guard(bad(0,0)));}
     let bus=phy.bus_between_stages();let start=bus.now_us();
     phy::guard(bus,&board.identity,phy::RegisterPhase::AfterDack).map_err(Failure::guard)?;
     if let Err(cause)=left(bus,start){return Err(Failure::guard(cause));}
-    if let Err(error)=rxdck::run(bus,Band::Ghz2,start){
+    let tuned_band=band::band(tuned.channel).unwrap_or(Band::Ghz2);
+    if let Err(error)=rxdck::run(bus,tuned_band,start){
         let mut failure=Failure::guard(error.cause);failure.stage=Stage::ChannelRxDck;failure.channel_rx=Some(error);
         phy.mark_failed();return Err(failure);
     }
