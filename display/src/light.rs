@@ -9,6 +9,7 @@
 use crate::atom::{self, Interpreter};
 use crate::batches::{Bus, Out, Store, BOARD_PHYS};
 use crate::dcn::{self, field::*, first_light, Output, Pattern, Pipe, Plan, PlanError, Protected, Reg, Signal, Step, Table, R, STAGES, STAGE_NAMES};
+use crate::picture;
 use crate::timing::Timing;
 use core::fmt;
 
@@ -33,9 +34,56 @@ impl Writable { pub fn reg(self) -> Reg { self.0 } }
 pub trait Poke { fn write(&mut self, reg: Writable, value: u32); }
 /// A monotonic clock and a delay.
 pub trait Clock { fn now_us(&mut self) -> u64; fn delay_us(&mut self, us: u32); }
-/// What step 3 runs on: reads, guarded writes, time.
-pub trait Engine: Bus + Poke + Clock {}
-impl<T: Bus + Poke + Clock> Engine for T {}
+/// Step 4's surface (BAR 0's slot 5): a row of pixels written, a pixel read back; false or None when it is not mapped.
+pub trait Canvas { fn row(&mut self, y: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize) -> Option<u32>; }
+/// What steps 3 and 4 run on: reads, guarded writes, time, and step 4's surface.
+pub trait Engine: Bus + Poke + Clock + Canvas {}
+impl<T: Bus + Poke + Clock + Canvas> Engine for T {}
+
+/// Step 4's reference (213-DRV-0092): the firmware's pipe as step 1's batches 2, 4, 9 and 10 read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub pipe: u8, pub otg: u8,
+    /// Its OTG's H_TOTAL and V_TOTAL (each the total less one), blank ends and its viewport's width.
+    pub h_total: u32, pub v_total: u32, pub h_blank_end: u32, pub v_blank_end: u32, pub width: u32,
+    /// Its DLG and TTU registers: REF_FREQ_TO_PIX_FREQ, REFCYC_PER_HTOTAL, REFCYC_H_BLANK_END, DLG_V_BLANK_END,
+    /// REFCYC_PER_LINE_DELIVERY_L, REFCYC_PER_REQ_DELIVERY, and the PITCH field.
+    pub ref_to_pix: u32, pub per_htotal: u32, pub refcyc_h_blank_end: u32, pub dlg_v_blank_end: u32, pub line_delivery: u32,
+    pub req_delivery: u32, pub pitch_field: u32,
+}
+
+/// The reference from step 1's values, once all its batches were read and they name one firmware's pipe.
+pub fn reference(s: &Store, f: &Firmware) -> Option<Reference> {
+    if s.batches() < crate::batches::BATCHES { return None; }
+    let pipe = (0..4u8).find(|&n| f.hubps[n as usize])?;
+    let t = f.otg;
+    Some(Reference {
+        pipe, otg: t,
+        h_total: s.field(R::OtgHTotal, t, COUNTER_LOW)?, v_total: s.field(R::OtgVTotal, t, COUNTER_LOW)?,
+        h_blank_end: s.field(R::OtgHBlankStartEnd, t, COUNTER_HIGH)?, v_blank_end: s.field(R::OtgVBlankStartEnd, t, COUNTER_HIGH)?,
+        width: s.field(R::HubpPriViewportDimension, pipe, PRI_VIEWPORT_WIDTH)?,
+        ref_to_pix: s.field(R::HubpreqRefFreqToPixFreq, pipe, REF_FREQ_TO_PIX_FREQ)?,
+        per_htotal: s.field(R::HubpreqDstDimensions, pipe, REFCYC_PER_HTOTAL)?,
+        refcyc_h_blank_end: s.field(R::HubpreqBlankOffset0, pipe, REFCYC_H_BLANK_END)?,
+        dlg_v_blank_end: s.field(R::HubpreqBlankOffset0, pipe, DLG_V_BLANK_END)?,
+        line_delivery: s.field(R::HubpreqPerLineDelivery, pipe, REFCYC_PER_LINE_DELIVERY_L)?,
+        req_delivery: s.field(R::HubpreqSurf0TtuCntl0, pipe, REFCYC_PER_REQ_DELIVERY)?,
+        pitch_field: s.field(R::HubpreqSurfacePitch, pipe, PITCH)?,
+    })
+}
+
+/// What stage 9 found and derived, for the stages after it: the firmware's pixel and reference clocks, and pipe 1's
+/// DLG and TTU values for step 3's mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Derived {
+    pub firmware_pixel_khz: u32, pub reference_khz: u32,
+    pub ref_to_pix: u32, pub per_htotal: u32, pub refcyc_h_blank_end: u32, pub dlg_v_blank_end: u32, pub line_delivery: u32,
+    pub req_delivery: u32,
+}
+
+/// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
+pub const MEASURED_FRAMES: u32 = 30;
+pub const MEASURE_LIMIT_US: u64 = 2_000_000;
 
 /// The pipe and output the firmware drives DP-2 with, and the HUBPs that follow its timing generator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,16 +371,26 @@ impl fmt::Display for Bytes<'_> {
 // --- the plan ---
 
 /// Step 3 ready to run: the plan of the eight stages, the guard and the watch, for one firmware and choice.
-pub struct Light { pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard, watch: Watch, attached: Watch }
+pub struct Light {
+    pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard,
+    watch: Watch, attached: Watch,
+    /// Step 4's reference, when step 1 read it (stage 9 refuses without it), and the build stage 10's picture names.
+    pub reference: Option<Reference>, pub build: &'static str,
+}
 
 impl Light {
     pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> {
         let guard = Guard::new(&firmware, &choice)?;
-        let plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
+        let mut plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
+        dcn::second_pipe(&mut plan).map_err(Refusal::Plan)?;
         let mut starts = [plan.len(); STAGES as usize + 1];
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
-        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice) })
+        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
     }
+    /// With step 4's reference, from step 1's values.
+    pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
+    /// With the build stage 10's picture names (02_build.sh's MIND_BUILD_COMMIT).
+    pub fn with_build(mut self, build: &'static str) -> Light { self.build = build; self }
     pub fn guard(&self) -> &Guard { &self.guard }
     pub fn watch(&self) -> &Watch { &self.watch }
     pub fn attached(&self) -> &Watch { &self.attached }
@@ -354,7 +412,8 @@ impl Light {
 
     fn intro(&self, allowed: u8, expected: bool, out: &mut dyn Out) {
         let (f, c) = (self.firmware, self.choice);
-        out.line(format_args!("STEP 3: FIRST LIGHT ON HDMI-A-1 IN {} STAGES; THIS BUILD MAY RUN {}", STAGES, allowed));
+        out.line(format_args!("STEP 3: FIRST LIGHT ON HDMI-A-1 IN {} STAGES, STEP 4 IN {} MORE (MIND CORE'S PICTURE); THIS BUILD MAY RUN {}",
+            dcn::FIRST_LIGHT, STAGES - dcn::FIRST_LIGHT, allowed));
         out.line(format_args!("S0 THE FIRMWARE'S PIPE ({}): OTG{} OPP{} DIG {} FRONT END, PHY {}, HUBPS {}{}{}{}; NEVER WRITTEN, READ AFTER EACH STAGE ({} REGISTERS)",
             if expected { "AS THE SURVEY EXPECTS: STEP 1 NOT READ" } else { "AS STEP 1 FOUND" }, f.otg, f.opp, LETTERS[f.dig_fe as usize], LETTERS[f.phy as usize],
             f.hubps[0] as u8, f.hubps[1] as u8, f.hubps[2] as u8, f.hubps[3] as u8, self.watch.len()));
@@ -362,7 +421,7 @@ impl Light {
             c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
             self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0));
         for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
-            out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES {} TO {}", n, c.pipe.otg, ATTACHED_FROM, STAGES));
+            out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM {} ON", n, c.pipe.otg, ATTACHED_FROM));
         }
     }
 
@@ -376,6 +435,11 @@ impl Light {
                     out.line(format_args!("S{} {} RUN TABLE {} ({}) WITH {} BYTES: {}", n, verb, t.index(), table_name(t.index()), len, Bytes(&p[..len])));
                 }
                 Step::Frames { otg, frames, timeout_us } => out.line(format_args!("S{} {} WATCH OTG{}'S FRAME COUNT MOVE {} TIMES WITHIN {} MS", n, verb, otg, frames, timeout_us / 1000)),
+                Step::Reference => out.line(format_args!("S{} {} COUNT {} FRAMES OF THE FIRMWARE'S OTG{} (AT MOST {} MS) AND DERIVE PIPE {}'S DLG AND TTU FROM PIPE {}'S; NOTHING WRITTEN",
+                    n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
+                    self.reference.map_or(0, |r| r.pipe))),
+                Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
+                    n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
                 Step::Begin(_) => {}
             }
         }
@@ -406,6 +470,11 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
 pub enum Failure {
     Unreadable(u32),
     Refused(Refused),
+    /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
+    NoReference,
+    /// Stage 10: the surface is not mapped, or a sample read back differs from what was drawn.
+    NoSurface,
+    SurfaceDiffers { x: u32, y: u32 },
     /// A status wait ran out.
     Timeout(u32),
     /// The timing generator's frame count did not move.
@@ -421,6 +490,9 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Failure::Unreadable(o) => write!(f, "{:05X} COULD NOT BE READ", o),
+            Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
+            Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
+            Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
             Failure::Timeout(o) => write!(f, "{:05X} NEVER SHOWED ITS STATUS", o),
@@ -488,7 +560,7 @@ fn call<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
 
 fn read(e: &mut impl Bus, reg: Reg) -> Result<u32, Failure> { e.read(reg).ok_or(Failure::Unreadable(reg.offset())) }
 
-fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, out: &mut dyn Out) -> Result<(), Failure> {
+fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, derived: &mut Option<Derived>, out: &mut dyn Out) -> Result<(), Failure> {
     for step in light.stage(n) {
         match step {
             Step::Update { reg, mask, value } => {
@@ -519,10 +591,114 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                 }
                 out.line(format_args!("S{} OTG{} COUNTED {} FRAMES IN {} MS", n, otg, moved, e.now_us().saturating_sub(start) / 1000));
             }
-            Step::Call(t) => call(light, e, interp, journal, t, 'S', n, true, out)?,
+            Step::Call(t) => {
+                let from = journal.len;
+                call(light, e, interp, journal, t, 'S', n, true, out)?;
+                table_path(light, journal, from, t, n, out);
+            }
+            Step::Reference => *derived = Some(reference_stage(light, e, n, out)?),
+            Step::Draw => draw_stage(light, e, n, out)?,
             Step::Begin(_) => {}
         }
     }
+    Ok(())
+}
+
+/// Which path a table took through PHY A's control register bus: for table 12, whether the PHY was set up already (its
+/// `RDPCSTX_SCRATCH` at 0x300, the VBIOS's mark) and the short path ran, or the long one with its writes through the bus.
+fn table_path(light: &Light, journal: &Journal, from: usize, t: Table, n: u8, out: &mut dyn Out) {
+    let p = light.choice.output.phy as u32;
+    let (cr_addr, cr_data, scratch) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p), seg2(0x2937 + 0xD8 * p));
+    let made = || journal.items[from..journal.len].iter().flatten();
+    let bus = made().filter(|(w, _, _)| w.reg().offset() == cr_addr || w.reg().offset() == cr_data).count();
+    let data = made().filter(|(w, _, _)| w.reg().offset() == cr_data).count();
+    let mark = made().find(|(w, _, _)| w.reg().offset() == scratch).map(|(_, old, _)| *old);
+    match (t, mark) {
+        (Table::SetPixelClock { pixclk_100hz, .. }, _) if pixclk_100hz > 0 && bus == 0 => out.line(format_args!(
+            "S{} THE PHY WAS SET UP ALREADY (SCRATCH {:#X}): THE SHORT PATH, NO WRITE THROUGH ITS BUS", n, mark.unwrap_or(0))),
+        (Table::SetPixelClock { pixclk_100hz, .. }, _) if pixclk_100hz > 0 => out.line(format_args!(
+            "S{} THE PHY WAS NOT SET UP (SCRATCH {:#X}): THE LONG PATH: {} WRITES THROUGH ITS BUS ({} INTO THE PHY)", n, mark.unwrap_or(0), bus, data)),
+        _ if bus > 0 => out.line(format_args!("S{} TABLE {} MADE {} WRITES THROUGH PHY {}'S CONTROL REGISTER BUS ({} INTO THE PHY)",
+            n, t.index(), bus, LETTERS[p as usize], data)),
+        _ => {}
+    }
+}
+
+/// Stage 9: the firmware's timing generator counted for its pixel clock; with REF_FREQ_TO_PIX_FREQ, the reference clock;
+/// the DLG and TTU formulas checked against what the firmware set for its pipe, then pipe 1's values derived for step
+/// 3's mode. Nothing written.
+fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> Result<Derived, Failure> {
+    let r = light.reference.ok_or(Failure::NoReference)?;
+    out.line(format_args!("S{} PIPE {} AS THE FIRMWARE SET IT: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {}, PITCH FIELD {} (WIDTH {})",
+        n, r.pipe, crate::batches::Ratio19(Some(r.ref_to_pix)), r.per_htotal, r.refcyc_h_blank_end, r.dlg_v_blank_end, r.line_delivery,
+        r.req_delivery, r.pitch_field, r.width));
+    // Its frame rate: from one frame's edge, MEASURED_FRAMES frames.
+    let count = R::OtgStatusFrameCount.at(r.otg).ok_or(Failure::NoReference)?;
+    let frame = |e: &mut E| read(e, count).map(|v| v & 0xFF_FFFF);
+    let begin = e.now_us();
+    let first = frame(e)?;
+    let mut edge = first;
+    while edge == first {
+        if e.now_us().saturating_sub(begin) > MEASURE_LIMIT_US { return Err(Failure::NoFrames(0)); }
+        e.delay_us(100);
+        edge = frame(e)?;
+    }
+    let start = e.now_us();
+    let mut frames = 0;
+    while frames < MEASURED_FRAMES {
+        if e.now_us().saturating_sub(begin) > MEASURE_LIMIT_US { return Err(Failure::NoFrames(frames)); }
+        e.delay_us(100);
+        frames = frame(e)?.wrapping_sub(edge) & 0xFF_FFFF;
+    }
+    let us = e.now_us().saturating_sub(start).max(1);
+    let (h0, v0) = ((r.h_total + 1) as u64, (r.v_total + 1) as u64);
+    let pixel_khz = (h0 * v0 * frames as u64 * 1000 / us) as u32;
+    let reference_khz = ((r.ref_to_pix as u64 * pixel_khz as u64) >> 19) as u32;
+    let millihertz = frames as u64 * 1_000_000_000 / us;
+    out.line(format_args!("S{} OTG{} COUNTED {} FRAMES IN {} US: {}.{:03} HZ, ITS PIXEL CLOCK {} KHZ; THE REFERENCE CLOCK {} KHZ",
+        n, r.otg, frames, us, millihertz / 1000, millihertz % 1000, pixel_khz, reference_khz));
+    // The formulas (Display Core's dml20_rq_dlg_get_dlg_params, as recalled) on the firmware's own pipe.
+    let at = |ratio: u32, x: u64| ((ratio as u64 * x) >> 19) as u32;
+    let (per0, hbe0, line0) = (at(r.ref_to_pix, h0 * 256), at(r.ref_to_pix, r.h_blank_end as u64), at(r.ref_to_pix, r.width as u64));
+    out.line(format_args!("S{} PIPE {} BY FORMULA: PER HTOTAL {} (SET {}), H_BLANK_END {} (SET {}), LINE {} (SET {}), V_BLANK_END {} (DLG {})",
+        n, r.pipe, per0, r.per_htotal, hbe0, r.refcyc_h_blank_end, line0, r.line_delivery, r.v_blank_end, r.dlg_v_blank_end));
+    // Pipe 1 for step 3's mode, with the firmware's requests per line scaled to its width.
+    let otg = light.timing.otg().map_err(|_| Failure::NoReference)?;
+    let pix1 = light.timing.pixel_khz.max(1) as u64;
+    let ratio1 = ((reference_khz as u64) << 19) / pix1;
+    let h1 = otg.h_total as u64 + 1;
+    let line1 = ((ratio1 * light.timing.h_active as u64) >> 19) as u32;
+    let round = |a: u64, b: u64| (a + b / 2) / b.max(1);
+    let requests0 = if r.req_delivery > 0 { round(r.line_delivery as u64 * 1024, r.req_delivery as u64) } else { 0 };
+    let requests1 = round(requests0 * light.timing.h_active as u64, r.width.max(1) as u64).max(1);
+    let d = Derived {
+        firmware_pixel_khz: pixel_khz, reference_khz, ref_to_pix: ratio1 as u32, per_htotal: ((ratio1 * h1 * 256) >> 19) as u32,
+        refcyc_h_blank_end: ((ratio1 * otg.h_blank_end as u64) >> 19) as u32, dlg_v_blank_end: otg.v_blank_end, line_delivery: line1,
+        req_delivery: (line1 as u64 * 1024 / requests1) as u32,
+    };
+    out.line(format_args!("S{} PIPE {} FOR {}x{} AT {} KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} ({} REQUESTS A LINE)",
+        n, light.choice.pipe.otg, light.timing.h_active, light.timing.v_active, pix1, crate::batches::Ratio19(Some(d.ref_to_pix)),
+        d.per_htotal, d.refcyc_h_blank_end, d.dlg_v_blank_end, d.line_delivery, d.req_delivery, requests1));
+    Ok(d)
+}
+
+/// The samples stage 10 reads back: the corners, the border's middle, the cross, both diagonals and the first letter.
+pub const SAMPLES: [(usize, usize); 9] = [(0, 0), (1919, 1079), (5, 540), (960, 100), (178, 100), (1741, 100), (300, 100), (695, 340), (705, 340)];
+
+/// Stage 10: the picture drawn row by row into slot 5's memory, a few pixels read back. No register written.
+fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> Result<(), Failure> {
+    let lines = picture::Lines { build: light.build };
+    let mut row = [0u32; picture::WIDTH];
+    for y in 0..picture::HEIGHT {
+        picture::row(&lines, y, &mut row);
+        if !e.row(y, &row) { return Err(Failure::NoSurface); }
+    }
+    for (x, y) in SAMPLES {
+        if e.sample(x, y) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
+    }
+    out.line(format_args!("S{} DRAWN: {}x{} AT SLOT 5'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
+        picture::WIDTH, picture::HEIGHT, picture::PITCH, picture::PITCH * 4, SAMPLES.len()));
+    out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD {}", n, light.build));
     Ok(())
 }
 
@@ -568,6 +744,7 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
         out.line(format_args!("U{} PHY {}'S CONTROL REGISTER BUS LEFT AS IT IS: {} ADDRESS AND {} DATA WRITES; WHAT THEY SET INSIDE THE PHY STAYS",
             n, LETTERS[p as usize], addresses, data));
     }
+    if n == 10 { out.line(format_args!("U{} THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET", n)); }
     out.line(format_args!("U{} {} UNDONE: {} WRITES RESTORED", n, STAGE_NAMES[n as usize - 1], restored));
 }
 
@@ -595,6 +772,7 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE ATTACHED HUBPS: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
+    let mut derived: Option<Derived> = None;
     for n in 1..=STAGES {
         let name = STAGE_NAMES[n as usize - 1];
         if n > allowed {
@@ -605,7 +783,7 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         out.line(format_args!("S{} {}: STAGE {} OF {} NEXT; ITS WRITES:", n, name, n, STAGES));
         light.plan_lines(n, "WILL", out);
         out.pause(PAUSE_BEFORE_STAGE_MS);
-        let result = stage(light, e, interp, journal, n, out).and_then(|()| {
+        let result = stage(light, e, interp, journal, n, &mut derived, out).and_then(|()| {
             let now = light.watch.read(e)?;
             if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
             if n < ATTACHED_FROM || light.attached.is_empty() { return Ok(()); }
