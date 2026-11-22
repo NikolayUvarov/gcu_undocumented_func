@@ -1,0 +1,40 @@
+# 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
+
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written, not yet run on the Ryzen) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+
+## Problem
+
+Run A of 000-DRV-0093 (the STM-Speaker board `CAFE:4014` on the Ryzen, 2026-11-22 06:54:47–07:09:50 UTC, release 202611220644, `S/handoff/cam/stm-run-A.txt`) kept capture and playback open for 15 minutes:
+- **The counts.** Capture (DCI 3, endpoint 81) and feedback (DCI 5, endpoint 82) each ran dry 6 times, with 0 missed and 0 errors. Playback (DCI 2) never ran dry.
+- **Only the first dry ring of each stream has a time.** `usb_host` says each completion code once a stream: DCI 3 at uptime 354.844 s, DCI 5 at 356.173 s, both within a few seconds of a 155 KB log read over the cable. The other five of each have no time.
+- **What each one costs.** A dry ring (completion 15, Ring Overrun) means no TD was on the ring for a service interval, so the controller sent no IN token. The next TD then starts `FIRST_AHEAD`, 64 microframes, ahead of the controller's frame. So each dry ring is a gap of at least 8 ms with no packet asked for.
+- **Why the ring empties.** An IN stream's TDs go back on the ring only when its client (`audio_gw`) takes their packets. A client that comes late, or a `usb_host` busy elsewhere, leaves the ring empty.
+- **What the board saw.** The board's own reading of run A found no harm to its processing: 0 restarts of its sound path, and 0 processing blocks over 8 ms or over its 5.6 ms goal. Its USB queue counters were not timed then, so it cannot say whether it saw the pauses.
+
+A guess, not shown: `usb_host` waits for a synchronous transfer of another device without serving a request meanwhile. The cable's converter (`usb_serial`, a CH340 on the same hub) sent the log read's 155 KB that way. A client's take then waits until that transfer ends.
+
+## Plan
+
+1. **Every dry ring said, with its uptime and how long the ring stood empty** (alone, first).
+   - **The line**, said when the ring gets its next TD: `DRY n AT s S: NO TD t MS`. It holds:
+     - how long the ring stood empty, from the last TD's end to the next TD's frame;
+     - the last TD's end before the dry;
+     - the client's last call before the dry, and its next call after;
+     - the wait `usb_host` was in when the controller said so (a transfer's slot and endpoint, or a command, and for how long), or `NOT WAITING`.
+   - Up to 64 such lines a stream; the rest are counted.
+   - **The stream's end line** adds the time with no TD on the ring in all, and the longest.
+   - A bulk stream's ring that stood empty is said the same way (158-DRV-0082).
+2. **`usb_host` puts an IN stream's finished TDs back on the ring by itself**, as the bulk streams do (158-DRV-0082). It keeps their packets in a bounded spill until the client takes them, so a slow client loses packets only once the spill is full, and the endpoint keeps being asked.
+3. **The restart after a dry ring no further ahead than the controller needs.** Is 64 microframes the minimum on this xHCI, or a safe guess? The xHCI's Isochronous Scheduling Threshold (HCSPARAMS2 IST) bounds it; the Ryzen's value is to be read and kept to.
+
+## Acceptance criteria
+
+- [ ] Step 1 on the Ryzen: a duplex run as run A (`audiostub duplex 900 0`, the board behind the Genesys hub), in which every dry ring is said with its time, its length and the wait it fell in. The STM-Speaker agent holds each pause against its own counters, so the run's start and end go to it.
+- [ ] Steps 2 and 3, in QEMU's `iso` and `usbaudio` suites.
+- [ ] The same 15-minute run with 0 TIMES DRY on both IN endpoints (DCI 3 and 5), with nobody else on the cable. That holds for that machine, that board and that release (MC-12.1).
+
+## Related
+
+- [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md): the speakerphone in `audio_gw`. Run A is its evidence.
+- [000-DRV-0093](000-DRV-0093-a-duplex-audio-stub-for-the-speakerphones-runs.md): the duplex stub and run A.
+- [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md): the bulk streams' spill, which step 2 follows.
