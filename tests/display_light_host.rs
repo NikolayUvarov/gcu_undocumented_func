@@ -10,10 +10,13 @@
 #[path = "../display/src/batches.rs"] mod batches;
 #[path = "../display/src/atom.rs"] mod atom;
 #[path = "../display/src/light.rs"] mod light;
+#[path = "../display/src/picture.rs"] mod picture;
 
 use batches::{Bus, Out, Store};
-use dcn::{Reg, Step, R, STAGES};
-use light::{assess, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, Writable, EXPECTED, HDMI_A_1};
+use dcn::{Reg, Step, R};
+// Step 3's stages (first light); step 4's come after them (213-DRV-0092).
+const STAGES: u8 = dcn::FIRST_LIGHT;
+use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, Writable, EXPECTED, HDMI_A_1};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -41,7 +44,7 @@ fn found() -> Store {
         s.set(R::DigBeEnCntl, p, if p == 4 { 0x101 } else { 0 });
     }
     s.set(R::DmcubCntl, 0, 1 << 17); // the DMCUB held in reset
-    s.set_batches(8);
+    s.set_batches(10);
     s
 }
 
@@ -68,6 +71,7 @@ fn the_pipe_is_chosen_from_what_step_1_found() {
 #[test]
 fn step_3_refuses_what_it_cannot_tell() {
     let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found(); change(&mut s); assess(&s).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(9)), Refusal::NotRead { batch: 10 });
     assert_eq!(refuse(&|s| s.set_batches(7)), Refusal::NotRead { batch: 8 });
     assert_eq!(refuse(&|s| s.set_batches(6)), Refusal::NotRead { batch: 7 });
     assert_eq!(refuse(&|s| s.set_batches(4)), Refusal::NotRead { batch: 5 });
@@ -134,20 +138,42 @@ struct Engine {
     hook: Option<(u32, u32, u32)>,
     // Statuses the hardware sets: bits that read as set, and acknowledge bits that read as their request bit (one lower).
     set: Vec<(u32, u32)>, follow: Vec<(u32, u32)>,
+    // Status bits that read as set while bits of a register (the same or another) are set: (at, bits, source, mask).
+    derived: Vec<(u32, u32, u32, u32)>,
     // After a write to the first offset, the statuses at the second are no longer answered (a status that never comes).
     cut: Vec<(u32, u32)>,
     // After the first write to the offset, the n-th read cannot be read, once (a table or a stage failing midway).
     fail: Option<(u32, usize)>, armed: Option<usize>,
+    // The timing generators' frame counts follow the clock at this period (0: one more at each read).
+    frame_us: u64,
+    // Step 4's surface, made at its first row; none when `no_surface`.
+    surface: Vec<u32>, no_surface: bool,
+}
+impl Canvas for Engine {
+    fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
+        if self.no_surface || y >= picture::HEIGHT { return false; }
+        if self.surface.is_empty() { self.surface = vec![0; picture::PITCH * picture::HEIGHT]; }
+        self.surface[y * picture::PITCH..][..pixels.len()].copy_from_slice(pixels);
+        true
+    }
+    fn sample(&mut self, x: usize, y: usize) -> Option<u32> { self.surface.get(y * picture::PITCH + x).copied() }
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
         self.clock += 10;
         if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
         let o = r.offset();
-        if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move { self.frames += 1; return Some(self.frames); }
+        if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move {
+            if self.frame_us > 0 { return Some((self.clock / self.frame_us) as u32); }
+            self.frames += 1;
+            return Some(self.frames);
+        }
         let mut v = *self.regs.get(&o).unwrap_or(&0);
         for &(at, bits) in &self.set { if at == o { v |= bits; } }
         for &(at, ack) in &self.follow { if at == o { v = (v & !ack) | ((v & (ack >> 1)) << 1); } }
+        for &(at, bits, src, mask) in &self.derived {
+            if at == o { let s = if src == o { *self.regs.get(&o).unwrap_or(&0) } else { *self.regs.get(&src).unwrap_or(&0) }; v = if s & mask != 0 { v | bits } else { v & !bits }; }
+        }
         Some(v)
     }
 }
@@ -161,7 +187,7 @@ impl Poke for Engine {
             else if (0..4).any(|t| reg(R::OtgControl, t) == o) { (v & !0x1_0000) | (v & 1) << 16 } else { v };
         self.regs.insert(o, v);
         if let Some((at, target, value)) = self.hook { if at == o { self.regs.insert(target, value); } }
-        for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); } }
+        for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); self.derived.retain(|s| s.0 != status); } }
         if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
     }
 }
@@ -281,7 +307,7 @@ fn all_eight_stages_write_in_the_routes_order_and_never_the_firmwares_pipe() {
         assert!(log.iter().any(|x| x.starts_with(&format!("S{} ", n)) && x.contains("DONE; THE FIRMWARE'S PIPE UNCHANGED")));
     }
     assert!(log.iter().any(|x| x.starts_with("S8 T76 WROTE DIG0_DIG_BE_EN_CNTL AT 155C0 = 00000001 (WAS 00000000)")));
-    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 8 OF 8"));
+    assert!(log.last().unwrap().starts_with(&format!("STEP 3 STOPPED AFTER STAGE 8 OF {}", dcn::STAGES)));
     for x in &log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
 }
 
@@ -398,6 +424,108 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
     assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 3") && x.ends_with("CHANGED")));
 }
 
+// The firmware's pipe as runs 3 to 7 read OTG0 (2560x1600 in 2720x1646) and HUBP0, with DLG values for a 100 MHz
+// reference clock by Display Core's formulas (the hardware's own are batch 9's).
+fn ryzen_reference() -> light::Reference {
+    light::Reference { pipe: 0, otg: 0, h_total: 2719, v_total: 1645, h_blank_end: 112, v_blank_end: 43, width: 2560,
+        ref_to_pix: 195_264, per_htotal: 259_335, refcyc_h_blank_end: 41, dlg_v_blank_end: 43, line_delivery: 953,
+        req_delivery: 24_396, pitch_field: 0xA00 }
+}
+fn step4(reference: Option<light::Reference>) -> Light {
+    let (f, c) = EXPECTED;
+    Light::new(f, c, timing::CEA_1080P60).unwrap().with_reference(reference).with_build("TESTBUILD")
+}
+fn run_light(l: &Light, img: &[u8], e: &mut Engine, allowed: u8, undo: bool) -> (Outcome, Vec<String>) {
+    let mut interp = atom::Interpreter::new(atom::Image::new(img).unwrap());
+    let mut journal = light::Journal::default();
+    let mut log = Log(vec![]);
+    let outcome = if undo { light::run_then_undo(l, e, &mut interp, &mut journal, allowed, &mut log) } else { light::run(l, e, &mut interp, &mut journal, allowed, &mut log) };
+    (outcome, log.0)
+}
+fn number_after(log: &[String], start: &str, key: &str) -> u64 {
+    let l = log.iter().find(|x| x.starts_with(start)).unwrap_or_else(|| panic!("no {:?}", start));
+    let rest = &l[l.find(key).unwrap_or_else(|| panic!("no {:?} in {:?}", key, l)) + key.len()..];
+    rest.split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn stages_9_and_10_measure_the_firmwares_clock_derive_pipe_1_and_draw_the_picture() {
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675; // DP-2 at 59.97 Hz
+    let (outcome, log) = run_light(&l, &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 10 }, "{:#?}", &log[log.len().saturating_sub(16)..]);
+    // Stage 9: the firmware's pixel clock from 30 of its frames, the reference clock from REF_FREQ_TO_PIX_FREQ.
+    let pixel = number_after(&log, "S9 OTG0 COUNTED 30 FRAMES", "ITS PIXEL CLOCK ");
+    let reference = number_after(&log, "S9 OTG0 COUNTED 30 FRAMES", "THE REFERENCE CLOCK ");
+    assert!((268_000..=269_000).contains(&pixel) && (99_500..=100_500).contains(&reference), "{} {}", pixel, reference);
+    assert!(log.iter().any(|x| x == "S9 PIPE 0 BY FORMULA: PER HTOTAL 259335 (SET 259335), H_BLANK_END 41 (SET 41), LINE 953 (SET 953), V_BLANK_END 43 (DLG 43)"), "{:#?}", log.iter().filter(|x| x.starts_with("S9")).collect::<Vec<_>>());
+    // Pipe 1's values for 1080p60 at the reference clock found.
+    let otg = timing::CEA_1080P60.otg().unwrap();
+    let ratio1 = (reference << 19) / 148_500;
+    let line = format!("S9 PIPE 1 FOR 1920x1080 AT 148500 KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}",
+        batches::Ratio19(Some(ratio1 as u32)), (ratio1 * (otg.h_total as u64 + 1) * 256) >> 19, (ratio1 * otg.h_blank_end as u64) >> 19,
+        otg.v_blank_end, (ratio1 * 1920) >> 19);
+    assert!(log.iter().any(|x| x.starts_with(&line)), "{}\n{:#?}", line, log.iter().filter(|x| x.starts_with("S9")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x.ends_with("(30 REQUESTS A LINE)")));
+    // Stages 9 and 10 write no register: the writes are first light's.
+    let mut first_light = engine();
+    first_light.frame_us = 16_675;
+    run_light(&l, &good(), &mut first_light, 8, false);
+    assert_eq!(writes(&e), writes(&first_light));
+    for n in [9u8, 10] {
+        assert!(log.iter().any(|x| x.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED", n, dcn::STAGE_NAMES[n as usize - 1]))));
+        assert!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED", n))));
+    }
+    // Stage 10: the picture in the surface, read back where stage 10 reads it and elsewhere.
+    let lines = picture::Lines { build: "TESTBUILD" };
+    for y in (0..picture::HEIGHT).step_by(7) {
+        for x in (0..picture::WIDTH).step_by(5) { assert_eq!(e.sample(x, y), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
+    }
+    assert!(log.iter().any(|x| x == "S10 DRAWN: 1920x1080 AT SLOT 5'S START, PITCH 1920 PIXELS (7680 BYTES); 9 SAMPLES READ BACK AS DRAWN"));
+    assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD TESTBUILD"));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 10 OF"));
+    // With the undo: step 4's stages first, then step 3's, every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 10, true);
+    assert_eq!(outcome, Outcome::Undone { done: 10 });
+    assert!(log.iter().any(|x| x == "U10 THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET"));
+    restored_but(&e, &before, &[]);
+}
+
+#[test]
+fn stage_9_without_a_reference_and_stage_10_without_a_surface_fail_and_are_undone_whole() {
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&step4(None), &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 9, why: Failure::NoReference });
+    assert!(log.iter().any(|x| x == "STEP 3 FAILED AT STAGE 9 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    restored_but(&e, &before, &[]);
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.no_surface = true;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&step4(Some(ryzen_reference())), &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 10, why: Failure::NoSurface });
+    assert!(log.iter().any(|x| x.starts_with("S10 DRAW FAILED: SLOT 5'S SURFACE IS NOT MAPPED")));
+    restored_but(&e, &before, &[]);
+    // Step 1's values give the reference only when all its batches were read and they name the firmware's pipe.
+    let (f, _) = EXPECTED;
+    let mut s = found();
+    assert_eq!(light::reference(&s, &f), None, "found() holds no batch 9 values");
+    for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
+        (R::HubpPriViewportDimension, 1600 << 16 | 2560), (R::HubpreqRefFreqToPixFreq, 195_264), (R::HubpreqDstDimensions, 259_335),
+        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 24_396), (R::HubpreqSurfacePitch, 0xA00)] {
+        s.set(r, 0, v);
+    }
+    assert_eq!(light::reference(&s, &f), Some(ryzen_reference()));
+    s.set_batches(9);
+    assert_eq!(light::reference(&s, &f), None, "batch 10 not read");
+}
+
 #[test]
 fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
     let run_undo = |e: &mut Engine, allowed: u8| {
@@ -420,7 +548,7 @@ fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
         let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
         assert_eq!(undone, (1..=allowed).rev().collect::<Vec<u8>>());
         assert!(log[..6].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
-        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed)));
+        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed, dcn::STAGES)));
         assert!(!log.iter().any(|x| x.contains("LEFT IN PLACE")));
     }
     // A build of 0 writes nothing and has nothing to undo; a stage that fails is undone as in `run`.
@@ -440,7 +568,7 @@ fn the_hubp_that_follows_step_3s_otg_is_read_after_stages_5_to_8() {
     let mut e = engine1();
     let (outcome, log) = run(&good(), &mut e, STAGES);
     assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", log);
-    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES 5 TO 8")));
+    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM 5 ON")));
     for n in 1..=STAGES { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED (1 REGISTERS)", n))), n >= 5, "stage {}", n); }
     assert!(!writes(&e).iter().any(|w| w.0 == hubp1), "HUBP1 was written");
     // Its statuses moving when OTG 1 starts (in blank, the XRQ's requests) fail no stage.
@@ -502,7 +630,7 @@ fn a_build_that_may_run_nothing_only_describes_and_has_no_device() {
     assert!(lines.iter().any(|x| x.starts_with("S2 UNDO: TABLE 12 WITH 16 BYTES 00 00 00 00 14 00 00 01 FF") && x.ends_with("THEN EVERY WRITE RESTORED")));
     assert!(lines.iter().any(|x| x.starts_with("S8 UNDO: TABLE 76 WITH 32 BYTES 00 00 02 00")));
     assert!(!lines.iter().any(|x| x.contains("WROTE") || x.contains("RUNNING")));
-    assert_eq!(lines.last().unwrap(), "STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN");
+    assert_eq!(lines.last().unwrap(), &format!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", dcn::STAGES));
     for x in &lines { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
 }
 
@@ -546,17 +674,28 @@ fn the_vfct_table_yields_the_radeons_image() {
     assert_eq!(atom::vfct_image(b"XXXX"), None);
 }
 
-// The model with the statuses the Ryzen's tables wait for answered (hwdocs, "What first light's VBIOS tables write").
-const STATUSES: [(u32, u32, bool); 5] = [
-    ((0x34C0 + 0x2940) * 4, 1 << 28, false), // RDPCS_SRAM_INIT_DONE
-    ((0x34C0 + 0x294C) * 4, 1 << 7, false), // RDPCS_PHY_DP_MPLLB_STATE
-    ((0x34C0 + 0x2943) * 4, 0x2020_2020, true), // each lane's TX_ACK after its TX_REQ
-    ((0x34C0 + 0x2928) * 4, 1 << 2, true), // DPCS_SYMCLK_CLOCK_ON after DPCS_SYMCLK_EN
-    ((0x34C0 + 0x2931) * 4, 1 << 10, true), // RDPCS_SYMCLK_DIV2_CLOCK_ON after its EN
-];
+// The statuses the Ryzen's tables wait for, answered as the hardware answered them (hwdocs, "What first light's VBIOS
+// tables write"; the watched run of 2026-11-22): SRAM init done; each lane's TX_ACK after its TX_REQ; the symbol clock on
+// while its gate is off or it is enabled; the half-rate symbol clock after its enable; the PLL's state on while any
+// lane's MPLL_EN in PHY_CNTL6 is (dpcs_2_1_0_sh_mask.h).
+const fn phy(d: u32) -> u32 { (0x34C0 + d) * 4 }
+const STATUSES: [u32; 5] = [phy(0x2940), phy(0x2943), phy(0x2928), phy(0x2931), phy(0x294C)];
 fn answered() -> Engine {
     let mut e = engine();
-    for (at, bits, follows) in STATUSES { if follows { e.follow.push((at, bits)); } else { e.set.push((at, bits)); } }
+    e.set.push((phy(0x2940), 1 << 28)); // RDPCS_SRAM_INIT_DONE
+    e.follow.push((phy(0x2943), 0x2020_2020)); // RDPCS_PHY_DP_TXn_ACK after TXn_REQ
+    e.derived.push((phy(0x2928), 1 << 2, phy(0x2928), 0b11)); // DPCS_SYMCLK_CLOCK_ON: GATE_DIS or EN
+    e.follow.push((phy(0x2931), 1 << 10)); // RDPCS_SYMCLK_DIV2_CLOCK_ON after its EN
+    e.derived.push((phy(0x294C), 1 << 7, phy(0x2946), 0x4444)); // RDPCS_PHY_DP_MPLLB_STATE: a lane's MPLL_EN
+    e
+}
+
+// The Ryzen as the watched run found it (2026-11-22, boot 66, after a restart out of Linux): every register step 3
+// wrote, at its value before step 3. PHY A's RDPCSTX_SCRATCH (0x177DC) holds 0x300, the VBIOS's mark of a PHY it set up.
+const WARM: [(u32, u32); 56] = [(0x13E7C, 0x00000000), (0x14318, 0x00000000), (0x1783C, 0xB008003E), (0x17844, 0x3F00003E), (0x17840, 0x1410003E), (0x1782C, 0x00010B00), (0x17830, 0x00000105), (0x17834, 0x00000000), (0x17838, 0x11000000), (0x1781C, 0x22AA0003), (0x17820, 0x00001000), (0x17824, 0x01000AC1), (0x17828, 0x00000002), (0x17818, 0x001D3333), (0x1780C, 0x02020202), (0x00580, 0x00000000), (0x177A0, 0x00000005), (0x177C4, 0x001171F0), (0x177C0, 0x00D00000), (0x177DC, 0x00000300), (0x00400, 0x00000000), (0x0051C, 0x00000000), (0x00510, 0x0000C000), (0x14204, 0x80000300), (0x141A8, 0x00000000), (0x141B0, 0x00000000), (0x141AC, 0x00000000), (0x141B4, 0x00000000), (0x141BC, 0x00000000), (0x141C0, 0x00000000), (0x141C4, 0x00000000), (0x141DC, 0x00000000), (0x141D8, 0x00000000), (0x141E0, 0x00000000), (0x14210, 0x00000000), (0x0E7A4, 0x00000000), (0x1431C, 0x00000000), (0x14320, 0x00010000), (0x14324, 0x00000000), (0x13E70, 0x00000000), (0x141B8, 0x00000000), (0x13698, 0x00000000), (0x135C0, 0x00000000), (0x135D0, 0x00000000), (0x135B8, 0x00000000), (0x13E6C, 0x0000F100), (0x15668, 0x00000001), (0x154AC, 0x00000063), (0x154A0, 0x00000000), (0x155BC, 0x00010000), (0x174B8, 0x03020100), (0x174B4, 0x01000100), (0x17848, 0x7434003E), (0x155C0, 0x00000100), (0x15684, 0x00000000), (0x177A4, 0x0000C000)];
+fn warm() -> Engine {
+    let mut e = answered();
+    for (o, v) in WARM { e.regs.insert(o, v); }
     e
 }
 
@@ -604,12 +743,15 @@ fn a_stage_that_fails_at_any_read_is_undone_whole_with_its_off_calls_run_to_thei
     // The Ryzen's own tables, when its image is given.
     let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { return };
     let bytes = std::fs::read(&path).unwrap();
-    let mut counts = vec![];
-    for (stage, after) in [(2u8, reg(R::OtgClockControl, 1)), (6, reg(R::OptcDataSourceSelect, 1)), (8, reg(R::DigBeCntl, 0))] {
-        counts.push((stage, fail_at_each_read(&bytes, stage, after, &answered)));
+    // From a cold PHY A (table 12's long path) and from the state the watched run found (its short path).
+    for (state, start) in [("cold", &answered as &dyn Fn() -> Engine), ("warm", &warm)] {
+        let mut counts = vec![];
+        for (stage, after) in [(2u8, reg(R::OtgClockControl, 1)), (6, reg(R::OptcDataSourceSelect, 1)), (8, reg(R::DigBeCntl, 0))] {
+            counts.push((stage, fail_at_each_read(&bytes, stage, after, start)));
+        }
+        eprintln!("the Ryzen's tables failing at each read, {}: {:?} (stage, failures at that stage)", state, counts);
+        assert!(counts.iter().all(|&(_, n)| n > 0));
     }
-    eprintln!("the Ryzen's tables failing at each read: {:?} (stage, failures at that stage)", counts);
-    assert!(counts.iter().all(|&(_, n)| n > 0));
 }
 
 #[test]
@@ -618,8 +760,8 @@ fn stage_8_failing_at_each_of_its_waits_is_undone_whole() {
     let bytes = std::fs::read(&path).unwrap();
     // Once stage 7 has written, each status in turn stops being answered: a wait of table 76's that ends by its limit.
     let mut waits = vec![];
-    for (at, _, _) in STATUSES {
-        let mut e = answered();
+    for (at, start) in STATUSES.iter().flat_map(|&at| [(at, answered as fn() -> Engine), (at, warm as fn() -> Engine)]) {
+        let mut e = start();
         e.cut.push((reg(R::DigBeCntl, 0), at));
         let before = e.regs.clone();
         let (outcome, log) = run(&bytes, &mut e, STAGES);
@@ -635,6 +777,51 @@ fn stage_8_failing_at_each_of_its_waits_is_undone_whole() {
     }
     eprintln!("table 76 waits for: {:05X?}", waits);
     assert!(!waits.is_empty());
+}
+
+// Every write of the watched run on the Ryzen (2026-11-22, release 202611220438, boot 66) in its order: (stage, table
+// (0 for the plan's own), byte offset, value), from its log.
+const WATCHED_RUN: [(u8, u8, u32, u32); 95] = [(1, 0, 0x13E7C, 0x00000003), (1, 0, 0x14318, 0x00000003), (2, 12, 0x1783C, 0xB008003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x17844, 0x3F00003E), (2, 12, 0x17840, 0x1E14003E), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x17830, 0x00000021), (2, 12, 0x17834, 0x00000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x1781C, 0xE0000001), (2, 12, 0x17820, 0x00000000), (2, 12, 0x17824, 0x00000000), (2, 12, 0x17828, 0x00000000), (2, 12, 0x17818, 0x001D3337), (2, 12, 0x17818, 0x001D3377), (2, 12, 0x17818, 0x001D3777), (2, 12, 0x17818, 0x001D7777), (2, 12, 0x1780C, 0x12121212), (2, 12, 0x1780C, 0x22222222), (2, 12, 0x00580, 0x00000001), (2, 12, 0x177A0, 0x00000007), (2, 12, 0x177C4, 0x001173F0), (2, 12, 0x177C0, 0x00D01000), (2, 12, 0x177C0, 0x00D03000), (2, 12, 0x177C0, 0x00D07000), (2, 12, 0x177C0, 0x00D0F000), (2, 12, 0x177DC, 0x00000300), (2, 12, 0x00400, 0x00000000), (2, 12, 0x0051C, 0x00000000), (2, 12, 0x00510, 0x0000C000), (2, 12, 0x00400, 0x00000101), (2, 0, 0x00400, 0x00000101), (3, 0, 0x14204, 0x80000300), (3, 0, 0x141A8, 0x00000897), (3, 0, 0x141B0, 0x002C0000), (3, 0, 0x141AC, 0x00C00840), (3, 0, 0x141B4, 0x00000000), (3, 0, 0x141BC, 0x00000464), (3, 0, 0x141C0, 0x00000464), (3, 0, 0x141C4, 0x00000464), (3, 0, 0x141DC, 0x00050000), (3, 0, 0x141D8, 0x00290461), (3, 0, 0x141E0, 0x00000000), (3, 0, 0x14210, 0x00000000), (3, 0, 0x0E7A4, 0x00000000), (3, 0, 0x14204, 0x80000300), (3, 0, 0x1431C, 0x00000024), (3, 0, 0x14320, 0x00010000), (3, 0, 0x14324, 0x00000001), (3, 0, 0x0E7A4, 0x04610000), (3, 0, 0x13E70, 0x00000000), (3, 0, 0x141B8, 0x00000000), (4, 0, 0x13698, 0x00000001), (4, 0, 0x135C0, 0x07800438), (4, 0, 0x135D0, 0x00000000), (4, 0, 0x135B8, 0x00661001), (5, 0, 0x13E6C, 0x0000F100), (5, 0, 0x0E7A4, 0x84610000), (5, 0, 0x14204, 0x80000301), (6, 4, 0x15668, 0x00000000), (6, 4, 0x154AC, 0x0000001F), (6, 4, 0x154A0, 0x00000000), (6, 4, 0x154A0, 0x00000400), (6, 4, 0x154A0, 0x00000000), (6, 0, 0x154A0, 0x00000001), (7, 0, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x174B8, 0x01000302), (8, 76, 0x174B4, 0x00000100), (8, 76, 0x1780C, 0x03030303), (8, 76, 0x1780C, 0x22222222), (8, 76, 0x1783C, 0xB038A034), (8, 76, 0x17840, 0x1E14A034), (8, 76, 0x17844, 0x3F00A034), (8, 76, 0x17848, 0x7434A034), (8, 76, 0x155C0, 0x00000101), (8, 76, 0x15684, 0x0000010F), (8, 76, 0x174B8, 0x11000302), (8, 76, 0x177C0, 0x00D0F000), (8, 76, 0x177C0, 0x00D1F000), (8, 76, 0x177A4, 0x0001C000), (8, 76, 0x1780C, 0x00000000), (8, 76, 0x1780C, 0x04040404), (8, 76, 0x17818, 0x001D4444), (8, 76, 0x1780C, 0x14141414), (8, 76, 0x1780C, 0x24242424), (8, 76, 0x1780C, 0x0C0C0C0C), (8, 0, 0x154A0, 0x01000401), (8, 0, 0x154A0, 0x00000001)];
+
+#[test]
+fn the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path() {
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut e = warm();
+    let before = e.regs.clone();
+    let (outcome, log) = run(&bytes, &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    // The tables' runs as the hardware logged them: table 12 found PHY A set up (RDPCSTX_SCRATCH 0x300) and skipped it.
+    for x in ["S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES", "S6 TABLE 4 DONE: 31 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+              "S8 TABLE 76 DONE: 286 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES"] {
+        assert!(log.iter().any(|l| l == x), "no {:?}", x);
+    }
+    // Every write in the hardware's order and value, but two status bits a read-modify-write carried: the lanes'
+    // TX_ACK, still set on the hardware just after TX_REQ fell, and DIG_FE_CNTL's bit 24 at the DIG_START pulse.
+    let ours: Vec<(u8, u8, u32, u32)> = log.iter().filter_map(|l| {
+        let (stage, rest) = l.strip_prefix('S')?.split_once(' ')?;
+        let (table, rest) = match rest.strip_prefix('T') { Some(r) => { let (t, r) = r.split_once(' ')?; (t.parse().ok()?, r) } None => (0u8, rest) };
+        let rest = rest.strip_prefix("WROTE ")?;
+        let at = rest.find("AT ")?;
+        let (off, val) = rest[at + 3..].split_once(" = ")?;
+        Some((stage.parse().ok()?, table, u32::from_str_radix(off, 16).ok()?, u32::from_str_radix(&val[..8], 16).ok()?))
+    }).collect();
+    assert_eq!(ours.len(), WATCHED_RUN.len());
+    for (i, (a, b)) in ours.iter().zip(WATCHED_RUN.iter()).enumerate() {
+        let status = if b.2 == phy(0x2943) { 0x2020_2020 } else if b.2 == reg(R::DigFeCntl, 0) { 1 << 24 } else { 0 };
+        assert_eq!((a.0, a.1, a.2, a.3 & !status), (b.0, b.1, b.2, b.3 & !status), "write {}", i + 1);
+    }
+    assert!(!ours.iter().any(|w| w.2 == PHY_A_CR_ADDR || w.2 == PHY_A_CR_DATA), "a write through PHY A's control register bus");
+    assert!(log.iter().any(|l| l == "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"));
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    // From a cold PHY A (its scratch 0), table 12 sets it up first: the long path, 37 writes through the bus.
+    let mut e = answered();
+    let (_, log) = run(&bytes, &mut e, 2);
+    assert!(log.iter().any(|l| l == "S2 TABLE 12 DONE: 530 STEPS, 4 CALLS, 10 US OF DELAYS, 111 WRITES"), "{:#?}", log.iter().filter(|l| l.contains("TABLE 12")).collect::<Vec<_>>());
+    assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA).count(), 37);
+    assert!(log.iter().any(|l| l == "S2 THE PHY WAS NOT SET UP (SCRATCH 0x0): THE LONG PATH: 37 WRITES THROUGH ITS BUS (17 INTO THE PHY)"), "{:#?}", log.iter().filter(|l| l.starts_with("S2 THE")).collect::<Vec<_>>());
 }
 
 #[test]

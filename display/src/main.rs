@@ -1,24 +1,27 @@
 #![no_std]
 #![no_main]
 // display (213-DRV-0086, DRV's): the Ryzen's Radeon display engine. It logs the grant as KRN's stub did (213-KRN-0270,
-// 0271), then runs step 1 (the firmware's display state read in batches, as many as BATCHES_ALLOWED says) and step 3
-// (first light on HDMI-A-1 in stages, as many as STAGES_ALLOWED says; at 0 nothing is written and no writer is made).
+// 0271), then runs step 1 (the firmware's display state read in batches, as many as BATCHES_ALLOWED says) and steps 3
+// and 4 (first light on HDMI-A-1, then MIND Core's picture, 213-DRV-0092, in stages, as many as STAGES_ALLOWED says; at 0
+// nothing is written and no writer is made).
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
 #[allow(dead_code)] mod dcn;
 #[allow(dead_code)] mod edid;
 #[allow(dead_code)] mod light;
+#[allow(dead_code)] mod picture;
 #[allow(dead_code)] mod timing;
 use alloc::boxed::Box;
 use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ, SLOT_MEM};
 use mind::dev::{cap_info, device_config, Mmio};
 
-/// How many of step 1's eight batches this build may read. 0 maps no register and reads none: it logs each batch and the
+/// How many of step 1's ten batches this build may read. 0 maps no register and reads none: it logs each batch and the
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
-/// How many of step 3's eight stages this build may run. 0 makes no writer: it logs each stage with every write it would
-/// make. Raised one run at a time, on the DRV owner session's word, and only with BATCHES_ALLOWED at 8 (all of step 1).
+/// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 on step 4's (213-DRV-0092). 0 makes no
+/// writer: it logs each stage with every write it would make. Raised one run at a time, on the DRV owner session's word,
+/// and only with BATCHES_ALLOWED at 10 (all of step 1).
 const STAGES_ALLOWED: u8 = 0;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
@@ -91,7 +94,7 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usi
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
     let plan = match light::Light::new(found.0, found.1, timing) {
-        Ok(plan) => plan,
+        Ok(plan) => plan.with_reference(light::reference(store, &found.0)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
     if STAGES_ALLOWED == 0 { light::describe(&plan, expected, &mut Log); return 0; }
@@ -101,10 +104,12 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usi
     let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return 0 };
     let mut interp = Box::new(atom::Interpreter::new(image));
     let mut journal = Box::new(light::Journal::default());
+    // Step 4's surface: the start of BAR 0's slot 5, when granted (213-KRN-0271).
+    let surface = Mmio::map(SECOND_SCREEN).ok();
     if UNDO_AFTER_STAGES {
-        light::run_then_undo(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+        light::run_then_undo(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
     } else {
-        light::run(&plan, &mut Writer(mmio), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
+        light::run(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
     }
     journal.len()
 }
@@ -139,8 +144,9 @@ impl batches::Bus for Registers {
     }
 }
 
-/// Step 3's engine: reads, writes (only a `light::Writable`) and time. Made only when STAGES_ALLOWED is above 0.
-struct Writer(Mmio);
+/// Steps 3 and 4's engine: reads, writes (only a `light::Writable`), time, and step 4's surface in BAR 0's slot 5
+/// (its start, write-combined). Made only when STAGES_ALLOWED is above 0.
+struct Writer(Mmio, Option<Mmio>);
 impl batches::Bus for Writer {
     fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
         let offset = reg.offset() as usize;
@@ -151,6 +157,19 @@ impl light::Poke for Writer {
     fn write(&mut self, reg: light::Writable, value: u32) {
         let offset = reg.reg().offset() as usize;
         if offset + 4 <= self.0.len() { self.0.write32(offset, value); }
+    }
+}
+impl light::Canvas for Writer {
+    fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
+        let (Some(surface), start) = (&self.1, y * picture::PITCH * 4) else { return false };
+        if y >= picture::HEIGHT || start + pixels.len() * 4 > surface.len() { return false; }
+        for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
+        true
+    }
+    fn sample(&mut self, x: usize, y: usize) -> Option<u32> {
+        let surface = self.1.as_ref()?;
+        let at = (y * picture::PITCH + x) * 4;
+        (x < picture::WIDTH && y < picture::HEIGHT && at + 4 <= surface.len()).then(|| surface.read32(at))
     }
 }
 impl light::Clock for Writer {
