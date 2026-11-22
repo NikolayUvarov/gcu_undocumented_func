@@ -272,7 +272,17 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     // 213-DRV-0104: sends answered in time by the time from their arrival to their answer, and the time from an answer
     // (or a refusal) to the next send's arrival, both in 2 ms bins to 30 ms then 10 ms to 90 (MS_BINS; the gaps' last
     // bin 90 or more); the most sends that arrived within one second.
-    pub answer_ms:[u32;MS_BINS],pub gap_ms:[u32;MS_BINS+1],pub peak_sends:u32}
+    pub answer_ms:[[u32;MS_BINS];3],pub gap_ms:[u32;MS_BINS+1],pub peak_sends:u32,
+    // 213-DRV-0104: the in-time answers above by the frame's size (SIZES: under 200 bytes, to 1000, over); sends to one
+    // station ended, by the rate they went at (txdesc::LEGACY_RATES' order: sends, acknowledged, tries) and by their tries
+    // (1 to 15); frames received for this station by the access point's rate (rx_rate_bin) and those with the retry bit.
+    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32}
+/// 213-DRV-0104: a frame's size class for the in-time answers: under 200 bytes, 200 to 1000, over 1000.
+pub fn size_class(length:usize)->usize{if length<200{0}else if length<=1000{1}else{2}}
+/// 213-DRV-0104: the received rates binned: the descriptor's data rate as the hardware gives it (rtw89_hw_rate): CCK 0 to 3
+/// and OFDM 4 to 11 as they are, HT MCS 0 to 15 (0x80 to 0x8F) at 12 to 27, anything else at 28.
+pub const RX_RATES:usize=29;
+pub fn rx_rate_bin(rate:u16)->usize{match rate{0..=11=>rate as usize,0x80..=0x8f=>12+(rate-0x80)as usize,_=>RX_RATES-1}}
 /// 213-DRV-0104: the bins of a send's times: 2 ms each to 30 ms, then 10 ms each to 90.
 pub const MS_BINS:usize=21;
 /// The bin of `ms`: within 90 ms, or MS_BINS for 90 or more.

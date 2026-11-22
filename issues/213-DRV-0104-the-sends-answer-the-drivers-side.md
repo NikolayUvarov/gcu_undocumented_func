@@ -228,6 +228,46 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **Host case:** `service_probes_held_frames_and_counts_how_the_minutes_sends_ended` now checks two sends in time binned under 10 ms, 12 gaps for 13 arrivals, and the peak.
 - The 40 `rtw89_*_host.rs` files pass: 4888 cases. The release build builds.
 
+**2026-11-22, the rates** (this branch; host cases, not run):
+- **Why:** the owner's pings from the link's shell on boot 96 (17:34 to 17:37 UTC) to the gateway, 300 each:
+  - 56 data bytes: median 4.8 to 7.8 ms;
+  - 1472 bytes: median 18.1 to 20.8 ms, least 3.8 ms;
+  - no loss to speak of.
+  - So a full frame can go fast, and mostly does not. At 10 to 15 ms a full frame, one at a time, the uplink cannot pass 100 to 150 KB/s. The rates in use and the tries, ours or the access point's, are the next thing to see.
+- **The minute lines:**
+  - The in-time answers of 1dcdbb5e5 are now split by the frame's size (under 200 bytes, 200 to 1000, over 1000), one line each, the bins apart by spaces. The gaps to the next send and the peak a second share one line.
+  - New lines:
+
+    ```
+    [RTW89] TRAFFIC ON c: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S: 6M n/a/t … (213-DRV-0104)
+    [RTW89] TRAFFIC ON c: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 12 TO 54 MB/S: 24M n/a/t … (213-DRV-0104)
+    [RTW89] TRAFFIC ON c: SENT TO ONE STATION BY TRIES, 1 TO 15: … (213-DRV-0104)
+    [RTW89] TRAFFIC ON c: RECEIVED FOR US n, r WITH THE RETRY BIT; BY LEGACY RATE: … (213-DRV-0104)
+    [RTW89] TRAFFIC ON c: RECEIVED FOR US BY HT RATE: MCS7 n …; OTHER o (213-DRV-0104)
+    ```
+
+  - A unicast send is counted when it ends (in time, late or parked): the rate `dot11` asked for in the call, which the descriptor carries as a fixed rate; acknowledged or not; and the tries. That is one hardware try a submission (SELECTED_LIMIT): the RPQ gives no count and no final rate.
+  - A frame for this station (addressed to its own MAC) is counted as it is taken for the station, by the data rate in its RX descriptor (word 1, bits 16 to 24, `rtw89_hw_rate`: CCK, OFDM, HT MCS 0 to 15, other) and by the retry bit of its frame control.
+- **What `dot11`'s rate choice does with our answers** (dot11/src/station.rs; main at 1e9d8beb5):
+  - `sent` (:443) charges the rate the frame went at with its tries, and an acknowledgement or none.
+  - A frame not acknowledged at the current rate steps the rate down at once (:449).
+  - Every RATE_WINDOW (20) frames (:107), each rate with at least MIN_TRIES (4) tries this window (:111) averages its success per try half and half with its past (:453 to 458). The rate with the least airtime is then chosen (`airtime_us`, :118: 24000/rate + 200 µs + 1000 µs for each failed try's share), among those that succeed at least 13/256 of the time, if it saves a sixteenth (:460 to 462).
+  - The faster neighbour gets one frame in 16 (`pick_rate`, :428; SAMPLE_EVERY 8, alternating). So its average needs about 64 frames, three windows, to take four new tries.
+  - **A late answer** (`acked: false`, the tries so far) steps the rate down at once and charges one failed try.
+  - **A busy refusal** (`station.sent(false, 15)`, wlan/src/main.rs:470) steps it down at once and charges 15 failed tries to the rate the refused frame was given.
+  - Worked example, with per-try successes as on a quiet channel: 0.90 at 24 Mb/s, 0.95 at 18, 0.97 at 12. Airtime then picks 24 Mb/s (813 µs against 920).
+    - One refusal in a window of 20 makes that window's 24 Mb/s success about 18 of 35, 0.51. The average falls to 0.71, its airtime rises to 1114 µs, and 18 Mb/s is chosen.
+    - The next refusal does the same to 18 Mb/s. Meanwhile 24 Mb/s recovers only through its sampled tries, by half the distance every three windows.
+    - So refusals at about one in 20 frames pin the rate one or two steps below what the air allows. Late answers do the same at a fifteenth of the weight.
+    - Boot 96's OFF minutes refused 2.1% of sends, about 0.4 a window. Boot 82 answered 22% late.
+  - **This is a prediction from the code, not a measurement (MC-12.3).** The rate lines above are what can show it: refusals differ sevenfold between SEND_BEHIND_LATE's ON and OFF minutes, so if the mechanism holds, the rates used should differ with them.
+- **Host case:** `service_probes_held_frames_and_counts_how_the_minutes_sends_ended`:
+  - its twelve unicast sends at 6 Mb/s, each acknowledged at one try;
+  - the in-time answers by size;
+  - sixteen frames for the station at the model's rate 0, one with the retry bit;
+  - the bins of `rx_rate_bin`, `size_class` and `ms_bin` at their edges.
+- The 40 `rtw89_*_host.rs` files pass: 4888 cases. The release build builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

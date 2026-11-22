@@ -327,12 +327,21 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
                 channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
             // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
-            // 213-DRV-0104: how long sends took to their answer when in time, and how long the next took to come.
-            let (a, g) = (tx.answer_ms, tx.gap_ms);
-            mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS, 0 TO 30 IN 2: {:?} (213-DRV-0104)", channel, &a[..15]);
-            mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS, 30 TO 90 IN 10: {:?}; PEAK {} SENDS IN A SECOND (213-DRV-0104)", channel, &a[15..], tx.peak_sends);
-            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS, 0 TO 30 IN 2: {:?} (213-DRV-0104)", channel, &g[..15]);
-            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS, 30 TO 90 IN 10: {:?}, 90 OR MORE {} (213-DRV-0104)", channel, &g[15..21], g[21]);
+            // 213-DRV-0104: how long sends took to their answer when in time, by size, and how long the next took to come.
+            for (class, bins) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.answer_ms.iter()) {
+                mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS (2 TO 30, 10 TO 90), {}: {} (213-DRV-0104)", channel, class, Spaced(bins));
+            }
+            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
+                channel, Spaced(&tx.gap_ms), tx.peak_sends);
+            // 213-DRV-0104: sends to one station by the rate they went at and by tries, and what the access point sent us.
+            const TX_RATES: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
+            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[..6], &tx.by_rate[..6]));
+            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 12 TO 54 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[6..], &tx.by_rate[6..]));
+            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY TRIES, 1 TO 15: {} (213-DRV-0104)", channel, Spaced(&tx.by_tries[1..]));
+            let r = tx.rx_rate;
+            mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US {}, {} WITH THE RETRY BIT; BY LEGACY RATE:{} (213-DRV-0104)",
+                channel, r.iter().sum::<u32>(), tx.rx_retry, Counted(&TX_RATES_RX, &r[..12]));
+            mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US BY HT RATE:{}; OTHER {} (213-DRV-0104)", channel, Counted(&MCS, &r[12..28]), r[28]);
             let behind = tx.behind_label();
             mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
                 channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);
@@ -558,3 +567,34 @@ fn main(_info: &'static BootInfo) {
 const RESTART_AFTER_FAILURE: bool = true;
 
 fn idle() -> ! { loop { mind::time::sleep(60_000); } }
+
+// 213-DRV-0104: numbers apart by spaces, for the minute's histograms.
+struct Spaced<'a>(&'a [u32]);
+impl core::fmt::Display for Spaced<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for (i, v) in self.0.iter().enumerate() { if i > 0 { f.write_str(" ")?; } write!(f, "{}", v)?; }
+        Ok(())
+    }
+}
+// 213-DRV-0104: each rate that was used, with its sends, acknowledged and tries; NONE when none was.
+struct ByRate<'a>(&'a [&'a str], &'a [[u32; 3]]);
+impl core::fmt::Display for ByRate<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut any = false;
+        for (name, [n, a, t]) in self.0.iter().zip(self.1) { if *n != 0 { any = true; write!(f, " {} {}/{}/{}", name, n, a, t)?; } }
+        if !any { f.write_str(" NONE")?; }
+        Ok(())
+    }
+}
+// 213-DRV-0104: each label whose count is not zero, with its count; NONE when all are.
+struct Counted<'a>(&'a [&'a str], &'a [u32]);
+impl core::fmt::Display for Counted<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut any = false;
+        for (name, n) in self.0.iter().zip(self.1) { if *n != 0 { any = true; write!(f, " {} {}", name, n)?; } }
+        if !any { f.write_str(" NONE")?; }
+        Ok(())
+    }
+}
+const TX_RATES_RX: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
+const MCS: [&str; 16] = ["MCS0", "MCS1", "MCS2", "MCS3", "MCS4", "MCS5", "MCS6", "MCS7", "MCS8", "MCS9", "MCS10", "MCS11", "MCS12", "MCS13", "MCS14", "MCS15"];

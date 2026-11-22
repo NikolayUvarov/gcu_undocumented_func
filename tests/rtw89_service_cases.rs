@@ -810,7 +810,8 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
     assert!(service.take_held().is_none(),"once only");
     // The frame buffer fills: twenty frames for the station and no reader.
-    {let mut c=c.borrow_mut();for _ in 0..20{c.incoming.push(packet());}}for _ in 0..4{ipc::advance(5);assert!(service.step());}
+    {let mut c=c.borrow_mut();let mut retried=packet();retried[1]|=8;c.incoming.push(retried);for _ in 0..20{c.incoming.push(packet());}}
+    for _ in 0..4{ipc::advance(5);assert!(service.step());}
     let mut traffic=None;
     for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
@@ -819,8 +820,18 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");
     // 213-DRV-0104: the two sends in time binned by their answer's time, every arrival after the first by its gap since
     // the answer before it (13 arrivals: ten late, one refused, two in time), and the busiest second.
-    assert_eq!((tx.answer_ms.iter().sum::<u32>(),tx.gap_ms.iter().sum::<u32>()),(2,12),"{tx:?}");
-    assert!(tx.answer_ms[..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
+    let in_time:Vec<u32>=tx.answer_ms.iter().map(|c|c.iter().sum()).collect();
+    assert_eq!((in_time,tx.gap_ms.iter().sum::<u32>()),(vec![2,0,0],12),"two of 64 bytes in time, 13 arrivals: {tx:?}");
+    assert!(tx.answer_ms[0][..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
+    // Each unicast send ended at 6 Mb/s (rate 12, the fifth of LEGACY_RATES): 12 ended (ten late, two in time), all
+    // acknowledged at their one try; the refused one did not end.
+    assert_eq!((tx.by_rate[4],tx.by_tries[1],tx.by_tries.iter().sum::<u32>()),([12,12,12],12,12),"{tx:?}");
+    // The frames for this station taken into the buffer (16, nobody reads them), at the model's rate 0 (CCK 1 Mb/s), the
+    // first with the retry bit.
+    assert_eq!((tx.rx_rate[0],tx.rx_rate.iter().sum::<u32>(),tx.rx_retry),(16,16,1),"{:?}",tx.rx_rate);
+    {use crate::btc_session::data_mode::{rx_rate_bin,size_class,ms_bin};
+    assert_eq!([0,4,11,0x80,0x87,0x8f,0x90,0x100,0x180].map(rx_rate_bin),[0,4,11,12,19,27,28,28,28],"CCK, OFDM, HT MCS 0-15, other");
+    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
     assert!(tx.peak_sends>=2&&tx.peak_sends<=13,"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
     assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
     let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};

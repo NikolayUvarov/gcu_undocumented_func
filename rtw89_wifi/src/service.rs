@@ -75,7 +75,8 @@ pub(crate) struct Stall{pub quiet_ms:u64,pub frames:u64,pub sent:u32,pub acked:u
 // `grace_us`: the data mode's grace when the send began; a recovery it outlasts since moves `deadline` (OUTLAST_SER).
 // `call` is None once a late send was answered (KEEP_LATE) and only its release is awaited.
 // `phase`: where in the beacon interval it was submitted, by our clock and by the TSF (213-DRV-0091).
-struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64,unicast:bool,began:u64,phase:Phase}
+// `rate` and `length`: the send's rate (500 kb/s) and its frame's bytes, for the minute's counts (213-DRV-0104).
+struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64,unicast:bool,began:u64,phase:Phase,rate:u8,length:usize}
 // 213-DRV-0091: how sends are held in the MAC. The first HELD_PROBES late frames of a run are probed, then one a minute;
 // one frame released in time after the first is probed once beside them. A minute's releases by the beacon interval's
 // phase, its late frames' outcomes and holds, and the frame buffer's full spells, for the minute line.
@@ -110,8 +111,19 @@ impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_m
         if self.second.1==0||now.saturating_sub(self.second.0)>=1000{self.second=(now,0);}
         self.second.1=self.second.1.saturating_add(1);self.minute.peak_sends=self.minute.peak_sends.max(self.second.1);
     }
-    // 213-DRV-0104: a send answered in time, `ms` after its arrival.
-    fn in_time(&mut self,ms:u64){let b=data_mode::ms_bin(ms).min(data_mode::MS_BINS-1);self.minute.answer_ms[b]=self.minute.answer_ms[b].saturating_add(1);}}
+    // 213-DRV-0104: a send of `length` bytes answered in time, `ms` after its arrival.
+    fn in_time(&mut self,ms:u64,length:usize){
+        let(c,b)=(data_mode::size_class(length),data_mode::ms_bin(ms).min(data_mode::MS_BINS-1));
+        self.minute.answer_ms[c][b]=self.minute.answer_ms[c][b].saturating_add(1);
+    }
+    // 213-DRV-0104: a send to one station ended at `rate` (500 kb/s), acknowledged or not, after `attempts` tries.
+    fn ended_at(&mut self,rate:u8,acked:bool,attempts:u8){
+        let m=&mut self.minute;
+        if let Some(i)=crate::txdesc::LEGACY_RATES.iter().position(|r|*r==rate){
+            let r=&mut m.by_rate[i];r[0]=r[0].saturating_add(1);r[1]=r[1].saturating_add(u32::from(acked));r[2]=r[2].saturating_add(u32::from(attempts));
+        }
+        let t=usize::from(attempts.min(15));m.by_tries[t]=m.by_tries[t].saturating_add(1);
+    }}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -300,6 +312,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                     _=>{}
                 }
             }
+            // 213-DRV-0104: a frame for this station, by the access point's rate in its descriptor and its retry bit.
+            if m.len()>=24&&m[4..10]==f.own(){
+                let mm=&mut self.tx_watch.minute;
+                if let Some((_,rate))=crate::ppdu::key(record.buffer()){let b=data_mode::rx_rate_bin(rate);mm.rx_rate[b]=mm.rx_rate[b].saturating_add(1);}
+                if m[1]&8!=0{mm.rx_retry=mm.rx_retry.saturating_add(1);}
+            }
             let at=(self.frames.head+self.frames.count)%FRAMES;let signal=record.signal();
             let length=frame.write(data.channel(),data.current_filter().all_beacons(),&mut self.frames.bytes[at]).map_err(Fatal::Frame)?;
             self.frames.bytes[at][frames::SIGNAL]=signal;self.kept=self.kept.saturating_add(1);
@@ -381,8 +399,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 self.tx_watch.not_held=true;let registers=self.data().held();
                 self.tx_watch.held=Some(Event::Held{n:0,held:false,ms:now.saturating_sub(pending.began),submitted:pending.phase,at,registers});
             }
+            if pending.unicast{self.tx_watch.ended_at(pending.rate,done.acked,attempts);}
             if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));
-                self.tx_watch.in_time(now.saturating_sub(pending.began));self.ended(pending.unicast,done.acked,now);}
+                self.tx_watch.in_time(now.saturating_sub(pending.began),pending.length);self.ended(pending.unicast,done.acked,now);}
             else{self.late_released(pending.began,done.acked,attempts,now);}
         }Ok(())
     }
@@ -393,6 +412,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
         let parked=self.parked.take().unwrap();let now=time::monotonic_ns()/1_000_000;
         let m=&mut self.tx_watch.minute;m.parked_released=m.parked_released.saturating_add(1);if done.acked{m.parked_acked=m.parked_acked.saturating_add(1);}
+        if parked.unicast{self.tx_watch.ended_at(parked.rate,done.acked,attempts);}
         self.release_phase();self.late_released(parked.began,done.acked,attempts,now);Ok(())
     }
     // 213-DRV-0104, SEND_BEHIND_LATE_ALTERNATES: off for the first whole minute, then on, and so on; at a poll with no send
@@ -703,7 +723,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                         // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).
                         if self.late{self.data().extend_send(LATE_MS*1000);}
                         let phase=self.phase();
-                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase})
+                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase,rate,length:frame.len()})
                     },
                     Err(failure)=>{if error(&failure)==wlanhw::Error::Busy{self.tx_watch.busy();}let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},
