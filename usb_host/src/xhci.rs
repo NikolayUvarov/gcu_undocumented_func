@@ -28,8 +28,6 @@ const TYPE_ISOCH: u32 = 5;
 // An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
 // IDs.
 const FRAME_ID_SHIFT: u32 = 20;
-// The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
-const FIRST_AHEAD: u32 = 8 * 8;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
@@ -151,6 +149,9 @@ pub struct Xhci {
     wait: Option<Wait>, waited: Option<(Wait, u64)>,
     // When the streams' finished TDs were last moved into their spills (000-DRV-0094).
     spilled_ns: u64,
+    // The microframes a TD's frame must be ahead of the controller's at least (its Isochronous Scheduling Threshold and
+    // one microframe, in whole frames), and how far ahead a stream's first TD goes: a frame more (000-DRV-0094 step 3).
+    soonest: u32, ahead: u32,
 }
 
 /// A log line's controller: nothing for the first, so its lines read as before; `XHCI n: ` for a further one.
@@ -186,6 +187,12 @@ impl Xhci {
         let caplength = mmio.read8(0) as usize; let hcs1 = mmio.read32(0x04); let hcs2 = mmio.read32(0x08); let hcc1 = mmio.read32(0x10);
         let (doorbells, runtime) = ((mmio.read32(0x14) & !3) as usize, (mmio.read32(0x18) & !0x1F) as usize);
         let context = if hcc1 & 4 != 0 { 64 } else { 32 };
+        // HCSPARAMS2's IST: microframes, or frames with bit 3 (xHCI 1.2, 5.3.4); a TD's frame comes after it, as Linux
+        // schedules one (`xhci_get_isoc_frame_id`), and a frame more for the first.
+        let ist = if hcs2 & 8 != 0 { (hcs2 & 7) * 8 } else { hcs2 & 7 };
+        let soonest = ((ist + 1).div_ceil(8) * 8).max(8);
+        let ahead = soonest + 8;
+        mind::println!("[USB] {}ISOCHRONOUS SCHEDULING THRESHOLD {} MICROFRAMES: A TD AT LEAST {} AHEAD, A STREAM'S FIRST {}", Tag(number), ist, soonest, ahead);
         // Take the controller from firmware (USB Legacy Support), then halt and reset it.
         let mut cap = ((hcc1 >> 16) << 2) as usize;
         while cap != 0 {
@@ -216,7 +223,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number, wait: None, waited: None, spilled_ns: 0 };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number, wait: None, waited: None, spilled_ns: 0, soonest, ahead };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -619,13 +626,14 @@ impl Xhci {
             return;
         }
         // Its frame: the one after the TD before, or a little ahead of the controller; one that fell behind starts anew.
-        let ahead = t.uframe.filter(|u| (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= 16);
-        let uframe = ahead.unwrap_or((mfindex + FIRST_AHEAD) & 0x3FFF);
+        let (soonest, first) = (self.soonest, self.ahead);
+        let ahead = t.uframe.filter(|u| (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= soonest);
+        let uframe = ahead.unwrap_or((mfindex + first) & 0x3FFF);
         t.uframe = Some((uframe + t.step) & 0x3FFF);
-        // A dry ring's first TD again (000-DRV-0094): no TD from the last one's end until this one's frame, FIRST_AHEAD on.
+        // A dry ring's first TD again (000-DRV-0094): no TD from the last one's end until this one's frame, `first` on.
         if let (None, Some(d)) = (ahead, t.dry_seen.take()) {
             let now = mind::time::monotonic_ns();
-            let empty = (now + FIRST_AHEAD as u64 * 125_000).saturating_sub(d.end_ns);
+            let empty = (now + first as u64 * 125_000).saturating_sub(d.end_ns);
             (t.empty_ns, t.longest_ns) = (t.empty_ns + empty, t.longest_ns.max(empty));
             if t.said < DRY_SAID {
                 t.said += 1;

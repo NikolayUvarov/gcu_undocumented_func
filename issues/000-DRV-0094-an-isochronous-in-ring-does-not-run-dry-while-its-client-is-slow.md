@@ -1,6 +1,6 @@
 # 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: steps 1 and 2 written and run on the Ryzen; steps 3 and 4 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: steps 1 and 2 written and run on the Ryzen; step 3 written; step 4 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -66,6 +66,10 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
   - The end line adds the spill's most and how often it was full.
   - Command waits are left as they were: a command may change the slot's endpoints.
   - QEMU's `usb-audio` has no IN endpoint, so the QEMU suites do not reach this path. The Ryzen run is its evidence.
+- **Step 3, written** (not run on the Ryzen yet):
+  - `usb_host` reads each controller's Isochronous Scheduling Threshold (HCSPARAMS2's IST: microframes, or frames with bit 3) and says it at its start (`ISOCHRONOUS SCHEDULING THRESHOLD n MICROFRAMES: …`).
+  - A TD's frame must then be at least IST + 1 microframe ahead, in whole frames, as Linux's `xhci_get_isoc_frame_id` schedules. A stream's first TD, and the first after a dry ring, goes one frame further. Before, it went 64 microframes ahead (`FIRST_AHEAD`, a guess), and a TD continued down to 16 ahead.
+  - On QEMU (IST 7 frames) that is 64 and 72. On the Ryzen it is to be read.
 - **Runs C and D on the Ryzen, 2026-11-22.**
   - The setup: release 202611220957; the board behind the Genesys hub; `audiostub duplex 300 0`, each with one log read over the cable at its middle; nobody else on the cable.
   - The raw lines are in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`; the bench log has each run's times.
