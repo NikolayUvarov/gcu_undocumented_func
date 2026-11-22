@@ -3,13 +3,15 @@
 // display (213-DRV-0086, DRV's): the Ryzen's Radeon display engine. It logs the grant as KRN's stub did (213-KRN-0270,
 // 0271), then runs step 1 (the firmware's display state read in batches, as many as BATCHES_ALLOWED says) and steps 3
 // and 4 (first light on HDMI-A-1, then MIND Core's picture, 213-DRV-0092, in stages, as many as STAGES_ALLOWED says; at 0
-// nothing is written and no writer is made). SURVEY_ORDER chooses the survey's order or the production one (213-DRV-0098).
+// nothing is written and no writer is made). SURVEY_ORDER chooses the survey's order or the production one (213-DRV-0098);
+// HOTPLUG follows HPD 1 after them (213-DRV-0096), STANDING_CHECK reads both pipes' underflow statuses (213-DRV-0103).
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
 #[allow(dead_code)] mod dcn;
 #[allow(dead_code)] mod ddc;
 #[allow(dead_code)] mod edid;
+#[allow(dead_code)] mod hpd;
 #[allow(dead_code)] mod light;
 #[allow(dead_code)] mod picture;
 mod screen;
@@ -19,6 +21,8 @@ use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, 
 // The paths screen.rs is written against (its host cases model them).
 use mind::{abi, dev, idl, ipc, sys};
 use mind::dev::{cap_info, device_config, Mmio};
+use dcn::field::{DC_HPD_EN, DC_HPD_SENSE};
+use dcn::R;
 
 /// How many of step 1's eleven batches this build may read (the eleventh, HDMI-A-1's DDC line, for 213-DRV-0095). 0
 /// maps no register and reads none: it logs each batch and the registers it would read. Raised one run at a time, on
@@ -49,6 +53,19 @@ const UNDO_AFTER_STAGES: bool = false;
 /// line a stage with its time, the detail only when a part fails. Either way nothing is read or written at 0 batches
 /// and 0 stages. Set on the DRV owner session's word.
 const SURVEY_ORDER: bool = false;
+/// When true, HPD 1's sense is polled after steps 1 to 4 (213-DRV-0096): a monitor unplugged for half a second takes the
+/// stages back, screen_gone first, every register as before them; one plugged in for half a second runs steps 1 to 4
+/// again; a shorter bounce does neither; after a failure nothing more is tried. Needs STAGES_ALLOWED above 0 and not
+/// UNDO_AFTER_STAGES. Set on the DRV owner session's word.
+const HOTPLUG: bool = false;
+/// When true, both pipes' underflow and request-timeout statuses are read once a second after the offer, while stage
+/// 15's picture is up (213-DRV-0103); a new one undoes the stages as stage 15's watch does, the mark kept. It needs
+/// STAGES_ALLOWED at 15 or more and not UNDO_AFTER_STAGES; with HOTPLUG or without it. Set on the DRV owner session's word.
+const STANDING_CHECK: bool = false;
+/// When true, stage 15's watch is `light::SHORT_WATCH_FRAMES` (60), not `light::WATCH_FRAMES` (300): only together with
+/// STANDING_CHECK, which a build without it refuses. Set on the DRV owner session's word.
+const SHORT_WATCH: bool = false;
+const _: () = assert!(!SHORT_WATCH || STANDING_CHECK, "the watch shortens only together with the standing check (213-DRV-0103)");
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 /// Before step 1 in the survey's order, so that the boot's own lines are kept first.
@@ -93,7 +110,11 @@ fn main(_info: &'static BootInfo) {
     let t2 = now_us();
     let edid = step2(&store, mmio.as_ref(), out);
     let t3 = now_us();
-    let (written, times) = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()), edid.as_ref(), out);
+    let image = vfct.as_ref().map(|t| t.as_slice());
+    // Only here is a writer made: a build of STAGES_ALLOWED 0 has none, and step 3 only describes its stages.
+    let mut writer = mmio.filter(|_| STAGES_ALLOWED > 0).map(|m| Writer(m, Mmio::map(SECOND_SCREEN).ok()));
+    let run = step3(&store, writer.as_mut(), image, edid.as_ref(), out);
+    let (written, times) = (run.as_ref().map_or(0, |r| r.journal.len()), run.as_ref().map(|r| r.times));
     // How long each part took, from display's start (213-DRV-0098): to the offer when stage 16 made it.
     let ms = |us: u64| (us / 1000, us % 1000 / 100);
     let (a, b, c) = (ms(t1 - started), ms(t2 - t1), ms(t3 - t2));
@@ -112,6 +133,7 @@ fn main(_info: &'static BootInfo) {
         (r, w) => mind::println!("[DISPLAY] {} REGISTERS READ BY STEP 1, {} WRITES BY STEP 3", r, w),
     }
     if let Ok(after) = device_config(ENGINE, 4) { mind::println!("[DISPLAY] COMMAND {:04X} AFTER STEP 1", after & 0xFFFF); }
+    if let (true, false, Some(w)) = (HOTPLUG || STANDING_CHECK, UNDO_AFTER_STAGES, writer.as_mut()) { follow(w, run, order, image, out); }
     idle();
 }
 
@@ -161,36 +183,107 @@ impl light::Clock for Ddc<'_> {
     }
 }
 
-/// Step 3: the writes it made, and its times when its stages ran. At STAGES_ALLOWED 0 it only describes the stages, for
-/// the pipe step 1 found or, with step 1 not read, for the survey's expectation.
-fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>, edid: Option<&edid::Edid>, out: &mut dyn batches::Out) -> (usize, Option<light::Times>) {
+/// Steps 3 and 4's run as it stands, for an unplug's taking back (213-DRV-0096).
+struct Run<'a> { light: Box<light::Light>, interp: Box<atom::Interpreter<'a>>, journal: Box<light::Journal>, outcome: light::Outcome, times: light::Times }
+
+/// Steps 3 and 4: their run, when their stages ran. At STAGES_ALLOWED 0 they only describe the stages, for the pipe
+/// step 1 found or, with step 1 not read, for the survey's expectation.
+fn step3<'a>(store: &batches::Store, writer: Option<&mut Writer>, vfct: Option<&'a [u8]>, edid: Option<&edid::Edid>, out: &mut dyn batches::Out) -> Option<Run<'a>> {
     let today = timing::first_light_mode(&HDMI_A_1_VICS);
-    let (found, expected) = match light::assess(store) {
-        Ok(found) => (found, false),
-        Err(why) if STAGES_ALLOWED == 0 => { mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why); (light::EXPECTED, true) }
-        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return (0, None); }
-    };
     let signal = if HDMI_SIGNALLING { dcn::Signal::Hdmi } else { dcn::Signal::Dvi };
     let (timing, signal) = if MODE_FROM_EDID {
         let (timing, signal, why) = light::mode_from_edid(edid, today, signal);
         mind::println!("[DISPLAY] STEP 3'S MODE: {}x{} AT {} KHZ IN {:?} SIGNALLING, {}", timing.h_active, timing.v_active, timing.pixel_khz, signal, why);
         (timing, signal)
     } else { (today, signal) };
-    let plan = match light::Light::new_with(found.0, found.1, timing, signal) {
-        Ok(plan) => plan.with_reference(light::reference(store, &found.0, &found.1)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
-        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return (0, None); }
+    let build = option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN");
+    let watch = if SHORT_WATCH { light::SHORT_WATCH_FRAMES } else { light::WATCH_FRAMES };
+    let plan = match light::prepare(store, timing, signal, build) {
+        Ok(plan) => plan.with_watch(watch),
+        Err(why) if STAGES_ALLOWED == 0 => {
+            mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why);
+            let (f, c) = light::EXPECTED;
+            if let Ok(plan) = light::Light::new_with(f, c, timing, signal) { light::describe(&plan.with_build(build).with_watch(watch), true, out); }
+            return None;
+        }
+        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return None; }
     };
-    if STAGES_ALLOWED == 0 { light::describe(&plan, expected, out); return (0, None); }
-    // Only here is a writer made: a build of STAGES_ALLOWED 0 has none.
-    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 3 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return (0, None) };
-    let Some((0x1002, 0x1638, image)) = vfct.and_then(atom::vfct_image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: NO VBIOS IMAGE FOR 1002:1638"); return (0, None) };
-    let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return (0, None) };
+    if STAGES_ALLOWED == 0 { light::describe(&plan, false, out); return None; }
+    let Some(writer) = writer else { mind::println!("[DISPLAY] STEP 3 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return None };
+    let Some((0x1002, 0x1638, image)) = vfct.and_then(atom::vfct_image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: NO VBIOS IMAGE FOR 1002:1638"); return None };
+    let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return None };
     let mut interp = Box::new(atom::Interpreter::new(image));
     let mut journal = Box::new(light::Journal::default());
-    // Step 4's surface: the start of BAR 0's slot 5, when granted (213-KRN-0271).
-    let surface = Mmio::map(SECOND_SCREEN).ok();
-    let (_, times) = light::run_timed(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, UNDO_AFTER_STAGES, out);
-    (journal.len(), Some(times))
+    let (outcome, times) = light::run_timed(&plan, writer, &mut interp, &mut journal, STAGES_ALLOWED, UNDO_AFTER_STAGES, out);
+    Some(Run { light: Box::new(plan), interp, journal, outcome, times })
+}
+
+/// After steps 1 to 4: HPD 1 followed with HOTPLUG (213-DRV-0096), read every `hpd::POLL_MS`, and the standing check
+/// with STANDING_CHECK (213-DRV-0103), once a second while stage 15's picture is up. An unplug that holds takes the
+/// stages back (screen_gone first); a monitor plugged in that holds runs steps 1 to 4 again on the same mapping, step 1
+/// and the EDID read anew; a new underflow or request timeout undoes them as the watch does; after a failure nothing
+/// more is tried.
+fn follow<'a>(w: &mut Writer, mut run: Option<Run<'a>>, order: batches::Order, vfct: Option<&'a [u8]>, out: &mut dyn batches::Out) -> ! {
+    use batches::Bus;
+    let (Some(sense), Some(control)) = (R::HpdIntStatus.at(light::HDMI_A_1.hpd), R::HpdControl.at(light::HDMI_A_1.hpd)) else { idle() };
+    let read = |w: &mut Writer| w.read(sense).map(|v| DC_HPD_SENSE.get(v) == 1);
+    let mut state = hpd::state_after(run.as_ref().map(|r| r.outcome));
+    let mut f = None;
+    if HOTPLUG {
+        if w.read(control).map(|v| DC_HPD_EN.get(v)) != Some(1) { mind::println!("[DISPLAY] HPD 1 IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED"); }
+        else if let Some(now) = read(w) {
+            mind::println!("[DISPLAY] HPD 1 FOLLOWED EVERY {} MS, A CHANGE COUNTED AFTER {} MS: SENSE {}, THE SECOND OUTPUT {:?}", hpd::POLL_MS,
+                           hpd::SETTLE_US / 1000, now as u8, state);
+            f = Some(hpd::Follow::new(state, now));
+        } else { mind::println!("[DISPLAY] HPD 1 CANNOT BE READ: NOT FOLLOWED"); }
+    }
+    if f.is_none() && !STANDING_CHECK { idle(); }
+    if STANDING_CHECK { mind::println!("[DISPLAY] THE STANDING CHECK: BOTH PIPES' UNDERFLOW STATUSES READ EVERY {} MS WHILE THE SECOND PICTURE IS UP; THE WATCH {} FRAMES",
+                                       light::STANDING_US / 1000, run.as_ref().map_or(light::WATCH_FRAMES, |r| r.light.watch_frames)); }
+    let mut account = light::Standing::new(now_us());
+    let mut next = now_us() + light::STANDING_US;
+    let done = |r: &Run| match r.outcome { light::Outcome::Stopped { done } | light::Outcome::NotReady { done, .. } => done, _ => 0 };
+    loop {
+        mind::time::sleep(if f.is_some() { hpd::POLL_MS } else { (light::STANDING_US / 1000) as usize });
+        // The standing check, once a second, while pipe 1 scans the picture (stage 15 in place).
+        if STANDING_CHECK && state == hpd::State::Lit && now_us() >= next {
+            next = now_us() + light::STANDING_US;
+            if let Some(r) = run.as_mut().filter(|r| done(r) >= 15) {
+                if let Err(why) = light::standing_check(&r.light, w, &r.journal, &mut account, out) {
+                    let since = r.times.offered_us.map_or(0, |o| now_us().saturating_sub(r.times.start_us + o));
+                    let stages = done(r);
+                    light::standing_undo(&r.light, w, &mut r.interp, &mut r.journal, stages, why, since, out);
+                    r.outcome = light::Outcome::Failed { stage: 15, why };
+                    state = hpd::State::Stopped;
+                    if let Some(f) = f.as_mut() { f.set(state); }
+                }
+            }
+        }
+        let Some(follow) = f.as_mut() else { continue };
+        let Some(sense) = read(w) else { continue };
+        match follow.feed(sense, now_us()) {
+            hpd::Action::TakeBack => {
+                let Some(r) = run.as_mut() else { follow.set(hpd::State::Dark); state = hpd::State::Dark; continue };
+                let stages = done(r);
+                let unchanged = light::take_back(&r.light, w, &mut r.interp, &mut r.journal, stages, out);
+                r.outcome = light::Outcome::Stopped { done: 0 };
+                state = if unchanged { hpd::State::Dark } else { hpd::State::Stopped };
+                follow.set(state);
+            }
+            hpd::Action::LightUp => {
+                drop(run.take()); // the last run's journal and interpreter let go before the next is made
+                let mut store = batches::Store::default();
+                batches::read_into(w, BATCHES_ALLOWED, order, out, &mut store);
+                let edid = if EDID_ALLOWED { ddc::read(&store, &mut Ddc(&w.0), out).ok().and_then(|r| ddc::describe(&r, out)) } else { None };
+                run = step3(&store, Some(w), vfct, edid.as_ref(), out);
+                state = hpd::state_after(run.as_ref().map(|r| r.outcome));
+                follow.set(state);
+                next = now_us() + light::STANDING_US;
+                mind::println!("[DISPLAY] A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT {:?}", state);
+            }
+            hpd::Action::None => {}
+        }
+    }
 }
 
 /// The VICs HDMI-A-1's EDID lists (read under Linux, 2026-11-21); the EDID over DDC is step 2.

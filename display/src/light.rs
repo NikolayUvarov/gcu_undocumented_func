@@ -162,6 +162,12 @@ pub const DLG_TEST_MODE_OFF: u32 = 1 << 8;
 pub const QOS_LEVEL: u32 = 8;
 /// Stage 15's watch with the pattern off, in OTG1's frames: five seconds at 60 Hz.
 pub const WATCH_FRAMES: u32 = 300;
+/// The watch's length when the standing check (213-DRV-0103) follows it: one second at 60 Hz, never without it.
+pub const SHORT_WATCH_FRAMES: u32 = 60;
+/// How often the standing check reads the two pipes' statuses after the offer.
+pub const STANDING_US: u64 = 1_000_000;
+/// How often it says how many checks it made, at most.
+pub const STANDING_SAID_US: u64 = 600_000_000;
 /// The watch's mark for a frame that passed between two reads.
 const SKIPPED: u8 = 0x80;
 
@@ -172,11 +178,12 @@ pub const SURFACE_BYTES: usize = 0x0140_0000;
 
 /// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
 /// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row, and the
-/// times and a stage's tally (213-DRV-0098; the production order's held lines are on the heap). Half of display's stack
+/// times and a stage's tally (213-DRV-0098; the production order's held lines are on the heap), and a plug's step 1 values
+/// besides the first start's (213-DRV-0096). Half of display's stack
 /// (linker.ld) bounds it, so that the frames' own locals keep the rest: on 2026-11-22 the 64 KiB a task has by default
 /// faulted at its guard page as step 3 began (boot 69, release 202611220523).
 pub const STEP3_STACK_BYTES: usize = core::mem::size_of::<Interpreter>() + core::mem::size_of::<Journal>()
-    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::MAX_WIDTH
+    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + 2 * core::mem::size_of::<Store>() + 4 * picture::MAX_WIDTH
     + 2 * core::mem::size_of::<Times>() + 2 * core::mem::size_of::<Tally>();
 /// The stack display asks for (linker.ld's PT_GNU_STACK).
 pub const STACK_BYTES: usize = 0x40000;
@@ -221,9 +228,11 @@ pub fn mode_from_edid(edid: Option<&crate::edid::Edid>, fallback: Timing, signal
     (p, Signal::Hdmi, ModeFrom::Edid)
 }
 
-/// The mark a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its interrupt off): a start
-/// of display again in the same boot finds it and runs no stage. A machine boot clears OTG1's registers (step 1 read
-/// them all 0 after every boot, though Linux had driven OTG1 before it), PHY A's not.
+/// The mark of stages in place, which a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its
+/// interrupt off): a start of display again finds it and runs no stage. A failure's undo leaves it, so a failed stage
+/// is not tried again; an unplug's taking back clears it (213-DRV-0096), so that a monitor plugged in lights the output
+/// again. A machine boot clears OTG1's registers (step 1 read them all 0 after every boot, though Linux had driven OTG1
+/// before it), PHY A's not.
 pub const RESTART_MARK: u32 = 0x5A5A;
 
 /// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
@@ -252,6 +261,13 @@ pub const EXPECTED: (Firmware, Choice) = (
     Firmware { otg: 0, opp: 0, dig_fe: 4, phy: 4, hubps: [true, false, false, false] },
     Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1, attached: [false, true, false, false] },
 );
+
+/// Step 3 ready for its run from step 1's values, as display starts it and as a monitor plugged in starts it again
+/// (213-DRV-0096): the pipes `assess` finds, the plan for `timing` in `signal`, step 4's reference and the build.
+pub fn prepare(s: &Store, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> {
+    let (f, c) = assess(s)?;
+    Ok(Light::new_with(f, c, timing, signal)?.with_reference(reference(s, &f, &c)).with_build(build))
+}
 
 /// Why step 3 does not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -496,10 +512,20 @@ impl Watch {
 
 // --- the journal ---
 
-/// Every write step 3 made, with the value before it and its stage, for the undo.
-pub struct Journal { items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize }
-impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0 } } }
+/// Every write step 3 made, with the value before it and its stage, for the undo; and for an unplug's taking back
+/// (213-DRV-0096) the mark with its value before, and the firmware's pipe as step 3 began.
+pub struct Journal {
+    items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize, mark: Option<(Writable, u32)>, baseline: Option<[u32; WATCH]>,
+    /// The two pipes' HUBP and ODM statuses as stage 9 found them, for the standing check (213-DRV-0103).
+    statuses: Option<[u32; 4]>,
+}
+impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None, statuses: None } } }
 impl Journal {
+    /// Nothing journaled, for a run of the stages again.
+    pub fn clear(&mut self) {
+        for item in self.items[..self.len].iter_mut() { *item = None; }
+        (self.len, self.mark, self.baseline, self.statuses) = (0, None, None, None);
+    }
     fn push(&mut self, w: Writable, old: u32, stage: u8) -> bool {
         if self.len == JOURNAL { return false; }
         self.items[self.len] = Some((w, old, stage));
@@ -549,6 +575,8 @@ pub struct Light {
     watch: Watch, attached: Watch,
     /// Step 4's reference, when step 1 read it (stage 9 refuses without it), and the build stage 10's picture names.
     pub reference: Option<Reference>, pub build: &'static str,
+    /// Stage 15's watch, in frames: `WATCH_FRAMES`, or `SHORT_WATCH_FRAMES` with the standing check (213-DRV-0103).
+    pub watch_frames: u32,
 }
 
 impl Light {
@@ -562,10 +590,13 @@ impl Light {
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
         let surface = picture::Size::for_mode(timing.h_active as usize, timing.v_active as usize);
         if surface.bytes() > SURFACE_BYTES || surface.width > picture::MAX_WIDTH { return Err(Refusal::Surface { bytes: surface.bytes() }); }
-        Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
+        Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN", watch_frames: WATCH_FRAMES })
     }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
+    /// With stage 15's watch of `frames` (at most `WATCH_FRAMES`): the build gives `SHORT_WATCH_FRAMES` only together
+    /// with the standing check (213-DRV-0103).
+    pub fn with_watch(mut self, frames: u32) -> Light { self.watch_frames = frames.clamp(1, WATCH_FRAMES); self }
     /// With the build stage 10's picture names (02_build.sh's MIND_BUILD_COMMIT).
     pub fn with_build(mut self, build: &'static str) -> Light { self.build = build; self }
     pub fn guard(&self) -> &Guard { &self.guard }
@@ -648,7 +679,7 @@ impl Light {
                     12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
                     13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.surface.pitch - 1)),
                     14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
-                    _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, WATCH_FRAMES)),
+                    _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, self.watch_frames)),
                 }
             }
             _ => for step in self.stage(n) { self.step_line(n, verb, step, out); },
@@ -680,7 +711,7 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
 pub enum Failure {
     Unreadable(u32),
     Refused(Refused),
-    /// display started again in this boot: step 3's OTG holds the mark of a start before.
+    /// display started again with the stages in place: step 3's OTG holds the mark of a start before.
     StartedAgain,
     /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
     NoReference,
@@ -722,7 +753,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Failure::Unreadable(o) => write!(f, "{:05X} COULD NOT BE READ", o),
-            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT"),
+            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY (THE MARK IN ITS OTG): THE STAGES RUN ONCE UNTIL AN UNPLUG TAKES THEM BACK"),
             Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
             Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
             Failure::MpccInUse { mpcc, opp_id, firmware_mux, firmware_bot } => write!(f,
@@ -1228,7 +1259,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
     p.push(Step::NoUnderflow).map_err(|_| Failure::PlanFull)?;
     put(&mut p, DpgControl, o, &[(DPG_EN, 0)])?;
-    p.push(Step::Watch { frames: WATCH_FRAMES }).map_err(|_| Failure::PlanFull)?;
+    p.push(Step::Watch { frames: light.watch_frames }).map_err(|_| Failure::PlanFull)?;
     Ok(p)
 }
 
@@ -1340,8 +1371,9 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         Ok(v) => v,
         Err(why) => { out.note(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return (Outcome::Failed { stage: 0, why }, times); }
     };
-    // Once a boot: a start of display again in this boot (init restarts a program that faults) finds the mark and runs no
-    // stage; else the mark is left before stage 1, and never undone.
+    journal.baseline = Some(baseline);
+    // Once while lit: a start of display again (init restarts a program that faults) finds the mark and runs no stage;
+    // else the mark is left before stage 1, and only an unplug's taking back clears it.
     if allowed > 0 {
         let Some(mark) = R::OtgVerticalInterrupt2Position.at(light.choice.pipe.otg) else { return (Outcome::Failed { stage: 0, why: Failure::StartedAgain }, times) };
         let was = match read(e, mark) { Ok(v) => v, Err(why) => { out.note(format_args!("STEP 3 NOT RUN: ITS MARK: {}", why)); return (Outcome::Failed { stage: 0, why }, times); } };
@@ -1351,7 +1383,8 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         }
         let Ok(w) = light.guard.check(mark) else { return (Outcome::Failed { stage: 0, why: Failure::StartedAgain }, times) };
         e.write(w, RESTART_MARK);
-        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT",
+        journal.mark = Some((w, was));
+        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN RUNS NO STAGE; A MACHINE BOOT OR AN UNPLUG CLEARS IT",
             Name(mark), RESTART_MARK, was));
     }
     let attached = match light.attached.read(e) {
@@ -1376,7 +1409,7 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
             let now = light.watch.read(e)?;
             if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
             // Stage 9 done: stages 11 to 15 built from its reference.
-            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); }
+            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); journal.statuses = Some(d.underflow); }
             // The attached HUBP is guarded until step 4 takes it, from stage 11.
             if n < ATTACHED_FROM || n >= dcn::PIPE_WRITES_FROM || light.attached.is_empty() { return Ok(tally); }
             let now = light.attached.read(e)?;
@@ -1445,4 +1478,80 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
     }
     out.note(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
     (Outcome::Stopped { done: allowed }, times)
+}
+
+/// Steps 3 and 4 taken back for an unplug (213-DRV-0096): stages `done` to 1 undone, last first, as a failure's undo
+/// takes them back (stage 16's first lets the compositor go: screen_gone), then the mark put back as it was before step 3,
+/// so that a monitor plugged in runs the stages again, and the journal emptied for that run. Whether the firmware's pipe
+/// reads as it did when step 3 began.
+pub fn take_back<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, done: u8, out: &mut dyn Out) -> bool {
+    out.part();
+    let (start, done) = (e.now_us(), done.min(STAGES));
+    out.note(format_args!("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES {} TO 1 ({} WRITES)", done, journal.len));
+    for m in (1..=done).rev() { undo(light, e, interp, journal, m, false, out); }
+    if let Some((w, was)) = journal.mark.take() {
+        e.write(w, was);
+        out.line(format_args!("U0 RESTORED {} = {:08X}: THE MARK OF STAGES IN PLACE CLEARED", Name(w.reg()), was));
+    }
+    let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
+    journal.clear();
+    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}", Ms(e.now_us().saturating_sub(start)),
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+    same == Some(true)
+}
+
+/// The standing check's account (213-DRV-0103): the checks made since it last said so, the longest time between two, and
+/// when it said so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Standing { pub checks: u64, pub longest_us: u64, last_us: Option<u64>, said_us: u64 }
+
+impl Standing {
+    pub fn new(now_us: u64) -> Standing { Standing { said_us: now_us, ..Standing::default() } }
+}
+
+/// The standing check after the offer (213-DRV-0103): the firmware's HUBP and ODM statuses, then pipe 1's, against what
+/// stage 9 found. These statuses are latched: each has its clear bit (`HUBP_UNDERFLOW_CLEAR`, `HUBP_TIMEOUT_STATUS_CLEAR`,
+/// `OPTC_UNDERFLOW_CLEAR`), the ODM's live one is apart (`OPTC_UNDERFLOW_OCCURRED_CURRENT`), Display Core reads and then
+/// clears them (`dcn10_did_underflow_occur`), and only the watch clears pipe 1's. So an underflow since stage 9 shows at
+/// the next check however short it was. A new one is the failure; none, nothing logged but, at most every
+/// `STANDING_SAID_US`, how many checks were made and the longest time between two.
+pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, account: &mut Standing, out: &mut dyn Out) -> Result<(), Failure> {
+    let (Some(r), Some(was)) = (light.reference, journal.statuses) else { return Err(Failure::NoReference) };
+    let q = light.choice.pipe.otg;
+    let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference);
+    let regs = [at(R::HubpCntl, r.pipe)?, at(R::OptcInputGlobalControl, r.otg)?, at(R::HubpCntl, q)?, at(R::OptcInputGlobalControl, q)?];
+    let new = |field: dcn::Field, v: u32, before: u32| field.get(v) & !field.get(before) != 0;
+    for (i, reg) in regs.iter().enumerate() {
+        let v = read(e, *reg)?;
+        let (underflow, timeout) = if i % 2 == 0 { (new(HUBP_UNDERFLOW_STATUS, v, was[i]), new(HUBP_TIMEOUT_STATUS, v, was[i])) } else { (new(OPTC_UNDERFLOW_OCCURRED_STATUS, v, was[i]), false) };
+        if underflow { return Err(Failure::Underflow { offset: reg.offset(), value: v }); }
+        if timeout { return Err(Failure::RequestTimeout { offset: reg.offset(), value: v }); }
+    }
+    let now = e.now_us();
+    if let Some(last) = account.last_us { account.longest_us = account.longest_us.max(now.saturating_sub(last)); }
+    (account.last_us, account.checks) = (Some(now), account.checks + 1);
+    if now.saturating_sub(account.said_us) >= STANDING_SAID_US {
+        out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE",
+            account.checks, now.saturating_sub(account.said_us) / 60_000_000, account.longest_us / 1000));
+        (account.checks, account.longest_us, account.said_us) = (0, 0, now);
+    }
+    Ok(())
+}
+
+/// What the standing check found undone as stage 15's watch undoes (213-DRV-0103): stage 15's writes put back at once
+/// (the pattern on, HUBP1 blanked as stage 13 left it), then screen_gone when stage 16 ran, then stages 14 to 1; the mark
+/// kept, so nothing is tried again this boot. Whether the firmware's pipe reads as it did when step 3 began.
+pub fn standing_undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, done: u8, why: Failure, since_offer_us: u64, out: &mut dyn Out) -> bool {
+    out.part();
+    let done = done.min(STAGES);
+    if done >= 15 { undo(light, e, interp, journal, 15, true, out); }
+    out.failed();
+    out.note(format_args!("S15 STANDING CHECK: {} {} S AFTER THE OFFER; STAGE 15'S WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING {} AND STAGES 14 TO 1",
+        why, since_offer_us / 1_000_000, if done >= 16 { "16 (SCREEN_GONE)" } else { "NO OFFER" }));
+    if done >= 16 { undo(light, e, interp, journal, 16, false, out); }
+    for m in (1..=done.min(14)).rev() { undo(light, e, interp, journal, m, false, out); }
+    let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
+    out.note(format_args!("STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT",
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+    same == Some(true)
 }
