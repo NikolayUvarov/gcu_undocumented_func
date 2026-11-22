@@ -258,7 +258,7 @@ fn main(info: &'static BootInfo) {
     let mut watch = Watch::default();
     let mut second: Option<Second> = None; // a second screen a driver lent (213-KRN-0272)
     let mut second_lines = 0u32;
-    let mut fit = Fit::Keep; // how the first screen is shown on the second (213-KRN-0273), until the shell chooses
+    let mut fit = Fit::Stretch; // how the first screen is shown on the second (213-KRN-0273), until the shell chooses
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {

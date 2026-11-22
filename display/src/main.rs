@@ -27,23 +27,23 @@ use dcn::R;
 /// How many of step 1's eleven batches this build may read (the eleventh, HDMI-A-1's DDC line, for 213-DRV-0095). 0
 /// maps no register and reads none: it logs each batch and the registers it would read. Raised one run at a time, on
 /// the DRV owner session's word (213-DRV-0086).
-const BATCHES_ALLOWED: u8 = 0;
+const BATCHES_ALLOWED: u8 = 11;
 /// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 to 16 step 4's (213-DRV-0092). 0 makes no
 /// writer: it logs each stage with every write it would make. Raised one run at a time, on the DRV owner session's word,
 /// and only with BATCHES_ALLOWED at 10 or more (step 1's first ten).
-const STAGES_ALLOWED: u8 = 0;
+const STAGES_ALLOWED: u8 = 16;
 /// When true, step 2 reads HDMI-A-1's EDID over its DDC line before step 3 (213-DRV-0095), the I2C engine put back as
 /// batch 11 found it; its result is logged only, and its failure leaves steps 3 and 4 as they are. Needs
 /// BATCHES_ALLOWED 11. Set on the DRV owner session's word.
-const EDID_ALLOWED: bool = false;
+const EDID_ALLOWED: bool = true;
 /// When true, steps 3 and 4 light HDMI-A-1 in HDMI signalling (213-DRV-0095): table 4 and 76 in HDMI mode, the HDMI
 /// engine, its general control packet and an AVI infoframe; the mode stays 1920x1080 (VIC 16). Set on the DRV owner
 /// session's word.
-const HDMI_SIGNALLING: bool = false;
+const HDMI_SIGNALLING: bool = true;
 /// When true, with EDID_ALLOWED, steps 3 and 4 take the EDID's preferred timing in HDMI signalling when it fits
 /// (`light::mode_from_edid`): the Ryzen's monitor's 3440x1440 at 60 Hz, 324 MHz; else today's mode. Set on the DRV owner
 /// session's word.
-const MODE_FROM_EDID: bool = false;
+const MODE_FROM_EDID: bool = true;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
 const UNDO_AFTER_STAGES: bool = false;
@@ -57,14 +57,14 @@ const SURVEY_ORDER: bool = false;
 /// stages back, screen_gone first, every register as before them; one plugged in for half a second runs steps 1 to 4
 /// again; a shorter bounce does neither; after a failure nothing more is tried. Needs STAGES_ALLOWED above 0 and not
 /// UNDO_AFTER_STAGES. Set on the DRV owner session's word.
-const HOTPLUG: bool = false;
+const HOTPLUG: bool = true;
 /// When true, both pipes' underflow and request-timeout statuses are read once a second after the offer, while stage
 /// 15's picture is up (213-DRV-0103); a new one undoes the stages as stage 15's watch does, the mark kept. It needs
 /// STAGES_ALLOWED at 15 or more and not UNDO_AFTER_STAGES; with HOTPLUG or without it. Set on the DRV owner session's word.
-const STANDING_CHECK: bool = false;
+const STANDING_CHECK: bool = true;
 /// When true, stage 15's watch is `light::SHORT_WATCH_FRAMES` (60), not `light::WATCH_FRAMES` (300): only together with
 /// STANDING_CHECK, which a build without it refuses. Set on the DRV owner session's word.
-const SHORT_WATCH: bool = false;
+const SHORT_WATCH: bool = true;
 const _: () = assert!(!SHORT_WATCH || STANDING_CHECK, "the watch shortens only together with the standing check (213-DRV-0103)");
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
