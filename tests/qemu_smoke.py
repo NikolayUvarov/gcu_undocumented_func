@@ -7722,11 +7722,11 @@ def gateway_stub_check(args):
                          r"REBOOT REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART THE MACHINE: NOT IN THE OWNER'S POLICY \(MC-3\.4\)"):
                 assert re.search(line, refusals), (line, refusals[-2000:])
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
-            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
-            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
-            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, then stops calling, and
-            # the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
-            seen, deadline = [], time.monotonic() + 60
+            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, 6 s each, then stops
+            # calling, and the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
+            # Sampled from the restart on, by screendumps alone between dmesg reads at most every 3 s: on a loaded machine a
+            # dmesg read took longer than the red's 6 s, and waiting for the stub's lines first missed it (000-KRN-0275).
+            seen, deadline, read = [], time.monotonic() + 150, 0.0
             while time.monotonic() < deadline:
                 _, size, _, screen = vm.screenshot().split(b"\n", 3)
                 width = int(size.split()[0])
@@ -7734,9 +7734,14 @@ def gateway_stub_check(args):
                 pixel = screen[at:at + 3]
                 if not seen or seen[-1] != pixel:
                     seen.append(pixel)
-                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True, timeout=60).rpartition("SCOPE START 2")[2]:
-                    break
+                if time.monotonic() - read >= 3:
+                    read = time.monotonic()
+                    out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
+                    if "SCOPE START 2" in out and "[GATEWAY-STUB] REMOTE MARK STOPPED" in out.rpartition("SCOPE START 2")[2]:
+                        break
                 time.sleep(.3)
+            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
             time.sleep(4)
             _, size, _, screen = vm.screenshot().split(b"\n", 3)
             after = screen[at:at + 3]
