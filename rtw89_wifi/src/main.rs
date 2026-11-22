@@ -375,7 +375,8 @@ fn served(event: receive_service::Event) {
                 mind::println!("[RTW89] A FRAME RELEASED IN TIME, BESIDE THE HELD ONES: {} MS AFTER ITS SUBMISSION; SUBMITTED {:?} / {:?} MS INTO THE BEACON INTERVAL OF {} MS, RELEASED {:?} / {:?} (213-DRV-0091)",
                     ms, sc, st, si, ac, at_tsf);
             }
-            mind::println!("[RTW89] {} REGISTERS: {:?}(213-DRV-0091)", if held { "HELD FRAME'S" } else { "IN-TIME FRAME'S" }, registers);
+            // In pieces: a log record holds 200 bytes, and the whole set is about 430 (the Ryzen's boot 84 cut it).
+            pieces(if held { "HELD FRAME'S REGISTERS" } else { "IN-TIME FRAME'S REGISTERS" }, &registers);
         }
         receive_service::Event::Calibrated { channel, dpk_gain_scale, paths } => for (path, c) in paths.iter().enumerate() {
             mind::println!("[RTW89] CALIBRATION ON {} PATH {}: IQK LOK IDAC {:05X} VBUF {:05X}{}, ONE-SHOT FAILS LOK {} TX {} RX {}{}, TX {:08X} RX {:08X}: {} BY LINUX'S CHECKS (213-DRV-0091)",
