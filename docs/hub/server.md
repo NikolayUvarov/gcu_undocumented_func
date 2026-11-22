@@ -1,8 +1,8 @@
 # The separate hub, `tools/mindhub`
 
-**Version:** 2 (2026-11-21): `hub-api 2`, export and deletion, attachments on messages, names on the board, the proof of work raised by itself, flags (100003-APP-0148); 1 (2026-11-21) · **Tasks:** [100003-APP-0146](../../issues-done/100003-APP-0146-the-separate-hub.done), [100003-APP-0148](../../issues-done/100003-APP-0148-the-hubs-remaining-parts.done) · **Design:** [README.md](README.md), sections 3 to 7 and 10 · **Owner:** tools track (`APP`)
+**Version:** 3 (2026-11-21): `hub-api 3`, the user's answer to a proposal (100003-APP-0155); 2 (2026-11-21): `hub-api 2`, export and deletion, attachments on messages, names on the board, the proof of work raised by itself, flags (100003-APP-0148); 1 (2026-11-21) · **Tasks:** [100003-APP-0146](../../issues-done/100003-APP-0146-the-separate-hub.done), [100003-APP-0148](../../issues-done/100003-APP-0148-the-hubs-remaining-parts.done) · **Design:** [README.md](README.md), sections 3 to 7 and 10 · **Owner:** tools track (`APP`)
 
-`mindhub` is MIND Hub's first server, a host program for Linux. It takes users' requests and their conversation, registers devices with the admin's answer, keeps each user's trust and the anti-flood limits, shows the board, and serves the agents' API and the admin's pages, all over `hub-api 2`. The forms, bounds, states, trust bands, buckets and signatures are `improve/proto`'s, the same code MIND Core's programs link. TLS 1.3 is `tools/httpd`'s.
+`mindhub` is MIND Hub's first server, a host program for Linux. It takes users' requests and their conversation, registers devices with the admin's answer, keeps each user's trust and the anti-flood limits, shows the board, and serves the agents' API and the admin's pages, all over `hub-api 3`. The forms, bounds, states, trust bands, buckets and signatures are `improve/proto`'s, the same code MIND Core's programs link. TLS 1.3 is `tools/httpd`'s.
 
 This page says what is built and tested on the host. It is not a guarantee about any other configuration (MC-12.1, 12.3).
 
@@ -42,7 +42,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
 - **A journal that cannot be written** stops the hub.
 - **Settings.** The admin changes them on the settings page. Those changes are events, and they win over `hub.conf`.
 - **Deleting rewrites the journal** (design 9). A request deleted by its user, or an account deleted, takes its texts out of the journal. The hub writes the journal again without them, in a file of its own that then takes the journal's place, so a crash leaves the old or the new one whole. A start does it again if a crash came between.
-- **`hub-api 2`'s journal.** A journal of `hub-api 1` is refused at start with that name: the forms in its events are of the version before.
+- **`hub-api 3`'s journal.** A journal of `hub-api 1` or `hub-api 2` is refused at start with that name: the forms in its events are of a version before.
 
 ## 3. What it does
 
@@ -61,6 +61,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
   - The hub moves trust by itself only within −256 … +512. A negative trust is read-only, −1023 a ban.
   - Every refusal names its limit, and a 429 says when it ends (`Retry-After`).
 - **Threads and states** (6): questions move a request to `needs-info`, and the last answer takes it back.
+  - A proposal of an agent waits for its user, who accepts it, corrects it or declines it once (`consent`, `hub-api 3`). Its answer moves no state. A request's summary says `open_proposal`, and the agent reads the answer's `consent` in the thread.
   - The agents' moves are checked by the crate's state machine and their track.
   - The admin's word that a release carries landed requests (`POST /hub/admin/v1/delivered`) makes them `delivered`. A device that runs that release or a later one makes them `awaiting-check` (`POST /hub/v1/devices/me/version`).
   - A verdict of `works` verifies a request, and the others reopen it. No verdict in 30 days closes it unchecked.
@@ -72,7 +73,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
   - `GET /hub/v1/me/export`, or the page's export, gives all the hub keeps of them as JSON.
   - `DELETE /hub/v1/requests/{id}` deletes a request no track took.
   - `DELETE /hub/v1/me`, or the page's form, deletes the account: their requests that no track took, their devices revoked, their names, contact and answers erased. A registration's network stays a day, for the anti-flood count.
-- **Pages** without scripts: the user's list, thread, answer, verdict, new request, deletion, export and account deletion; the admin's devices, users and trust history, requests with moderation and flags, settings and journal.
+- **Pages** without scripts: the user's list, thread, answer, a proposal's Accept, Correct and Decline, verdict, new request, deletion, export and account deletion; the admin's devices, users and trust history, requests with moderation and flags, settings and journal.
   - Each form carries its session's token. Cookies are `Secure`, `HttpOnly` and `SameSite=Strict`.
   - The pages load nothing from elsewhere (`Content-Security-Policy`).
 
@@ -93,8 +94,10 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
     - an export;
     - the proof of work raised and lowered by the hour;
     - flagged requests waiting for the admin;
-    - a journal of `hub-api 1` refused by its name.
-- **`tests/conformance.rs`:** the conformance suite (`src/conformance.rs`, 19 checks, with deletion, export, an answer's attachment, a name on the board and an account deleted) against the hub on loopback, and over TLS 1.3 with an Ed25519 and a P-256 key, the hub known by its pin. A wrong pin is refused, and a second hub on the same data serves the same.
+    - a journal of `hub-api 1` or `hub-api 2` refused by its name.
+  - 100003-APP-0155: a proposal refused an answer with no consent, accepted with no words while a question waits (which its answer still ends), answered once, and a second one corrected with no words refused and declined.
+- **`tests/conformance.rs`:** the conformance suite (`src/conformance.rs`, 20 checks, with deletion, export, an answer's attachment, a name on the board, an account deleted, and a proposal corrected by its user) against the hub on loopback, and over TLS 1.3 with an Ed25519 and a P-256 key, the hub known by its pin. A wrong pin is refused, and a second hub on the same data serves the same.
+- **`tests/pages.rs`:** a browser signed in by a pairing code sees a proposal waiting with its three answers; a correction with no words is refused, and an acceptance with none reaches the track.
 - **`tests/http.rs`:** heads out of form refused with their status, forms decoded strictly, networks, codes, versions, and the challenges of one network.
 
 **The conformance suite on another hub:** `mindhub conformance --hub URL --pin … --admin-key … --intake-key … --track-key … --track TRK --integrator-key …`.

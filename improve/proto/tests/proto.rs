@@ -192,7 +192,7 @@ fn a_registration_and_a_message_in_their_bounds() {
     assert_eq!(with(&|r| r.joining = Joining::Pair { code: "abcd2345".into() }), Err(Error::Value("pair_code")));
     assert_eq!(with(&|r| r.contact = Some("owner@example.org".into())), Ok(()));
     for wrong in ["owner", "@example.org", "a@b@c", "a b@c"] { assert_eq!(with(&|r| r.contact = Some(wrong.into())), Err(Error::Value("contact")), "{}", wrong); }
-    let message = |kind, answers, verdict: Option<Verdict>, release: Option<&str>| Message { kind, text: "ok".into(), answers, verdict, release: release.map(String::from), attachments: vec![] };
+    let message = |kind, answers, verdict: Option<Verdict>, release: Option<&str>| Message { kind, text: "ok".into(), answers, consent: None, verdict, release: release.map(String::from), attachments: vec![] };
     assert_eq!(message(MessageKind::Comment, None, None, None).check(), Ok(()));
     assert_eq!(message(MessageKind::Answer, Some(3), None, None).check(), Ok(()));
     assert_eq!(message(MessageKind::Answer, None, None, None).check(), Err(Error::Value("kind")), "an answer names its question");
@@ -310,7 +310,7 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     assert_eq!(wire::read(&wire::encode_registration(&reg), wire::decode_registration), Ok(reg.clone()));
     let paired = Registration { joining: Joining::Pair { code: "ABCD2345".into() }, contact: Some("a@b".into()), work: Some(77), ..reg };
     assert_eq!(wire::read(&wire::encode_registration(&paired), wire::decode_registration), Ok(paired));
-    let m = Message { kind: MessageKind::Verdict, text: "работает".into(), answers: None, verdict: Some(Verdict::DoesNotWork), release: Some("202611201200".into()),
+    let m = Message { kind: MessageKind::Verdict, text: "работает".into(), answers: None, consent: None, verdict: Some(Verdict::DoesNotWork), release: Some("202611201200".into()),
                       attachments: vec![Attachment { kind: AttachmentKind::Log, name: "after.log".into(), size: 2048, sha256: [0x5c; 32] }] };
     assert_eq!(wire::read(&wire::encode_message(&m), wire::decode_message), Ok(m.clone()));
     let plain = Message { attachments: vec![], ..m.clone() };
@@ -333,11 +333,13 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     assert_eq!(wire::read(&missing, wire::decode_request), Err(wire::Error::Missing("security")));
     let typed = wire::encode_request(&request()).replace(r#""security":false"#, r#""security":"no""#);
     assert_eq!(wire::read(&typed, wire::decode_request), Err(wire::Error::Type("security")));
-    let unknown = wire::encode_request(&request()).replace("hub-api 2", "hub-api 0");
+    let unknown = wire::encode_request(&request()).replace(improve_proto::API, "hub-api 0");
     assert_eq!(wire::read(&unknown, wire::decode_request), Err(wire::Error::Api));
-    // The version before is refused by its name, never read (MC-12.4).
-    let old = wire::encode_request(&request()).replace("hub-api 2", "hub-api 1");
-    assert_eq!(wire::read(&old, wire::decode_request), Err(wire::Error::Retired("hub-api 1")));
+    // The versions before are refused by their names, never read (MC-12.4).
+    for retired in improve_proto::RETIRED {
+        let old = wire::encode_request(&request()).replace(improve_proto::API, retired);
+        assert_eq!(wire::read(&old, wire::decode_request), Err(wire::Error::Retired(retired)));
+    }
     let missing_named = wire::encode_request(&request()).replace(r#","named":false"#, "");
     assert_eq!(wire::read(&missing_named, wire::decode_request), Err(wire::Error::Missing("named")));
     let both = wire::encode_registration(&registration()).replace(r#""display_name""#, r#""pair_code":"ABCD2345","display_name""#);
@@ -346,16 +348,19 @@ fn the_forms_round_trip_and_refuse_unknown_keys() {
     assert_eq!(wire::read(&negative, wire::decode_change), Err(wire::Error::Value("at_ms")));
     vector("request.json", &(wire::encode_request(&request()) + "\n"));
     vector("message.json", &(wire::encode_message(&m) + "\n"));
+    // A proposal's answer (hub-api 3): it names the proposal and corrects it.
+    let correction = Message { kind: MessageKind::Answer, text: "И Shift+n — к предыдущей".into(), answers: Some(4), consent: Some(Consent::Correct), verdict: None, release: None, attachments: vec![] };
+    vector("answer.json", &(wire::encode_message(&correction) + "\n"));
 }
 
 #[test]
 fn the_parse_services_flat_values_make_the_same_tree() {
     use json::{tree, Flat, FlatKind::*};
     let f = |kind, parent: Option<u16>, key: &'static str, text: &'static str| Flat { kind, parent, key, text };
-    // {"api":"hub-api 2","n":-7,"ok":true,"list":[1,"x",null]}
-    let flat = [f(Object, None, "", ""), f(String, Some(0), "api", "hub-api 2"), f(Number, Some(0), "n", "-7"), f(True, Some(0), "ok", ""),
+    // {"api":"hub-api 3","n":-7,"ok":true,"list":[1,"x",null]}
+    let flat = [f(Object, None, "", ""), f(String, Some(0), "api", "hub-api 3"), f(Number, Some(0), "n", "-7"), f(True, Some(0), "ok", ""),
                 f(Array, Some(0), "list", ""), f(Number, Some(4), "", "1"), f(String, Some(4), "", "x"), f(Null, Some(4), "", "")];
-    assert_eq!(tree(&flat), json::parse(r#"{"api":"hub-api 2","n":-7,"ok":true,"list":[1,"x",null]}"#));
+    assert_eq!(tree(&flat), json::parse(r#"{"api":"hub-api 3","n":-7,"ok":true,"list":[1,"x",null]}"#));
     let mut twice = flat;
     twice[2] = f(Number, Some(0), "api", "1");
     assert_eq!(tree(&twice), Err(json::Error::Duplicate(2)), "a key twice in one object");
@@ -372,3 +377,36 @@ fn the_parse_services_flat_values_make_the_same_tree() {
     assert_eq!(tree(&deep), Err(json::Error::TooDeep));
 }
 
+
+#[test]
+fn a_machine_runs_a_release_at_or_past_it() {
+    use improve_proto::runs_release;
+    assert!(runs_release("202611211200", "202611211200"));
+    assert!(runs_release("202611211300", "202611211200"));
+    assert!(!runs_release("202611201200", "202611211200"));
+    assert!(!runs_release("unknown", "202611211200"));
+    assert!(!runs_release("2026112112000", "202611211200"), "another length compares only as the same");
+    assert!(runs_release("beta-2", "beta-2") && !runs_release("beta-3", "beta-2"));
+}
+
+#[test]
+fn an_answer_to_a_proposal_accepts_corrects_or_declines_it() {
+    // hub-api 3 (100003-APP-0155): `consent` on an answer alone; an acceptance may come without a word.
+    let answer = |consent, text: &str| Message { kind: MessageKind::Answer, text: text.into(), answers: Some(3), consent, verdict: None, release: None, attachments: vec![] };
+    assert_eq!(answer(Some(Consent::Accept), "").check(), Ok(()));
+    assert_eq!(answer(Some(Consent::Accept), "Yes, go on").check(), Ok(()));
+    assert_eq!(answer(Some(Consent::Correct), "").check(), Err(Error::Empty("text")), "a correction says what");
+    assert_eq!(answer(Some(Consent::Decline), " ").check(), Err(Error::Empty("text")), "a refusal says why");
+    assert_eq!(answer(None, "").check(), Err(Error::Empty("text")));
+    let comment = Message { kind: MessageKind::Comment, answers: None, ..answer(Some(Consent::Accept), "ok") };
+    assert_eq!(comment.check(), Err(Error::Value("consent")));
+    for c in [Consent::Accept, Consent::Correct, Consent::Decline] {
+        let m = answer(Some(c), "words");
+        let text = wire::encode_message(&m);
+        assert!(text.contains(&format!(r#""consent":"{}""#, c.name())), "{text}");
+        assert_eq!(wire::read(&text, wire::decode_message), Ok(m));
+    }
+    let wrong = wire::encode_message(&answer(Some(Consent::Accept), "x")).replace(r#""consent":"accept""#, r#""consent":"maybe""#);
+    assert_eq!(wire::read(&wrong, wire::decode_message), Err(wire::Error::Value("consent")));
+    assert!(!wire::encode_message(&answer(None, "x")).contains("consent"), "a question's answer carries none");
+}

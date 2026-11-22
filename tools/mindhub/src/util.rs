@@ -96,8 +96,5 @@ pub fn field<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
 /// A form's text with its line ends as the API keeps them: CR LF and lone CR become LF.
 pub fn lines(text: &str) -> String { text.replace("\r\n", "\n").replace('\r', "\n") }
 
-/// A release's or a version's order: both of digits and of one length compare as numbers, anything else only equal.
-pub fn at_least(version: &str, release: &str) -> bool {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if digits(version) && digits(release) && version.len() == release.len() { version >= release } else { version == release }
-}
+/// A release's or a version's order, as `improve` reads it too (improve/proto).
+pub use improve_proto::runs_release as at_least;
