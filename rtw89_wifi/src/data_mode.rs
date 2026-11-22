@@ -600,6 +600,24 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
+    /// RPQ_ALONE in a host model (tx.rs), whose default is the strict path.
+    #[cfg(test)]
+    pub(crate) fn rpq_alone(&mut self){self.queue.rpq_alone()}
+    /// 213-DRV-0104 (SEND_BEHIND_LATE): the pending send, answered late, parked on the ring so that the next can begin
+    /// behind it; its release is awaited by its sequence and it is not resubmitted. Refused for a frame that cannot be.
+    pub(crate) fn park(&mut self)->Result<(),Failure>{
+        self.queue.park().map_err(|e|Failure{stage:Stage::Runtime,cause:Cause::Tx(e),shutdown:None})?;self.tx_deadline=None;Ok(())
+    }
+    /// 213-DRV-0104: the parked frame's release, if it came (the rings are read by the steps' polls, as for any send).
+    pub(crate) fn parked_release(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
+        Self::request(timeout_us)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;
+            if !self.queue.parked(){return Ok(None)}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let result=self.queue.parked_release(&mut window);self.session.last=window.last;
+            let outcome=result?;self.session.left(deadline)?;Ok(outcome)})();
+        result.map_err(|cause|self.runtime_failure(cause))
+    }
     pub(crate) fn channel(&self)->u8{self.prepared.tuned.channel}
     pub(crate) fn mac(&self)->[u8;6]{self.prepared.board.identity.mac}
     pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}

@@ -637,6 +637,40 @@ fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,
     let _=Event::FloorRefused{channel:36};drop(service);clean();
 });}
 
+// 213-DRV-0104, SEND_BEHIND_LATE: with the switch, a send while one is late (answered at its deadline, its release
+// awaited) goes on the ring behind it with its call open, and is answered at its own release with its true outcome; the
+// late one, parked, is counted released late and is not sent again. A third while one is parked and the next is late
+// too is refused busy. Without the switch the second is refused busy, as before. RPQ alone, no firmware report (fault 7),
+// the releases held back as the MAC holds the frames.
+#[test]
+fn service_sends_behind_a_late_frame_when_the_switch_is_on(){for behind in[false,true]{run(7,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().send_behind_late(behind);service.rpq_alone();assert!(service.step());
+    let sent=|id:usize|{let(w,b)=ipc::response(id).unwrap();assert_eq!(w,[2<<16,0]);wlanhw::Sent::decode(&mut Reader::new(&b[..2])).unwrap()};
+    c.borrow_mut().hold_rpq=true;
+    let a=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(a).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(a).acked,"A answered at its deadline");
+    assert!(matches!(service.take_event(),Some(Event::LateFrame{count:1,..})));
+    let b=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    if !behind{error(b,wlanhw::Error::Busy);assert_eq!(c.borrow().published,1);c.borrow_mut().hold_rpq=false;ipc::advance(5);assert!(service.step());
+        drop(service);clean();return}
+    assert!(ipc::response(b).is_none(),"B taken, its call open");assert_eq!(c.borrow().published,2,"B on the ring behind A");
+    // Both released within B's time: B answered with its outcome, A counted as a late frame released.
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());
+    assert_eq!(sent(b),wlanhw::Sent{acked:true,attempts:1});
+    let event=service.take_event();assert!(matches!(event,Some(Event::LateRelease{acked:true,attempts:1,..})),"{event:?}");
+    // D late, E behind it and late too: F is refused, one parked at a time; then both released, nothing sent again.
+    c.borrow_mut().hold_rpq=true;
+    let d=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());ipc::advance(91);assert!(service.step());assert!(!sent(d).acked);
+    let e=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(e).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(e).acked,"E answered at its deadline");
+    let f=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(f,wlanhw::Error::Busy);
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());ipc::advance(5);assert!(service.step());
+    assert_eq!(c.borrow().published,4,"A, B, D and E once each");
+    let g=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(sent(g).acked,"sends go on");
+    let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
+});}}
+
 // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
 // then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
 #[test]

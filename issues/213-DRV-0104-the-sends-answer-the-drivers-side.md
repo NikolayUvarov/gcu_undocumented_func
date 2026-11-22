@@ -108,7 +108,7 @@ This issue is the driver's side of each, and what the driver can mend alone now.
   - Whether that beats today's drops is for the bench to show: late frames per send, refusals a minute, and the upload rate.
 - **MGQ frames are not parked:** they wait for the firmware's report.
 - The link, port and floor changes wait for no frame pending or parked, as they wait for no frame pending today.
-- **This is an intention until it is written and run (MC-12.3).** Its progress goes below.
+- **Written behind the switch, committed false; not run on the Ryzen (MC-12.3).** Its progress is below.
 
 ## Plan
 
@@ -120,9 +120,44 @@ This issue is the driver's side of each, and what the driver can mend alone now.
 ## Acceptance criteria
 
 - [ ] NET's answer on steps 1 to 3, and this note revised to it.
-- [ ] LATE_ANSWER in, the driver unchanged with it committed.
-- [ ] SEND_BEHIND_LATE in with its host cases; the rtw89 host files and the release build pass.
+- [x] LATE_ANSWER in, the driver unchanged with it committed.
+- [x] SEND_BEHIND_LATE in with its host cases; the rtw89 host files and the release build pass.
 - [ ] If run on the bench: compared by paired minutes on the Ryzen (MC-12.1), with what it shows and does not.
+
+## Progress
+
+**2026-11-22, LATE_ANSWER** (fd4c0fb87):
+- The late answer is `late_answer()` behind `service::LATE_ANSWER`, committed `NotAcknowledged`. The driver is unchanged.
+
+**2026-11-22, SEND_BEHIND_LATE, written** (this branch; host cases, not run on the Ryzen):
+- **`tx::Queue`:**
+  - `park()` moves the pending frame to `parked`. It refuses (State) a frame whose firmware report is awaited (MGQ, or the strict path), and refuses (Busy) a second park.
+  - `reports` gives a release report to the parked frame when its sequence is the parked one's, checking QSEL and MAC ID. The rest go to the pending frame as before.
+  - `ingest` takes reports while only a parked frame is out.
+  - `parked_release()` finds it final once its descriptor is fetched and its release reported:
+    - acknowledged when Done and not to a group;
+    - one try more for Done or RetryLimit, none for a drop (Lifetime, MacIdDrop), as `progress` counts them;
+    - never resubmitted.
+  - `begin` refuses (Busy, without poisoning the queue) a frame whose submissions would come round to the parked frame's buffer. `submit` keeps the same bound.
+- **`DataSession`:** `park()` (the data mode's TX deadline cleared with it), and `parked_release()` under the same live, reconcile and OUTLAST_SER prologue as `advance`.
+- **`Service`:**
+  - With `SEND_BEHIND_LATE`, a send arriving while the pending one was answered late parks that one and begins behind it. Otherwise, as before, it is answered `busy`.
+  - Each step settles the parked frame's release before the pending one's, by `finish_parked`. A parked frame not released by its deadline (LATE_MS) stops the service as TransmitTimeout, as a late one does.
+  - A parked release is counted as a late frame's in the minute (late, first try, never, hold, phase) and logged as LATE FRAME WAS RELEASED. That accounting is shared with `finish_send` (`late_released`, `release_phase`).
+  - The link, the port, the floor and a new filter's unlink wait for no frame pending or parked.
+- **Host cases:**
+  - `a_parked_frame_is_released_by_its_sequence_in_either_order_and_never_resubmitted` (tests/rtw89_tx_cases.rs): releases in both orders, and a parked RetryLimit and MacIdDrop final with no second submission.
+  - `one_frame_is_parked_at_a_time_management_never_and_its_buffer_is_kept`: MGQ refused and not poisoned; one park at a time; 29 frames behind a parked one; a frame of two submissions refused busy at the bound, and one of one taken; at the next the bound refuses; the parked release, read with no send pending, frees it.
+  - `service_sends_behind_a_late_frame_when_the_switch_is_on` (tests/rtw89_service_cases.rs), over the model's RPQ releases held back (`hold_rpq`) with no firmware report (fault 7):
+    - without the switch the second send is refused busy;
+    - with it the second is taken behind the late one and answered `acked` at its release, and the late one's release is counted;
+    - a third is refused while one is parked and the next is late too;
+    - four frames went out four times, and sends go on.
+  - The 40 `rtw89_*_host.rs` files pass: 4886 cases, 0 failed. The release build builds.
+- **Not shown:**
+  - Nothing of it ran on the Ryzen.
+  - The hardware's order of releases for two frames of one channel, one held, is taken from the ring's order and Linux's handling, not measured.
+  - Whether it beats today's refusals is the bench's question.
 
 ## Related
 
