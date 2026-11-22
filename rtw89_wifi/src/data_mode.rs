@@ -268,7 +268,15 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     pub full_times:u32,pub full_longest_ms:u64,
     // 213-DRV-0104: sends answered at their deadline, refused busy and parked; parked frames released and of them
     // acknowledged; what the minute held when SEND_BEHIND_LATE alternates (None: it does not), and the switch otherwise.
-    pub answered_late:u32,pub busy:u32,pub parked:u32,pub parked_released:u32,pub parked_acked:u32,pub behind:FloorKind,pub behind_fixed:bool}
+    pub answered_late:u32,pub busy:u32,pub parked:u32,pub parked_released:u32,pub parked_acked:u32,pub behind:FloorKind,pub behind_fixed:bool,
+    // 213-DRV-0104: sends answered in time by the time from their arrival to their answer, and the time from an answer
+    // (or a refusal) to the next send's arrival, both in 2 ms bins to 30 ms then 10 ms to 90 (MS_BINS; the gaps' last
+    // bin 90 or more); the most sends that arrived within one second.
+    pub answer_ms:[u32;MS_BINS],pub gap_ms:[u32;MS_BINS+1],pub peak_sends:u32}
+/// 213-DRV-0104: the bins of a send's times: 2 ms each to 30 ms, then 10 ms each to 90.
+pub const MS_BINS:usize=21;
+/// The bin of `ms`: within 90 ms, or MS_BINS for 90 or more.
+pub fn ms_bin(ms:u64)->usize{if ms<30{(ms/2)as usize}else if ms<90{15+((ms-30)/10)as usize}else{MS_BINS}}
 impl TxMinute{
     /// 213-DRV-0104: what the minute held of SEND_BEHIND_LATE, for its line.
     pub fn behind_label(&self)->&'static str{

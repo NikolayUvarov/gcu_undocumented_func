@@ -327,6 +327,12 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
                 channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
             // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
+            // 213-DRV-0104: how long sends took to their answer when in time, and how long the next took to come.
+            let (a, g) = (tx.answer_ms, tx.gap_ms);
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS, 0 TO 30 IN 2: {:?} (213-DRV-0104)", channel, &a[..15]);
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS, 30 TO 90 IN 10: {:?}; PEAK {} SENDS IN A SECOND (213-DRV-0104)", channel, &a[15..], tx.peak_sends);
+            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS, 0 TO 30 IN 2: {:?} (213-DRV-0104)", channel, &g[..15]);
+            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS, 30 TO 90 IN 10: {:?}, 90 OR MORE {} (213-DRV-0104)", channel, &g[15..21], g[21]);
             let behind = tx.behind_label();
             mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
                 channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);

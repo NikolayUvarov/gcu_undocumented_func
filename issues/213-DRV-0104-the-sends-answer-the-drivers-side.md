@@ -184,6 +184,24 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
   - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended` now also counts a refusal and ten late answers.
   - The 40 `rtw89_*_host.rs` files pass: 4887 cases, 0 failed. The release build builds.
 
+**2026-11-22, each send's time to its answer** (this branch; host cases, not run):
+- **Why:** an upload of 225 KB takes 5 to 8 s whether frames are parked or refused (boots 95 and 96). That is about 32 ms a full frame, sent one at a time. So what caps it may be the time a frame takes when it is in time, or the time before the next one comes. The driver did not log either.
+- **Four lines a minute:**
+
+  ```
+  [RTW89] TRAFFIC ON c: SENDS ANSWERED IN TIME BY MS, 0 TO 30 IN 2: [...] (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: SENDS ANSWERED IN TIME BY MS, 30 TO 90 IN 10: [...]; PEAK n SENDS IN A SECOND (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: FROM AN ANSWER TO THE NEXT SEND BY MS, 0 TO 30 IN 2: [...] (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: FROM AN ANSWER TO THE NEXT SEND BY MS, 30 TO 90 IN 10: [...], 90 OR MORE n (213-DRV-0104)
+  ```
+
+  - The first two lines bin each send answered in time by the time from its arrival to its answer, in the service's millisecond clock.
+  - The last two bin the time from the last answer (or refusal) to the next send's arrival: wlan's and netstack's turn.
+  - The bins are 2 ms to 30 ms, then 10 ms to 90. At 2 ms throughout to 90 they would take six lines a minute.
+  - The peak is the most sends that arrived within one second, by seconds that begin at an arrival.
+- **Host case:** `service_probes_held_frames_and_counts_how_the_minutes_sends_ended` now checks two sends in time binned under 10 ms, 12 gaps for 13 arrivals, and the peak.
+- The 40 `rtw89_*_host.rs` files pass: 4888 cases. The release build builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

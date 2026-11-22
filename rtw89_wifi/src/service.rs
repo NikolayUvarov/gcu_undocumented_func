@@ -95,13 +95,23 @@ struct FloorState{enabled:bool,alternates:bool,due:bool,set:bool,refused:bool,li
 impl Default for FloorState{fn default()->Self{Self{enabled:detection_floor::DETECTION_FLOOR_AS_LINUX,alternates:detection_floor::DETECTION_FLOOR_ALTERNATES,
     due:false,set:false,refused:false,linux:None,found:None,kind:data_mode::FloorKind::None,switch_due:false,failures:0,written:Default::default()}}}
 fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
+// 213-DRV-0104: `answered`: when the last send was answered or refused; `second`: when the current second of arrivals began
+// and how many sends arrived in it.
 struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
-    full_since:Option<u64>}
+    full_since:Option<u64>,answered:Option<u64>,second:(u64,u32)}
 impl Default for TxWatch{fn default()->Self{Self{probes:0,minute_probed:false,not_held:false,held:None,minute:Default::default(),holds:[0;32],
-    holds_n:0,full_since:None}}}
+    holds_n:0,full_since:None,answered:None,second:(0,0)}}}
 impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_ms=self.minute.full_longest_ms.max(ms);}
     // 213-DRV-0104: a send answered busy, counted for the minute line.
-    fn busy(&mut self){self.minute.busy=self.minute.busy.saturating_add(1);}}
+    fn busy(&mut self){self.minute.busy=self.minute.busy.saturating_add(1);self.answered=Some(time::monotonic_ns()/1_000_000);}
+    // 213-DRV-0104: a send arrived at `now`: the time since the last answer, and the sends of this second.
+    fn arrived(&mut self,now:u64){
+        if let Some(at)=self.answered{let b=data_mode::ms_bin(now.saturating_sub(at));self.minute.gap_ms[b]=self.minute.gap_ms[b].saturating_add(1);}
+        if self.second.1==0||now.saturating_sub(self.second.0)>=1000{self.second=(now,0);}
+        self.second.1=self.second.1.saturating_add(1);self.minute.peak_sends=self.minute.peak_sends.max(self.second.1);
+    }
+    // 213-DRV-0104: a send answered in time, `ms` after its arrival.
+    fn in_time(&mut self,ms:u64){let b=data_mode::ms_bin(ms).min(data_mode::MS_BINS-1);self.minute.answer_ms[b]=self.minute.answer_ms[b].saturating_add(1);}}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -371,7 +381,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 self.tx_watch.not_held=true;let registers=self.data().held();
                 self.tx_watch.held=Some(Event::Held{n:0,held:false,ms:now.saturating_sub(pending.began),submitted:pending.phase,at,registers});
             }
-            if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));self.ended(pending.unicast,done.acked,now);}
+            if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));
+                self.tx_watch.in_time(now.saturating_sub(pending.began));self.ended(pending.unicast,done.acked,now);}
             else{self.late_released(pending.began,done.acked,attempts,now);}
         }Ok(())
     }
@@ -530,6 +541,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     }
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
     fn ended(&mut self,unicast:bool,acked:bool,now:u64){
+        self.tx_watch.answered=Some(now);
         self.quiet.0=self.quiet.0.saturating_add(1);if acked{self.quiet.1=self.quiet.1.saturating_add(1);}
         self.sent.0=self.sent.0.saturating_add(1);if acked{self.sent.1=self.sent.1.saturating_add(1);}
         if !unicast{return}
@@ -665,6 +677,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 if let Err(failure)=result{if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}}
             },
             wlanhw::Request::Send{frame,rate,attempts}=>{
+                self.tx_watch.arrived(now);
                 if self.refused{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
                 // 5 GHz is OFDM alone: 6 to 54 Mb/s (wlanhw.wit `bands` bit 1).
                 if self.data().channel()>14&&rate<12{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Invalid));return}
