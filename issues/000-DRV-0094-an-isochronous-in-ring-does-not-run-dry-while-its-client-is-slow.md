@@ -1,6 +1,6 @@
 # 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: steps 1 and 2 written and run on the Ryzen; step 3 written; step 4 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: steps 1 and 2 written and run on the Ryzen; step 3 written; step 4 as 000-LNK-0050, written) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -27,7 +27,10 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
 2. **`usb_host` puts an IN stream's finished TDs back on the ring by itself**, as the bulk streams do (158-DRV-0082). It keeps their packets in a bounded spill until the client takes them, so a slow client loses packets only once the spill is full, and the endpoint keeps being asked.
 3. **The restart after a dry ring no further ahead than the controller needs.** Is 64 microframes the minimum on this xHCI, or a safe guess? The xHCI's Isochronous Scheduling Threshold (HCSPARAMS2 IST) bounds it; the Ryzen's value is to be read and kept to.
 
-4. **An OUT stream's ring kept full while `usb_host` waits for another transfer** (found by run D): `usb_host` holds packets the client gave ahead of the ring, and puts them on as TDs come free, during a wait too.
+4. **An OUT stream's ring kept full while `usb_host` waits for another transfer** (found by run D). The owner session's decision, 2026-11-22:
+   - **Now:** the cable's converter, whose writes were the waits, writes in pieces of 256 bytes (000-LNK-0050). `usb_host` then serves `audio_gw`'s puts between two.
+   - **Later, as its own task:** `usb_host` starts bulk transfers and answers from its loop instead of waiting on them (000-DRV-0101).
+   - **Not done:** OUT packets held ahead in `usb_host`, since that delays playback by the queue.
 
 ## Acceptance criteria
 
