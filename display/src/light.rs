@@ -759,8 +759,8 @@ pub struct Tally {
     pub path: Option<(bool, u32)>,
     /// Stage 9's count of the firmware's frames; stage 13's pitch read back as written or not.
     pub count_us: u64, pub read_back: Option<bool>,
-    /// Stage 15's watch: its frames, its time and the longest gap between two reads.
-    pub watch: Option<(u32, u64, u64)>,
+    /// Stage 15's watch: its frames, its time, the longest gap between two reads and the frame it came before.
+    pub watch: Option<(u32, u64, u64, u32)>,
     pub offered: bool,
 }
 
@@ -794,7 +794,7 @@ impl fmt::Display for Done<'_> {
         }
         if n == 10 { write!(f, ", {}x{} DRAWN AND READ BACK", l.surface.width, l.surface.height)?; }
         match t.read_back { Some(true) => f.write_str(", THE PITCH READ BACK AS WRITTEN")?, Some(false) => f.write_str(", THE PITCH READ BACK NOT AS WRITTEN")?, None => {} }
-        if let Some((frames, us, gap)) = t.watch { write!(f, ", WATCHED {} FRAMES IN {} MS CLEAN, THE LONGEST GAP {} US", frames, us / 1000, gap)?; }
+        if let Some((frames, us, gap, at)) = t.watch { write!(f, ", WATCHED {} FRAMES IN {} MS CLEAN, LONGEST GAP {} US AT FRAME {}", frames, us / 1000, gap, at)?; }
         if t.offered { write!(f, ", OFFERED {}x{} PITCH {}", l.surface.width, l.surface.height, l.surface.pitch * 4)?; }
         Ok(())
     }
@@ -962,7 +962,7 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
 /// each new frame. The firmware's showing an underflow or a timeout fails at once; pipe 1's are kept by frame, cleared
 /// (HUBP_UNDERFLOW_CLEAR, HUBP_TIMEOUT_STATUS_CLEAR, OPTC_UNDERFLOW_CLEAR: one, then zero) and watched on, and after the
 /// watch fail the stage. Then the frames are logged, sixty a line.
-fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, out: &mut dyn Out) -> Result<(u32, u64, u64), Failure> {
+fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, out: &mut dyn Out) -> Result<(u32, u64, u64, u32), Failure> {
     let r = light.reference.ok_or(Failure::NoReference)?;
     let q = light.choice.pipe.otg;
     let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference);
@@ -1030,7 +1030,7 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
         }
         out.line(format_args!("S{} FRAMES {:3} TO {:3}: {}", n, i * 60 + 1, i * 60 + chunk.len(), core::str::from_utf8(&line[..chunk.len()]).unwrap_or("")));
     }
-    match found { Some((_, why)) => Err(why), None => Ok((frames, us, gap)) }
+    match found { Some((_, why)) => Err(why), None => Ok((frames, us, gap, gap_at)) }
 }
 
 /// Which path a table took through PHY A's control register bus: for table 12, whether the PHY was set up already (its
@@ -1388,7 +1388,7 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
                 times.stages_us[n as usize - 1] = us;
                 times.tables_us += tally.tables.iter().flatten().map(|t| t.us).sum::<u64>();
                 (times.waits_us, times.count_us) = (times.waits_us + tally.wait_us, times.count_us + tally.count_us);
-                if let Some((_, watch_us, _)) = tally.watch { times.watch_us += watch_us; }
+                if let Some((_, watch_us, _, _)) = tally.watch { times.watch_us += watch_us; }
                 if tally.offered { times.offered_us = Some(e.now_us().saturating_sub(start)); }
                 if (ATTACHED_FROM..dcn::PIPE_WRITES_FROM).contains(&n) && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
                 out.note(format_args!("{}", Done { light, n, us, t: &tally, d: derived.as_ref() }));
