@@ -71,6 +71,11 @@
 - **Criterion 1's rest, host cases:** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
   - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
 - **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
+- **The first landing's head bf9942b64 itself** (2026-11-22, LEG9, 18:51–20:19 UTC; outputs kept in `/home/un/.local/share/mind-bench/cam/runs/s13/`):
+  - the build and the fixtures passed;
+  - the full `host_tests.sh` with `MIND_SSHD` passed whole: 263 groups, none failed;
+  - QEMU gave 17 PASS, 0 FAIL and 0 SKIP: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` and `usbload`.
+  - `vfs`'s photo-pause check passed the first time.
 - **613434c46 and 49bd2fede** (2026-11-22, LEG9, on 05ac6a253, the same code; outputs kept in `/home/un/.local/share/mind-bench/cam/logs/s12-05ac6a253/`):
   - the build and the fixtures passed;
   - `usbload` alone passed, with a minute's tally of 10021 deferred and 10021 answered, the longest 26 ms;
@@ -100,7 +105,7 @@
 - **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
 - **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
 
-## For a successor (state on 2026-11-22, 19:20 UTC)
+## For a successor (state on 2026-11-22, 20:25 UTC)
 
 How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
 
@@ -111,8 +116,8 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
   - **49bd2fede** makes `usbload` wait for and check the tally.
   - Neither has run on hardware. Their own run on 05ac6a253 (`tests/s12-run.sh`) ended green at 19:48 UTC: see the progress above.
 - **The USB agent took over at 18:50** (CAM's context ran out). Its runs, under the shared lock, write to `/home/un/.local/share/mind-bench/cam/runs/`, each with a `status` file:
-  - `s13`: the landing head bf9942b64 itself, with the build, the fixtures, all of `host_tests.sh` and QEMU's `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio`, `vfs`, `block` and `usbload` (`tests/s13-run.sh`);
-  - `s14`: 000-DRV-0081 (`claude/000-DRV-0081-a-close-tells-the-device-first`, from the landing head), the same set (`tests/s14-run.sh`).
+  - `s13`: the landing head bf9942b64 itself, ended green at 20:19 UTC (`tests/s13-run.sh`);
+  - `s14`: 000-DRV-0081 (`claude/000-DRV-0081-a-close-tells-the-device-first`, from the landing head). Only its fixtures and `usbaudio` ran before the maintainer asked, at 19:50 UTC, that nothing new be started on LEG9. `tests/s14-run.sh full` runs the rest.
 - **Reading a run:**
   - The once-a-boot line is `A BULK TRANSFER ANSWERED FROM THE LOOP: …`.
   - The minute's tally is `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`. What is right: a equals n, 0 in the four after, and the longest tens of ms at most.
