@@ -1,14 +1,16 @@
 /// The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
 /// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
 /// mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2);
-/// a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272).
-package mind:display@1.3.0;
+/// a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272), kept in shape or
+/// stretched as the shell chooses (1.4, 213-KRN-0273).
+package mind:display@1.4.0;
 
 interface display {
     /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy; `denied`: a
     /// `remote` from a client with no mark of its own (1.2), or a second screen from a client not badged
-    /// `BADGE_SCREEN` (1.3); `bad-screen`: a second screen whose shape the lent pixels do not hold, or whose format or
-    /// size the compositor does not draw (1.3).
+    /// `BADGE_SCREEN` (1.3), or a fit from a client with a badge (1.4); `bad-screen`: a second screen whose shape the lent
+    /// pixels do not hold, or whose format or size the compositor does not draw (1.3). `no-screen` also answers `mirror`
+    /// while no second screen is offered (1.4).
     enum error { no-screen, no-memory, denied, bad-screen }
     /// The screen's size in pixels and its stride (pixels per row, at least the width).
     record mode { width: u32, height: u32, stride: u32 }
@@ -44,4 +46,19 @@ interface display {
     /// The second screen is gone (its monitor unplugged, its pipe off): the compositor stops drawing into it and lets
     /// its mapping go before it answers.
     screen-gone: func() -> result<_, error>;
+
+    /// 1.4 (213-KRN-0273): how the first screen is shown on the second. `keep`: its shape kept, as large as the second
+    /// holds, centred, black around it (1.3's way, and the compositor's choice until told otherwise). `stretch`: it fills
+    /// the second screen, each axis scaled on its own. Either way the second screen shows the whole first screen, its
+    /// marks among it.
+    enum fit { keep, stretch }
+    /// The second screen now: its size in pixels, the fit, and the picture of the first screen on it (its size; it
+    /// lies centred).
+    record mirror { width: u16, height: u16, fit: fit, picture-width: u16, picture-height: u16 }
+    /// Chooses the fit, for the second screen now and those offered after it, until the next choice or the compositor's
+    /// restart. Only a client with no badge may choose (the shell's, and the copies it lends the programs it starts);
+    /// a remote path's or a driver's gets `denied`.
+    mirror-fit: func(fit: fit) -> result<_, error>;
+    /// The second screen and how the first is shown on it; `no-screen` while none is offered. Any client may ask.
+    mirror: func() -> result<mirror, error>;
 }

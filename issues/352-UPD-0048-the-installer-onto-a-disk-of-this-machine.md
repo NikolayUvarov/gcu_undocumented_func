@@ -78,9 +78,23 @@ A model and a serial number are asked of `DRV` for `block.wit` when the first re
 - the writer on disk images on the host (`tests/install_host.rs`): `fsck.fat` finds the volumes clean, mtools reads the files, and a write cut short at each step leaves no ESP's entry;
 - in QEMU, the disks offered on a live boot: the blank disk is offered, and the live medium is refused.
 
+**The shell's `install`** is APP's [352-APP-0157](352-APP-0157-the-shells-install-command.md), in `main` since round 169.
+
+**The install in QEMU** (`iso` suite, on `claude/352-UPD-0048-install-in-the-iso-suite`, over round 167's candidate), x86 (OVMF) and aarch64 (AAVMF) passed in this session's container (QEMU 8.2.2):
+- the ISO is booted as a CD-ROM, with the blank 512 MiB disk;
+- `install` lists the disk as `ATA 512 EMPTY` (aarch64: `VIRTIO 512 EMPTY`); `install 1` takes those words typed back at the console and writes the disk: `INSTALL: DONE ON DISK 1, MBR …: THE ESP AT SECTOR 2048 …`;
+- that disk, booted alone, verifies its ESP's manifest (`BOOT: VOLUME MBR PARTITION 1 AT LBA 2048`), and `init` gives the block store its partition 3, which `store.txt` names.
+
+**On the machines, with `main` merged in** (7f1dab668b, after round 169), run through Effector:
+- `x86: keys, shell, tools` on i9, 837 s;
+- `aarch64: tools` on acc1, 147 s.
+
+Each `iso` suite printed its PASS line, which comes only after the written disk has booted alone with the store on its partition 3.
+
+**Found on the way:** `init` looks for the store's partition on no legacy IDE disk (`STORE_DRIVERS` has no `ata`). A system installed on an IDE disk therefore boots with no partition for its store; it says `store.txt NAMES PARTITION …: NO DISK HAS IT`. The check boots the written disk on AHCI, as a PC's disk is. Whether the installer should refuse or warn about an IDE disk is open.
+
 **Left:**
-- the shell's `install` command (`APP`, requested);
-- an install in QEMU and a boot from the installed disk;
+- the host's check of the table and volumes after the install (`sfdisk`, `fsck.fat`), slot A confirmed and an update into slot B;
 - the refusals and the failures in QEMU;
 - a real PC;
 - an ARM device with eMMC.

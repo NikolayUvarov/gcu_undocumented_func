@@ -4369,7 +4369,8 @@ def iso_suite(args):
         cdrom = ([*drive, "-device", "ide-cd,drive=cd,bootindex=0"] if args.arch == "x86_64" else
                  ["-device", "virtio-scsi-pci,id=scsi", *drive, "-device", "scsi-cd,drive=cd,bus=scsi.0,bootindex=0"])
         machines = {
-            "a CD-ROM": dict(disk=blank.relative_to(ROOT).as_posix(), raw=True, extra=cdrom),
+            # Writes reach the blank image: the install below writes it, and it then boots alone (352-UPD-0048).
+            "a CD-ROM": dict(disk=blank.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=cdrom),
             "a USB disk": dict(disk=iso.relative_to(ROOT).as_posix(), usb=True),
         }
         for what, options in machines.items():
@@ -4407,14 +4408,41 @@ def iso_suite(args):
                 started = vm.service_logs("init", "THE SHELL GETS THE INSTALLER'S CLIENT")
                 require(started, "[INIT] A LIVE BOOT: NO DISK OR PARTITION FOR THE BLOCK STORE, WHICH RUNS ON RAMDISK#1")
                 require(started, "[INIT] A LIVE BOOT: THE SHELL GETS THE INSTALLER'S CLIENT")
+                if what == "a CD-ROM":
+                    install_check(vm, args)
             finally:
                 vm.close()
+        # 352-UPD-0048: the disk the install wrote boots alone, its ESP's manifest verified, the store on its partition 3. On
+        # x86 it is moved to AHCI, as a PC's disk: init looks for the store on no legacy IDE disk (STORE_DRIVERS).
+        vm = VM(args, blank.relative_to(ROOT).as_posix(), raw=True, ahci=args.arch == "x86_64")
+        try:
+            log = ANSI.sub("", vm.log).replace("\r", "")
+            assert re.search(r"BOOT: MANIFEST \S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED\n", log), log[-3000:]
+            require(log, "BOOT: VOLUME MBR PARTITION 1 AT LBA 2048")
+            vm.command("dmesg -s init")
+            log = ANSI.sub("", vm.log).replace("\r", "")
+            assert re.search(r"\[INIT\] THE BLOCK STORE'S PARTITION: \S+ PARTITION 3 ", log), "\n".join(l for l in log.splitlines() if "STORE" in l or "store.txt" in l)[-3000:]
+        finally:
+            vm.close()
         with iso.open("rb") as f:
             assert hashlib.sha256(f.read()).hexdigest() == digest, "the ISO changed"
     print(f"PASS: the hybrid ISO ({digest[:16]}, {args.arch}) boots as a CD-ROM and as a USB disk through El Torito; its loader reads "
           f"and checks the kernel and the services, then the whole volume ({kb} KB) into memory, which ramdisk#2 serves "
           "read-only and vfs_server mounts as the boot volume; programs run from it, a write is refused, the store takes no disk, "
-          "the installer holds the blank disk and refuses the live medium; the ISO unchanged", flush=True)
+          "the installer holds the blank disk and refuses the live medium; the shell's install writes that disk, its words "
+          "typed back, and it then boots alone, the store on its partition 3; the ISO unchanged", flush=True)
+
+
+def install_check(vm, args):
+    """352-UPD-0048 with APP's 352-APP-0157: the shell's `install` lists the blank disk, takes its words typed back at the
+    console, and writes MIND Core onto it from the live volume; the ESP's entry last, at 1 MiB."""
+    words = f"{'ATA' if args.arch == 'x86_64' else 'VIRTIO'} 512 EMPTY"
+    require(vm.command("install"), f"TO INSTALL: INSTALL 1, THEN TYPE {words}")
+    vm.send("install 1\n")
+    vm.expect(f"TYPE ITS WORDS: {words} (ESC: NO)", timeout=60)
+    vm.send(words + "\n")
+    done = vm.expect("TAKE THE LIVE MEDIUM OUT AND RESTART TO BOOT IT", timeout=900)
+    assert re.search(r"INSTALL: DONE ON DISK 1, MBR [0-9A-F]{8}: THE ESP AT SECTOR 2048 ", done), done[-2000:]
 
 
 def ahci_suite(vm):
