@@ -338,6 +338,24 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
   - With the constant set true, the release build builds and only the case's "the strict path is the default" assertion fails.
 
+**2026-11-22, the mended check on the Ryzen: its first meeting** (boot 74, release 202611220644, from S/rz37 ff2eee6e2. Its rtw89_wifi is fab92488e: the mended check, the firmware's error codes, the HISR0 read, the PCI interrupt state line, `HALT_INTERRUPT_AS_LINUX` false. It was the boot image's driver in boots 69 to 76 from 05:29 UTC):
+- **The line, at about 07:19 UTC:**
+
+  ```
+  1776.947 rtw89_wifi: [RTW89] CHECK MET AN UNREADABLE CMAC 1: 40018 READ DEADBEEF, READABLE AGAIN AFTER 2 READS IN 1341 US; SER_DBG_INFO 00000000 -> F000001F (213-DRV-0091)
+  ```
+
+  - **It met the night's register.** The window, 0x40018, read DEADBEEF as at the night's stops, and the second read 1.3 ms later answered.
+  - **The data mode went on.** The minute lines from 1806 to 2286 s show traffic, beacons and acknowledged sends, with no hole and the inbox never full.
+- **The firmware recovered during it, silently.**
+  - SER_DBG_INFO in the probes read 0 at 66 s, F000001E at 666 and 1266 s, and F000001F at 1866 s, so the meeting came with one step of the count.
+  - The BB and the scheduler were never off, so the line says `AN UNREADABLE CMAC`.
+  - HISR0 showed no halt bit, and no error code came.
+- **A wording to mend later:** the line's "before" value is the session's last-seen SER_DBG_INFO, 0 since the admission with no recovery outlasted, not a read just before the meeting. The step was 1E to 1F.
+- **Not yet shown:**
+  - This is one meeting only.
+  - The count's rise of 30 between 66 and 666 s of this boot, during the display's stage runs, is not explained. In boot 65 it rose by 1 or 2 at a time.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
