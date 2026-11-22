@@ -102,10 +102,12 @@ pub enum R {
     MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
     DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
+    // Read by batch 9 for the firmware's HUBP, written for pipe 1 by stage 13 as hubp2_vready_at_or_After_vsync does.
+    HubpreqDebugDb,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 142] = {
+pub const ALL: [R; 143] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -132,7 +134,8 @@ pub const ALL: [R; 142] = {
      CmDgamControl, CmBlndgamControl, MpccTopSel, MpccBotSel, MpccOppId, MpccControl,
      MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
      DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
-     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio]
+     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
+     HubpreqDebugDb]
 };
 
 impl R {
@@ -268,6 +271,7 @@ impl R {
             DsclTapControl => (2, 0xCED + 0x16B * i),
             DsclHorzScaleRatio => (2, 0xCF1 + 0x16B * i),
             DsclVertScaleRatio => (2, 0xCF5 + 0x16B * i),
+            HubpreqDebugDb => (2, 0x5F6 + 0xDC * i),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -380,6 +384,7 @@ impl R {
             DsclTapControl => "SCL_TAP_CONTROL",
             DsclHorzScaleRatio => "SCL_HORZ_FILTER_SCALE_RATIO",
             DsclVertScaleRatio => "SCL_VERT_FILTER_SCALE_RATIO",
+            HubpreqDebugDb => "HUBPREQ_DEBUG_DB",
         }
     }
 
@@ -391,7 +396,7 @@ impl R {
             OptcDataSourceSelect | OptcDataFormatControl | OptcInputClockControl | OptcInputGlobalControl => "ODM",
             VtgControl => "VTG", OppPipeControl => "OPP_PIPE", DpgControl | DpgDimensions | DpgOffsetSegment => "DPG",
             DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
-            DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl => "HUBP",
+            DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl | HubpreqDebugDb => "HUBP",
             HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh | HubpreqVmidSettings0 | HubpreqFlipControl | HubpreqVmSystemApertureLow | HubpreqVmSystemApertureHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => "",
@@ -541,7 +546,18 @@ pub mod field {
     pub const HUBP_CLOCK_ENABLE: Field = f(0, 1);
     pub const HUBP_VREADY_AT_OR_AFTER_VSYNC: Field = f(8, 1);
     pub const HUBP_UNDERFLOW_STATUS: Field = f(28, 3);
+    /// DCHUBP_CNTL's other statuses and their clears (dcn_2_1_0_sh_mask.h): in blank, a request timed out.
+    pub const HUBP_IN_BLANK: Field = f(3, 1);
+    pub const HUBP_TIMEOUT_STATUS: Field = f(20, 4);
+    pub const HUBP_TIMEOUT_STATUS_CLEAR: Field = f(26, 1);
+    pub const HUBP_UNDERFLOW_CLEAR: Field = f(31, 1);
+    /// DCN_TTU_QOS_WM, and the QoS fields of DCN_SURF0_TTU_CNTL0 and DCN_CUR0_TTU_CNTL0.
+    pub const QOS_LEVEL_LOW_WM: Field = f(0, 14);
+    pub const QOS_LEVEL_HIGH_WM: Field = f(16, 14);
+    pub const QOS_LEVEL_FIXED: Field = f(24, 4);
+    pub const QOS_RAMP_DISABLE: Field = f(28, 1);
     pub const OPTC_UNDERFLOW_OCCURRED_STATUS: Field = f(10, 1);
+    pub const OPTC_UNDERFLOW_CLEAR: Field = f(12, 1);
     pub const PGFSM_POWER_ON: u32 = 0;
 }
 
@@ -630,6 +646,9 @@ pub enum Step {
     NoUnderflow,
     /// Read the register back and log it with its field, against what the stage last wrote to it.
     ReadBack { reg: Reg, field: Field },
+    /// Stage 15 with the pattern off: both pipes' statuses read at each of OTG1's next `frames` frames, polled without
+    /// sleeping; the firmware's showing anything new fails at once, pipe 1's are kept by frame and cleared.
+    Watch { frames: u32 },
 }
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
@@ -831,6 +850,9 @@ pub fn steps_in(plan: &Plan, n: u8) -> impl Iterator<Item = Step> + '_ {
     plan.steps().filter(move |s| if let Step::Begin(m) = s { current = *m; false } else { current == n })
 }
 
+/// Stage 3's VSTARTUP_START: the lines of the vertical blank after the sync (step 4 keeps it for its plane).
+pub fn vstartup(otg: &Otg) -> u32 { (otg.v_blank_end - otg.v_sync_end).clamp(1, 0x3FF) }
+
 fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {
     use field::*;
     use R::*;
@@ -849,7 +871,7 @@ fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {
     plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 0)])?;
     plan.update(reg(OtgControl, t)?, &[(OTG_START_POINT_CNTL, 0), (OTG_FIELD_NUMBER_CNTL, 0)])?;
     // Global sync with no plane behind the pipe: VSTARTUP inside the vertical blank, after the sync.
-    let vstartup = (otg.v_blank_end - otg.v_sync_end).clamp(1, 0x3FF);
+    let vstartup = vstartup(otg);
     plan.update(reg(OtgVstartupParam, t)?, &[(VSTARTUP_START, vstartup)])?;
     plan.update(reg(OtgVupdateParam, t)?, &[(VUPDATE_OFFSET, 0), (VUPDATE_WIDTH, 1)])?;
     plan.update(reg(OtgVreadyParam, t)?, &[(VREADY_OFFSET, 1)])?;

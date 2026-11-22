@@ -138,6 +138,12 @@ struct Engine {
     hook: Option<(u32, u32, u32)>,
     // After a write to the first offset that clears the bits of the second, the model sets the third to the fourth.
     clear_hook: Option<(u32, u32, u32, u32)>,
+    // After a write to the first offset that clears the bits of the second: at the third, the fourth's bits read as set
+    // from the fifth microseconds on, until a write there sets a clear bit (31, 26 or 12) (a one-off event, cleared).
+    arm: Vec<(u32, u32, u32, u32, u64)>, timed: Vec<(u32, u32, u64)>,
+    // After a write to the first offset that clears the bits of the second, the fifth read after it finds the clock this
+    // many microseconds on (the task kept from running).
+    stall: Option<(u32, u32, u64)>, stalled: Option<(u32, u64)>,
     // Statuses the hardware sets: bits that read as set, and acknowledge bits that read as their request bit (one lower).
     set: Vec<(u32, u32)>, follow: Vec<(u32, u32)>,
     // Status bits that read as set while bits of a register (the same or another) are set: (at, bits, source, mask).
@@ -163,6 +169,7 @@ impl Canvas for Engine {
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
         self.clock += 10;
+        if let Some((left, len)) = self.stalled { if left == 0 { self.clock += len; self.stalled = None; } else { self.stalled = Some((left - 1, len)); } }
         if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
         let o = r.offset();
         if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move {
@@ -173,6 +180,7 @@ impl Bus for Engine {
         let mut v = *self.regs.get(&o).unwrap_or(&0);
         for &(at, bits) in &self.set { if at == o { v |= bits; } }
         for &(at, ack) in &self.follow { if at == o { v = (v & !ack) | ((v & (ack >> 1)) << 1); } }
+        for &(at, bits, from) in &self.timed { if at == o && self.clock >= from { v |= bits; } }
         for &(at, bits, src, mask) in &self.derived {
             if at == o { let s = if src == o { *self.regs.get(&o).unwrap_or(&0) } else { *self.regs.get(&src).unwrap_or(&0) }; v = if s & mask != 0 { v | bits } else { v & !bits }; }
         }
@@ -190,6 +198,10 @@ impl Poke for Engine {
         self.regs.insert(o, v);
         if let Some((at, target, value)) = self.hook { if at == o { self.regs.insert(target, value); } }
         if let Some((at, mask, target, value)) = self.clear_hook { if at == o && v & mask == 0 { self.regs.insert(target, value); } }
+        for (at, mask, target, bits, delay) in self.arm.clone() { if at == o && v & mask == 0 { self.timed.push((target, bits, self.clock + delay)); } }
+        let clock = self.clock;
+        if v & (1 << 31 | 1 << 26 | 1 << 12) != 0 { self.timed.retain(|&(at, _, from)| at != o || from > clock); }
+        if let Some((at, mask, len)) = self.stall { if at == o && v & mask == 0 { self.stalled = Some((4, len)); self.stall = None; } }
         for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); self.derived.retain(|s| s.0 != status); } }
         if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
     }
@@ -438,7 +450,9 @@ fn ryzen_reference() -> light::Reference {
     light::Reference { pipe: 0, otg: 0, h_total: 2719, v_total: 1645, h_blank_end: 112, v_blank_end: 43, width: 2560,
         ref_to_pix: 195_264, per_htotal: 259_335, refcyc_h_blank_end: 41, dlg_v_blank_end: 43, line_delivery: 953,
         req_delivery: 24_396, pitch_field: 0xA00, line_delivery_pre: 953, req_delivery_pre: 24_396, fb_base: 0xF4_0000_0000,
-        mpcc_top: 1, mpcc_opp: 1, mux: 1, firmware_mux: 0, firmware_bot: 0, refclk_cntl: 0, timer_cntl: 0x1001, vready: 1, copies }
+        mpcc_top: 1, mpcc_opp: 1, mux: 1, firmware_mux: 0, firmware_bot: 0, refclk_cntl: 0, timer_cntl: 0x1001, vready: 1, copies,
+        // OTG0's global sync and HUBP0's QoS as boot 70 read them.
+        sync: [0xD, 0x0140_02A8, 0x12C], debug_db: 0, qos_level: 8 }
 }
 // Pipe 0 as boot 70 read it on the Ryzen (2026-11-22, release 202611220537): the GOP's own DLG, not Display Core's
 // (REF_FREQ_TO_PIX_FREQ 0x14E5E, line and request delivery 0); PER_HTOTAL by Display Core's formula at 48 MHz; every
@@ -536,9 +550,19 @@ fn stage_9_on_what_boot_70_read_takes_its_reference_clock_from_per_htotal() {
     assert_eq!((g(R::HubpreqRefFreqToPixFreq, 1), g(R::HubpreqDstDimensions, 1), g(R::HubpreqPerLineDelivery, 1)), (169_466, 182_044, 620));
     assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1) & 0x7F_FFFF, 21_183);
     assert_eq!((g(R::MpccTopSel, 1), g(R::MpccBotSel, 1), g(R::MpccOppId, 1), g(R::MpcOutMux, 1)), (1, 0xF, 1, 1));
-    // HUBP1's CNTL: stage 13 keeps it blanked (VREADY 0, as the firmware's), stage 15 unblanks it; the pattern then off.
+    // Pipe 1's sync for its plane: the firmware's VUPDATE width and VREADY times at 148.5 MHz, a quarter line's offset,
+    // VREADY after the sync by hubp2_vready_at_or_After_vsync's rule; its QoS as Display Core's.
+    has("S9 PIPE 1'S SYNC FOR ITS PLANE: VSTARTUP 36 (STAGE 3'S), VUPDATE OFFSET 550 WIDTH 177, VREADY 166 (THE FIRMWARE'S OTG0: VSTARTUP 13, VUPDATE 680 WIDTH 320, VREADY 300); VREADY AT OR AFTER VSYNC 1 (THE FIRMWARE'S HUBP 0)");
+    has("S9 PIPE 1'S QOS: LEVEL 8 (THE FIRMWARE'S 8), HIGH WATERMARK 2844 (4 LINES;");
+    assert!(log.iter().any(|x| x == "S13 WROTE OTG1_OTG_VUPDATE_PARAM AT 14320 = 00B10226 (WAS 00010000)"), "{:#?}", log.iter().filter(|x| x.starts_with("S13 WROTE OTG1")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == "S13 WROTE OTG1_OTG_VREADY_PARAM AT 14324 = 000000A6 (WAS 00000001)"));
+    assert!(log.iter().any(|x| x.starts_with("S13 WROTE HUBP1_HUBPREQ_DEBUG_DB AT 0EE48 = 00000100")));
+    assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1), 8 << 24 | 21_183);
+    assert_eq!(g(R::HubpreqTtuQosWm, 1), 2844 << 16);
+    // HUBP1's CNTL: stage 13 keeps it blanked with VREADY after the sync, stage 15 unblanks it; the pattern then off.
     let cntl: Vec<u32> = writes(&e).into_iter().filter(|x| x.0 == reg(R::HubpCntl, 1)).map(|x| x.1).collect();
-    assert_eq!(cntl, [0x000F_001B, 0x000F_001A]);
+    assert_eq!(cntl, [0x000F_011B, 0x000F_011A]);
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
     assert!(log.iter().any(|x| x == "S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)"));
     assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919"));
     assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 15 AS THIS BUILD ALLOWS"));
@@ -558,12 +582,24 @@ fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares()
     assert_eq!((g(R::HubpreqPrimarySurfaceAddressHigh, 1), g(R::HubpreqPrimarySurfaceAddress, 1)), (0xF4, 0x0100_0000));
     assert_eq!(g(R::HubpreqSurfacePitch, 1), 1919);
     assert_eq!((g(R::HubpPriViewportStart, 1), g(R::HubpPriViewportDimension, 1)), (0, 1080 << 16 | 1920));
-    assert_eq!(g(R::HubpCntl, 1) & 0x1101, 0x100, "unblanked, TTU on, VREADY as the firmware's");
+    assert_eq!(g(R::HubpCntl, 1) & 0x1101, 0x100, "unblanked, TTU on, VREADY after the sync");
     // Its DLG and TTU as stage 9 derived them; the rest copied from pipe 0.
     assert_eq!(g(R::HubpreqRefFreqToPixFreq, 1), ((number_after(&log, "S9 OTG0 COUNTED", "THE REFERENCE CLOCK ") << 19) / 148_500) as u32);
-    for (i, reg) in light::COPIED.iter().enumerate().filter(|(_, r)| **r != R::MpccControl) {
+    let own = [R::MpccControl, R::HubpreqTtuQosWm, R::HubpreqCur0TtuCntl0];
+    for (i, reg) in light::COPIED.iter().enumerate().filter(|(_, r)| !own.contains(r)) {
         assert_eq!(g(*reg, 1), r.copies[i], "{}", reg.name());
     }
+    // The QoS Display Core gives every plane: level 8 for the surface and the cursor, the high watermark four lines.
+    let reference = number_after(&log, "S9 OTG0 COUNTED", "THE REFERENCE CLOCK ");
+    assert_eq!(g(R::HubpreqTtuQosWm, 1), ((reference * 4 * 2200 / 148_500) as u32) << 16);
+    assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1) >> 24, 8);
+    let cur = light::COPIED.iter().position(|&c| c == R::HubpreqCur0TtuCntl0).unwrap();
+    assert_eq!(g(R::HubpreqCur0TtuCntl0, 1), r.copies[cur] & 0x7F_FFFF | 8 << 24);
+    // The sync for the plane, and the DLG's test mode off.
+    let pix0 = number_after(&log, "S9 OTG0 COUNTED", "ITS PIXEL CLOCK ");
+    let at1 = |x: u64| (x * 148_500).div_ceil(pix0) as u32;
+    assert_eq!((g(R::OtgVupdateParam, 1), g(R::OtgVreadyParam, 1)), (at1(320) << 16 | 550, at1(300)));
+    assert_eq!(g(R::HubpreqDebugDb, 1), 0x100);
     // DPP1 clocked with a 1920x1080 recout, HUBP1 clocked; MPCC1 from DPP1 to OPP1, its output mux on MPCC1; the
     // pattern off.
     assert_eq!((g(R::DppControl, 1) & 0x10, g(R::HubpClkCntl, 1) & 1), (0x10, 1));
@@ -584,7 +620,13 @@ fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares()
     let pitch = log.iter().position(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919").expect("the read-back");
     assert!(log[pitch - 1].starts_with("S13 WROTE HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F"));
     assert!(log.iter().any(|x| x == "S13 WILL READ HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C BACK"));
-    assert_eq!(log.iter().filter(|x| x.starts_with("S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1")).count(), 2);
+    assert_eq!(log.iter().filter(|x| x.starts_with("S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1")).count(), 1);
+    // The watch with the pattern off: 300 frames read one by one, all clean, five lines of them.
+    assert!(log.iter().any(|x| x.starts_with("S15 WATCHED 300 FRAMES OF OTG1 IN ") && x.contains(" WITH THE PATTERN OFF: 0 PASSED BETWEEN TWO READS")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    let frames: Vec<&String> = log.iter().filter(|x| x.starts_with("S15 FRAMES ")).collect();
+    assert_eq!(frames.len(), 5);
+    assert_eq!(frames[4].as_str(), &format!("S15 FRAMES 241 TO 300: {}", ".".repeat(60)));
     // The attached HUBP is watched until stage 10, then is step 4's own.
     for n in 5..=15u8 { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED", n))), n <= 10, "stage {}", n); }
     // The guard keeps pipe 1's blocks shut to first light's stages, and pipe 0's to all.
@@ -657,10 +699,17 @@ fn an_underflow_at_stage_15_fails_and_is_undone_whole_and_a_busy_mpcc_stops_step
     let names: Vec<&String> = log[..failed].iter().filter(|x| x.starts_with("U15 RESTORED")).collect();
     assert_eq!(names.len(), 2, "{:#?}", names);
     assert!(names[0].starts_with("U15 RESTORED DPG1_DPG_CONTROL") && names[1].starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL"), "{:#?}", names);
+    // The watch ran its 300 frames, clearing HUBP1's status at each (this underflow comes back every frame), then the
+    // stage failed: the pattern on, then HUBP1's CNTL as stage 13 left it.
+    assert!(log.iter().any(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 300 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME 1 ")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == &format!("S15 FRAMES 241 TO 300: {}", "U".repeat(60))));
     let w = pipe_1(&e);
     let off = w.iter().position(|x| x.0 == reg(R::DpgControl, 1) && x.1 & 1 == 0).unwrap();
+    let on = off + w[off..].iter().position(|x| x.0 == reg(R::DpgControl, 1) && x.1 & 1 == 1).unwrap();
+    assert!(w[off + 1..on].iter().all(|x| x.0 == cntl), "only the clears between: {:X?}", &w[off..on]);
+    assert_eq!(w[off + 1..on].iter().filter(|x| x.1 & 1 << 31 != 0).count(), 300);
     let stage_13 = w.iter().find(|x| x.0 == cntl).unwrap().1;
-    assert_eq!((w[off + 1].0, w[off + 1].1 & 1, w[off + 2]), (reg(R::DpgControl, 1), 1, (cntl, stage_13)), "the pattern on, then HUBP1's CNTL: {:X?}", w);
+    assert_eq!(w[on + 1], (cntl, stage_13), "the pattern on, then HUBP1's CNTL: {:X?}", &w[on..]);
     restored_but(&e, &before, &[flag]);
     restored_but(&e, &before, &[reg(R::HubpCntl, 1)]);
     assert_eq!(e.regs[&reg(R::DpgControl, 1)] & 1, before.get(&reg(R::DpgControl, 1)).copied().unwrap_or(0) & 1);
@@ -725,8 +774,9 @@ fn stage_9_without_a_reference_and_stage_10_without_a_surface_stop_with_first_li
     let want = ryzen_reference();
     for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
         (R::HubpPriViewportDimension, 1600 << 16 | 2560), (R::HubpreqRefFreqToPixFreq, 195_264), (R::HubpreqDstDimensions, 259_335),
-        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 24_396), (R::HubpreqSurfacePitch, 0xA00),
-        (R::HubpreqPerLineDeliveryPre, 953), (R::HubpreqSurf0TtuCntl1, 24_396), (R::DcnVmFbLocationBase, 0xF400)] {
+        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 8 << 24 | 24_396), (R::HubpreqSurfacePitch, 0xA00),
+        (R::HubpreqPerLineDeliveryPre, 953), (R::HubpreqSurf0TtuCntl1, 24_396), (R::DcnVmFbLocationBase, 0xF400),
+        (R::OtgVstartupParam, 0xD), (R::OtgVupdateParam, 0x0140_02A8), (R::OtgVreadyParam, 0x12C), (R::HubpreqDebugDb, 0)] {
         s.set(r, 0, v);
     }
     for (r, v) in light::COPIED.iter().zip(want.copies) { s.set(*r, 0, v); }
@@ -737,6 +787,57 @@ fn stage_9_without_a_reference_and_stage_10_without_a_surface_stop_with_first_li
     assert_eq!(light::reference(&s, &f, &c), Some(want));
     s.set_batches(9);
     assert_eq!(light::reference(&s, &f, &c), None, "batch 10 not read");
+}
+
+#[test]
+fn stage_15s_watch_keeps_the_picture_up_and_names_the_frame_of_pipe_1s_first_underflow_but_not_the_firmwares() {
+    let l = step4(Some(boot70_reference()));
+    let (cntl1, cntl0, dpg) = (reg(R::HubpCntl, 1), reg(R::HubpCntl, 0), reg(R::DpgControl, 1));
+    // A one-off underflow on HUBP1 some 17 frames after the pattern goes off, cleared by the watch: kept, the watch
+    // goes on to its end with the picture up, then the stage fails and is put back at once.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl1, 1 << 28, 17 * 16_674 + 8_000));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == cntl1), "{:?}", outcome);
+    let s15: Vec<&String> = log.iter().filter(|x| x.starts_with("S15 ")).collect();
+    let first = s15.iter().find(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 1 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME ")).unwrap_or_else(|| panic!("{:#?}", s15));
+    let frame: u32 = first.split("AT FRAME ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    assert!((17..=19).contains(&frame), "{}", first);
+    assert!(first.ends_with("; CLEARED 1 TIMES"));
+    let marks: String = s15.iter().filter(|x| x.starts_with("S15 FRAMES ")).map(|x| x.split(": ").nth(1).unwrap()).collect();
+    assert_eq!((marks.len(), marks.matches('U').count(), marks.find('U')), (300, 1, Some(frame as usize - 1)));
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C") && x.ends_with("ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING STAGES 14 TO 1")));
+    // The firmware's HUBP underflowing during the watch: at once, the watch cut short.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl0, 1 << 28, 5 * 16_674));
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == cntl0), "{:?}", outcome);
+    assert!(!log.iter().any(|x| x.starts_with("S15 WATCHED ")));
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EB1C") || x.starts_with(&format!("S15 UNBLANK FAILED: AN UNDERFLOW AT {:05X}", cntl0))), "{:#?}", &log[log.len().saturating_sub(4)..]);
+    restored_but(&e, &before, &[]);
+    // A request timing out at HUBP1: kept as T, the stage failed after the watch.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl1, 2 << 20, 40 * 16_674));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::RequestTimeout { offset, .. } } if offset == cntl1), "{:?}", outcome);
+    assert!(log.iter().any(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 0 FRAMES, REQUEST TIMEOUT IN 1;")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: A REQUEST TIMEOUT AT 0EE3C")));
+    // Display kept from running for 676 ms just after the pattern goes off, as in boot 74: the frames it missed are
+    // marked, and the gap named.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.stall = Some((dpg, 1, 676_000));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    let watched = log.iter().find(|x| x.starts_with("S15 WATCHED 300 FRAMES")).unwrap();
+    let passed: u32 = watched.split("WITH THE PATTERN OFF: ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    let gap = number_after(&log, "S15 WATCHED 300 FRAMES", "THE LONGEST GAP BETWEEN READS ");
+    assert!((39..=41).contains(&passed) && (676_000..677_000).contains(&gap), "{}", watched);
+    assert!(log.iter().any(|x| x.starts_with("S15 FRAMES   1 TO  60: ---------")), "{:#?}", log.iter().filter(|x| x.starts_with("S15 FRAMES")).collect::<Vec<_>>());
 }
 
 #[test]
