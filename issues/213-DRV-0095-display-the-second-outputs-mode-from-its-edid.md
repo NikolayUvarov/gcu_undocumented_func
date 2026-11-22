@@ -284,8 +284,8 @@ Otherwise it takes today's 1920x1080 in the signalling `HDMI_SIGNALLING` asks fo
 - **At 1920x1080** everything is as before: the same samples, pitch and lines.
 
 **On the model at 3440x1440, 324 MHz**, with boot 70's reference at 48 MHz, all 16 stages run and are undone whole:
-- **Stage 9:** REF/PIX 0.1481, PER_HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57, line 620 becomes 509, request 9664
-  (54 requests a line), next start 5988.
+- **Stage 9:** REF/PIX 0.1481, PER_HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57, LINE 509, REQ 9664 (54
+  requests a line), next start 5988.
 - **The global sync:** VSTARTUP 52 (stage 3's), VUPDATE offset 900 and width 387, VREADY 362.
 - **QoS:** high watermark 2133.
 - **The AVI infoframe:** VIC 0, no aspect code.
