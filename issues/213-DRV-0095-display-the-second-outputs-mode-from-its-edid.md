@@ -296,8 +296,68 @@ Otherwise it takes today's 1920x1080 in the signalling `HDMI_SIGNALLING` asks fo
 - table 4 takes 33 steps;
 - table 76 takes 300 steps.
 
-**Seen on the hardware:** nothing of it yet. Stage 10 draws 2.4 times as many pixels as at 1080p, so it takes about
-2.5 s, not 1 s.
+**Seen on the hardware:** boot 81, below.
+
+**Boot 79 (2026-11-22, release 202611220957, 356af608b, `HDMI_SIGNALLING` and `EDID_ALLOWED` true, switches 11/16/false):
+HDMI signalling at 1920x1080 went through at the first try.**
+- **Step 2:** a block took `FROM GO TO THE TRANSFER'S END 12106 US, OVER 117 READS OF THE STATUS 100 US APART`, which is
+  the transfer itself, about 12 ms on the wire. Both blocks were read.
+- **Step 3's first line:** `MODE 1920x1080 AT 148.5 MHZ IN HDMI SIGNALLING (CTA VIC 16)`.
+- **The tables match the model's counts exactly:**
+  - table 12: 310 steps, 33 writes, the PHY's short path;
+  - table 4: 33 steps, 5 writes;
+  - table 76: 289 steps, 23 writes.
+- **Stage 6's HDMI writes:** `DIG0_HDMI_CONTROL = 00010019 (WAS 00010011)`, the VBI packets 0x31, AVMUTE 0,
+  `DIG0_AFMT_GENERIC_0 = 0828101F` (the AVI packet's first word), and the packet controls.
+- **Stage 15:** 300 frames clean.
+- **The mirror:** `SECOND SCREEN 1920X1080, PITCH 7680 … MIRRORED AT 1728X1080 FROM 96,0`; 179 writes left in place.
+- **What the maintainer saw** of it is not reported yet.
+
+**Boot 81 (2026-11-22, release 202611221107, a2ee81ca5, `EDID_ALLOWED` and `MODE_FROM_EDID` true, switches 11/16/false):
+the monitor's own mode went through at the first try.**
+- **The mode:** `STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING`, and `MODE
+  3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)`.
+- **The tables match the model's counts exactly:**
+  - table 12: 308 steps, 33 writes, the PHY's short path;
+  - table 4: 33 steps, 5 writes;
+  - table 76: 300 steps, 23 writes.
+- **Stage 9:** `PIPE 1 FOR 3440x1440 AT 324000 KHZ: REF/PIX 0.1481, PER HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57,
+  LINE 509, REQ 9664 (54 REQUESTS A LINE)`.
+- **Stage 10:** `DRAWN: 3440x1440 AT SLOT 5'S START, PITCH 3456 PIXELS (13824 BYTES); 9 SAMPLES READ BACK AS DRAWN`. Its
+  drawing took tens of milliseconds at either size: the second between its lines is the stage's pause.
+- **Stage 13:** `READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 00000D7F, AS WRITTEN: FIELD 3455`.
+- **Stage 15:** `WATCHED 300 FRAMES OF OTG1 IN 4985 MS (60.172 HZ)`, the longest gap between reads 14 us, then `NO
+  UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES`. One pipe carries the mode, as DML's limits said.
+- **Stage 16:** `[COMPOSITOR] SECOND SCREEN 3440X1440, PITCH 13824, Bgr, FROM PID 38: THE FIRST MIRRORED AT 2304X1440
+  FROM 568,0`, then `STEP 3 STOPPED AFTER STAGE 16 OF 16`, 179 writes left in place.
+- **What the maintainer sees** on the monitor is asked; the owner session passes on his words.
+
+## For a successor (state on 2026-11-22)
+
+- **Branch:** `claude/213-DRV-0095-display-the-monitors-own-mode`, made from 213-DRV-0092's head (3e68b77b9, in the
+  landing queue). Code: `display/src/` (`ddc.rs` step 2, `light.rs` steps 3 and 4, `dcn.rs` registers and plan,
+  `edid.rs`, `picture.rs`, `screen.rs`, `main.rs`).
+- **The switches in `main.rs`,** all committed off:
+  - `BATCHES_ALLOWED` (11 reads batch 11);
+  - `EDID_ALLOWED` (step 2);
+  - `HDMI_SIGNALLING` (HDMI at today's 1080p);
+  - `MODE_FROM_EDID` (the monitor's mode, needs `EDID_ALLOWED`);
+  - `STAGES_ALLOWED` (16 for all);
+  - `UNDO_AFTER_STAGES`.
+
+  The Ryzen runs used 11/16/false with the flags each run names above. Nothing runs on the machine without the owner
+  session's word.
+- **Host cases:**
+  - `tests/display_{light,ddc,picture,batches,screen}_host.rs` and `tests/display_host.rs`;
+  - with `MIND_AMD_VBIOS` naming the Ryzen's VBIOS image (not in the repository) they also run the Ryzen's own tables
+    on the warm state;
+  - `scripts/host_tests.sh` runs them all.
+- **Hardware evidence so far:** boots 77 (batch 11), 78 (the EDID), 79 (HDMI at 1080p) and 81 (3440x1440). The logs are
+  the owner session's, under its handoff directory.
+- **Open:**
+  - the maintainer's look at 3440x1440 (criterion 4);
+  - the remaining tasks: hot-plug 213-DRV-0096, the cold path 0097, start in seconds 0098, both screens by default 0099;
+  - the stretched mirror and the extended desktop, which are KRN's and APP's.
 
 ## Plan
 
@@ -325,6 +385,8 @@ Otherwise it takes today's 1920x1080 in the signalling `HDMI_SIGNALLING` asks fo
   engine as found after; what it says of a mode within DVI recorded here (boot 78: none).
 - [ ] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
   (MC-12.1).
+  Boot 81's log shows the mode, the mirror at 2304x1440 from x 568 and the watch clean; the maintainer's look is still
+  to come.
 
 ## Related
 
