@@ -1,6 +1,6 @@
 # 000-DRV-0101 — `usb_host` starts bulk transfers and answers from its loop instead of waiting on them
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22: the issue only, by the owner session's decision) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: written on `claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop` at the owner session's word, and through the host tests and QEMU's suites; no hardware run before the owner session says) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -28,8 +28,47 @@
 ## Acceptance criteria
 
 - [ ] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer.
-- [ ] QEMU's `usb`, `ehci`, `cameras`, `link`, `usbaudio` and the USB storage suites pass.
+- [x] QEMU's `usb`, `ehci`, `cameras`, `link`, `usbaudio` and the USB storage suites pass. (2026-11-22, LEG9, on 05bc8e92c: those, `iso` with its USB disk's boot, `vfs`, `block` with its USB part, and the new `usbload`.)
 - [ ] On the Ryzen: a duplex with a log read and a stick write in its middle, every stream's `TIMES DRY` 0 while they run, and the stick's and the cable's throughput no lower (MC-12.1).
+
+## Progress (2026-11-22)
+
+**What is written** (`usb_host/src/main.rs`, `usb_host/src/pending.rs`, `usb_host/src/xhci.rs`):
+- **Starting a transfer:** a client's bulk transfer on xHCI is put on its ring (`Xhci::start`), and `usb_host` looks for its completion for up to 2 ms (`BULK_SPIN_NS`), taking the events and putting the streams' TDs back meanwhile (`Xhci::finished`).
+  - One that ends within that is answered at once, as before. The stick's reads mostly do.
+  - A longer one has its answer deferred (`wire::Call::defer`) into a table of 8 (`Pending`), and `usb_host` goes back to its loop.
+- **The loop:**
+  - it waits 1 ms at most while a transfer is deferred;
+  - each turn it answers those that ended (`bulks`), copying an IN transfer's bytes into the client's buffer, and resets the endpoint after an error as before;
+  - it answers not-found one whose device or controller went;
+  - it stops one with no completion for 30 s and answers it as timed out, its TRB left behind as before;
+  - a new instance of a client that attaches has its earlier instance's transfers stopped and answered first.
+  - The first transfer answered from the loop is said: `A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT s ENDPOINT e, n BYTES, m MS`.
+- **The bytes' place** (`pending::place`): a pool page of its own for up to a page (the serial writes), else DATA, which one transfer a controller holds at a time. A long one waits for DATA while another holds it, so a stick's read and a converter's write go on together.
+- **No room to defer** (8 deferred already): the transfer is waited on, as before.
+- **EHCI's bulk transfers** stay waited on: the Ryzen's devices are all on its xHCIs.
+
+**What still blocks the loop, and why it stays for now:**
+- **Control transfers** (`control_request`): waited on, with the streams' TDs put back meanwhile (0094's step 2). They end within a few milliseconds: a camera's probe and commit took 6 ms on the Ryzen.
+- **Commands** (`Xhci::command`): Configure Endpoint, Stop and Reset Endpoint, Set Dequeue. They come at a device's set-up, an interface's setting and an error's recovery, and take a few milliseconds: 8 ms at capture's close on the Ryzen.
+- **A port's reset and its recovery** during a scan, 20 to 50 ms: only when a device comes.
+- Each of these could be answered from the loop the same way, `select` with its control transfer and its command among them. That is a larger change than the bulk path, and none of them recurs while streams run.
+
+**000-DRV-0081 is not covered by this.** Its 38 ms at capture's close (0094's step 1 run: `WAITING ON A COMMAND FOR 8.0 MS`, the client's calls 32 ms before and 30 ms after) was two things:
+- the command, 8 ms;
+- `audio_gw` not taking or putting while it closed capture, about 30 ms.
+
+0094's step 2 already keeps the IN rings full through both: in run D the feedback ring did not run dry at the close. The playback ring's dry at the close (run D: 12.5 ms, `NOT WAITING`) is the client stopping its puts while it closes. 0081 still needs its own change: SET_INTERFACE 0 before the endpoints are dropped, and the stream marked closing so that its last transfers are not counted as errors. That order is the speakerphone's 82 to 92 frames lacked at each close.
+
+**Tests:**
+- **Host:** `tests/usb_pending_host.rs`, the place of a transfer's bytes and the loop's next step.
+- **QEMU:** a new suite `usbload`, in the gate's "services, storage, audio" group. It boots from a USB stick with a `usb_host` built to answer every bulk transfer from its loop (`defer-every-bulk`: QEMU ends transfers at once, so the default build would answer them on the spot). While QEMU's usb-audio plays audiostub's tone for 20 s and the host reads the system log over QEMU's FT232, the shell reads a 4 MiB file off the stick three times. Every read must be whole (SHA-256), the link's read whole, and the tone played to its end.
+- Then QEMU's `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio`, `vfs` and `block` (whose USB part writes past a file system through the stick), and the full host tests.
+- **Results** (2026-11-22, LEG9, 05bc8e92c, run twice, the second after LEG9's restart):
+  - the full `host_tests.sh` passed whole (263 groups);
+  - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` (ATA, AHCI and USB) and `usbload`, which passed three times in all;
+  - in `usbload` the first transfer answered from the loop was the stick's first command, `SLOT 1 ENDPOINT 02, 31 BYTES, 1 MS`.
+- **Not covered yet** (criterion 1's rest): a deferred transfer that halts, one that times out, and a client gone before its answer. These are host-testable only through `pending.rs`'s rules, or in QEMU with a device made to stall.
 
 ## Related
 

@@ -9,6 +9,7 @@ extern crate alloc;
 mod ehci;
 mod hub;
 mod iso_ring;
+mod pending;
 mod spill;
 mod xhci;
 
@@ -60,7 +61,28 @@ struct Controller {
 const MAX_RESTARTS: u8 = 8;
 const RESTARTS_APART_MS: u64 = 600_000;
 
-struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2] }
+struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2], pending: [Option<Pending>; MAX_PENDING], deferred: u64, said_deferred: bool, tally: Tally }
+
+// The bulk transfers answered from the loop in the minute so far, said once a minute when there were any (000-DRV-0101):
+// deferred, answered, answered not-found (device or controller gone), timed out, stopped for a client's new instance,
+// waited on for want of room, and the longest from its request to its answer; `since`: the minute's start (uptime ms).
+#[derive(Default)]
+struct Tally { deferred: u32, answered: u32, gone: u32, timed_out: u32, forgotten: u32, waited: u32, longest_ms: u64, since: u64 }
+
+// A client's bulk transfer on xHCI that did not end within BULK_SPIN_NS (000-DRV-0101): its answer deferred, so usb_host
+// serves its other clients meanwhile and answers from its loop. Which controller (and its set-up's generation), device
+// (and its generation), ring and endpoint; the client's buffer and the bytes; the DMA page it uses, or DATA (None);
+// when it was asked (uptime ms); whether it is on the ring yet (not while another transfer holds DATA).
+struct Pending {
+    call: Option<wire::Call>, badge: u16, c: usize, generation: u16, index: usize, device: u16, at: usize, slot: u8, target: u8, address: u8, input: bool,
+    offset: usize, length: usize, page: Option<usize>, since: u64, started: bool,
+}
+const MAX_PENDING: usize = 8;
+// A transfer that ends within this is answered at once, as before; a longer one from the loop (000-DRV-0101). The test
+// build `defer-every-bulk` answers every one from the loop, so QEMU, whose transfers end at once, runs that path.
+const BULK_SPIN_NS: u64 = if cfg!(feature = "defer-every-bulk") { 0 } else { 2_000_000 };
+// A transfer with no completion for this long is stopped and answered as timed out, as `transfer` waits.
+const BULK_TIMEOUT_MS: u64 = 30_000;
 
 const XHCI_MAX: usize = 1 + mind::usb::XHCI.len();
 
@@ -614,46 +636,167 @@ impl Host {
         Ok(got as u16)
     }
 
-    fn bulk(&mut self, badge: u16, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
+    // A client's bulk transfer (000-DRV-0101). On xHCI it is started and answered at once if it ends within
+    // BULK_SPIN_NS; else its answer is deferred and the loop gives it (`bulks`), usb_host serving the other clients
+    // meanwhile. On EHCI it is waited on, as before.
+    fn bulk_request(&mut self, badge: u16, handle: u32, address: u8, offset: u32, length: u32, mut call: wire::Call) {
+        if let Some((b, _)) = ehci_device(handle) {
+            let r = self.interface(handle, badge).and_then(|(index, iface)| self.ehci_bulk(b, badge, index, iface, address, offset, length));
+            let _ = usb::reply_bulk(call, r);
+            return;
+        }
+        let mut p = match self.bulk_begin(badge, handle, address, offset as usize, length as usize) { Ok(p) => p, Err(e) => { let _ = usb::reply_bulk(call, Err(e)); return } };
+        if p.started && BULK_SPIN_NS > 0 {
+            let done = self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, BULK_SPIN_NS));
+            if let Some(done) = done { let r = self.bulk_end(&p, done); let _ = usb::reply_bulk(call, r); return; }
+        }
+        let free = self.pending.iter().position(Option::is_none);
+        match (free, call.defer()) {
+            (Some(at), Ok(())) => { p.call = Some(call); self.pending[at] = Some(p); self.deferred += 1; self.tally.deferred += 1; }
+            // No room to defer it: waited on, as before.
+            _ => {
+                self.tally.waited += 1;
+                let r = loop {
+                    if !p.started { break Err(Error::Other(mind::abi::ERR_BUSY)); }
+                    let done = self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, BULK_TIMEOUT_MS * 1_000_000));
+                    break match done { Some(done) => self.bulk_end(&p, done), None => { self.abandon(&p); Err(Error::Other(ERR_TIMEOUT)) } };
+                };
+                let _ = usb::reply_bulk(call, r);
+            }
+        }
+    }
+
+    // A bulk transfer checked and, when a DMA buffer is free, put on its ring: a pool page for up to a page, else DATA
+    // (one such transfer a controller at a time). Its call is set once it is deferred.
+    fn bulk_begin(&mut self, badge: u16, handle: u32, address: u8, offset: usize, length: usize) -> Result<Pending> {
         let (index, iface) = self.interface(handle, badge)?;
-        if let Some((b, _)) = ehci_device(handle) { return self.ehci_bulk(b, badge, index, iface, address, offset, length); }
         let c = xhci_device(handle).0;
         let device = self.root(c)?.devices[index].ok_or(Error::NotFound)?;
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_bulk()).ok_or(Error::Invalid)?;
-        let (offset, length) = (offset as usize, length as usize);
         let size = self.buffer(badge)?.len();
         if length == 0 || length > BULK_MAX || offset.checked_add(length).is_none_or(|end| end > size) { return Err(Error::Invalid); }
         let target = dci(endpoint.address);
         let at = device.rings[..device.ring_count].iter().position(|r| r.0 == target).ok_or(Error::Invalid)?;
-        // A bulk stream holds the endpoint's ring while it runs (usb.wit 1.6).
+        // A bulk stream holds the endpoint's ring while it runs (usb.wit 1.6), and so does a transfer not answered yet.
         if self.root(c)?.xhci.stream(device.slot, target).is_some() { return Err(Error::Invalid); }
-        let mut ring = device.rings[at].1;
+        if self.pending.iter().flatten().any(|p| p.c == c && p.slot == device.slot && p.target == target) { return Err(Error::Invalid); }
+        let generation = self.root(c)?.generation;
+        let mut p = Pending { call: None, badge, c, generation, index, device: device.generation, at, slot: device.slot, target, address, input: endpoint.is_in(),
+            offset, length, page: None, since: mind::time::uptime_ms() as u64, started: false };
+        self.place(&mut p);
+        Ok(p)
+    }
+
+    // Transfer `p` on its ring if a DMA buffer is free for it: its bytes there first when it is OUT.
+    fn place(&mut self, p: &mut Pending) {
+        let data_busy = self.pending.iter().flatten().any(|q| q.c == p.c && q.started && q.page.is_none());
         let Host { roots, buffers, .. } = self;
-        let root = roots.get_mut(c).and_then(Option::as_mut).ok_or(Error::NotFound)?;
-        let buffer = buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
-        if !endpoint.is_in() { root.xhci.dma.bytes(DATA, length).copy_from_slice(&buffer[offset..offset + length]); }
-        let data = root.xhci.physical(DATA);
-        let result = root.xhci.transfer(device.slot, target, &mut ring, &[(data, length as u32, TYPE_NORMAL << 10 | IOC | ISP)]);
-        if let Some(d) = root.devices[index].as_mut() { d.rings[at].1 = ring; }
-        match result {
+        let Some(root) = roots.get_mut(p.c).and_then(Option::as_mut) else { return };
+        let page = if p.length <= xhci::PAGE { root.xhci.alloc() } else { None };
+        if pending::place(p.length, xhci::PAGE, page.is_some(), data_busy) == pending::Place::Wait { return; }
+        let Some(buffer) = buffers.get_mut(p.badge as usize).and_then(Option::as_mut) else { if let Some(page) = page { root.xhci.release(page); } return };
+        let place = page.unwrap_or(DATA);
+        if !p.input { root.xhci.dma.bytes(place, p.length).copy_from_slice(&buffer.as_mut_slice()[p.offset..p.offset + p.length]); }
+        let Some(device) = root.devices[p.index].as_mut() else { if let Some(page) = page { root.xhci.release(page); } return };
+        let mut ring = device.rings[p.at].1;
+        let data = root.xhci.physical(place);
+        root.xhci.start(p.slot, p.target, &mut ring, &[(data, p.length as u32, TYPE_NORMAL << 10 | IOC | ISP)]);
+        if let Some(d) = root.devices[p.index].as_mut() { d.rings[p.at].1 = ring; }
+        (p.page, p.started) = (page, true);
+    }
+
+    // Transfer `p`'s end: the bytes it moved (an IN one's copied to the client's buffer), or the error, its endpoint
+    // reset as before; its DMA page back to the pool.
+    fn bulk_end(&mut self, p: &Pending, done: core::result::Result<u32, u32>) -> Result<u32> {
+        let Host { roots, buffers, .. } = self;
+        let root = roots.get_mut(p.c).and_then(Option::as_mut).ok_or(Error::NotFound)?;
+        let place = p.page.unwrap_or(DATA);
+        let result = match done {
             Ok(residue) => {
-                let got = length.saturating_sub(residue as usize);
-                if endpoint.is_in() { buffer[offset..offset + got].copy_from_slice(root.xhci.dma.bytes(DATA, got)); }
+                let got = p.length.saturating_sub(residue as usize);
+                if p.input {
+                    let buffer = buffers.get_mut(p.badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
+                    buffer[p.offset..p.offset + got].copy_from_slice(root.xhci.dma.bytes(place, got));
+                }
                 Ok(got as u32)
             }
-            // No answer: the endpoint is stopped and its TRB left behind, or every later transfer waits behind it (the
-            // MacBook Pro's stick, 211-DRV-0053).
-            Err(0) => { root.xhci.restart(device.slot, target, &ring, false); Err(Error::Other(ERR_TIMEOUT)) }
             Err(code) => {
                 // A stall or another error halted the endpoint on the controller: reset it on both sides, so the next
                 // transfer can run (BOT recovery; a transaction error halts it too, 211-DRV-0053).
-                root.xhci.recover(device.slot, target, &ring);
-                let _ = root.control(index, 0x02, 1, 0, address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
-                if code != STALL { mind::println!("[USB] SLOT {} ENDPOINT {:02X}: COMPLETION {}; THE ENDPOINT IS RESET", device.slot, address, code); }
+                if let Some(ring) = root.devices[p.index].map(|d| d.rings[p.at].1) { root.xhci.recover(p.slot, p.target, &ring); }
+                let _ = root.control(p.index, 0x02, 1, 0, p.address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
+                if code != STALL { mind::println!("[USB] SLOT {} ENDPOINT {:02X}: COMPLETION {}; THE ENDPOINT IS RESET", p.slot, p.address, code); }
                 Err(Error::Invalid)
+            }
+        };
+        if let Some(page) = p.page { root.xhci.release(page); }
+        result
+    }
+
+    // Transfer `p` given up: its endpoint stopped and its TRB left behind, or every later transfer waits behind it (the
+    // MacBook Pro's stick, 211-DRV-0053); its page back, once the controller cannot write it any more.
+    fn abandon(&mut self, p: &Pending) {
+        let Some(root) = self.roots.get_mut(p.c).and_then(Option::as_mut).filter(|r| r.generation == p.generation) else { return };
+        if p.started { if let Some(ring) = root.devices[p.index].map(|d| d.rings[p.at].1) { root.xhci.restart(p.slot, p.target, &ring, false); } }
+        if let Some(page) = p.page { root.xhci.release(page); }
+    }
+
+    // The deferred bulk transfers, from the loop (000-DRV-0101): each that ended is answered; one whose device, controller
+    // or client went is answered not-found; one that waited for DATA is put on its ring once DATA is free; one with no
+    // completion for BULK_TIMEOUT_MS is stopped and answered as timed out.
+    fn bulks(&mut self) {
+        for at in 0..MAX_PENDING {
+            let Some(mut p) = self.pending[at].take() else { continue };
+            let here = self.roots.get(p.c).and_then(Option::as_ref).filter(|r| r.generation == p.generation)
+                .is_some_and(|r| r.devices[p.index].is_some_and(|d| d.generation == p.device && d.slot == p.slot));
+            if !here {
+                // Its controller was set up again or its device went: the pages went with them, or go back here.
+                if let Some(root) = self.roots.get_mut(p.c).and_then(Option::as_mut).filter(|r| r.generation == p.generation) { if let Some(page) = p.page { root.xhci.release(page); } }
+                answer(&mut p, Err(Error::NotFound));
+                self.tally.gone += 1;
+                continue;
+            }
+            if !p.started { self.place(&mut p); if !p.started { self.pending[at] = Some(p); continue; } }
+            let done = self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, 0));
+            let waited = (mind::time::uptime_ms() as u64).saturating_sub(p.since);
+            match (pending::next(done.is_some(), waited, BULK_TIMEOUT_MS), done) {
+                (pending::Next::Answer, Some(done)) => {
+                    let r = self.bulk_end(&p, done);
+                    // The first answered from the loop is said, with how long it took (000-DRV-0101).
+                    if !self.said_deferred { self.said_deferred = true; mind::println!("[USB] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT {} ENDPOINT {:02X}, {} BYTES, {} MS (000-DRV-0101)", p.slot, p.address, p.length, (mind::time::uptime_ms() as u64).saturating_sub(p.since)); }
+                    answer(&mut p, r);
+                    self.tally.answered += 1;
+                    self.tally.longest_ms = self.tally.longest_ms.max(waited);
+                }
+                (pending::Next::TimedOut, _) => { self.abandon(&p); answer(&mut p, Err(Error::Other(ERR_TIMEOUT))); self.tally.timed_out += 1; }
+                _ => self.pending[at] = Some(p),
             }
         }
     }
+
+    // The bulk transfers of client `badge`'s earlier instance, given up when a new one attaches.
+    fn forget_bulks(&mut self, badge: u16) {
+        for at in 0..MAX_PENDING {
+            if !self.pending[at].as_ref().is_some_and(|p| p.badge == badge) { continue; }
+            let Some(mut p) = self.pending[at].take() else { continue };
+            self.abandon(&p);
+            answer(&mut p, Err(Error::NotFound));
+            self.tally.forgotten += 1;
+        }
+    }
+
+    // The minute's tally said when it held any, then begun again.
+    fn say_tally(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        if now.saturating_sub(self.tally.since) < 60_000 { return; }
+        let t = &self.tally;
+        if t.deferred + t.waited > 0 {
+            mind::println!("[USB] BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: {} DEFERRED, {} ANSWERED, {} NOT FOUND, {} TIMED OUT, {} STOPPED, {} WAITED ON; THE LONGEST {} MS (000-DRV-0101)",
+                t.deferred, t.answered, t.gone, t.timed_out, t.forgotten, t.waited, t.longest_ms);
+        }
+        self.tally = Tally { since: now, ..Tally::default() };
+    }
+    fn pending_bulks(&self) -> bool { self.pending.iter().any(Option::is_some) }
 
     // Reports of an interrupt IN endpoint, each after a length byte; with `longest` (usb.wit 1.1), reports of several
     // packets after two length bytes. xHCI keeps to one packet of up to 64 bytes for now (211-DRV-0018).
@@ -894,6 +1037,7 @@ impl Host {
             usb::Request::Attach { buffer } => {
                 // The earlier buffer goes first: its address may be the one the new mapping gets.
                 let result = if !known(badge) { Err(Error::Rights) } else {
+                    self.forget_bulks(badge);
                     drop(self.buffers[badge as usize].take());
                     self.release_all(badge); // a new buffer is a new client instance: the old one's interfaces are free
                     Mapping::new(buffer).and_then(|m| if m.len() < mind::usb::BUFFER { Err(Error::Invalid) } else { self.buffers[badge as usize] = Some(m); Ok(()) })
@@ -903,7 +1047,7 @@ impl Host {
             usb::Request::Claim => { let r = self.claim(badge); usb::reply_claim(call, r) }
             usb::Request::Release { handle } => { let r = self.release(handle, badge); usb::reply_release(call, r) }
             usb::Request::Control { handle, request_type, request, value, index, length } => { let r = self.control_request(badge, handle, request_type, request, value, index, length); usb::reply_control(call, r) }
-            usb::Request::Bulk { handle, address, offset, length } => { let r = self.bulk(badge, handle, address, offset, length); usb::reply_bulk(call, r) }
+            usb::Request::Bulk { handle, address, offset, length } => { self.bulk_request(badge, handle, address, offset, length, call); Ok(()) }
             usb::Request::Reports { handle, address } => { let r = self.reports(badge, handle, address, None); usb::reply_reports(call, r) }
             usb::Request::ReportsUpTo { handle, address, longest } => { let r = self.reports(badge, handle, address, Some(longest)); usb::reply_reports_up_to(call, r) }
             usb::Request::Select { handle, alternate } => { let r = self.select(badge, handle, alternate); usb::reply_select(call, r) }
@@ -913,6 +1057,9 @@ impl Host {
         };
     }
 }
+
+// A deferred bulk transfer's answer to its client (000-DRV-0101).
+fn answer(p: &mut Pending, result: Result<u32>) { if let Some(call) = p.call.take() { let _ = usb::reply_bulk(call, result); } }
 
 // One report into `out` after its length (one byte, or two, low first, when `wide`); the bytes written.
 fn put(out: &mut [u8], report: &[u8], wide: bool) -> usize {
@@ -959,7 +1106,7 @@ fn main(_info: &'static BootInfo) {
         };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
-    let mut host = Host { roots, buffers: core::array::from_fn(|_| None), scanned: 0, ehci: buses };
+    let mut host = Host { roots, buffers: core::array::from_fn(|_| None), scanned: 0, ehci: buses, pending: [const { None }; MAX_PENDING], deferred: 0, said_deferred: false, tally: Tally::default() };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     for root in host.roots.iter_mut().flatten() { root.scan(); }
@@ -967,9 +1114,14 @@ fn main(_info: &'static BootInfo) {
     host.scanned = mind::time::uptime_ms() as u64;
     loop {
         let streaming = host.ehci.iter().flatten().any(|bus| bus.streaming.is_some()) || host.roots.iter().flatten().any(|r| r.xhci.streaming());
-        let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
+        // A deferred bulk transfer is looked at every millisecond (000-DRV-0101).
+        let wait = if host.pending_bulks() { 1 } else if streaming { STREAM_MS } else { SCAN_MS as u32 };
+        let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait);
         // A bulk stream's finished transfers go into its spill and their TDs back on the ring (158-DRV-0082).
         for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.spill_streams(); root.xhci.watch_streams(); } }
+        // The deferred bulk transfers that ended are answered, and their minute's tally said (000-DRV-0101).
+        if host.pending_bulks() { host.bulks(); }
+        host.say_tally();
         // A controller that stopped with an error is set up again, its devices found anew by the next scan, and it takes
         // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073). So is
         // one that left a command unanswered, the device it stopped at left alone (000-DRV-0075): the boot stick and
