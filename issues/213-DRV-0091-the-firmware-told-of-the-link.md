@@ -278,6 +278,32 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
   - After the change, all 40 pass, and the release build builds.
 
+**2026-11-22, why the driver masks HIMR0's halt bit, and HISR0 read under the mask** (branch `claude/213-DRV-0091-the-halt-status`, on 07e59deb9; host cases, not yet run on the Ryzen):
+- **Who masks the bit, and why.** `mac::mask_host` came with 71589b8b9 (213-DRV-0032, 2026-11-04, "the bounded diagnostic passes on the Ryzen").
+  - Its message: "the three host interrupt masks cleared, before the MAC preparation and after the download (the firmware enables HIMR0's halt interrupt), as disable_intr does".
+  - main.rs's note: "The firmware enables its halt interrupt (HIMR0 bit 21); this polled driver keeps host interrupts masked".
+  - 213-DRV-0032's table records it: HIMR0 `00200000` after the download, 0 before.
+  - So the reason is that this driver polls and has no interrupt handler. Masking was to follow `rtw89_pci_disable_intr`, the state Linux keeps before it starts. Nothing in the issue or the code says the bit was masked to change the firmware's behaviour.
+- **What Linux does with the bit** (pci.c, pci.h and rtw8852be.c at 05f7e89):
+  - The 8852BE uses `rtw89_pci_config_intr_mask`, which sets `halt_c2h_intrs = B_AX_HALT_C2H_INT_EN` (bit 21; WDT_TIMEOUT, bit 22, is only in the recovery masks of the v1 chips).
+  - `rtw89_pci_ops_start` calls `rtw89_pci_enable_intr`, which writes HIMR0 (0x1A0) with it. `rtw89_pci_disable_intr` writes 0 only around stops and while the interrupt is handled.
+  - `rtw89_pci_recognize_intrs` reads HISR0 (0x1A4), keeps the bits of `halt_c2h_intrs`, and writes them back to clear them. A halt C2H bit leads to `rtw89_ser_notify(rtw89_mac_get_err_status())`.
+  - So Linux runs with bit 21 on, and this driver runs with it off.
+- **The change: `firmware_status()` now reads HISR0 first at each check.**
+  - When bit 21 (HALT_C2H) or bit 22 (WDT_TIMEOUT) is set, it writes those bits back, as `rtw89_pci_recognize_intrs` does, then reads SER_DBG_INFO and counts them.
+  - It then reads HALT_C2H_CTRL as before.
+  - Nothing is answered to the firmware, and HIMR0 stays masked.
+  - New line: `[RTW89] HISR0 HALT BITS n: <hisr> (HALT_C2H WDT_TIMEOUT) WITH HALT_C2H_CTRL <ctrl>; SER_DBG_INFO <v>; CLEARED AS LINUX DOES, NOTHING ANSWERED (213-DRV-0091)`.
+  - The minute line adds `HISR0 HALT_C2H h, WDT_TIMEOUT w`.
+- **What it tells.** If the silent recoveries raise HISR0's halt bit with HALT_C2H_CTRL still 0, the firmware signals the host and posts no code. If HISR0 stays clear too, the firmware does not signal the host for them at all, at least under this mask.
+- **Host case:** `service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing`. The model's HISR0 is cleared by writing its bits back, and a posted code raises bit 21. The case covers:
+  - a HALT_C2H bit with no code, then a WDT_TIMEOUT bit, each seen once and cleared;
+  - a posted L0_RESET_DONE, with its bit and its code;
+  - nothing written to HALT_H2C or its control;
+  - the minute line counting 2 HALT_C2H and 1 WDT_TIMEOUT.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
