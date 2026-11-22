@@ -33,6 +33,8 @@ mod scale;
 mod pointer;
 #[path = "../improve/app/src/waiting.rs"]
 mod waiting;
+#[path = "../wm/src/screens.rs"]
+mod screens;
 #[path = "../common/font16.rs"]
 mod font16;
 
@@ -2465,4 +2467,33 @@ fn the_run_windows_history() {
     back.draw(&mut grid, &DARK, &mut none, None);
     let shown: String = (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>() + "\n").collect();
     assert!(shown.contains("(↑ ↓: earlier ones)"), "{shown}");
+}
+
+#[test]
+fn the_desk_over_two_screens() {
+    use screens::{layout, Side};
+    use tui::Rect;
+    // 177-APP-0094: a 2560x1440 first screen and a 1920x1080 second, in 8x16 cells: 320x90 and 240x67.
+    let one = layout((320, 90), None);
+    assert_eq!((one.cols, one.rows, one.screens.len()), (320, 90, 1));
+    let right = layout((320, 90), Some(((240, 67), Side::Right)));
+    assert_eq!((right.cols, right.rows), (560, 90));
+    assert_eq!(right.screens, vec![Rect::new(0, 0, 320, 90), Rect::new(320, 0, 240, 67)], "aligned at the first's top");
+    let left = layout((320, 90), Some(((240, 67), Side::Left)));
+    assert_eq!(left.screens, vec![Rect::new(240, 0, 320, 90), Rect::new(0, 0, 240, 67)]);
+    let below = layout((320, 90), Some(((240, 67), Side::Below)));
+    assert_eq!((below.cols, below.rows, below.screens[1]), (320, 157, Rect::new(0, 90, 240, 67)), "aligned at the first's left");
+    let above = layout((320, 90), Some(((240, 67), Side::Above)));
+    assert_eq!((above.screens[0], above.screens[1]), (Rect::new(0, 67, 320, 90), Rect::new(0, 0, 240, 67)));
+    // Which screen a cell is on; the corner neither covers goes to the nearest.
+    assert_eq!((right.screen_of(10, 10), right.screen_of(400, 10), right.screen_of(319, 89)), (0, 1, 0));
+    assert_eq!(right.screen_of(400, 80), 1, "below the second screen's bottom: still the second, the nearest");
+    // The screen beside another.
+    assert_eq!((right.beside(0, Side::Right), right.beside(0, Side::Left), right.beside(1, Side::Left)), (Some(1), None, Some(0)));
+    assert_eq!((below.beside(0, Side::Below), above.beside(0, Side::Above), above.beside(1, Side::Below)), (Some(1), Some(1), Some(0)));
+    // A window moved to the other screen: the same place there in proportion, its size kept where it fits.
+    assert_eq!(right.moved(Rect::new(160, 45, 80, 25), 1), Rect::new(440, 33, 80, 25), "the middle of one is the middle of the other");
+    assert_eq!(right.moved(Rect::new(0, 0, 300, 80), 1), Rect::new(320, 0, 240, 67), "a window larger than the second screen fits it");
+    assert_eq!(right.moved(Rect::new(400, 10, 80, 25), 0), Rect::new(106, 13, 80, 25));
+    assert_eq!((Side::from_name("above"), Side::Below.name(), Side::from_name("up")), (Some(Side::Above), "below", None));
 }
