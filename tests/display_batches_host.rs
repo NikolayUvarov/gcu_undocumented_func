@@ -1,11 +1,15 @@
 // Host cases of display's step 1 (213-DRV-0086): the eight batches' registers, the order of names, pauses and reads,
 // how many batches a build reads, batch 4's dependence on batch 3, and the decoding of the state Linux's Display Core
-// dumped on the Ryzen on 2026-11-21 (hwdocs/cezanne-display.md).
+// dumped on the Ryzen on 2026-11-21 (hwdocs/cezanne-display.md); the production order's reads against what steps 3
+// and 4 take (213-DRV-0098).
 #![allow(dead_code)] // the driver uses parts these cases do not
 #[path = "../display/src/timing.rs"] mod timing;
 #[path = "../display/src/edid.rs"] mod edid;
 #[path = "../display/src/dcn.rs"] mod dcn;
 #[path = "../display/src/batches.rs"] mod batches;
+#[path = "../display/src/atom.rs"] mod atom;
+#[path = "../display/src/light.rs"] mod light;
+#[path = "../display/src/picture.rs"] mod picture;
 
 use batches::{plan, run, Bus, Known, Out, BATCHES, PAUSE_BEFORE_READ_MS, PAUSE_BETWEEN_BATCHES_MS};
 use dcn::{Reg, R};
@@ -389,4 +393,124 @@ fn every_register_of_the_map_is_named_once_in_the_engine_at_the_headers_offset()
         (R::DmcubScratch, 15, 2, 0x329C), (R::DmcubCntl, 0, 2, 0x32A0), (R::DmcubTimerCurrent, 0, 2, 0x32A7),
     ];
     for (r, i, s, d) in checks { assert_eq!(reg(r, i), (seg[s] + d) * 4, "{} {}", r.name(), i); }
+}
+
+// --- the production order (213-DRV-0098) ---
+
+// The firmware's state with everything steps 3 and 4 take: HPD 1 sensing, DIG E driving PHY E for OTG 0, the DMCUB held
+// in reset, pipe 0's reference (boot 70's values) and the I2C engine idle.
+fn ryzen_state() -> HashMap<u32, u32> {
+    let mut m = firmware_state();
+    m.insert(reg(R::HpdIntStatus, 0), 0b10);
+    for d in 0..4u8 { m.insert(reg(R::DigFeCntl, d), 7); }
+    m.insert(reg(R::DigFeCntl, 4), 1 << 24);
+    m.insert(reg(R::DigBeCntl, 4), (1 << 4) << 8);
+    m.insert(reg(R::DigBeEnCntl, 4), 0x101);
+    m.insert(reg(R::DmcubCntl, 0), 1 << 17);
+    for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
+        (R::HubpreqBlankOffset0, 0x13 << 16 | 0x35), (R::HubpreqSurfacePitch, 0xA00), (R::DcnVmFbLocationBase, 0xF400), (R::OtgVstartupParam, 0xD),
+        (R::OtgVupdateParam, 0x0140_02A8), (R::OtgVreadyParam, 0x12C), (R::HubpreqSurf0TtuCntl0, 8 << 24), (R::DchubbubGlobalTimerCntl, 0x1001)] {
+        m.insert(reg(r, 0), v);
+    }
+    for (o, v) in [(0x14D88, 0x01E0_0002), (0x14D8C, 0x3000_0040), (0x004EC, 0x0012_0230)] { m.insert(o, v); }
+    m
+}
+
+fn kind_at(o: u32) -> R { dcn::ALL.iter().copied().find(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o))).unwrap() }
+
+// Step 1 in an order on a model, through the order's own log: the reads, the store, the report and the lines logged.
+fn step1_in(order: batches::Order, regs: HashMap<u32, u32>, unmapped: &[u32]) -> (Vec<u32>, batches::Store, batches::Report, Vec<String>) {
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let mut model = Model { regs, events: events.clone(), unmapped: unmapped.iter().copied().collect() };
+    let mut store = batches::Store::default();
+    let report = match order {
+        batches::Order::Survey => batches::read_into(&mut model, BATCHES, order, &mut Log(events.clone()), &mut store),
+        batches::Order::Production => {
+            let mut buf = vec![0u8; batches::HELD_BYTES];
+            let mut held = batches::Held::new(Log(events.clone()), &mut buf);
+            batches::read_into(&mut model, BATCHES, order, &mut held, &mut store)
+        }
+    };
+    let ev = events.borrow().clone();
+    (reads(&ev), store, report, lines(&ev).iter().map(|x| x.to_string()).collect())
+}
+
+// What steps 3 and 4 take from step 1's values: the pipes chosen, and the reference of the firmware's.
+fn taken(s: &batches::Store) -> (Result<(light::Firmware, light::Choice), light::Refusal>, Option<light::Reference>) {
+    let found = light::assess(s);
+    let reference = found.as_ref().ok().and_then(|(f, c)| light::reference(s, f, c));
+    (found, reference)
+}
+
+#[test]
+fn the_production_order_reads_only_what_steps_2_to_4_take_in_the_surveys_order_and_pauses_nowhere() {
+    let (survey, ss, sr, _) = step1_in(batches::Order::Survey, ryzen_state(), &[]);
+    let (production, ps, pr, plines) = step1_in(batches::Order::Production, ryzen_state(), &[]);
+    // The survey's reads of the kinds `USED` names, in the survey's order, and no other.
+    let want: Vec<u32> = survey.iter().copied().filter(|&o| batches::USED.contains(&kind_at(o))).collect();
+    assert_eq!(production, want);
+    assert_eq!((sr.registers_read, pr.registers_read, sr.batches_read, pr.batches_read), (305, want.len(), 11, 11));
+    assert_eq!((ss.batches(), ps.batches()), (11, 11), "every batch counted read: steps 3 and 4 need the first ten");
+    eprintln!("step 1 on the Ryzen's state: the survey reads {} registers, the production order {}", survey.len(), production.len());
+    // Each value it read is the survey's.
+    for &o in &production { let (r, i) = dcn::ALL.iter().flat_map(|&r| (0..r.instances()).map(move |i| (r, i))).find(|&(r, i)| r.at(i).unwrap().offset() == o).unwrap(); assert_eq!(ps.get(r, i), ss.get(r, i)); }
+    // Its log: one line, no pause, no value.
+    assert_eq!(plines, [format!("STEP 1 DONE: 11 OF 11 BATCHES READ, {} REGISTERS, NOTHING WRITTEN; ONLY WHAT STEPS 2 TO 4 TAKE (THE PRODUCTION ORDER)", want.len())]);
+    // A register the grant does not map: named in either order.
+    let (_, _, _, plines) = step1_in(batches::Order::Production, ryzen_state(), &[reg(R::DomainPgStatus, 2)]);
+    assert!(plines.iter().any(|x| x.starts_with("B3 DOMAIN2_PG_STATUS AT") && x.ends_with("NOT MAPPED, NOT READ")), "{:#?}", plines);
+    assert!(plines.iter().any(|x| x.starts_with("B4 HUBP: NOTHING TO READ")), "{:#?}", plines);
+    // A build that may read nothing reads nothing in either order.
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let mut model = Model { regs: ryzen_state(), events: events.clone(), unmapped: BTreeSet::new() };
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(events.clone()), &mut buf);
+    assert_eq!(batches::read_into(&mut model, 0, batches::Order::Production, &mut held, &mut batches::Store::default()).registers_read, 0);
+    assert!(reads(&events.borrow()).is_empty() && !events.borrow().iter().any(|e| matches!(e, Event::Pause(_))));
+}
+
+#[test]
+fn steps_3_and_4_take_the_same_from_either_orders_step_1() {
+    let (_, ss, _, _) = step1_in(batches::Order::Survey, ryzen_state(), &[]);
+    let (_, ps, _, _) = step1_in(batches::Order::Production, ryzen_state(), &[]);
+    let (found, reference) = taken(&ss);
+    assert_eq!(found, Ok(light::EXPECTED));
+    assert!(reference.is_some());
+    assert_eq!(taken(&ps), (found, reference));
+}
+
+#[test]
+fn no_register_the_production_order_leaves_unread_changes_what_steps_3_and_4_take_and_each_it_reads_does() {
+    let (survey, base_store, _, _) = step1_in(batches::Order::Survey, ryzen_state(), &[]);
+    let base = taken(&base_store);
+    // Whatever value step 1 finds in a register the production order does not read, steps 3 and 4 take the same.
+    let unread: Vec<u32> = survey.iter().copied().filter(|&o| !batches::USED.contains(&kind_at(o))).collect();
+    assert!(unread.len() > 100, "{}", unread.len());
+    for &o in &unread {
+        let was = ryzen_state().get(&o).copied().unwrap_or(0);
+        for v in [0, !0, 0x5A5A_5A5A, was ^ 1] {
+            let mut regs = ryzen_state();
+            regs.insert(o, v);
+            let (_, s, _, _) = step1_in(batches::Order::Survey, regs, &[]);
+            assert_eq!(taken(&s), base, "{:05X} ({}) = {:08X}", o, kind_at(o).name(), v);
+        }
+    }
+    // Each kind it reads in batches 1 to 10 is taken: without it (unmapped), steps 3 and 4 take something else, on the
+    // Ryzen's state or on one where front end A is busy or the back end names front end B (batch 11's: display_ddc_host).
+    let mut busy_a = ryzen_state();
+    busy_a.insert(reg(R::DigFeCntl, 0), 1 << 24);
+    let mut names_b = busy_a.clone();
+    names_b.insert(reg(R::DigBeCntl, 4), (1 << 1) << 8);
+    names_b.insert(reg(R::DigFeCntl, 1), 1 << 24);
+    let states = [ryzen_state(), busy_a, names_b];
+    for kind in batches::USED {
+        if !(1..=10).any(|b| batches::plan(b, &firmware_known()).iter().any(|n| n.r == kind)) { continue; }
+        let gone: Vec<u32> = (0..kind.instances()).map(|i| reg(kind, i)).collect();
+        let differs = states.iter().any(|st| {
+            let (_, with, _, _) = step1_in(batches::Order::Production, st.clone(), &[]);
+            let (_, without, _, _) = step1_in(batches::Order::Production, st.clone(), &gone);
+            taken(&with) != taken(&without)
+        });
+        assert!(differs, "{} is read but not taken", kind.name());
+    }
 }

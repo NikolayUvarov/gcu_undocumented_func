@@ -3,7 +3,7 @@
 // display (213-DRV-0086, DRV's): the Ryzen's Radeon display engine. It logs the grant as KRN's stub did (213-KRN-0270,
 // 0271), then runs step 1 (the firmware's display state read in batches, as many as BATCHES_ALLOWED says) and steps 3
 // and 4 (first light on HDMI-A-1, then MIND Core's picture, 213-DRV-0092, in stages, as many as STAGES_ALLOWED says; at 0
-// nothing is written and no writer is made).
+// nothing is written and no writer is made). SURVEY_ORDER chooses the survey's order or the production one (213-DRV-0098).
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
@@ -43,9 +43,15 @@ const MODE_FROM_EDID: bool = false;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
 const UNDO_AFTER_STAGES: bool = false;
+/// When true, steps 1 to 4 run in the survey's order, for bring-up: every batch named and paused, every value, write and
+/// plan logged before it is made, 1 s before each stage's writes and 3 s after it. When false, in the production order
+/// (213-DRV-0098): the same writes and checks in the same order, step 1 reading only what steps 2 to 4 take, no pause, a
+/// line a stage with its time, the detail only when a part fails. Either way nothing is read or written at 0 batches
+/// and 0 stages. Set on the DRV owner session's word.
+const SURVEY_ORDER: bool = false;
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
-/// Before step 1, so that the boot's own lines are kept first.
+/// Before step 1 in the survey's order, so that the boot's own lines are kept first.
 const START_PAUSE_MS: usize = 5000;
 const RADEON: u32 = 0x1638_1002;
 
@@ -59,6 +65,7 @@ const VBIOS: usize = SLOT_IRQ;
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    let started = now_us();
     let device = mind::process::args_str().trim();
     let (kind, _, engine) = cap_info(ENGINE);
     if kind != CAP_KIND_MMIO { mind::println!("[DISPLAY] NO REGISTERS GRANTED"); idle(); }
@@ -76,10 +83,29 @@ fn main(_info: &'static BootInfo) {
         Some(table) => { let length = table.as_slice().get(4..8).map_or(0, |l| u32::from_le_bytes([l[0], l[1], l[2], l[3]]) as usize); vbios(&table.as_slice()[..length.min(table.len())]) }
         None => mind::println!("[DISPLAY] NO VBIOS IMAGE GRANTED"),
     }
+    let order = if SURVEY_ORDER { batches::Order::Survey } else { batches::Order::Production };
+    let mut buf = alloc::vec![0u8; if SURVEY_ORDER { 0 } else { batches::HELD_BYTES }];
+    let (mut survey, mut held) = (Log, batches::Held::new(Log, &mut buf));
+    let out: &mut dyn batches::Out = if SURVEY_ORDER { &mut survey } else { &mut held };
     let mut store = batches::Store::default();
-    let (read, mmio) = step1(id, engine, &mut store);
-    let edid = step2(&store, mmio.as_ref());
-    let written = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()), edid.as_ref());
+    let t1 = now_us();
+    let (read, mmio) = step1(id, engine, order, &mut store, out);
+    let t2 = now_us();
+    let edid = step2(&store, mmio.as_ref(), out);
+    let t3 = now_us();
+    let (written, times) = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()), edid.as_ref(), out);
+    // How long each part took, from display's start (213-DRV-0098): to the offer when stage 16 made it.
+    let ms = |us: u64| (us / 1000, us % 1000 / 100);
+    let (a, b, c) = (ms(t1 - started), ms(t2 - t1), ms(t3 - t2));
+    let name = if SURVEY_ORDER { "SURVEY'S" } else { "PRODUCTION" };
+    match times.and_then(|t| t.offered_us.map(|o| t.start_us + o)) {
+        Some(offered) => {
+            let (d, e) = (ms(offered.saturating_sub(started)), ms(offered.saturating_sub(t3)));
+            mind::println!("[DISPLAY] THE SECOND SCREEN OFFERED {}.{} MS AFTER DISPLAY'S START, IN THE {} ORDER: BEFORE STEP 1 {}.{} MS, STEP 1 {}.{} MS, STEP 2 {}.{} MS, STEP 3 TO THE OFFER {}.{} MS",
+                d.0, d.1, name, a.0, a.1, b.0, b.1, c.0, c.1, e.0, e.1);
+        }
+        None => { let d = ms(now_us() - t3); mind::println!("[DISPLAY] NO SECOND SCREEN OFFERED, IN THE {} ORDER: BEFORE STEP 1 {}.{} MS, STEP 1 {}.{} MS, STEP 2 {}.{} MS, STEP 3 {}.{} MS", name, a.0, a.1, b.0, b.1, c.0, c.1, d.0, d.1) }
+    }
     match (read, written) {
         (0, 0) => mind::println!("[DISPLAY] NO REGISTER READ OR WRITTEN"),
         (r, 0) => mind::println!("[DISPLAY] {} REGISTERS READ, NONE WRITTEN", r),
@@ -89,25 +115,28 @@ fn main(_info: &'static BootInfo) {
     idle();
 }
 
+fn now_us() -> u64 { mind::time::monotonic_ns() / 1000 }
+
 /// Step 1 on the engine's window: the registers it read, kept in `store`, and the window's mapping when it made one.
-fn step1(id: u32, engine: usize, store: &mut batches::Store) -> (usize, Option<Mmio>) {
-    mind::println!("[DISPLAY] STEP 1 MAY READ {} OF {} BATCHES, WRITES NOTHING", BATCHES_ALLOWED, batches::BATCHES);
+fn step1(id: u32, engine: usize, order: batches::Order, store: &mut batches::Store, out: &mut dyn batches::Out) -> (usize, Option<Mmio>) {
+    mind::println!("[DISPLAY] STEP 1 MAY READ {} OF {} BATCHES, WRITES NOTHING; THE {} ORDER", BATCHES_ALLOWED, batches::BATCHES,
+                   if SURVEY_ORDER { "SURVEY'S" } else { "PRODUCTION" });
     if id != RADEON { mind::println!("[DISPLAY] NOT THE RADEON 1002:1638: STEP 1 NOT RUN"); return (0, None); }
     if engine < dcn::DCN_BYTES.end as usize { mind::println!("[DISPLAY] THE ENGINE'S WINDOW IS BELOW {:#X} BYTES: STEP 1 NOT RUN", dcn::DCN_BYTES.end); return (0, None); }
-    mind::time::sleep(START_PAUSE_MS);
-    if BATCHES_ALLOWED == 0 { return (batches::run_into(&mut Unmapped, 0, &mut Log, store).registers_read, None); }
+    if SURVEY_ORDER { mind::time::sleep(START_PAUSE_MS); }
+    if BATCHES_ALLOWED == 0 { return (batches::read_into(&mut Unmapped, 0, order, out, store).registers_read, None); }
     let Ok(mmio) = Mmio::map(ENGINE) else { mind::println!("[DISPLAY] THE ENGINE'S WINDOW NOT MAPPED: STEP 1 NOT RUN"); return (0, None) };
     let mut registers = Registers(mmio);
-    let read = batches::run_into(&mut registers, BATCHES_ALLOWED, &mut Log, store).registers_read;
+    let read = batches::read_into(&mut registers, BATCHES_ALLOWED, order, out, store).registers_read;
     (read, Some(registers.0))
 }
 
 /// Step 2 (213-DRV-0095): the EDID over DDC1, on step 1's mapping, and what it says.
-fn step2(store: &batches::Store, mmio: Option<&Mmio>) -> Option<edid::Edid> {
+fn step2(store: &batches::Store, mmio: Option<&Mmio>, out: &mut dyn batches::Out) -> Option<edid::Edid> {
     if !EDID_ALLOWED { mind::println!("[DISPLAY] STEP 2 (THE EDID OVER DDC1) NOT RUN: THIS BUILD DOES NOT ASK FOR IT"); return None; }
     let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 2 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return None };
-    let read = ddc::read(store, &mut Ddc(mmio), &mut Log).ok()?;
-    ddc::describe(&read, &mut Log)
+    let read = ddc::read(store, &mut Ddc(mmio), out).ok()?;
+    ddc::describe(&read, out)
 }
 
 // Step 2's access to the engine: reads, the writes ddc.rs's guard lets through, and time.
@@ -132,14 +161,14 @@ impl light::Clock for Ddc<'_> {
     }
 }
 
-/// Step 3: the writes it made. At STAGES_ALLOWED 0 it only describes the stages, for the pipe step 1 found or, with
-/// step 1 not read, for the survey's expectation.
-fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>, edid: Option<&edid::Edid>) -> usize {
+/// Step 3: the writes it made, and its times when its stages ran. At STAGES_ALLOWED 0 it only describes the stages, for
+/// the pipe step 1 found or, with step 1 not read, for the survey's expectation.
+fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>, edid: Option<&edid::Edid>, out: &mut dyn batches::Out) -> (usize, Option<light::Times>) {
     let today = timing::first_light_mode(&HDMI_A_1_VICS);
     let (found, expected) = match light::assess(store) {
         Ok(found) => (found, false),
         Err(why) if STAGES_ALLOWED == 0 => { mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why); (light::EXPECTED, true) }
-        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
+        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return (0, None); }
     };
     let signal = if HDMI_SIGNALLING { dcn::Signal::Hdmi } else { dcn::Signal::Dvi };
     let (timing, signal) = if MODE_FROM_EDID {
@@ -149,23 +178,19 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>, edid: 
     } else { (today, signal) };
     let plan = match light::Light::new_with(found.0, found.1, timing, signal) {
         Ok(plan) => plan.with_reference(light::reference(store, &found.0, &found.1)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
-        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
+        Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return (0, None); }
     };
-    if STAGES_ALLOWED == 0 { light::describe(&plan, expected, &mut Log); return 0; }
+    if STAGES_ALLOWED == 0 { light::describe(&plan, expected, out); return (0, None); }
     // Only here is a writer made: a build of STAGES_ALLOWED 0 has none.
-    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 3 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return 0 };
-    let Some((0x1002, 0x1638, image)) = vfct.and_then(atom::vfct_image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: NO VBIOS IMAGE FOR 1002:1638"); return 0 };
-    let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return 0 };
+    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 3 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return (0, None) };
+    let Some((0x1002, 0x1638, image)) = vfct.and_then(atom::vfct_image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: NO VBIOS IMAGE FOR 1002:1638"); return (0, None) };
+    let Ok(image) = atom::Image::new(image) else { mind::println!("[DISPLAY] STEP 3 NOT RUN: THE VBIOS IMAGE HAS NO ATOM ROM HEADER"); return (0, None) };
     let mut interp = Box::new(atom::Interpreter::new(image));
     let mut journal = Box::new(light::Journal::default());
     // Step 4's surface: the start of BAR 0's slot 5, when granted (213-KRN-0271).
     let surface = Mmio::map(SECOND_SCREEN).ok();
-    if UNDO_AFTER_STAGES {
-        light::run_then_undo(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
-    } else {
-        light::run(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, &mut Log);
-    }
-    journal.len()
+    let (_, times) = light::run_timed(&plan, &mut Writer(mmio, surface), &mut interp, &mut journal, STAGES_ALLOWED, UNDO_AFTER_STAGES, out);
+    (journal.len(), Some(times))
 }
 
 /// The VICs HDMI-A-1's EDID lists (read under Linux, 2026-11-21); the EDID over DDC is step 2.

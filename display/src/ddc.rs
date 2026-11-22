@@ -149,6 +149,8 @@ struct Step2<'a, E: Bus + Poke + Clock> {
     journal: [Option<(Writable, u32, bool)>; MAX_WRITES],
     len: usize,
     granted: bool,
+    // Each block's time from GO to the transfer's end, for step 2's line (213-DRV-0098).
+    go_us: [u64; MAX_BLOCKS],
 }
 
 // Every register and instance here is one of the map's.
@@ -242,6 +244,7 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         // GO: the clock taken right after its write and the status polled at once; the write logged after the transfer,
         // so that no log line lies between GO and the first read of the status (boot 78 measured the poll only).
         let (status, us, polls) = self.go(block)?;
+        self.go_us[block as usize % MAX_BLOCKS] = us;
         if status & SW_STOPPED_ON_NACK != 0 { return Err(Failure::Nack { block, status }); }
         if status & SW_TIMEOUT != 0 { return Err(Failure::Timeout { block, status }); }
         if status & SW_ABORTED != 0 { return Err(Failure::Aborted { block, status }); }
@@ -283,10 +286,11 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         result.map(|s| (s, us, polls))
     }
 
-    // release_engine, then every register written put back, last first; then each checked against batch 11.
-    fn give_back(&mut self, store: &Store) {
+    // release_engine, then every register written put back, last first; then each checked against batch 11: how many
+    // were put back, and how many of `RESTORED` read as batch 11 read them.
+    fn give_back(&mut self, store: &Store) -> (usize, usize) {
         use R::*;
-        if self.len == 0 { return; }
+        if self.len == 0 { return (0, RESTORED.len()); }
         let reset = match self.read(DcI2cSwStatus, 0) { Ok(s) => STATUS.get(s) == USED_BY_SW, Err(_) => false };
         let fields: &[(Field, u32)] = if reset { &[(SOFT_RESET, 1), (SW_STATUS_RESET, 1)] } else { &[(SW_STATUS_RESET, 1)] };
         let _ = self.update(DcI2cControl, 0, fields, true);
@@ -314,14 +318,15 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         for (r, n) in RESTORED {
             match (self.read(r, n), store.get(r, n)) {
                 (Ok(now), Some(found)) if now == found => same += 1,
-                (Ok(now), Some(found)) => self.out.line(format_args!("D NOT AS FOUND: {} = {:08X}, BATCH 11 READ {:08X}", Name(at(r, n)), now, found)),
-                _ => self.out.line(format_args!("D NOT CHECKED: {}", Name(at(r, n)))),
+                (Ok(now), Some(found)) => self.out.note(format_args!("D NOT AS FOUND: {} = {:08X}, BATCH 11 READ {:08X}", Name(at(r, n)), now, found)),
+                _ => self.out.note(format_args!("D NOT CHECKED: {}", Name(at(r, n)))),
             }
         }
         let holder = self.read(DcI2cArbitration, 0).map(|a| RW_CNTL_STATUS.get(a)).ok();
         let found = store.field(DcI2cArbitration, 0, RW_CNTL_STATUS);
         out_held(self.out, holder, found);
         self.out.line(format_args!("D THE ENGINE GIVEN BACK: {} WRITES PUT BACK; {} OF {} REGISTERS AS BATCH 11 READ THEM", restored, same, RESTORED.len()));
+        (restored, same)
     }
 }
 
@@ -330,21 +335,30 @@ fn out_held(out: &mut dyn Out, now: Option<u32>, found: Option<u32>) {
     out.line(format_args!("D THE ENGINE NOW HELD BY {}; BATCH 11 FOUND IT HELD BY {}", name(now), name(found)));
 }
 
-/// Step 2: the EDID's blocks, or why not; the engine given back as found either way.
+/// Step 2: the EDID's blocks, or why not; the engine given back as found either way. Its last line says how long it
+/// took, each transfer from GO and the give-back (213-DRV-0098); a transfer that fails logs its detail first.
 pub fn read<E: Bus + Poke + Clock>(store: &Store, e: &mut E, out: &mut dyn Out) -> Result<Read, Failure> {
+    out.part();
+    let start = e.now_us();
     out.line(format_args!("D STEP 2: HDMI-A-1'S EDID OVER DDC1 THROUGH THE I2C ENGINE, AT {} KHZ, IN DISPLAY CORE'S ORDER; THE ENGINE PUT BACK AS FOUND AFTER", SPEED_KHZ));
+    let (mut back, mut go) = ((0, RESTORED.len()), [0u64; MAX_BLOCKS]);
     let result = if store.get(R::DcI2cArbitration, 0).is_none() || store.get(R::DcI2cDdc1Setup, 0).is_none() { Err(Failure::NotRead) }
         else if store.field(R::HpdIntStatus, 0, DC_HPD_SENSE) != Some(1) { Err(Failure::NoMonitor) }
         else {
-            let mut s = Step2 { e, out: &mut *out, journal: [None; MAX_WRITES], len: 0, granted: false };
+            let mut s = Step2 { e: &mut *e, out: &mut *out, journal: [None; MAX_WRITES], len: 0, granted: false, go_us: [0; MAX_BLOCKS] };
             let r = s.transfer();
-            if let Err(why) = r { s.out.line(format_args!("D STOPPED: {}; THE ENGINE IS GIVEN BACK", why)); }
-            s.give_back(store);
+            if let Err(why) = r { s.out.failed(); s.out.line(format_args!("D STOPPED: {}; THE ENGINE IS GIVEN BACK", why)); }
+            back = s.give_back(store);
+            go = s.go_us;
             r
         };
+    let us = e.now_us().saturating_sub(start);
     match &result {
-        Ok(r) => out.line(format_args!("D STEP 2 DONE: {} BLOCKS READ ({} BYTES)", r.blocks, r.blocks * BLOCK)),
-        Err(why) => out.line(format_args!("D STEP 2 NOT DONE: {}; STEPS 3 AND 4 GO ON WITHOUT IT", why)),
+        Ok(r) if r.blocks > 1 => out.note(format_args!("D STEP 2 DONE: {} BLOCKS READ ({} BYTES) IN {} US, THE TRANSFERS {} AND {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS BATCH 11 READ THEM",
+            r.blocks, r.blocks * BLOCK, us, go[0], go[1], back.0, back.1, RESTORED.len())),
+        Ok(r) => out.note(format_args!("D STEP 2 DONE: {} BLOCK READ ({} BYTES) IN {} US, THE TRANSFER {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS BATCH 11 READ THEM",
+            r.blocks, r.blocks * BLOCK, us, go[0], back.0, back.1, RESTORED.len())),
+        Err(why) => out.note(format_args!("D STEP 2 NOT DONE: {}; STEPS 3 AND 4 GO ON WITHOUT IT", why)),
     }
     result
 }
@@ -358,21 +372,22 @@ pub fn hash(bytes: &[u8]) -> u64 { bytes.iter().fold(0xCBF2_9CE4_8422_2325u64, |
 pub fn describe(read: &Read, out: &mut dyn Out) -> Option<Edid> {
     let edid = match Edid::parse(read.bytes()) {
         Ok(e) => e,
-        Err(why) => { out.line(format_args!("D THE EDID DOES NOT PARSE: {:?}", why)); return None; }
+        Err(why) => { out.note(format_args!("D THE EDID DOES NOT PARSE: {:?}", why)); return None; }
     };
     let name = core::str::from_utf8(edid.name()).unwrap_or("?");
-    out.line(format_args!("D EDID {}.{}, FNV-1A {:016X}: {}{}{} PRODUCT {:04X}, {}, \"{}\"; {} EXTENSIONS ANNOUNCED, {} BLOCKS READ",
+    // Who it is, its preferred timing and its HDMI limit: logged in either order; the rest is detail.
+    out.note(format_args!("D EDID {}.{}, FNV-1A {:016X}: {}{}{} PRODUCT {:04X}, {}, \"{}\"; {} EXTENSIONS ANNOUNCED, {} BLOCKS READ",
         edid.version, edid.revision, hash(read.bytes()), edid.manufacturer[0] as char, edid.manufacturer[1] as char, edid.manufacturer[2] as char,
         edid.product, edid.year, name, edid.extensions, read.blocks));
     let khz = |t: &crate::timing::Timing| t.pixel_khz;
     let hz = |t: &crate::timing::Timing| { let m = t.refresh_millihertz(); (m / 1000, m % 1000) };
     match edid.preferred() {
-        Some(t) => out.line(format_args!("D PREFERRED: {}x{} AT {}.{:03} HZ, {} KHZ, IN {}x{}", t.h_active, t.v_active, hz(&t).0, hz(&t).1, khz(&t), t.h_total(), t.v_total())),
-        None => out.line(format_args!("D NO PREFERRED TIMING")),
+        Some(t) => out.note(format_args!("D PREFERRED: {}x{} AT {}.{:03} HZ, {} KHZ, IN {}x{}", t.h_active, t.v_active, hz(&t).0, hz(&t).1, khz(&t), t.h_total(), t.v_total())),
+        None => out.note(format_args!("D NO PREFERRED TIMING")),
     }
     match edid.hdmi {
-        Some(h) => out.line(format_args!("D AN HDMI SINK: TMDS AT MOST {} MHZ (HDMI 1.4 BLOCK {} MHZ, HDMI FORUM BLOCK {} MHZ)", edid.max_tmds_khz() / 1000, h.max_tmds_mhz, h.forum_max_tmds_mhz)),
-        None => out.line(format_args!("D NO HDMI BLOCK: A DVI SINK, TMDS AT MOST {} MHZ", edid.max_tmds_khz() / 1000)),
+        Some(h) => out.note(format_args!("D AN HDMI SINK: TMDS AT MOST {} MHZ (HDMI 1.4 BLOCK {} MHZ, HDMI FORUM BLOCK {} MHZ)", edid.max_tmds_khz() / 1000, h.max_tmds_mhz, h.forum_max_tmds_mhz)),
+        None => out.note(format_args!("D NO HDMI BLOCK: A DVI SINK, TMDS AT MOST {} MHZ", edid.max_tmds_khz() / 1000)),
     }
     for (i, t) in edid.timings().enumerate() {
         out.line(format_args!("D TIMING {}: {}x{}{} AT {}.{:03} HZ, {} KHZ; DVI {}", i + 1, t.h_active, t.v_active, if t.interlaced { "I" } else { "" },
@@ -385,6 +400,5 @@ pub fn describe(read: &Read, out: &mut dyn Out) -> Option<Edid> {
             crate::timing::DVI_SINGLE_LINK_KHZ / 1000, t.h_active, t.v_active, hz(&t).0, hz(&t).1, khz(&t))),
         None => out.line(format_args!("D WITHIN DVI'S {} MHZ, NO TIMING IT GIVES IN FULL IS NEARER ITS SHAPE THAN 1920x1080", crate::timing::DVI_SINGLE_LINK_KHZ / 1000)),
     }
-    out.line(format_args!("D THE MODE STAYS 1920x1080 AT 60 HZ IN THIS BUILD: 213-DRV-0095'S NEXT STEP CHOOSES FROM THIS"));
     Some(edid)
 }
