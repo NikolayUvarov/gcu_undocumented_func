@@ -8207,6 +8207,14 @@ def camera_check(vm):
     vm.hmp("sendkey n")
     vm.serial(enter=False)
     vm.logged("[CAMERA] ONE CAMERA ONLY: test pattern", since)
+    # 158-APP-0152: the pattern's three modes (video.wit 1.1): 640x480 at 30, 320x240 at 10, 160x120 at 5. Opened at
+    # 320x240 at 10 it is mode 1; m steps on to mode 2, round to 0, and Shift+m back, each at its own size.
+    for keys, line in (("m", "160X120 AT 5/S: MODE 2 (OF 0 TO 2), 160x120 at 5/s SYNTHETIC"), ("m", "640X480 AT 30/S: MODE 0 (OF 0 TO 2), 640x480 at 30/s SYNTHETIC"),
+                       ("shift-m", "160X120 AT 5/S: MODE 2 (OF 0 TO 2), 160x120 at 5/s SYNTHETIC")):
+        since = len(vm.log)
+        vm.hmp(f"sendkey {keys}")
+        vm.serial(enter=False)
+        vm.logged(f"[CAMERA] OPENED test pattern {line}", since)
     # Read from the log: camera may end, and the shell resume, within the 100 ms serial() drops (round 162's gate).
     since = len(vm.log)
     vm.hmp("sendkey esc")
@@ -8214,8 +8222,13 @@ def camera_check(vm):
     vm.logged("[CAMERA] SHOWN ", since)
     vm.logged("SHELL RESUMED.", since)
     time.sleep(.2); vm.collect(); vm.output = ""
+    # -m: a mode at its own size, and one past the list refused with the count.
+    require(vm.command("camera -m 7 -s ram:none.bmp", timeout=30), "camera: mode 7: the gateway lists 3 modes for camera 0, numbers 0 to 2")
+    require(vm.command("camera -m 0 -s ram:cam640.bmp", timeout=60), "[CAMERA] STILL ram:cam640.bmp: 640X480, FRAME ")
+    time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
-          "-c beyond the list refused, n with one camera named (158-APP-0147)", flush=True)
+          "-c beyond the list refused, n with one camera named (158-APP-0147); the pattern's three modes stepped by m and Shift+m, "
+          "a still at -m 0's 640x480 and -m 7 refused (158-APP-0152)", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 
