@@ -20,10 +20,20 @@ Each step ends with something a person or a log can check, and none of it is pro
 
 ## Acceptance criteria
 
-- [ ] `display` runs on the Ryzen from the boot image and logs the engine's state as the survey has it.
-- [ ] The HDMI monitor shows the engine's test pattern at a stated mode while the DP monitor keeps MIND Core's screen; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
-- [ ] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a model of the blocks.
-- [ ] With KRN's part: MIND Core's screen on both monitors.
+- [x] `display` runs on the Ryzen from the boot image and logs the engine's state as the survey has it (step 1, all
+  eight batches, 2026-11-21).
+- The HDMI monitor shows the engine's test pattern at a stated mode while the DP monitor keeps MIND Core's screen; the
+  maintainer saw both. This holds for that machine and its two monitors (MC-12.1). Recorded in two parts, which together
+  are this criterion:
+  - [x] the HDMI monitor shows the colour squares at 1920x1080 (CTA VIC 16, 148.5 MHz, DVI signalling), and the DP
+    monitor shows MIND Core's screen after the stages; the maintainer saw both (2026-11-22, below);
+  - [ ] the DP monitor keeps MIND Core's screen through every stage, with no flicker, blank or loss of signal. On
+    2026-11-22 it was not watched during the stages: open.
+- [x] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a
+  model of the blocks (`tests/display_host.rs`, `display_light_host.rs`; on the Ryzen's tables, the watched run's 95
+  writes in its order).
+- [ ] With KRN's part: MIND Core's screen on both monitors. Step 4 is its own task since 2026-11-22:
+  [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
 
 ## Progress (2026-11-21)
 
@@ -615,6 +625,164 @@ the plan below holds.
     places); stage 8 failing at table 76's one wait (the lanes' `TX_ACK`). Each is undone whole: every register as
     before, the firmware's pipe unchanged, and the off calls run to their end, but when the missing status is the one
     the DISABLE waits for too.
+
+## First light on the Ryzen (2026-11-22, watched)
+
+The maintainer chose to run stages 2 to 8, watched.
+- **The run:** release 202611220438, slot A confirmed 04:42:59 UTC; the bench tree at 1c65c3cb3 (this branch at
+  965154171 merged), with `BATCHES_ALLOWED` 8, `STAGES_ALLOWED` 8 and `UNDO_AFTER_STAGES` false; boot 66, after a
+  restart out of Linux. 413 `[DISPLAY]` lines, none dropped.
+- **Step 1:** all eight batches as before, the DMCUB held in reset. Step 3 assessed the expected pipes, HUBP1 attached
+  and blanked.
+- **Each stage's line, at seconds of the boot:**
+  - `S1 OTG CLOCKS DONE` at 46.5;
+  - `S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES` and `S2 PIXEL CLOCK DONE` at 51.4;
+  - `S3 TIMING DONE` at 56.3;
+  - `S4 TEST PATTERN DONE` at 60.6;
+  - `S5 OTG1_OTG_CONTROL ... SHOWED ITS STATUS IN 5 US`, `S5 OTG1 COUNTED 2 FRAMES IN 25 MS` and `S5 START DONE` at 64.9;
+  - `S6 TABLE 4 DONE: 31 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES` at 69.1;
+  - `S7 BACK END DONE` at 73.3;
+  - `S8 TABLE 76 DONE: 286 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES` and `S8 PHY DONE` at 78.0.
+- After each stage came `THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`, and after 5 to 8 `THE ATTACHED HUBPS
+  UNCHANGED, BLANKED (1 REGISTERS)`. The run ended with `STEP 3 STOPPED AFTER STAGE 8 OF 8 AS THIS BUILD ALLOWS; 95
+  WRITES MADE ARE LEFT IN PLACE`, `178 REGISTERS READ BY STEP 1, 95 WRITES BY STEP 3` and `COMMAND 0006 AFTER STEP 1`.
+- **The maintainer's words:** «второй монитор показывает цветные квадраты, на первом лог загрузки mind core;
+  моргания не видел, так как не смотрел на экран». That is: the second monitor (HDMI-A-1) shows the colour squares;
+  the first (DP-2) shows MIND Core's boot log; he saw no flicker because he was not looking at the screen.
+- So the squares on HDMI-A-1 and MIND Core's screen on DP-2 after the stages were seen. Whether DP-2 flickered during
+  the stages was not watched, and stays open.
+- This is his look, at that machine with those two monitors, in that release (MC-12.1). It is not a guarantee for
+  another machine, monitor, mode or boot (MC-12.9).
+
+**The tables on the hardware against the model.**
+- **Table 12 took a shorter path** than on the model: 308 steps and 33 writes against 530 and 111.
+  - The branch is PHY A's `RDPCSTX0_RDPCSTX_SCRATCH` (dword 0x2937, byte 0x177DC), read right after the table's first
+    write.
+  - On the hardware it held 0x300; on the model 0. The VBIOS uses it as its mark of a PHY it has set up: the long path
+    clears it, sets PHY A up (the reset, the SRAM, and all 37 writes through the control register bus), and writes
+    0x300 at its end.
+  - Seeded with 0x300 alone, the model takes the hardware's path; 0x100 or 0x200 do not.
+  - So on the hardware **no write went through PHY A's control register bus**: `RDPCS_TX_CR_DATA` was written 0
+    times, `RDPCS_TX_CR_ADDR` 0 times. The residue this record feared did not arise in this run.
+  - The mark, and what is set up behind it, were there before MIND Core started. The machine had come from Linux,
+    where the DMCUB lit HDMI-A-1. Whether a cold boot (power off) clears the mark is not known. If it does, table 12
+    takes the long path, which has not run on this hardware yet.
+- **Tables 4 and 76 took the model's path:** the same steps, calls, delays and writes (31, 2, 2 µs, 5; 286, 9, 420 µs,
+  23).
+- **Line by line**, the model seeded with the hardware's values before step 3 (every register step 3 wrote: `WARM` in
+  the host cases) makes all 95 writes of the run in its order, at its registers and values. Two status bits differ,
+  both carried by a read-modify-write:
+  - the lanes' `TX_ACK` in `RDPCSTX_PHY_CNTL3` (still set on the hardware just after `TX_REQ` fell);
+  - bit 24 of `DIG0_DIG_FE_CNTL` at the `DIG_START` pulse (1 at its first write, 0 at its second).
+- The model now answers as the hardware did: `DPCS_SYMCLK_CLOCK_ON` while the gate is off or the clock enabled, and
+  `MPLLB_STATE` while a lane's `MPLL_EN` is set. The host cases run the Ryzen's tables from both states (fc8490ad4).
+
+**Table 12's cold path, and what a test of it would take (a decision of the maintainer's).** Every MIND Core start
+on this machine comes through Linux, so PHY A's mark is set and table 12 takes the short path. The long path, with its
+20 address and 17 data writes into PHY A, has not run on this hardware. Testing it would need, on purpose:
+1. **A start of MIND Core not through Linux.** From Linux, set `BootNext` to MIND Core's entry, as `boot_switch` does,
+   then power off instead of restarting. A person then switches the machine on. `BootNext` is kept in NVRAM across
+   the power-off.
+2. **What it may change:** whether a power-off clears PHY A's mark, and the rest of the display block's state, is
+   itself not known. Step 1's batches show the engine as found. Stage 2's line shows which path table 12 took (since
+   213-DRV-0092's first commit): `THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH` or `... THE LONG PATH: n
+   WRITES THROUGH ITS BUS`.
+3. **What to watch:**
+   - the long path's waits (SRAM init done, MPLLB's state, the lanes' acknowledgements), each bounded by the table's
+     500 ms;
+   - table 12's count: 530 steps and 111 writes on the model;
+   - HDMI-A-1 waking at stage 8;
+   - DP-2 through every stage.
+4. **What the undo takes back, and what not:**
+   - If a stage fails, every register returns to its value before step 3, PHY A's mark too (back to 0, so the next
+     set-up runs the long path again).
+   - The 17 data writes into PHY A's internal registers stay: its PLL and lane settings for 148.5 MHz TMDS. They stay
+     until PHY A is set up again, by the next long path, Linux's DMCUB, or a power-off.
+   - With no failure and no undo, the internal settings and the mark both stay until the next power-off.
+
+**This release at every boot.** 202611220438 runs the eight stages at each boot and leaves them; the owner session
+keeps it so today, each boot a repeat of the experiment.
+- One reason to watch for: a boot that does not come through Linux (a power-off, a cold start). If it clears PHY A's
+  mark, table 12 takes the long path, with its 37 writes into PHY A, never run on this hardware yet, and unwatched.
+- The rest refuses by itself when the state differs: a second running OTG, no monitor on HPD 1, a running DMCUB, an
+  unblanked HUBP1.
+
+## Step 4, planned: MIND Core's picture on HDMI-A-1 (no code yet)
+
+The maintainer's goal is MIND Core's own screen on the second monitor, not the engine's squares. Step 4 replaces OPP1's
+test pattern with pixels that pipe 1 fetches from a surface of `display`'s own. Then the compositor draws into that
+surface (acceptance criterion 4).
+
+**Where it starts.** Step 3 has run: OTG1 at 1080p60, DIG A and PHY A in DVI signalling, OPP1 showing the pattern.
+This release runs step 3 at every boot. Step 4 adds stages 9 to 15 after stage 8, in the same frame:
+- each stage is logged with its writes before any is made, and undone with every stage before it if it fails;
+- the firmware's pipe is never written and is read after each stage;
+- the step reads nothing step 1 has not read on the same boot.
+
+**The surface.**
+- **Where:** BAR 0's slot 5 (213-KRN-0271), [0x0100_0000, 0x0240_0000), 20 MiB behind the GOP's framebuffer, which
+  ends at 0xFA_0000. `display` maps it write-combined.
+- **Its GPU address:** HUBP0 scans 0xF4_0000_0000, which is BAR 0's offset 0 and the GOP's framebuffer, and
+  `DCN_VM_FB_LOCATION_BASE` reads 0xF4_0000_0000. So BAR 0 offset X is GPU address 0xF4_0000_0000 + X, and the surface
+  is at **0xF4_0100_0000**. No page table or GART is involved.
+- **Its shape:** 1920x1080, `SURFACE_PIXEL_FORMAT` 8 (32-bit ARGB, the GOP's and Linux's), linear. The pitch is 1920
+  pixels (7680 bytes, a multiple of 256), for 8,294,400 bytes.
+- **The pitch convention.** Display Core writes `PITCH` as the pitch less one (`hubp2_program_size`, not among the
+  files at hand). Linux's own surfaces show right, so step 4 writes 1919. The firmware's HUBP0 holds 0xA00 against the
+  GOP's stride of 2560. That would mean 2561 by this convention, yet DP-2 shows no shear. Either the hardware rounds a
+  linear pitch, or the GOP writes it as is. The picture of stage 10 settles it: a one-pixel diagonal and one-pixel
+  edges shear visibly by a pixel a row if the pitch is off by one.
+
+**The stages:**
+
+| Stage | What it writes (Display Core's order, `dcn20_program_pipe`) | Undo | HDMI-A-1 | DP-2 |
+|---|---|---|---|---|
+| 9 reads (step 1's batch 9) | nothing. It reads the firmware's pipe as a reference: HUBP0's request, DLG and TTU registers; DPP0's format and its scaler and colour bypass; the MPC tree for OPP0 (`MPCC0` `TOP_SEL`, `BOT_SEL`, `OPP_ID`, `MPC_OUT0_MUX`) and the free MPCCs; DCHUBBUB's watermark sets; DCCG's `DPPCLKn_DTO_PARAM` | none | squares | unchanged |
+| 10 draw | no register. `display` fills the surface: a solid colour, a one-pixel white border, and a diagonal from corner to corner | none (the memory is unused) | squares | unchanged |
+| 11 pipe 1's clocks | `DPPCLK1`'s DTO for at least 148.5 MHz (`update_dpp_dto`), DPP1's clock (`dpp_dppclk_control`), HUBP1's DCFCLK (`hubp_clk_cntl`) | restore | squares | unchanged; **watch** (clocks shared with pipe 0's) |
+| 12 DPP1 | input format ARGB 8888; input CSC, gamut remap, gamma and output CSC in bypass; scaler 1:1, recout 1920x1080 | restore | squares | unchanged |
+| 13 HUBP1, blanked | surface config (format 8, linear, rotation 0), `PITCH` 1919, primary address 0xF4_0100_0000, viewport 1920x1080 at 0,0; request size, DLG and TTU from stage 9's reference, for 1920x1080 at 148.5 MHz (`hubp_setup`) | restore | squares | unchanged |
+| 14 MPC | a free MPCC: `TOP_SEL` DPP1, no bottom, `OPP_ID` 1, top only at alpha 255; `MPC_OUT1_MUX` to it (`update_mpcc`) | restore | squares (the pattern still overrides) | unchanged |
+| 15 unblank, pattern off | `HUBP_BLANK_EN` 0, and once a frame has fetched without underflow, `DPG_EN` 0 in OPP1 | pattern back on, then HUBP1 blanked, then 14 to 11 restored (Display Core's disable order) | **the drawn picture**: straight edges, the border all round, the diagonal corner to corner | unchanged; **watch** (memory bandwidth) |
+
+**What the watch adds.** From stage 13, step 4 owns HUBP1. It leaves the attached-HUBP check, which only guarded
+HUBP1's blank, and goes on the route. The firmware's pipe is still read after each stage, and stage 15 also reads:
+- the underflow statuses of HUBP0 and HUBP1 (`HUBP_UNDERFLOW_STATUS`), which the step 3 watch masks;
+- those of OTG0 and OTG1 (`OPTC_UNDERFLOW_OCCURRED_STATUS`, `_CURRENT`).
+
+Any underflow fails the stage. On pipe 0 that is the firmware's DP-2 disturbed; on pipe 1, the request or DLG values
+are wrong. The guard adds DPP1 and the chosen MPCC to the route and keeps DPP0, MPCC0 and HUBP0 refused.
+
+**What cannot be undone:** nothing beyond step 3's. Step 4 writes no PHY, VBIOS table or control bus.
+
+**Not known yet, and how each is met:**
+- **The DLG, TTU and request values.** Display Core computes them with its mode library, which is not at hand. Stage 9
+  reads the firmware's for pipe 0 (2560x1600 at 268.5 MHz) as the reference, and step 4 derives pipe 1's from it for
+  its mode, by the mode ratio. A wrong value shows as HUBP1 underflow: the stage is failed and undone.
+- **The watermarks are global** (DCHUBBUB), set by the firmware for one pipe. Step 4 does not write them, since they
+  are shared with DP-2's pipe. If two pipes underflow on them, setting them is a stage of its own, on the owner's word.
+- **The pitch convention**, settled by stage 15's picture.
+- **That DISPCLK** (DENTIST divider id 0x14) **is enough** for a second pipe at 148.5 MHz. It drives 268.5 MHz now; a
+  shortfall would show as underflow.
+
+**What the maintainer sees:**
+- stages 9 to 14: HDMI-A-1 keeps the squares, and DP-2 keeps MIND Core's screen; watch DP-2 at stage 11 especially;
+- stage 15: the squares give way to `display`'s picture, a solid colour with a white border and a diagonal; watch DP-2
+  then too. Any slant in the border or the diagonal is a pitch or address error.
+
+**The other side: the second screen offered to the compositor.** The compositor is KRN's: `compositor/` changes only
+in KRN tasks. `wm` is APP's. It is point 4 of DRV's request to KRN, which 213-KRN-0271 keeps for after a picture
+from `display`'s own framebuffer, that is, after stage 15. What to ask of KRN then is a versioned interface, a new
+version of `display.wit` or one of its own, which KRN owns, through which `display` tells the compositor:
+- that a second screen exists, and when it appears or goes (HPD 1);
+- its width, height and pitch in bytes, and its pixel format: 32-bit `0x00RRGGBB` in memory order B, G, R, A, as the
+  GOP's;
+- where its pixels are: a shared mapping of the surface, which `display` lends, or BAR 0's range;
+- when a frame may be shown: OTG1's vertical blank, which `display` sees by its frame count.
+
+First as a mirror: the compositor copies the same changed pixels into both screens, and `wm` needs nothing. Then
+extended: a second screen of its own, for which `wm` (APP) needs its size and place from the compositor, to be asked
+of APP then. `display` writes its side against KRN's interface.
 
 ## Related
 
