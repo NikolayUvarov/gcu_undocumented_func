@@ -535,6 +535,7 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - An idle CPU halts in `scheduler::idle` (scheduler.rs:2095 to 2100; `cpu::wait_for_interrupt`, kernel/src/arch/x86_64/cpu.rs:394), with no tick of its own (scheduler.rs:325).
 - **So the late wake-ups come from the kernel's idle-CPU wake path:** a late tick or timers pass on CPU 0, or a wake IPI not sent while `woken[]` stays set. They do not come from the driver or from CPU 4's sharing. That is KRN's, and the owner carries it there.
 - **Not shown:** which of those paths it is. A kernel counter per CPU would tell: IPIs sent, IPIs suppressed, timers passes late.
+- **Under uploads** (the same boot, eleven minutes at 853 to 1513 s, 400 sends a minute): 301 to 431 waits over 5 ms a minute, as on the quiet machine. Only the cameras' whole minutes had none. The figures are in [213-DRV-0104](213-DRV-0104-the-sends-answer-the-drivers-side.md), boot 99's figures.
 
 ## For a successor (state on 2026-11-22)
 
