@@ -95,6 +95,7 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
 
 - **The heads:**
   - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
+  - **The first landing's head** (`claude/000-DRV-0101-landing`, bf9942b64) is 3ad6e4d76 with the issue's text of then on top; this branch has it merged, so it lands after it.
   - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
   - **49bd2fede** makes `usbload` wait for and check the tally.
   - Neither has run on hardware. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`, outputs in `/tmp/claude-1000/cam/s12/`), was going at 18:50.
