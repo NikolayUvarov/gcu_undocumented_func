@@ -765,6 +765,46 @@ fn service_polls_tight_while_a_send_is_pending(){
     });
 }
 
+// 213-DRV-0104, BEGIN_LIGHT: a send begun within CHECK_MS of the step's checks makes no liveness checks of its own (no
+// radio check in its step) and is answered as any other; one begun later than that, the queue left unread, makes them as
+// without the switch (its reconcile, over the frames waiting, validates once more).
+#[test]
+fn service_begins_a_send_light_within_check_ms_of_the_steps_checks(){
+    let(mut made,mut late)=(vec![],vec![]);
+    for light in [false,true]{run(0,true,true,|data,c|{
+        // Data frames final on DMA and the RPQ, as on the Ryzen (RPQ_ALONE): a release is read with the frame buffer full.
+        ipc::reset();let mut service=Service::new(data).unwrap().begin_light(light,false);service.rpq_alone();assert!(service.step());
+        let before=c.borrow().radio_checks;
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none(),"pending");
+        made.push(c.borrow().radio_checks-before);
+        assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its release");
+        // The frame buffer full (nobody reads), the queue is not read empty and the checks wait up to CHECK_LATEST_MS.
+        for _ in 0..20{c.borrow_mut().incoming.push(packet());}for _ in 0..4{ipc::advance(1);assert!(service.step());}
+        ipc::advance(12);let before=c.borrow().radio_checks;
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+        late.push(c.borrow().radio_checks-before);
+        assert!(service.step());assert!(ipc::response(send).is_some());
+        drop(service);clean();
+    });}
+    assert!(made[0]>=1&&made[1]==0,"the send's own radio checks (its checks', its reconcile's), made without the switch only: {made:?}");
+    assert!(late[0]>=1&&late[0]==late[1],"over CHECK_MS since the step's checks, begun with its own either way: {late:?}");
+    // Alternating: the partial minute never, then off, then on; each minute's line counts the sends begun light.
+    run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().begin_light(false,true);assert!(service.step());
+        let mut seen=vec![];
+        for _ in 0..4{
+            let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+            let mut line=None;
+            for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+                if let Some(Event::Traffic{tx,..})=service.take_event(){line=Some(tx);break}}
+            let tx=line.expect("a minute line");seen.push((tx.light_label(),tx.begun_light));
+        }
+        assert_eq!(seen,[("LIGHT NEVER",0),("THIS MINUTE LIGHT OFF",0),("THIS MINUTE LIGHT ON",1),("THIS MINUTE LIGHT OFF",0)]);
+        drop(service);clean();
+    });
+}
+
 // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
 // then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
 #[test]

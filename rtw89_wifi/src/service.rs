@@ -46,6 +46,11 @@ const SEND_BEHIND_LATE_ALTERNATES:bool=false;
 const POLL_TIGHT_WHILE_PENDING:bool=false;
 // A bench mode as SEND_BEHIND_LATE_ALTERNATES: the switch by the minute line's minutes, never, then off, then on.
 const POLL_TIGHT_ALTERNATES:bool=false;
+// 213-DRV-0104, a bench switch: true begins a send without the data mode's liveness checks and coexistence reconcile when
+// the step's own were made within CHECK_MS, as the polls between them do; the data mode's state is still checked.
+const BEGIN_LIGHT:bool=false;
+// A bench mode as SEND_BEHIND_LATE_ALTERNATES: BEGIN_LIGHT by the minute line's minutes, never, then off, then on.
+const BEGIN_LIGHT_ALTERNATES:bool=false;
 const TIGHT_US:u64=2_000;
 // io::short_delay spins on the clock (no sleep below the scheduler's tick); 100 µs keeps the light poll, about 20 MMIO
 // reads, under a tenth of the pace.
@@ -173,6 +178,8 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     behind_alternates:bool,behind_kind:data_mode::FloorKind,behind_switch_due:bool,
     // POLL_TIGHT_WHILE_PENDING and its alternation, as SEND_BEHIND_LATE's.
     tight:bool,tight_alternates:bool,tight_kind:data_mode::FloorKind,tight_switch_due:bool,
+    // BEGIN_LIGHT and its alternation, as SEND_BEHIND_LATE's.
+    light:bool,light_alternates:bool,light_kind:data_mode::FloorKind,light_switch_due:bool,
     // DEBUG (2026-11-08): the SNAPSHOT registers at the start, and when each first changed (ms from the start, its value,
     // whether a send was pending), read once a step.
     first:data_mode::Snapshot,changes:Changes,start_ms:u64,
@@ -242,7 +249,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,parked:None,behind:SEND_BEHIND_LATE,
             behind_alternates:SEND_BEHIND_LATE_ALTERNATES,behind_kind:data_mode::FloorKind::None,behind_switch_due:false,
-            tight:POLL_TIGHT_WHILE_PENDING,tight_alternates:POLL_TIGHT_ALTERNATES,tight_kind:data_mode::FloorKind::None,tight_switch_due:false,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
+            tight:POLL_TIGHT_WHILE_PENDING,tight_alternates:POLL_TIGHT_ALTERNATES,tight_kind:data_mode::FloorKind::None,tight_switch_due:false,
+            light:BEGIN_LIGHT,light_alternates:BEGIN_LIGHT_ALTERNATES,light_kind:data_mode::FloorKind::None,light_switch_due:false,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
             linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default(),floor:FloorState::default(),
@@ -287,6 +295,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     /// POLL_TIGHT_WHILE_PENDING, and whether it alternates by the minute.
     #[cfg(test)]
     pub(crate) fn poll_tight(mut self,on:bool,alternates:bool)->Self{self.tight=on;self.tight_alternates=alternates;self}
+    /// BEGIN_LIGHT, and whether it alternates by the minute.
+    #[cfg(test)]
+    pub(crate) fn begin_light(mut self,on:bool,alternates:bool)->Self{self.light=on;self.light_alternates=alternates;self}
     /// The data queues' frames final on DMA and the RPQ (tx.rs RPQ_ALONE), as on the Ryzen.
     #[cfg(test)]
     pub(crate) fn rpq_alone(&mut self){self.data().rpq_alone()}
@@ -417,7 +428,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
         if self.parked.is_some(){self.finish_parked()?}
-        self.switch_behind();self.switch_tight();
+        self.switch_behind();self.switch_tight();self.switch_light();
         self.tell_link()?;self.set_floor();
         self.listened(now)?;self.holes(now);self.signals(now);
         self.wake_waiters(now);
@@ -455,6 +466,13 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         self.tight_kind=if self.tight_kind==FloorKind::Off{FloorKind::On}else{FloorKind::Off};self.tight_switch_due=false;
     }
     fn tight_now(&self)->bool{if self.tight_alternates{self.tight_kind==data_mode::FloorKind::On}else{self.tight}}
+    // 213-DRV-0104, BEGIN_LIGHT_ALTERNATES: switched at a poll with no send pending once the minute's line is taken.
+    fn switch_light(&mut self){
+        use data_mode::FloorKind;
+        if !self.light_alternates||!self.light_switch_due||self.pending.is_some(){return}
+        self.light_kind=if self.light_kind==FloorKind::Off{FloorKind::On}else{FloorKind::Off};self.light_switch_due=false;
+    }
+    fn light_now(&self)->bool{if self.light_alternates{self.light_kind==data_mode::FloorKind::On}else{self.light}}
     fn finish_send(&mut self)->Result<(),Fatal>{let done=self.data().advance(WORK_US).map_err(Fatal::Radio)?;self.finished(done)}
     // 213-DRV-0104 (POLL_TIGHT_WHILE_PENDING): the same after a light poll, within a step that made the checks.
     fn finish_send_light(&mut self)->Result<(),Fatal>{let done=self.data().advance_light(WORK_US).map_err(Fatal::Radio)?;self.finished(done)}
@@ -632,8 +650,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let(kind,fixed)=(self.behind_kind,self.behind&&!self.behind_alternates);
         let mut minute=core::mem::take(&mut self.tx_watch.minute);minute.behind=kind;minute.behind_fixed=fixed;
         minute.tight=self.tight_kind;minute.tight_fixed=self.tight&&!self.tight_alternates;
+        minute.light=self.light_kind;minute.light_fixed=self.light&&!self.light_alternates;
         // The next minute holds the other kind, switched at the next poll with nothing pending or parked.
         if self.behind_alternates{self.behind_switch_due=true;}if self.tight_alternates{self.tight_switch_due=true;}
+        if self.light_alternates{self.light_switch_due=true;}
         minute
     }
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
@@ -798,7 +818,11 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 if call.defer().is_err(){self.tx_watch.busy();let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
                 let grace_us=self.data().grace_us();let unicast=frame.get(4).is_some_and(|byte|byte&1==0);
                 let tries=if attempts<=15{attempts.min(SEND_TRIES)}else{attempts};
-                match self.data().begin(frame,rate,tries,COMMAND_US){
+                // 213-DRV-0104, BEGIN_LIGHT: the checks and the reconcile left to the step's, made within CHECK_MS.
+                let light=self.light_now()&&self.checked.is_some_and(|at|now.saturating_sub(at)<CHECK_MS);
+                let begun=if light{self.data().begin_light(frame,rate,tries,COMMAND_US)}else{self.data().begin(frame,rate,tries,COMMAND_US)};
+                if light&&begun.is_ok(){self.tx_watch.minute.begun_light=self.tx_watch.minute.begun_light.saturating_add(1);}
+                match begun{
                     Ok(())=>{
                         // KEEP_LATE: the queue's own budget never ends a frame first; the service's deadlines do. Within a step
                         // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).

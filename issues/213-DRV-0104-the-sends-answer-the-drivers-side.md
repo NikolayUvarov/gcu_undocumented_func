@@ -344,6 +344,20 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **Host case:** the held-frame case's twelve sends begun are counted in both lines. The model's receive always waits its 2 ms, so none is found waiting there.
 - The 40 `rtw89_*_host.rs` files pass; `02_build.sh` builds.
 
+**2026-11-22, `BEGIN_LIGHT`: a send begun without the checks its step made** (branch `claude/213-DRV-0104-begin-light`; host cases, not run):
+- **`service::BEGIN_LIGHT`, a bench switch, committed false,** and `BEGIN_LIGHT_ALTERNATES`, a bench mode committed false (the partial minute never, then off, then on, as the others):
+  - With it, a send whose step made the data mode's checks within CHECK_MS (the service's `checked`, set by the full poll) is begun by `DataSession::begin_light`. That makes no liveness checks (the firmware's status, the TX rings' and the station's registers, the radio, the permits) and no coexistence reconcile: as the polls between two checks do not.
+  - Still made: the request's bounds, the frame's own address and descriptor, the data mode's own state (not stopped, its identity, in data mode, the session not failed: `alive`, which `live` now begins with), a recovery outlasted (OUTLAST_SER), and `tx::Queue::begin`'s own checks of its state and rings.
+  - A send whose step's checks are older (the queue not read empty, up to CHECK_LATEST_MS) is begun with them, as now.
+  - The DISPATCH TO SUBMISSION line counts the sends begun light and names what the minute held: `THIS MINUTE LIGHT ON` or `OFF`, `LIGHT ALWAYS` or `NEVER`.
+- **What it may cost:** a firmware error code, a recovery's step or a register the skipped checks would have met is met at the next step instead, by the pending send's `advance`, which makes the full checks and the reconcile before the send is answered.
+- **Host case** `service_begins_a_send_light_within_check_ms_of_the_steps_checks` (data frames final on the RPQ, as on the Ryzen):
+  - in the step that begins a send, the model's radio checks (its reads of 0x8040): 2 without the switch (the checks' and the reconcile's), none with it; the send answered at its release either way;
+  - with the frame buffer full and 12 ms more, the step's checks are older than CHECK_MS and the send is begun with them, the same count with and without;
+  - alternating, the minutes' lines: never 0, off 0, on 1, off 0 sends begun light.
+- The 40 `rtw89_*_host.rs` files pass: 4891 cases, 0 failed. `02_build.sh` builds.
+- **Not run on the Ryzen.** Whether it shortens the answer is the bench's: DISPATCH TO SUBMISSION in ON against OFF minutes, then the in-time answers.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

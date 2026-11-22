@@ -287,7 +287,9 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     pub tight:FloorKind,pub tight_fixed:bool,pub tight_polls:u32,
     // 213-DRV-0104: each send begun, from its receive to its dispatch (the step's work before it) and from that to its
     // submission (begin's checks and the submit), in US_BINS; those the receive found waiting (FOUND_WAITING_US).
-    pub to_dispatch_us:[u32;US_BINS],pub to_submit_us:[u32;US_BINS],pub found_waiting:u32}
+    pub to_dispatch_us:[u32;US_BINS],pub to_submit_us:[u32;US_BINS],pub found_waiting:u32,
+    // 213-DRV-0104: what the minute held of BEGIN_LIGHT (as `behind`), and the sends begun light.
+    pub light:FloorKind,pub light_fixed:bool,pub begun_light:u32}
 /// 213-DRV-0104: µs bins: 250 µs each to 2 ms, 1 ms each to 10 ms, then to 20 ms, to 50 ms, and 50 ms or more.
 pub const US_BINS:usize=19;
 pub fn us_bin(us:u64)->usize{if us<2_000{(us/250)as usize}else if us<10_000{8+((us-2_000)/1_000)as usize}else if us<20_000{16}else if us<50_000{17}else{18}}
@@ -307,6 +309,13 @@ impl TxMinute{
         match(self.behind,self.behind_fixed){
             (FloorKind::On,_)=>"THIS MINUTE BEHIND LATE ON",(FloorKind::Off,_)=>"THIS MINUTE BEHIND LATE OFF",
             (FloorKind::None,true)=>"BEHIND LATE ALWAYS",(FloorKind::None,false)=>"BEHIND LATE NEVER",
+        }
+    }
+    /// 213-DRV-0104: what the minute held of BEGIN_LIGHT, for its line.
+    pub fn light_label(&self)->&'static str{
+        match(self.light,self.light_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE LIGHT ON",(FloorKind::Off,_)=>"THIS MINUTE LIGHT OFF",
+            (FloorKind::None,true)=>"LIGHT ALWAYS",(FloorKind::None,false)=>"LIGHT NEVER",
         }
     }
     /// 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING, for its line.
@@ -502,9 +511,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     // The deadline the operation goes on with: later by an outlasted recovery's time (OUTLAST_SER).
     fn live(&mut self,deadline:u64)->Result<u64,Cause>{
-        if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
-        if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
-        self.firmware_status(deadline)?;
+        self.alive()?;self.firmware_status(deadline)?;
         let mut deadline=self.outlast_ser(deadline,false)?;
         let mut result=self.checks(deadline).and_then(|()|self.permits(deadline));
         // 213-DRV-0091: a station check that met an unreadable CMAC domain, and what it was then.
@@ -529,6 +536,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             result=Ok(());
         }
         result?;self.session.left(deadline)?;Ok(deadline)
+    }
+    // The data mode's own state: not stopped, its identity, in data mode, the session not failed.
+    fn alive(&self)->Result<(),Cause>{
+        if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
+        if let Some(error)=self.session.failed{return Err(Cause::Session(error))}Ok(())
     }
     // 213-DRV-0091: the checks made again while they meet an unreadable CMAC domain, UNREADABLE_GAP_US apart, a firmware
     // recovery that SER_DBG_INFO shows meanwhile outlasted first. A readable mismatch, or no answer after
@@ -641,12 +653,22 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         result.map_err(|cause|self.runtime_failure(cause))
     }
     pub(crate) fn begin(&mut self,frame:&[u8],rate:u8,max_submissions:u8,timeout_us:u32)->Result<(),Failure>{
+        self.begin_checked(frame,rate,max_submissions,timeout_us,true)
+    }
+    /// 213-DRV-0104 (service::BEGIN_LIGHT): `begin` without the liveness checks and the coexistence reconcile, which the
+    /// service made within its CHECK_MS; the data mode's own state is checked, a recovery outlasted, the TX rings checked.
+    pub(crate) fn begin_light(&mut self,frame:&[u8],rate:u8,max_submissions:u8,timeout_us:u32)->Result<(),Failure>{
+        self.begin_checked(frame,rate,max_submissions,timeout_us,false)
+    }
+    fn begin_checked(&mut self,frame:&[u8],rate:u8,max_submissions:u8,timeout_us:u32,checks:bool)->Result<(),Failure>{
         Self::request(timeout_us)?;
         if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
         if frame.get(10..16)!=self.prepared.station.current_filter().map(|f|f.own()).as_ref().map(|v|v.as_slice()){
             return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(txdesc::Error::Address)),shutdown:None})}
         if let Err(e)=txdesc::frame(frame,rate,max_submissions){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(e)),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.live(deadline)?;self.reconcile(deadline)?;let deadline=self.outlast_ser(deadline,true)?;let left=self.session.left(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;
+            let deadline=if checks{let d=self.live(deadline)?;self.reconcile(d)?;d}else{self.alive()?;deadline};
+            let deadline=self.outlast_ser(deadline,true)?;let left=self.session.left(deadline)?;
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.begin(&mut window,frame,rate,max_submissions,self.prepared.station.mac_id(),left);
             self.session.last=window.last;result?;self.session.left(deadline)?;self.tx_deadline=Some(deadline);Ok(())})();
