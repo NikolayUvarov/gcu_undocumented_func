@@ -71,6 +71,17 @@
 - **Criterion 1's rest, host cases:** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
   - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
 - **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
+- **613434c46 and 49bd2fede** (2026-11-22, LEG9, on 05ac6a253, the same code; outputs kept in `/home/un/.local/share/mind-bench/cam/logs/s12-05ac6a253/`):
+  - the build and the fixtures passed;
+  - `usbload` alone passed, with a minute's tally of 10021 deferred and 10021 answered, the longest 26 ms;
+  - the full `host_tests.sh` passed whole: 263 groups, none failed;
+  - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` and `usbload` (10023 deferred, 10023 answered, the longest 3 ms).
+  - `usbload` allows the two counts to differ by one, for a transfer deferred in one minute and answered in the next.
+- **What 613434c46 changes on a machine,** read from its diff:
+  - For every case the loop answers as 3ad6e4d76's did: the bytes, a reset after an error, not-found for a device gone, a timeout, a client's new instance.
+  - The only difference is the figure in the once-a-boot line `A BULK TRANSFER ANSWERED FROM THE LOOP: …, m MS`. It is now the wait up to the answer's copy, as the tally's longest already was.
+  - So the Ryzen's runs of 3ad6e4d76 stand for it by that reading, not by a run of its own (MC-12.1).
+  - `forget_bulks` takes a transfer before it asks the rule. The rule always answers `Stopped` there, so nothing is lost now. If the rule changed, a transfer would be dropped unanswered, so the order is worth turning round.
 
 **On the Ryzen** (release 202611221738, boot 97 from 17:42:50 UTC, the bench tree with 3ad6e4d76; read over the cable by the owner session and CAM):
 - The first transfer answered from the loop came at 3.533 s: `SLOT 3 ENDPOINT 81, 65536 BYTES, 3 MS`, a 64 KiB read of the stick.
@@ -98,7 +109,7 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
   - **The first landing's head** (`claude/000-DRV-0101-landing`, bf9942b64) is 3ad6e4d76 with the issue's text of then on top; this branch has it merged, so it lands after it.
   - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
   - **49bd2fede** makes `usbload` wait for and check the tally.
-  - Neither has run on hardware. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`, outputs in `/tmp/claude-1000/cam/s12/`), was going at 18:50.
+  - Neither has run on hardware. Their own run on 05ac6a253 (`tests/s12-run.sh`) ended green at 19:48 UTC: see the progress above.
 - **The USB agent took over at 18:50** (CAM's context ran out). Its runs, under the shared lock, write to `/home/un/.local/share/mind-bench/cam/runs/`, each with a `status` file:
   - `s13`: the landing head bf9942b64 itself, with the build, the fixtures, all of `host_tests.sh` and QEMU's `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio`, `vfs`, `block` and `usbload` (`tests/s13-run.sh`);
   - `s14`: 000-DRV-0081 (`claude/000-DRV-0081-a-close-tells-the-device-first`, from the landing head), the same set (`tests/s14-run.sh`).
