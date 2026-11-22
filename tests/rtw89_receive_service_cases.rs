@@ -254,13 +254,13 @@ fn a_scan_ends_with_its_tunes_and_the_frames_it_kept() { serve(true, vec![beacon
         assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     }
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
-    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 2, longest_us: 600, kept: 1, dropped: 0 }]);
+    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 2, longest_us: 600, kept: 1, dropped: 0, measured: 0, late: 0, unmatched: 0 }]);
     // A filter that ends no scan logs none; the next scan counts from its own start.
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
     let id = ipc::buffer(3, &filter(true, 0)); step(service, phy, events); ipc::response(id).unwrap();
     let id = ipc::words(2, 2); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
-    assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0 }]);
+    assert_eq!(events[1..], [Event::Scanned { tunes: 1, longest_us: 200, kept: 0, dropped: 0, measured: 0, late: 0, unmatched: 0 }]);
 });}
 
 #[test]
@@ -337,6 +337,40 @@ fn nothing_is_sent_on_a_radar_channel_before_its_access_points_beacon() { serve(
     assert_eq!(service.heard().count(), 0);
     let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Failed);
     assert!(service.take_ask().is_none());
-    // The access point heard on 5 GHz is logged once a run (Event::Heard5), the refusal once a tune.
-    assert_eq!(events.as_slice(), &[Event::Heard5 { channel: 100, bssid: BSSID }, Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }]);
+    // The access point heard on 5 GHz is logged once a run (Event::Heard5), the refusal once a tune; the refused receiver's
+    // beacon, when it came, with its times after the tune and after the refused send.
+    let [Event::Heard5 { channel: 100, bssid: BSSID }, Event::ListenHeard { channel: 100, bssid: BSSID, tune_ms, send_ms },
+        Event::ListenOnly { channel: 100, receiver: BSSID, heard: 0 }] = events.as_slice() else { panic!("{events:?}") };
+    assert!(tune_ms >= send_ms, "{tune_ms} {send_ms}");
+});}
+
+// 213-DRV-0087: a PPDU status report gives the frame kept just before it its signal while the station has not taken it;
+// one after the station took it, or that follows no kept frame of its count and rate, is counted and dropped.
+#[test]
+fn a_scans_beacon_carries_its_signal_from_the_report_that_follows_it() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+    use crate::captures::{bytes, frame, FIVE};
+    let report = bytes(FIVE);
+    let inject = |phy: &mut Live<'_, '_, '_, '_>, buffer: &[u8]| phy.bus_between_stages().device_for_test().inner.inject_buffer(0, buffer);
+    let receive = |service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>| {
+        let id = ipc::buffer(5, &[]); step(service, phy, events);
+        let (w, b) = ipc::response(id).unwrap(); let mut r = Reader::new(&b[..w[0] >> 16]);
+        let received = codec::decode_bytes::<2354>(&mut r).unwrap(); assert!(r.done()); received[..8].to_vec()
+    };
+    // The beacon at OFDM 6 Mb/s with the report's count 1: -63 dBm, the 5 GHz figure Linux gave -67 at other hours.
+    inject(phy, &frame(&beacon(), 1, 4)); inject(phy, &report);
+    let header = receive(service, phy, events);
+    assert_eq!((header[2], header[4]), (63, 12));
+    // Another PPDU's count: not this frame's report, its 0 stands.
+    inject(phy, &frame(&beacon(), 2, 4)); inject(phy, &report);
+    assert_eq!(receive(service, phy, events)[2], 0);
+    // A frame not kept (a control frame) between the kept one and the report: the report is that frame's, not the kept one's.
+    let mut other = other_data(); other.extend_from_slice(&[0; 4]); other[0] = 0x84;
+    inject(phy, &frame(&beacon(), 1, 4)); inject(phy, &frame(&other, 1, 4)); inject(phy, &report);
+    assert_eq!(receive(service, phy, events)[2], 0);
+    // Taken by the station before its report came: the report is late, nothing else is marked.
+    inject(phy, &frame(&beacon(), 1, 4));
+    assert_eq!(receive(service, phy, events)[2], 0);
+    inject(phy, &report); step(service, phy, events);
+    let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
+    assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 0, longest_us: 0, kept: 4, dropped: 0, measured: 1, late: 1, unmatched: 2 }]);
 });}

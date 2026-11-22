@@ -25,7 +25,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
   - a conversation per request;
   - a public board of the requests that became tasks;
   - the updates: OS releases and module packages, signed by UPD's keys, which the hub never holds.
-- **Two forms, one API** (`hub-api 2`), one protocol crate (`improve/proto`), one conformance suite:
+- **Two forms, one API** (`hub-api 3`), one protocol crate (`improve/proto`), one conformance suite:
   - the separate hub `tools/mindhub` first, in Rust (the maintainer's choice, 2026-11-20);
   - the native hub on MIND Core later.
 - **Clients:**
@@ -59,10 +59,11 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
 | 1 | [100003-APP-0145](../issues-done/100003-APP-0145-the-hub-protocol-crate.done), done | the protocol crate and its vectors |
 | 2 | [100003-APP-0146](../issues-done/100003-APP-0146-the-separate-hub.done), done | the separate hub: intake, registration, trust, anti-flood, threads, the board, the admin pages, the agents' API, the conformance suite |
 | 2+ | [100003-APP-0148](../issues-done/100003-APP-0148-the-hubs-remaining-parts.done), done | what stage 2 left: export and deletion, a verdict's attachments, a name on the board, the proof of work raised by itself, the flag on a request for a credential |
+| 2++ | [100003-APP-0155](../issues-done/100003-APP-0155-the-users-answer-to-a-proposal.done), done | `hub-api 3`: the user's answer to an agent's proposal, accepted, corrected or declined |
 | 3 | numbered when it starts | the hub's updates (needs UPD's `COMMIT` beside a release; restricted channels need UPD's signed fetch) |
-| 4 | [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md), in progress | `improve` on MIND Core, the console: done in QEMU on x86 against the separate hub; a thread's long texts wait for NET's `parse` |
+| 4 | [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md), in progress | `improve` on MIND Core, the console: done in QEMU on x86 against the separate hub, to the user's verdict; a thread's long texts wait for NET's `parse`, the running release read by itself for a reading client of the updater (UPD, KRN) |
 | 5 | [100003-APP-0150](../issues-done/100003-APP-0150-improve-on-a-host.done), done | `improve` on a host ([docs/hub/improve.md](../docs/hub/improve.md)); the web pages were made in 0146 and 0148 |
-| 6 | numbered when it starts | the shell's notice, `wm`'s window; the phone's screen with `MOB` |
+| 6 | [100003-APP-0153](100003-APP-0153-the-shells-notice-and-wms-mark.md), in progress | the shell's notice and `wm`'s mark, done in QEMU on x86; `wm`'s window and the phone's screen with `MOB` later |
 | 7 | numbered when it starts | the native hub (needs 110's MIND Core server side, NET's) |
 | 8 | at the maintainer's word | the agents' rule in AGENTS.md; the intake agent named |
 

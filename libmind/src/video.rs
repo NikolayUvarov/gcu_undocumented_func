@@ -66,13 +66,35 @@ pub fn yuy2_to_rgb(source: &[u8], out: &mut [u32]) -> usize {
 /// A YUY2 picture of `width` × `height` into `out_width` × `out_height` pixels, each the nearest one (a camera's frame
 /// size to the size a program asked for); pixels the source lacks are black.
 pub fn yuy2_scaled(source: &[u8], width: usize, height: usize, out: &mut [u32], out_width: usize, out_height: usize) {
-    for (y, row) in out.chunks_exact_mut(out_width).take(out_height).enumerate() {
+    yuy2_scaled_rows(source, width, height, out, out_width, out_height, 0..out_height);
+}
+
+/// The same for the output rows `rows` alone, the others left as they are: a large frame converted in bands, with other
+/// work between them (158-DRV-0083).
+pub fn yuy2_scaled_rows(source: &[u8], width: usize, height: usize, out: &mut [u32], out_width: usize, out_height: usize, rows: core::ops::Range<usize>) {
+    for (y, row) in out.chunks_exact_mut(out_width).take(out_height).enumerate().skip(rows.start).take(rows.end.saturating_sub(rows.start)) {
         let line = y * height / out_height * width;
         for (x, p) in row.iter_mut().enumerate() {
             let column = x * width / out_width;
             let at = (line + (column & !1)) * 2;
             *p = match source.get(at..at + 4) { Some(q) => yuv(if column & 1 == 0 { q[0] } else { q[2] }, q[1], q[3]), None => 0 };
         }
+    }
+}
+
+/// Row `y` of a picture `row.len()` wide and `height` tall (a decoded Motion JPEG frame's, 158-DRV-0084) into the rows of
+/// `out_width` × `out_height` pixels that take it, each pixel the nearest one, as `yuy2_scaled` samples: given every row
+/// in turn, the picture scaled.
+pub fn scale_row(y: usize, row: &[u32], height: usize, out: &mut [u32], out_width: usize, out_height: usize) {
+    let width = row.len();
+    if width == 0 || height == 0 || y >= height { return; }
+    // The output rows whose source row is y: from the first with oy · height / out_height ≥ y.
+    let mut oy = (y * out_height).div_ceil(height);
+    while oy < out_height && oy * height / out_height == y {
+        if let Some(line) = out.get_mut(oy * out_width..(oy + 1) * out_width) {
+            for (x, p) in line.iter_mut().enumerate() { *p = row[x * width / out_width]; }
+        }
+        oy += 1;
     }
 }
 

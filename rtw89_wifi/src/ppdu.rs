@@ -3,6 +3,8 @@
 //! A received PPDU's signal from its status report (213-DRV-0087), as Linux's rtw89_core_rx_process_ppdu_sts, the 8852B's
 //! convert_rpl_to_rssi and query_ppdu (pinned 05f7e89a). The device's bytes are untrusted: every length is checked.
 
+use crate::rxdesc;
+
 /// The RX descriptor's packet type of a PPDU status report (RTW89_CORE_RX_TYPE_PPDU_STAT).
 pub(crate) const TYPE: u8 = 1;
 
@@ -22,6 +24,9 @@ const OFDM6: u16 = 4;
 const IE_LENGTHS: [u8; 32] = [16, 32, 24, 24, 8, 8, 8, 8, 0xff, 8, 0xff, 176, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 16, 24, 0xff,
     0xff, 0xff, 0, 24, 24, 24, 24, 32, 32, 32, 32];
 
+// The descriptor's word 1: the PPDU count (bits 4-6) and the data rate (bits 16-24), the same in a frame and its report.
+fn count_rate(w1: u32) -> (u8, u16) { (((w1 >> 4) & 7) as u8, ((w1 >> 16) & 0x1ff) as u16) }
+
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
@@ -34,8 +39,7 @@ fn dbm(raw: u8) -> i8 { (raw >> 1) as i8 - 110 }
 pub(crate) fn parse(descriptor: [u32; 3], payload: &[u8]) -> Option<Report> {
     let [w0, w1, w3] = descriptor;
     if (w0 >> 24) & 15 != u32::from(TYPE) { return None; }
-    let count = ((w1 >> 4) & 7) as u8;
-    let rate = ((w1 >> 16) & 0x1ff) as u16;
+    let (count, rate) = count_rate(w1);
     let to_self = w3 & 1 != 0;
     // rtw89_core_rx_process_mac_ppdu: the MAC info, its users (padded to eight bytes), RX counters and PLCP before the PHY's.
     let mut at = 0usize;
@@ -84,3 +88,46 @@ pub(crate) fn parse(descriptor: [u32; 3], payload: &[u8]) -> Option<Report> {
 
 /// wlanhw.wit's receive header byte 2: the signal as minus dBm, 0 when not measured.
 pub(crate) fn weakness(signal_dbm: i8) -> u8 { (-i16::from(signal_dbm)).clamp(1, 255) as u8 }
+
+/// A report as the receive ring gave it: the descriptor's words after the buffer's PCIe word, its bytes after them.
+pub(crate) fn from_packet(packet: rxdesc::Packet, buffer: &[u8]) -> Option<Report> {
+    parse([word(buffer, 4)?, word(buffer, 8)?, word(buffer, 16)?], packet.bytes(buffer)?)
+}
+
+/// What became of the reports: `measured` gave the frame kept just before its signal; `late` came after that frame
+/// was handed on, which keeps its 0; `unmatched` followed no kept frame of their count and rate, or were not reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Signals { pub measured: u32, pub late: u32, pub unmatched: u32 }
+
+// The newest frame kept: its number among the receive queue's Wi-Fi frames, its slot, count and rate, and if unread.
+#[derive(Clone, Copy, Debug)]
+struct Kept { number: u64, at: usize, key: (u8, u16), unread: bool }
+
+/// Puts a report's signal on the one frame its owner kept last, when that frame is the receive queue's Wi-Fi frame
+/// just before the report and has its count and rate (Linux's rtw89_core_rx_ppdu_match); a report is never guessed
+/// onto another frame. The owner says what it keeps and hands on; the session numbers the frames.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Matcher { kept: Option<Kept>, pub(crate) signals: Signals }
+impl Matcher {
+    /// The `number`-th Wi-Fi frame kept in slot `at`; `buffer` holds its descriptor.
+    pub(crate) fn kept(&mut self, number: u64, at: usize, buffer: &[u8]) {
+        self.kept = word(buffer, 8).map(|w1| Kept { number, at, key: count_rate(w1), unread: true });
+    }
+    /// The frame in slot `at` handed on.
+    pub(crate) fn handed(&mut self, at: usize) { if let Some(kept) = self.kept.as_mut().filter(|k| k.at == at) { kept.unread = false; } }
+    /// The kept frames dropped: a tune, a new filter, the hand-over to the data mode.
+    pub(crate) fn forget(&mut self) { self.kept = None; }
+    /// Whether the frame in slot `at` is kept and still waits for its report.
+    pub(crate) fn waits(&self, at: usize) -> bool { self.kept.is_some_and(|k| k.unread && k.at == at) }
+    /// A report after the `frame`-th Wi-Fi frame (None: after another report): the slot and the header byte to write.
+    /// Only the report of the kept frame is parsed; the others, most of them on a busy channel, cost a comparison.
+    pub(crate) fn report(&mut self, frame: Option<u64>, packet: rxdesc::Packet, buffer: &[u8]) -> Option<(usize, u8)> {
+        let signals = &mut self.signals;
+        let Some(kept) = self.kept.take().filter(|k| frame == Some(k.number) && word(buffer, 8).map(count_rate) == Some(k.key))
+            else { signals.unmatched = signals.unmatched.saturating_add(1); return None };
+        if !kept.unread { signals.late = signals.late.saturating_add(1); return None; }
+        let Some(report) = from_packet(packet, buffer) else { signals.unmatched = signals.unmatched.saturating_add(1); return None };
+        signals.measured = signals.measured.saturating_add(1);
+        Some((kept.at, weakness(report.signal_dbm)))
+    }
+}

@@ -1,4 +1,4 @@
-//! A host client of `hub-api 2`: signs a call over the last challenge the hub gave, as a device, an agent or an admin
+//! A host client of `hub-api 3`: signs a call over the last challenge the hub gave, as a device, an agent or an admin
 //! does, and speaks TLS 1.3 to a hub known by its key's SPKI SHA-256 (4.1). The tests, the conformance suite and
 //! `mindhub admin-code` use it; `improve` on a host (stage 5) is built on it.
 

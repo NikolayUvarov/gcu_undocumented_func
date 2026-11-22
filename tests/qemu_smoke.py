@@ -8267,6 +8267,114 @@ def sysmon_name_check(vm):
           "the directory removed ends the scope until sysmon starts again with a new one", flush=True)
 
 
+def cameras_suite(args):
+    """158-DRV-0082: the video gateway holds a stream for each camera. With two test patterns (video/synthetic begins
+    with "2"), tests/video_stub reads the first for 15 s while another reads the second for 3 s, each its own pattern (its
+    counter half a minute ahead); the camera a program holds is busy for a third, and a number past the two is not
+    found. 158-DRV-0083 (video.wit 1.1): a pattern's three modes listed, each opened in turn with frames of its size,
+    and `opened` names the mode. With APP's `camera -c` (158-APP-0147) in the tree, the same through `camera`."""
+    if not raw_tools():
+        print("SKIP: cameras suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    assert args.video_elf, "the cameras suite needs tests/video_stub's build (scripts/x86_fixtures.sh)"
+    with tempfile.TemporaryDirectory(prefix="smoke-cameras-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"video/synthetic": b"2 test patterns stand in for two cameras\n",
+                                                        "videostub.elf": Path(args.video_elf).read_bytes()})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            require(vm.service_logs("video_gw", "SYNTHETIC SOURCE"), "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk, TWO PATTERNS")
+            require(vm.command("videostub 2 1", timeout=30), "VIDEO STUB: OPEN CAMERA 2 320X240 AT 10/S: NotFound (2 CAMERAS LISTED)")
+            # The first pattern is read for 15 s in the background: the second's run and the third's refusal fall in it.
+            started = re.search(r"PID=(\d+) NAME=videostub BACKGROUND", vm.command("run videostub 0 15 &"))
+            assert started, vm.log[-1500:]
+            log = ""
+            for _ in range(40):
+                log += vm.service_logs("video_gw")
+                if "OPENED test pattern 320x240 AT 10/S" in log:
+                    break
+                time.sleep(.25)
+            require(log, "OPENED test pattern 320x240 AT 10/S")
+            # Meanwhile the second for 3 s beside it, and the first is busy for another program.
+            second = vm.command("videostub 1 3", timeout=30)
+            read = re.search(r"VIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, 320X240, THE COUNTER 300 AHEAD\n", second.replace("\r", ""))
+            assert read and int(read[1]) >= 25, second
+            require(vm.command("videostub 0 1", timeout=30), "VIDEO STUB: OPEN CAMERA 0 320X240 AT 10/S: Busy (2 CAMERAS LISTED)")
+            # The first ends by itself, its frames on the rate and its own pattern's.
+            first = vm.program_logs(started[1], "FRAMES IN", tries=120)
+            got = re.search(r"VIDEO STUB: CAMERA 0: (\d+) FRAMES IN \d+ MS, SEQUENCE (\d+)\.\.(\d+), FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, 320X240, THE COUNTER 0 AHEAD", first)
+            assert got and int(got[1]) >= 142 and int(got[3]) - int(got[2]) + 1 - int(got[1]) <= 3, first
+            for _ in range(40):
+                log += vm.service_logs("video_gw")
+                if len(re.findall(r"\[VIDEO\] PID \d+ CLOSED AFTER \d+ FRAMES", log)) >= 2:
+                    break
+                time.sleep(.25)
+            assert re.search(r"\[VIDEO\] PID \d+ OPENED test pattern 2 320x240 AT 10/S, BESIDE 1 MORE", log), log
+            closed = [int(n) for n in re.findall(r"\[VIDEO\] PID \d+ CLOSED AFTER (\d+) FRAMES", log)]
+            assert len(closed) == 2 and max(closed) >= 142, (closed, log)
+            stepped = cameras_modes_check(vm)
+            programs = cameras_programs_check(vm)
+        finally:
+            vm.close()
+    print(f"PASS: cameras: two test patterns listed; one read for 15 s ({got[1]} frames) while the other was read for 3 s ({read[1]} frames), "
+          f"each its own pattern; the camera a program holds is busy for another, a third camera not found{programs} (158-DRV-0082); "
+          f"a pattern's 3 modes listed and each opened in turn ({stepped}), `opened` naming the mode (158-DRV-0083)", flush=True)
+
+
+def cameras_modes_check(vm):
+    """158-DRV-0083: video.wit 1.1's `modes` and `opened` on the second pattern, through tests/video_stub: its three
+    modes listed and offered, each opened in turn for 2 s with frames of its size and its own pattern, and a size none
+    of them has drawn as asked. Returns the frames each mode gave, for the summary."""
+    text = vm.command("videostub modes 1", timeout=30).replace("\r", "")
+    listed = re.findall(r"VIDEO STUB: MODE (\d+): SYNTHETIC (\d+)X(\d+) AT (\d+)/S \(INTERVAL (\d+)\), OFFERED\n", text)
+    assert [m[1:4] for m in listed] == [("640", "480", "30"), ("320", "240", "10"), ("160", "120", "5")], text
+    require(text, "VIDEO STUB: CAMERA 1: 3 MODES, 3 OFFERED")
+    require(vm.command("videostub modes 2", timeout=30), "VIDEO STUB: MODES OF CAMERA 2: NotFound")
+    text = re.sub(r"\[PID \d+\] ", "", vm.command("videostub step 1 2", timeout=60).replace("\r", ""))  # the shell names a foreground program's lines
+    frames = []
+    for (index, width, height, rate) in [("0", "640", "480", "30"), ("1", "320", "240", "10"), ("2", "160", "120", "5")]:
+        require(text, f'VIDEO STUB: OPENED CAMERA 1 "test pattern 2" {width}X{height} AT {rate}/S: MODE {index}, SYNTHETIC {width}X{height} AT {rate}/S\n')
+        got = re.search(rf"VIDEO STUB: MODE {index}: {width}X{height} AT {rate}/S\nVIDEO STUB: CAMERA 1: (\d+) FRAMES IN \d+ MS, SEQUENCE \d+\.\.\d+, FIRST AFTER \d+ MS, THE LONGEST READ \d+ MS, "
+                        rf"{width}X{height}, THE COUNTER {30 * int(rate)} AHEAD\n", text)
+        assert got and int(got[1]) >= 2 * int(rate) * 7 // 10, (index, text)  # a loaded machine draws 640x480 at 30 slower
+        frames.append(f"{width}x{height}: {got[1]}")
+    require(text, "VIDEO STUB: CAMERA 1: 3 OFFERED MODES OPENED, 0 REFUSED")
+    # A size none of the modes has: the pattern draws it, and `opened` names no mode.
+    require(vm.command("videostub 1 1 256x192 10", timeout=30).replace("\r", ""), 'VIDEO STUB: OPENED CAMERA 1 "test pattern 2" 256X192 AT 10/S: MODE 65535, SYNTHETIC 256X192 AT 10/S\n')
+    return ", ".join(frames)
+
+
+def cameras_programs_check(vm):
+    """The two patterns through APP's `camera -c` (158-APP-0147), when the tree has it: one recorded for 8 s while a
+    still is taken of the other, and the camera the first holds is busy for a third. Returns what the summary adds."""
+    if "-c " not in vm.command("camera --help", timeout=30):
+        print("SKIP: cameras through `camera -c`: this tree's camera opens the first camera alone (158-APP-0147)", flush=True)
+        return ""
+    vm.command("mkdir data")  # the stills and the recording go there
+    require(vm.command("camera -c 2 -s data/none.bmp", timeout=30), "camera: camera 2: the video gateway lists 2 cameras, numbers 0 to 1")
+    started = re.search(r"PID=(\d+) NAME=camera BACKGROUND", vm.command("run camera -c 0 -r 10 -t 8 data/first.avi &"))
+    assert started, vm.log[-1500:]
+    log = ""
+    for _ in range(40):
+        log += vm.service_logs("video_gw")
+        if re.search(r"PID \d+ OPENED test pattern 320x240 AT 10/S", log):
+            break
+        time.sleep(.25)
+    taken = vm.command("camera -c 1 -s data/second.bmp", timeout=30)
+    assert re.search(r"\[CAMERA\] STILL data/second.bmp: 320X240, FRAME \d+, \d+ BYTES", taken), taken
+    busy = vm.command("camera -c 0 -s data/third.bmp", timeout=30)
+    assert "STILL" not in busy and re.search(r"(?i)busy|in use|another program", busy), busy
+    # The recording ends by itself: the gateway's count of what its stream gave (camera's own last line goes with it).
+    for _ in range(80):
+        log += vm.service_logs("video_gw")
+        if re.search(r"PID \d+ CLOSED AFTER (8\d|79|7[6-8]) FRAMES", log):
+            break
+        time.sleep(.25)
+    assert re.search(r"PID \d+ CLOSED AFTER (8\d|79|7[6-8]) FRAMES", log), log
+    listed = vm.command("ls data")
+    assert "first.avi" in listed.lower() and "second.bmp" in listed.lower() and "third.bmp" not in listed.lower(), listed
+    return "; through camera -c, 8 s recorded beside a still of the other"
+
+
 def vfs_suite(args):
     """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
     (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
@@ -10528,19 +10636,22 @@ def slot_applications_check(args):
 def hub_check(args, disk):
     """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
     (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
-    question answered in its thread; a wrong pin refused; a thread with a text past 512 bytes named as unread until
-    NET's change to `parse` (requests-NET.md)."""
+    question answered in its thread; the release that carries it not on the machine yet, then on it, and the user's
+    verdict (6.3); a wrong pin refused; a thread with a text past 512 bytes named as unread until NET's change to
+    `parse` (requests-NET.md). The requests that wait for the user (100003-APP-0153): the shell says them above its
+    first prompt and when improve saw them change, and wm marks them in its top bar."""
     work = Path(tempfile.mkdtemp(prefix="mind-hub-"))
     target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
     subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
     mindhub = str(target / "release" / "mindhub")
     _certificates(work)
     pin = _spki_pin(work / "server.pem")
-    keys = {name: work / f"{name}.key" for name in ("admin", "intake")}
+    keys = {name: work / f"{name}.key" for name in ("admin", "intake", "track", "lander")}
     public = {name: subprocess.run([mindhub, "key", str(path)], check=True, capture_output=True, text=True).stdout.strip() for name, path in keys.items()}
     data = work / "data"
     data.mkdir()
-    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\n")
+    (data / "hub.conf").write_text(f"admin maintainer {public['admin']}\nagent APP intake {public['intake']}\nagent APP track {public['track']}\n"
+                                   f"agent KRN integrator {public['lander']}\n")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -10559,12 +10670,20 @@ def hub_check(args, disk):
         assert out.returncode == 0, (method, path, out.stdout, out.stderr)
         return out.stdout
 
-    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6).
+    # improve may reach the hub alone, for ten minutes and 1 MiB (MC-11.6); two files to attach, in the user's files.
     (disk / "netpolicy.txt").write_text(f"# improve reaches the test's hub on the host\nimprove 10.0.2.2 tcp {port} 600 {1 << 20}\n")
+    fan_log = "[ 0.000] fan0: 4200 rpm at idle\n" * 8
+    sensors = "fan1: 4200 RPM\nfan2: 0 RPM\n"
+    (disk / "fan.log").write_text(fan_log)
+    (disk / "sensors.txt").write_text(sensors)
+    # What waited when improve last looked, in an earlier boot: said above the first prompt (100003-APP-0153).
+    (disk / "data/improve").mkdir(parents=True, exist_ok=True)
+    (disk / "data/improve/waiting").write_text("# an earlier look\n7 3\n")
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
+        vm.logged("IMPROVE: 2 REQUESTS WAIT FOR YOU: #3 #7 (improve list)", 0)
         require(vm.command("improve", timeout=30), "usage: improve COMMAND")
         require(vm.command("improve status", timeout=30), "no hub yet: improve setup")
         out = vm.command(f"improve setup mind.test 10.0.2.2 {port} {pin}", timeout=60)
@@ -10574,20 +10693,80 @@ def hub_check(args, disk):
         devices = call("admin", "GET", "/hub/admin/v1/devices")
         assert "QEMU tester" in devices and '"state":"pending"' in devices, devices
         device = hashlib.sha256(bytes.fromhex(device_key)).hexdigest()
-        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 2","decision":"approve","text":"Welcome to the hub"}')
+        call("admin", "POST", f"/hub/admin/v1/devices/{device}/decision", '{"api":"hub-api 3","decision":"approve","text":"Welcome to the hub"}')
         out = vm.command("improve status", timeout=60)
         require_all(out, "device qemu (", "): approved", "user QEMU tester #1, trust 0 (band 0), access open", "admin maintainer, welcome: Welcome to the hub")
-        require(vm.command("improve new fault 'Fan noise' 'It is loud at idle' --yes", timeout=60), "request 1: new")
+        out = vm.command("improve new fault 'Fan noise' 'It is loud at idle' --attach log:fan.log --yes", timeout=60)
+        require_all(out, f"attachment: log fan.log ({len(fan_log)} bytes, sha256 {hashlib.sha256(fan_log.encode()).hexdigest()}) from fan.log", "request 1: new, 1 attachments sent")
         assert "Fan noise" in call("admin", "GET", "/hub/admin/v1/requests/1")
-        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"question","text":"One fan or two?"}')
+        assert call("admin", "GET", "/hub/admin/v1/requests/1/attachments/0") == f"200\n{fan_log}\n", "the attachment's bytes as the machine read them"
+        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"question","text":"One fan or two?"}')
+        since = len(vm.log)
         require(vm.command("improve list", timeout=60), "Fan noise  [a question for you]")
+        # The shell says the change above its prompt within its 5 s, as improve kept it.
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        require(vm.command("cat data/improve/waiting", timeout=30), "\n1\n")
         out = vm.command("improve show 1", timeout=60)
         require_all(out, "#1 Fan noise", "needs-info", "One fan or two?", "waits for your answer")
         question = re.search(r"#(\d+) question", out)[1]
-        require(vm.command(f"improve reply 1 'Two, one stopped' --answer {question}", timeout=60), "the request is new")
+        out = vm.command(f"improve reply 1 'Two, one stopped' --answer {question} --attach text:sensors.txt --yes", timeout=60)
+        require_all(out, "attachment: text sensors.txt", "the request is new")
+        answer = re.search(r"message #(\d+) on request 1", out)[1]
         assert "Two, one stopped" in call("admin", "GET", "/hub/admin/v1/requests/1")
+        assert call("intake", "GET", f"/hub/agent/v1/requests/1/messages/{answer}/attachments/0") == f"200\n{sensors}\n", "the answer's attachment for intake"
+        # News since the last look, then none; the export, written whole into a user's file.
+        require(vm.command("improve watch --once", timeout=60), "request 1: new")
+        require(vm.command("improve watch --once", timeout=60), "no news")
+        require(vm.command("improve export ram:hub.json", timeout=60), "exported to ram:hub.json (")
+        require_all(vm.command("cat ram:hub.json", timeout=30), '"display_name":"QEMU tester"', '"title":"Fan noise"')
+        # The user's check (6.3): accepted, worked, landed and delivered in a release; not on the machine until it runs it.
+        release = "202611211200"
+        call("intake", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"accepted","reason":"a fan","track":"APP","task":"000-APP-9999"}')
+        # The track's proposal before it starts (hub-api 3, 100003-APP-0155): it waits, and the machine corrects it.
+        since = len(vm.log)
+        proposal = re.search(r'"n":(\d+)', call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"proposal","text":"A gentler fan curve at idle"}'))[1]
+        require(vm.command("improve list", timeout=60), "Fan noise  [a proposal for you]")
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        require(vm.command("improve show 1", timeout=60), f'(waits for your answer: improve reply 1 --answer {proposal} --accept, or improve reply 1 "TEXT" --answer {proposal} --correct|--decline)')
+        require(vm.command(f"improve reply 1 'Quiet under load too' --answer {proposal}", timeout=60), "refused (400 consent)")
+        require(vm.command(f"improve reply 1 'Quiet under load too' --answer {proposal} --correct", timeout=60), "the request is accepted")
+        assert f'"answers":{proposal},"consent":"correct"' in call("track", "GET", "/hub/agent/v1/requests/1"), "the correction, as the track reads it"
+        require(vm.command("improve show 1", timeout=60), f"answer to #{proposal}, correcting it")
+        call("track", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"in-progress","reason":"working"}')
+        call("track", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 3","kind":"result","text":"The fan curve is gentler","release":"' + release + '"}')
+        call("lander", "POST", "/hub/agent/v1/requests/1/state", '{"api":"hub-api 3","to":"landed","reason":"round 1"}')
+        call("admin", "POST", "/hub/admin/v1/delivered", '{"api":"hub-api 3","release":"' + release + '","requests":[1]}')
+        require(vm.command("improve show 1", timeout=60), f"release {release} carries it; the hub does not know the release this machine runs: improve version RELEASE")
+        require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the hub does not know the release this machine runs")
+        require(vm.command("improve version 202611201200", timeout=60), "the hub knows this machine runs 202611201200")
+        require(vm.command("improve show 1", timeout=60), f"your machine does not have release {release} yet (it runs 202611201200): update apply, or wait for the update")
+        since = len(vm.log)
+        require(vm.command(f"improve version {release}", timeout=60), f"the hub knows this machine runs {release}")
+        # Nothing waited after the answer; the check waits now, and the shell says it again.
+        vm.logged("IMPROVE: REQUEST #1 WAITS FOR YOU (improve show 1)", since)
+        # wm's mark at its top bar's right end, with no battery here (100003-APP-0153).
+        since = len(vm.log)
+        vm.send("wm\n")
+        vm.expect("[WM] READY", timeout=180)
+        vm.logged("[WM] HUB: REQUESTS THAT WAIT FOR THE USER: 1", since)
+        time.sleep(1)
+        top = screen_text(vm)[0]
+        vm.serial(enter=False)
+        assert top.rstrip().endswith("HUB 1"), top
+        since = len(vm.log)
+        vm.hmp("sendkey alt-q")
+        vm.serial(enter=False)
+        vm.logged("SHELL RESUMED.", since)
+        require(vm.command("improve watch --once", timeout=60), "request 1: awaiting-check, it waits for your check")
+        require(vm.command("improve list", timeout=60), "Fan noise  [waits for your check]")
+        require(vm.command("improve show 1", timeout=60), f"release {release} is on this machine: check it, improve check 1 works|partly|does-not-work")
+        require(vm.command("improve check 1 works 'Quiet now'", timeout=60), "the request is verified")
+        out = vm.command("cat data/improve/waiting", timeout=30)
+        assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
+        assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
         # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        call("intake", "POST", "/hub/agent/v1/requests/1/messages", '{"api":"hub-api 2","kind":"comment","text":"' + "long " * 120 + '"}')
+        # The admin's comment, which a verified request still takes.
+        call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
         require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
@@ -10600,8 +10779,11 @@ def hub_check(args, disk):
         hub.wait(timeout=10)
         shutil.rmtree(work, ignore_errors=True)
     print("PASS: hub: improve on MIND Core against tools/mindhub over TLS 1.3 by the hub's pin: set up with its key in keystore, registered, "
-          "approved by the admin, a request filed, the agents' question answered; a wrong pin refused; a text past 512 bytes named as unread "
-          "until NET's change to parse (100003-APP-0151)", flush=True)
+          "approved by the admin, a request filed with a log attached, the agents' question answered with a file, news watched, the export "
+          "written into ram:, the track's proposal corrected from the machine (hub-api 3), the release that carries it not on the machine, "
+          "then on it, and the user's verdict on it; what waits for "
+          "the user said by the shell above its first prompt and when it changed, and marked by wm (100003-APP-0153); a wrong pin refused; a text past 512 bytes named as unread "
+          "until NET's change to parse (100003-APP-0151, 0153, 0155)", flush=True)
 
 
 def tone_power(samples, rate, start, hz, seconds=0.04):
@@ -16845,6 +17027,18 @@ def wm_suite(vm):
         while extra in state()[2]:
             wait()
         assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        # The Run window's history (000-APP-0154): kept in data/wm-run.txt, and ↑ brings "clock" back to run again.
+        until("[WM] RUN HISTORY: 1 LINES KEPT IN data/wm-run.txt")
+        keys("esc")
+        keys("alt-r", "up", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        again = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={again}")
+        keys("alt-w", text=f"CLOSE {again}")
+        until(f"GONE {again}")
+        while again in state()[2]:
+            wait()
         screen = screen_text(vm)
         vm.serial(enter=False)
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
@@ -16853,7 +17047,8 @@ def wm_suite(vm):
         assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
         print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
               "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
-              "window to the front, Alt+W closes one and the list follows", flush=True)
+              "window to the front, Alt+W closes one and the list follows; the Run window's history brings a line back "
+              "(000-APP-0154)", flush=True)
 
     # The desktop background (000-APP-0047, 000-APP-0050): data/wm.conf says none (the ░ cells as before) or an image
     # (BMP, PNG or JPEG); without it the default, a slowly moving pattern with the time, the date and the CPU load over
@@ -19877,6 +20072,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
+    parser.add_argument("--video-elf", help="test-only ELF built from tests/video_stub (two cameras at once in the cameras suite, 158-DRV-0082); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
     parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
@@ -19924,6 +20120,9 @@ def main():
     # The audio suite's levels stub (000-DRV-0057): x86 only, where the audio suites run.
     levels = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-levels-target/x86_64-unknown-none/release/levels_stub"
     args.levels_elf = args.levels_elf or (str(levels) if args.arch == "x86_64" and levels.exists() else None)
+    # The cameras suite's stub (158-DRV-0082): x86, where the suite runs.
+    stub = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-video-target/x86_64-unknown-none/release/video_stub"
+    args.video_elf = args.video_elf or (str(stub) if args.arch == "x86_64" and stub.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -20007,6 +20206,9 @@ def main():
             continue
         if suite == "usbaudio":
             usbaudio_suite(args)
+            continue
+        if suite == "cameras":
+            cameras_suite(args)
             continue
         if suite == "link":
             link_suite(args)

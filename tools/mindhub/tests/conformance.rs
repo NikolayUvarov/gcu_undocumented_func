@@ -1,4 +1,4 @@
-//! The conformance suite against `tools/mindhub` itself (hub-api 2), on loopback and over TLS 1.3 with an Ed25519 and a P-256
+//! The conformance suite against `tools/mindhub` itself (hub-api 3), on loopback and over TLS 1.3 with an Ed25519 and a P-256
 //! key, the hub known by its pin; a wrong pin is refused, and the hub's data rebuilt by a restart serves the same.
 
 use ed25519_dalek::SigningKey;

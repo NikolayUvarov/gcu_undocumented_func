@@ -17,7 +17,7 @@ use mind::idl::{usb, wire};
 use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 use mind::sys::{Error, Result};
-use mind::usb::{claims, known, EndpointInfo, Interface, BULK_MAX, CONTROL_MAX, MAX_ENDPOINTS};
+use mind::usb::{claims, known, EndpointInfo, Interface, BULK_MAX, BULK_STREAM_BYTES, CONTROL_MAX, MAX_ENDPOINTS};
 use xhci::{Ring, Tag, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
 
 const RECEIVED_CAP: usize = 9;
@@ -408,6 +408,15 @@ impl Controller {
         Some(status)
     }
 
+    // The bulk streams of device `index`'s interface `number` end (158-DRV-0082); each endpoint gets its ring back.
+    fn end_bulk_streams(&mut self, index: usize, number: u8) {
+        let Some(device) = self.devices[index] else { return };
+        let mask = self.xhci.bulk_streams_of(device.slot, number);
+        for at in (0..device.ring_count).filter(|&at| mask & 1 << device.rings[at].0 != 0) {
+            if let Some(ring) = self.xhci.end_bulk_stream(device.slot, device.rings[at].0) { if let Some(d) = self.devices[index].as_mut() { d.rings[at].1 = ring; } }
+        }
+    }
+
     // The configuration descriptor of device `index` and its length.
     // The streams of device `index`'s interface `number` replaced by those of `endpoints`' isochronous ones (none: they
     // end), in one Configure Endpoint that drops the old endpoints and adds the new (000-DRV-0073).
@@ -537,6 +546,7 @@ impl Host {
         let (slot, info) = (device.slot, device.interfaces[iface].info);
         for endpoint in info.endpoints() { root.xhci.forget(slot, dci(endpoint.address)); }
         // Its streams end, and the device goes back to setting 0.
+        root.end_bulk_streams(index, info.number);
         if root.xhci.streams_of(slot, Some(info.number)) != 0 { let _ = root.streams(index, info.number, &[]); let _ = root.control(index, 0x01, 11, 0, info.number as u16, 0); }
         Ok(())
     }
@@ -560,6 +570,7 @@ impl Host {
                     for endpoint in device.interfaces[iface].info.endpoints() { root.xhci.forget(device.slot, dci(endpoint.address)); }
                     if let Some(d) = root.devices[index].as_mut() { d.interfaces[iface].owner = 0; }
                     let number = device.interfaces[iface].info.number;
+                    root.end_bulk_streams(index, number);
                     if root.xhci.streams_of(device.slot, Some(number)) != 0 { let _ = root.streams(index, number, &[]); let _ = root.control(index, 0x01, 11, 0, number as u16, 0); }
                 }
             }
@@ -613,6 +624,8 @@ impl Host {
         if length == 0 || length > BULK_MAX || offset.checked_add(length).is_none_or(|end| end > size) { return Err(Error::Invalid); }
         let target = dci(endpoint.address);
         let at = device.rings[..device.ring_count].iter().position(|r| r.0 == target).ok_or(Error::Invalid)?;
+        // A bulk stream holds the endpoint's ring while it runs (usb.wit 1.6).
+        if self.root(c)?.xhci.stream(device.slot, target).is_some() { return Err(Error::Invalid); }
         let mut ring = device.rings[at].1;
         let Host { roots, buffers, .. } = self;
         let root = roots.get_mut(c).and_then(Option::as_mut).ok_or(Error::NotFound)?;
@@ -835,7 +848,37 @@ impl Host {
         if offset.checked_add(length).is_none_or(|end| end > buffer.len()) { return Err(Error::Invalid); }
         root.xhci.pump();
         let moved = if input { root.xhci.take_stream(at, &mut buffer[offset..offset + length]) } else { root.xhci.put_stream(at, &buffer[offset..offset + length]) };
+        // A bulk stream that halted on an error (158-DRV-0082): the endpoint reset on both sides, as `bulk` does, and its
+        // TDs on the ring again.
+        if root.xhci.bulk_halted(at) {
+            root.xhci.recover_bulk(at);
+            let _ = root.control(index, 0x02, 1, 0, address as u16, 0); // CLEAR_FEATURE ENDPOINT_HALT
+            root.xhci.take_stream(at, &mut []);
+        }
         Ok(moved as u32)
+    }
+
+    // A bulk IN endpoint kept polled, its transfers then taken by `isochronous`, or no longer (usb.wit 1.6, 158-DRV-0082).
+    fn bulk_stream(&mut self, badge: u16, handle: u32, address: u8, on: bool) -> Result<()> {
+        let (index, iface) = self.interface(handle, badge)?;
+        if ehci_device(handle).is_some() { return Err(Error::Invalid); }
+        let root = self.root(xhci_device(handle).0)?;
+        let device = root.devices[index].ok_or(Error::NotFound)?;
+        let info = device.interfaces[iface].info;
+        if !info.endpoints().iter().any(|e| e.address == address && e.is_bulk() && e.is_in()) { return Err(Error::Invalid); }
+        let target = dci(address);
+        let at = device.rings[..device.ring_count].iter().position(|r| r.0 == target).ok_or(Error::Invalid)?;
+        if !on {
+            if let Some(ring) = root.xhci.end_bulk_stream(device.slot, target) { if let Some(d) = root.devices[index].as_mut() { d.rings[at].1 = ring; } }
+            return Ok(());
+        }
+        if root.xhci.stream(device.slot, target).is_some() { return Ok(()); }
+        let Some(tds) = root.xhci.new_bulk_stream(device.slot, target, info.number, device.rings[at].1) else {
+            mind::println!("[USB] {}SLOT {} ENDPOINT {:02X}: NO ROOM FOR A BULK STREAM", Tag(root.xhci.number), device.slot, address);
+            return Err(Error::NoMemory);
+        };
+        mind::println!("[USB] {}SLOT {} ENDPOINT {:02X}: KEPT POLLED BY {} TRANSFERS OF {} BYTES", Tag(root.xhci.number), device.slot, address, tds, BULK_STREAM_BYTES);
+        Ok(())
     }
 
     // The OUT packets of the selected setting's isochronous endpoint `address` (usb.wit 1.5, 000-DRV-0073).
@@ -865,6 +908,7 @@ impl Host {
             usb::Request::Select { handle, alternate } => { let r = self.select(badge, handle, alternate); usb::reply_select(call, r) }
             usb::Request::Isochronous { handle, address, offset, length } => { let r = self.isochronous(badge, handle, address, offset, length); usb::reply_isochronous(call, r) }
             usb::Request::IsochronousOut { handle, address, offset, length } => { let r = self.isochronous_out(badge, handle, address, offset, length); usb::reply_isochronous_out(call, r) }
+            usb::Request::BulkStream { handle, address, on } => { let r = self.bulk_stream(badge, handle, address, on); usb::reply_bulk_stream(call, r) }
         };
     }
 }
