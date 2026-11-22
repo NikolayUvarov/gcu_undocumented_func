@@ -82,7 +82,7 @@ pub fn mask_host(bus: &mut impl Bus) -> io::Result<[u32; 3]> {
 
 /// 213-DRV-0091: false, the strict path, keeps HIMR0 masked after the download; true leaves B_AX_HALT_C2H_INT_EN on, as
 /// rtw89_pci_enable_intr does, where `halt_interrupt_refusal` finds no way for the device's interrupt to reach anyone.
-pub const HALT_INTERRUPT_AS_LINUX: bool = false;
+pub const HALT_INTERRUPT_AS_LINUX: bool = true;
 pub const B_AX_HALT_C2H_INT_EN: u32 = 1 << 21;
 
 /// The device's interrupt state in its PCI configuration (213-DRV-0091): Command and Status, the interrupt line and pin

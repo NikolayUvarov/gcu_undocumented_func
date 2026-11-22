@@ -271,7 +271,7 @@ fn the_pci_interrupt_state_says_whether_the_halt_interrupt_may_be_left_on() {
     // The guards: every bit of every mask on the strict path, all but HIMR0's halt bit when it is left on.
     assert_eq!([0x1a0, 0x10b0, 0x13b0].map(|at| mac::host_mask_required(at, false)), [u32::MAX; 3]);
     assert_eq!([0x1a0, 0x10b0, 0x13b0].map(|at| mac::host_mask_required(at, true)), [!(1 << 21), u32::MAX, u32::MAX]);
-    assert!(!mac::HALT_INTERRUPT_AS_LINUX, "the strict path is the default");
+    assert!(mac::HALT_INTERRUPT_AS_LINUX, "the bench run's switch: the halt interrupt left on as Linux leaves it");
     let mut bus = Device::new(); mac::halt_interrupt_on(&mut bus).unwrap(); assert_eq!(bus.get(0x1a0), 1 << 21);
     let mut bus = Device::new(); bus.ignore_write = Some(0x1a0); assert!(mac::halt_interrupt_on(&mut bus).is_err());
 }
