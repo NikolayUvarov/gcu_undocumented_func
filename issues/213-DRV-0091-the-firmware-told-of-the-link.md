@@ -285,7 +285,7 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - 213-DRV-0032's table records it: HIMR0 `00200000` after the download, 0 before.
   - So the reason is that this driver polls and has no interrupt handler. Masking was to follow `rtw89_pci_disable_intr`, the state Linux keeps before it starts. Nothing in the issue or the code says the bit was masked to change the firmware's behaviour.
 - **What Linux does with the bit** (pci.c, pci.h and rtw8852be.c at 05f7e89):
-  - The 8852BE uses `rtw89_pci_config_intr_mask`, which sets `halt_c2h_intrs = B_AX_HALT_C2H_INT_EN` (bit 21; WDT_TIMEOUT, bit 22, is only in the recovery masks of the v1 chips).
+  - The 8852BE uses `rtw89_pci_config_intr_mask`, which sets `halt_c2h_intrs = B_AX_HALT_C2H_INT_EN` (bit 21 alone; WDT_TIMEOUT, bit 22, is added only by the `_v1` mask functions of other chips).
   - `rtw89_pci_ops_start` calls `rtw89_pci_enable_intr`, which writes HIMR0 (0x1A0) with it. `rtw89_pci_disable_intr` writes 0 only around stops and while the interrupt is handled.
   - `rtw89_pci_recognize_intrs` reads HISR0 (0x1A4), keeps the bits of `halt_c2h_intrs`, and writes them back to clear them. A halt C2H bit leads to `rtw89_ser_notify(rtw89_mac_get_err_status())`.
   - So Linux runs with bit 21 on, and this driver runs with it off.
