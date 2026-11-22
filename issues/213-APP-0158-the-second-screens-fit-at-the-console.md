@@ -1,6 +1,6 @@
 # 213-APP-0158 — The second screen's fit at the console: `screen second keep|stretch`, kept
 
-**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's ask, with the Ryzen on the bench until about 2026-11-23) · **Status:** in progress (written and host-tested, 2026-11-22; the shell suite's run, then the Ryzen) · **Blocked by:** — (`display.wit` 1.4, [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), in `main` since round 171) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's ask, with the Ryzen on the bench until about 2026-11-23) · **Status:** in progress (done in QEMU on x86, 2026-11-22; the Ryzen's two monitors left) · **Blocked by:** — (`display.wit` 1.4, [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), in `main` since round 171) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track G · **Constitution:** MC-12.1
 
 **Recorded by:** the tools track, 2026-11-22, from KRN's request in `issues/requests-APP.md` ("The second screen's fit chosen at the console, and kept").
 
@@ -34,7 +34,8 @@ The compositor can show the first screen on the second in its own shape or stret
 ## Progress (2026-11-22)
 
 - **Written:** `shell/src/screens.rs`, the words and the file, and `screenctl.rs`, the calls and the start; the `help` line; the docs.
-- **Tested:** `tests/shell_host.rs` (44 tests, `the_second_screens_fit_shown_set_and_kept` among them). The shell suite's run is under way.
+- **Tested** in this container, x86_64: `tests/shell_host.rs` (44 tests, `the_second_screens_fit_shown_set_and_kept` among them); the shell suite (18 checks), whose `screen_check` passes: no second screen said, `stretch` taken and kept in `data/displays.txt`, set again by a shell `init` restarted (`[SHELL] THE SECOND SCREEN'S FIT FROM data/displays.txt: STRETCH`), `keep` back, a fit it does not know refused.
+- **Left:** the Ryzen's two monitors, where `stretch` must fill the second and `keep` show the first's shape (MC-12.1: QEMU has one screen).
 
 ## Related
 
