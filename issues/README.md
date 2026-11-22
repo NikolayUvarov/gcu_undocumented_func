@@ -133,11 +133,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [000-KRN-0264](000-KRN-0264-the-whole-frame-check-fails-on-i9-with-test-kernels.md) | The whole-frame check fails on i9 with the test kernels: the first screen's top 4–5 frames behind its bottom (rounds 154, 155; the reruns passed) | `KRN` | P2 | — | — |
 | [211-KRN-0256](211-KRN-0256-the-log-volume-on-a-gpt-boot-disk.md) | The log volume on a GPT boot disk: `init` gives `vfs_server` a window for its partition named `MIND LOG` (MOB's ask 1 of 2026-11-16) | `KRN` | P1 | — | 211 |
 | [213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md) | The AMD FCH's watchdog: a frozen Ryzen restarts by itself (`WATCHDOG: NONE` there today) | `KRN` | P2 | — | track A |
-<<<<<<< HEAD
-| [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md) | A second screen for the compositor: `display.wit` 1.3, offered by a display driver and mirrored into (for DRV's 213-DRV-0092) | `KRN` | P1 | — | 213 |
 | [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md) | The second screen stretched or kept in shape: `display.wit` 1.4, chosen by the shell (the maintainer's ask) | `KRN` | P1 | APP's shell command | 213 |
-=======
->>>>>>> origin/main
 | [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md) | `audio_gw` gets a second HD Audio function (the Ryzen's analog one beside the GPU's HDMI audio); `init` stops both of a driver's devices before a restart | `KRN` | P2 | the drivers track's `audio_gw` change | track H |
 | [213-KRN-0262](213-KRN-0262-the-loaders-lines-in-the-system-log.md) | The loader's lines in the system log, the graphics outputs among them (DRV's request for the Ryzen's second monitor) | `KRN` | P2 | — | 213 |
 | [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) | The link's developer mode: with `dev` in `link.conf`, `link` holds sysmon, network policy, Wi-Fi and reboot clients (800-LNK-0012) | `KRN` | P1 | in `main` (4e96ad8); the link track's suite left | — |
