@@ -276,7 +276,10 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     // 213-DRV-0104: the in-time answers above by the frame's size (SIZES: under 200 bytes, to 1000, over); sends to one
     // station ended, by the rate they went at (txdesc::LEGACY_RATES' order: sends, acknowledged, tries) and by their tries
     // (1 to 15); frames received for this station by the access point's rate (rx_rate_bin) and those with the retry bit.
-    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32}
+    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32,
+    // 213-DRV-0091: the service's steps: its waits for a request (POLL_MS asked) and its work after them, each over 5 and
+    // over 10 ms, and the longest (µs): a wait far over its time is the task not run again, work over it the step's own.
+    pub wait_over:[u32;2],pub wait_longest_us:u64,pub work_over:[u32;2],pub work_longest_us:u64}
 /// 213-DRV-0104: a frame's size class for the in-time answers: under 200 bytes, 200 to 1000, over 1000.
 pub fn size_class(length:usize)->usize{if length<200{0}else if length<=1000{1}else{2}}
 /// 213-DRV-0104: the received rates binned: the descriptor's data rate as the hardware gives it (rtw89_hw_rate): CCK 0 to 3

@@ -333,6 +333,9 @@ fn served(event: receive_service::Event) {
             }
             mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
                 channel, Spaced(&tx.gap_ms), tx.peak_sends);
+            // 213-DRV-0091: the service's steps: waits for a request (2 ms asked) and the work after them.
+            mind::println!("[RTW89] TRAFFIC ON {}: SERVICE STEPS: WAITS OVER 5 / 10 MS {} / {}, THE LONGEST {} US; WORK OVER 5 / 10 MS {} / {}, THE LONGEST {} US (213-DRV-0091)",
+                channel, tx.wait_over[0], tx.wait_over[1], tx.wait_longest_us, tx.work_over[0], tx.work_over[1], tx.work_longest_us);
             // 213-DRV-0104: sends to one station by the rate they went at and by tries, and what the access point sent us.
             const TX_RATES: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
             mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[..6], &tx.by_rate[..6]));

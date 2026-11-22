@@ -829,6 +829,8 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     // The frames for this station taken into the buffer (16, nobody reads them), at the model's rate 0 (CCK 1 Mb/s), the
     // first with the retry bit.
     assert_eq!((tx.rx_rate[0],tx.rx_rate.iter().sum::<u32>(),tx.rx_retry),(16,16,1),"{:?}",tx.rx_rate);
+    // 213-DRV-0091: the steps' waits and work, in the model's clock: its receive wait ends at once, with the 2 ms asked.
+    assert_eq!((tx.wait_over,tx.work_over,tx.work_longest_us),([0,0],[0,0],0),"{tx:?}");assert!(tx.wait_longest_us<=2_000,"{tx:?}");
     {use crate::btc_session::data_mode::{rx_rate_bin,size_class,ms_bin};
     assert_eq!([0,4,11,0x80,0x87,0x8f,0x90,0x100,0x180].map(rx_rate_bin),[0,4,11,12,19,27,28,28,28],"CCK, OFDM, HT MCS 0-15, other");
     assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}

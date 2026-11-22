@@ -111,6 +111,13 @@ impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_m
         if self.second.1==0||now.saturating_sub(self.second.0)>=1000{self.second=(now,0);}
         self.second.1=self.second.1.saturating_add(1);self.minute.peak_sends=self.minute.peak_sends.max(self.second.1);
     }
+    // 213-DRV-0091: a step's wait for a request and its work, in µs.
+    fn step(&mut self,wait_us:u64,work_us:u64){
+        let m=&mut self.minute;
+        for(us,over,longest)in[(wait_us,&mut m.wait_over,&mut m.wait_longest_us),(work_us,&mut m.work_over,&mut m.work_longest_us)]{
+            if us>5_000{over[0]=over[0].saturating_add(1);}if us>10_000{over[1]=over[1].saturating_add(1);}*longest=(*longest).max(us);
+        }
+    }
     // 213-DRV-0104: a send of `length` bytes answered in time, `ms` after its arrival.
     fn in_time(&mut self,ms:u64,length:usize){
         let(c,b)=(data_mode::size_class(length),data_mode::ms_bin(ms).min(data_mode::MS_BINS-1));
@@ -657,7 +664,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if self.failure.is_some(){return false}
         self.watch();
         let slot=if self.pending.as_ref().is_some_and(|p|p.slot==RECEIVE[0]){RECEIVE[1]}else{RECEIVE[0]};
-        let received=Endpoint::SERVICE.recv_timeout(slot,POLL_MS);
+        // 213-DRV-0091: how long the wait for a request and the step's work took, for the minute line.
+        let waited=time::monotonic_ns();let received=Endpoint::SERVICE.recv_timeout(slot,POLL_MS);let worked=time::monotonic_ns();
         let now=time::monotonic_ns()/1_000_000;
         if now<self.last_ms{self.fail(Fatal::Clock)}else{self.last_ms=now;if let Err(e)=self.progress(now){self.fail(e)}}
         let dispatch_now=time::monotonic_ns()/1_000_000;
@@ -667,6 +675,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             Err(sys::Error::Other(code))if code==mind::abi::ERR_TIMEOUT=>{},
             Err(error)=>self.fail(Fatal::Ipc(error)),
         }
+        self.tx_watch.step(worked.saturating_sub(waited)/1000,time::monotonic_ns().saturating_sub(worked)/1000);
         self.failure.is_none()
     }
     fn dispatch(&mut self,received:mind::ipc::Received,slot:usize,now:u64){
