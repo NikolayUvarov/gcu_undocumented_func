@@ -1,6 +1,6 @@
 # 158-APP-0152 — A key in `camera` and `wm`'s camera that steps through the camera's modes
 
-**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written, 2026-11-22; the `vfs` suite's run and the Ryzen's cameras left) · **Blocked by:** — (`video.wit` 1.1's `modes` and `opened`, [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md), in `main` since round 169) · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
+**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, 2026-11-22; the Ryzen's cameras left) · **Blocked by:** — (`video.wit` 1.1's `modes` and `opened`, [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md), in `main` since round 169) · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
 
 **Asked by:** DRV, `APP/2026-11-21T1259Z-DRV-request-a-key-in-camera-that-steps-through-the-cameras-modes.md` on `internal-dev-messages`, at the maintainer's word of 2026-11-21: «переключение камеры должно быть доступно и из самого приложения, как устройства, так и её режимов». Numbered on 2026-11-21.
 
@@ -55,6 +55,14 @@ Once `video.wit` 1.1's `modes(camera)` is on a branch to build against:
   - a 1.0 gateway (`modes` rejected) and a camera with one offered mode are named and left as they are;
   - `n` reads the next camera's modes.
 - **A buffer given up** for another mode's drops its shared capability.
-- **The `vfs` suite's camera check** now steps the test pattern's three modes with `m` and Shift+`m`, takes a still at `-m 0` (640×480), and refuses `-m 7` with the count. Its run on x86 is under way.
+- **The `vfs` suite's camera check** steps the test pattern's three modes:
+  - `m` from mode 1 (320×240 at 10) to 2 (160×120 at 5), `m` round to 0 (640×480 at 30), Shift+`m` back to 2, each `OPENED` at its own size;
+  - a still at `-m 0` is 640×480, on `ram:`;
+  - `-m 7` is refused with the count.
+- **Tested** in this container, x86_64:
+  - the `vfs` suite passes (8 checks). Its first run failed later on, counting `data/`'s files, as the still was there; it is on `ram:` now;
+  - DRV's `cameras` suite passes with this `camera`;
+  - `tests/camera_host.rs` (2).
+- **Left:** the Ryzen's two cameras, with DRV.
 - **Docs:** `docs/tools/README.md` and `README_RU.md`, 4.12.
 
