@@ -41,6 +41,8 @@ pub(crate) const QUIET_MS:u64=10_000;
 // Unicast sends in a row not acknowledged, over at least UNHEARD_MS: logged once a run, the service goes on.
 pub(crate) const UNHEARD:u32=16;
 pub(crate) const UNHEARD_MS:u64=5_000;
+// 213-DRV-0091 step 2: Linux's msleep(beacon_int + 1) before a port update, at the bench's 100 TU.
+const PORT_WAIT_MS:u64=101;
 // 213-DRV-0087: what became of the PPDU status reports is logged this often while it changes.
 const SIGNALS_MS:u64=60_000;
 // 213-DRV-0090: no beacon of the joined BSS for this long, once one was heard, is a hole (they come about ten a second);
@@ -99,6 +101,9 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // 213-DRV-0091: the link the firmware was told of: None, or the AID it was told; and a change still to tell it (the
     // AID of an association response, or None after a deauthentication), done when no send is pending.
     linked:Option<u16>,link_change:Option<Option<u16>>,links:u32,
+    // 213-DRV-0091 step 2: port 0 set for INFRA, and its change due at a time: a beacon interval and a millisecond after the
+    // H2Cs, as Linux's rtw89_mac_port_cfg_func_sw waits before it turns the port's function off.
+    port_linked:bool,port_due:Option<(u64,bool)>,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -142,7 +147,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
-            linked:None,link_change:None,links:0})
+            linked:None,link_change:None,links:0,port_linked:false,port_due:None})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -284,6 +289,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     // 213-DRV-0091: a link change told to the firmware once no send is pending; a busy queue waits a step, a failure that
     // shut the data mode down ends the service.
     fn tell_link(&mut self)->Result<(),Fatal>{
+        self.set_port()?;
         let Some(change)=self.link_change else{return Ok(())};
         if self.pending.is_some(){return Ok(())}
         if change==self.linked{self.link_change=None;return Ok(())}
@@ -295,6 +301,22 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let(channel,bssid)=(self.data().channel(),self.data().current_filter().bssid());
                 let after=probed.then(||self.data().probe());
                 let event=Event::Linked{channel,bssid,aid:change,was,before,after};
+                let now=time::monotonic_ns()/1_000_000;
+                if change.is_some()!=self.port_linked{self.port_due=Some((now.saturating_add(PORT_WAIT_MS),change.is_some()));}
+                if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
+            }
+            Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),
+            Err(_)=>Ok(()),
+        }
+    }
+    // 213-DRV-0091 step 2: the port's change once it is due and no send is pending.
+    fn set_port(&mut self)->Result<(),Fatal>{
+        let Some((due,linked))=self.port_due else{return Ok(())};
+        if self.pending.is_some()||time::monotonic_ns()/1_000_000<due{return Ok(())}
+        match self.data().port_link(linked,COMMAND_US){
+            Ok(())=>{
+                self.port_due=None;self.port_linked=linked;
+                let after=(self.links<=2).then(||self.data().probe());let event=Event::Port{channel:self.data().channel(),linked,after};
                 if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
             }
             Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),
@@ -425,8 +447,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             wlanhw::Request::SetFilter{filter}=>{
                 // 213-DRV-0091: another filter ends the link the firmware was told of, before its CAM entry is replaced.
                 if self.linked.is_some()&&self.pending.is_none(){
-                    match self.data().connect(None,COMMAND_US){
-                        Ok(())=>{self.linked=None;self.link_change=None;}
+                    match self.data().connect(None,COMMAND_US).and_then(|()|if self.port_linked{self.data().port_link(false,COMMAND_US)}else{Ok(())}){
+                        Ok(())=>{self.linked=None;self.link_change=None;self.port_linked=false;self.port_due=None;}
                         Err(failure) if failure.shutdown.is_some()=>{let _=wlanhw::reply_set_filter(call,Err(error(&failure)));self.fail(Fatal::Radio(failure));return}
                         Err(_)=>{}
                     }

@@ -348,6 +348,11 @@ fn served(event: receive_service::Event) {
             if let Some(probe) = before { pieces("LINK BEFORE", &probe); }
             if let Some(probe) = after { pieces("LINK AFTER", &probe); }
         }
+        receive_service::Event::Port { channel, linked, after } => {
+            mind::println!("[RTW89] PORT 0 SET FOR {} ON CHANNEL {} (NET TYPE, BSSID FIT, TSF UPDATE, TBTT PROHIBIT; 213-DRV-0091)",
+                if linked { "INFRA" } else { "NO LINK" }, channel);
+            if let Some(probe) = after { pieces("PORT AFTER", &probe); }
+        }
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
