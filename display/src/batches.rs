@@ -1,10 +1,12 @@
 //! Step 1 of 213-DRV-0086: the firmware's display state read in ten batches, the registers Display Core itself reads
 //! (hwdocs/cezanne-display.md, "a read proposed as safe"); in batch 8 those Linux's dmub code reads to tell whether the
 //! display microcontroller (DMCUB) runs; in batches 9 and 10 the firmware's pipe as step 4's reference (213-DRV-0092):
-//! its HUBP's request, DLG and TTU registers, its DPP, the MPC tree, DCHUBBUB's watermarks and DCCG's DPP clocks. Each
-//! batch is named in the log before its first read and
-//! paused after, each value logged as it is read, so that a hang names its register; batch 4 reads only the HUBPs batch
-//! 3 shows powered. `Bus` has no write: nothing here can change the device. `tests/display_batches_host.rs` checks it.
+//! its HUBP's request, DLG and TTU registers, its DPP, the MPC tree, DCHUBBUB's watermarks and DCCG's DPP clocks; in batch
+//! 11 HDMI-A-1's DDC line (213-DRV-0095). In the survey's order each batch is named in the log before its first read and
+//! paused after, each value logged as it is read, so that a hang names its register; in the production order
+//! (213-DRV-0098) only the registers steps 2 to 4 take are read (`USED`), in the same order, with no pause and one line.
+//! Batch 4 reads only the HUBPs batch 3 shows powered. `Bus` has no write: nothing here can change the device.
+//! `tests/display_batches_host.rs` checks it.
 
 use crate::dcn::{field::*, Field, Reg, R};
 use crate::timing::Otg;
@@ -26,10 +28,86 @@ pub trait Bus {
     fn read(&mut self, reg: Reg) -> Option<u32>;
 }
 
-/// Where the lines go, and the pauses.
+/// Where the lines go, and the pauses. The survey's order logs every line and makes every pause; the production order
+/// (213-DRV-0098, `Held`) makes no pause and holds a part's detail, logged only if the part fails. Neither touches the
+/// device: the reads and writes are the same in both orders.
 pub trait Out {
+    /// A line of detail: a read, a write, a plan, a value.
     fn line(&mut self, args: fmt::Arguments);
     fn pause(&mut self, ms: u32);
+    /// A line both orders log: a part's result and its time, a refusal, a failure.
+    fn note(&mut self, args: fmt::Arguments) { self.line(args) }
+    /// A part begins (a batch, step 2, a stage): the detail held of the one before is let go.
+    fn part(&mut self) {}
+    /// The part under way failed: the detail held of it is logged, and every line after it until the next part.
+    fn failed(&mut self) {}
+}
+
+/// Steps 1 to 4's order (213-DRV-0098).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    /// For bring-up: every batch named and paused, every value, write and plan logged, a pause around every stage.
+    Survey,
+    /// For a machine in use: step 1 reads only what steps 2 to 4 take (`USED`), no pause, a line a part, the detail
+    /// only on a failure. The same writes and checks in the same order as the survey's.
+    Production,
+}
+
+/// The production order's held detail of one part, on the heap: the longest stage's lines and more.
+pub const HELD_BYTES: usize = 64 * 1024;
+
+/// The production order's log: no pause; a part's detail lines held in `buf` (the latest kept, the oldest let go when
+/// it is full) and logged only if the part fails; notes logged at once through `inner`.
+pub struct Held<'a, O: Out> { pub inner: O, buf: &'a mut [u8], len: usize, dropped: u32, failing: bool }
+
+impl<'a, O: Out> Held<'a, O> {
+    pub fn new(inner: O, buf: &'a mut [u8]) -> Held<'a, O> { Held { inner, buf, len: 0, dropped: 0, failing: false } }
+    // One line as a length byte and its bytes (cut at 255).
+    fn hold(&mut self, args: fmt::Arguments) {
+        let mut line = Cut { bytes: [0; 255], len: 0 };
+        let _ = fmt::write(&mut line, args);
+        let n = line.len;
+        if n + 1 > self.buf.len() { self.dropped += 1; return; }
+        while self.len + n + 1 > self.buf.len() {
+            let first = 1 + self.buf[0] as usize;
+            self.buf.copy_within(first..self.len, 0);
+            self.len -= first;
+            self.dropped += 1;
+        }
+        self.buf[self.len] = n as u8;
+        self.buf[self.len + 1..self.len + 1 + n].copy_from_slice(&line.bytes[..n]);
+        self.len += n + 1;
+    }
+}
+
+impl<O: Out> Out for Held<'_, O> {
+    fn line(&mut self, args: fmt::Arguments) { if self.failing { self.inner.line(args) } else { self.hold(args) } }
+    fn pause(&mut self, _: u32) {}
+    fn note(&mut self, args: fmt::Arguments) { self.inner.note(args) }
+    fn part(&mut self) { (self.len, self.dropped, self.failing) = (0, 0, false); }
+    fn failed(&mut self) {
+        if self.failing { return; }
+        self.failing = true;
+        if self.dropped > 0 { self.inner.line(format_args!("{} EARLIER LINES OF THIS PART'S DETAIL WERE NOT KEPT", self.dropped)); }
+        let mut at = 0;
+        while at < self.len {
+            let n = self.buf[at] as usize;
+            self.inner.line(format_args!("{}", core::str::from_utf8(&self.buf[at + 1..at + 1 + n]).unwrap_or("?")));
+            at += 1 + n;
+        }
+        (self.len, self.dropped) = (0, 0);
+    }
+}
+
+// A line formatted into a fixed buffer, cut at its end.
+struct Cut { bytes: [u8; 255], len: usize }
+impl fmt::Write for Cut {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let n = s.len().min(self.bytes.len() - self.len);
+        self.bytes[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        Ok(())
+    }
 }
 
 /// One register of a batch.
@@ -61,6 +139,12 @@ impl List {
     pub fn iter(&self) -> impl Iterator<Item = Named> + '_ { self.items[..self.len].iter().flatten().copied() }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
+    /// Only the registers steps 2 to 4 take (`USED`), in the same order.
+    pub fn used(&self) -> List {
+        let mut list = List::new();
+        for n in self.iter().filter(|n| USED.contains(&n.r)) { list.push(n.r, n.inst); }
+        list
+    }
 }
 
 /// What earlier batches showed that later ones depend on.
@@ -135,6 +219,34 @@ const SHARED: [R; 6] = {
 };
 /// The DIG back ends of the board's outputs: PHYs A, B, D and E (the VBIOS's paths; C has no connector).
 pub const BOARD_PHYS: [u8; 4] = [0, 1, 3, 4];
+
+/// What steps 2 to 4 take from step 1's values (`light::assess`, `light::reference`, `ddc::read`), each at every
+/// instance the survey reads it: the production order reads these alone (213-DRV-0098). `tests/display_batches_host.rs`
+/// and `tests/display_ddc_host.rs` show that each is taken, and that no other register the survey reads changes what
+/// steps 2 to 4 do.
+pub const USED: [R; 77] = {
+    use R::*;
+    [// Batch 1: HPD 1's sense. Batch 2: which timing generator runs, from which OPP; the firmware's timing for stage 9.
+     HpdIntStatus, OtgControl, OptcDataSourceSelect, OtgHTotal, OtgVTotal, OtgHBlankStartEnd, OtgVBlankStartEnd,
+     // Batches 3 and 4: the powered HUBPs, what they follow, the firmware's surface's format and pitch.
+     DomainPgStatus, HubpCntl, HubpSurfaceConfig, HubpreqSurfacePitch,
+     // Batch 5: the DIG front and back ends. Batch 6: the frame buffer's base. Batch 8: the DMCUB's control.
+     DigFeCntl, DigBeCntl, DigBeEnCntl, DcnVmFbLocationBase, DmcubCntl,
+     // Batch 9: the firmware's HUBP and OTG, stage 9's reference and what pipe 1 copies.
+     HubpTilingConfig, HubpPriViewportDimension, HubpReqSizeConfig, HubpReqSizeConfigC, HubpreqSurfaceControl, HubpreqExpansionMode,
+     HubpreqTtuQosWm, HubpreqGlobalTtuCntl, HubpreqSurf0TtuCntl0, HubpreqSurf0TtuCntl1, HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1,
+     HubpreqVmMxL1TlbCntl, HubpreqBlankOffset0, HubpreqDstDimensions, HubpreqDstAfterScaler, HubpreqPrefetchSettings,
+     HubpreqVblankParameters0, HubpreqVblankParameters1, HubpreqVblankParameters2, HubpreqVblankParameters3,
+     HubpreqVblankParameters4, HubpreqPerLineDeliveryPre, HubpreqPerLineDelivery, HubpreqRefFreqToPixFreq,
+     HubpreqDstYDeltaDrqLimit, HubpretControl, HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow,
+     HubpreqVmSystemApertureHigh, OtgVstartupParam, OtgVupdateParam, OtgVreadyParam, HubpreqDebugDb,
+     // Batch 10: the firmware's DPP as pipe 1 copies it, the MPC tree, the reference clock's route.
+     CnvcSurfacePixelFormat, CnvcFormatControl, DsclSclMode, DsclControl, DsclLbDataFormat, CmControl, CmIcscControl,
+     CmGamutRemapControl, CmDgamControl, CmBlndgamControl, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio, MpccTopSel,
+     MpccBotSel, MpccOppId, MpccControl, MpcOutMux, DchubbubGlobalTimerCntl, RefclkCntl,
+     // Batch 11: the I2C engine and DDC1's pads as step 2 finds them and puts them back.
+     DcI2cArbitration, DcI2cControl, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction, DcGpioDdc1Mask]
+};
 
 pub fn title(batch: u8) -> &'static str {
     match batch {
@@ -257,15 +369,20 @@ impl Store {
 }
 
 /// Step 1: batches 1 to `allowed` read, the others only named with the registers they would read.
-pub fn run(bus: &mut impl Bus, allowed: u8, out: &mut impl Out) -> Report { run_into(bus, allowed, out, &mut Store::default()) }
+pub fn run(bus: &mut impl Bus, allowed: u8, out: &mut dyn Out) -> Report { run_into(bus, allowed, out, &mut Store::default()) }
 
-/// Step 1, every value read kept in `store`.
-pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut Store) -> Report {
+/// Step 1 in the survey's order, every value read kept in `store`.
+pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut dyn Out, store: &mut Store) -> Report { read_into(bus, allowed, Order::Survey, out, store) }
+
+/// Step 1 in `order`, every value read kept in `store`. The production order reads of each batch only the registers
+/// steps 2 to 4 take (`List::used`), in the survey's order, and counts the batch read when none of them is in it.
+pub fn read_into(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Out, store: &mut Store) -> Report {
     let allowed = allowed.min(BATCHES);
     out.line(format_args!("STEP 1: THE ENGINE'S STATE IN {} BATCHES, READ ONLY; THIS BUILD MAY READ {}", BATCHES, allowed));
     let mut known = Known::default();
     let mut report = Report::default();
     for batch in 1..=BATCHES {
+        out.part();
         let list = plan(batch, &known);
         if batch > allowed {
             name_only(batch, &list, &known, allowed, out);
@@ -273,9 +390,10 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
         }
         if list.is_empty() {
             let why = if batch >= 9 { "NOT ONE RUNNING OTG WITH ONE POWERED HUBP ON IT (BATCHES 2 AND 4)" } else { "BATCH 3 SHOWED NO HUBP POWERED, OR WAS NOT READ IN FULL" };
-            out.line(format_args!("B{} {}: NOTHING TO READ: {}", batch, title(batch), why));
+            out.note(format_args!("B{} {}: NOTHING TO READ: {}", batch, title(batch), why));
             continue;
         }
+        let list = if order == Order::Production { list.used() } else { list };
         out.line(format_args!("B{} {}: READING {} REGISTERS NEXT", batch, title(batch), list.len()));
         out.pause(PAUSE_BEFORE_READ_MS);
         let mut values = Values::new();
@@ -283,7 +401,7 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
             let v = bus.read(n.reg);
             match v {
                 Some(v) => { out.line(format_args!("B{} {} = {:08X}", batch, n, v)); report.registers_read += 1; store.push(n.r, n.inst, v); }
-                None => out.line(format_args!("B{} {}: NOT MAPPED, NOT READ", batch, n)),
+                None => out.note(format_args!("B{} {}: NOT MAPPED, NOT READ", batch, n)),
             }
             values.push(n, v);
         }
@@ -294,11 +412,13 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
         if store.batches + 1 == batch { store.batches = batch; }
         out.pause(PAUSE_BETWEEN_BATCHES_MS);
     }
-    out.line(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN", report.batches_read, BATCHES, report.registers_read));
+    out.part();
+    out.note(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN{}", report.batches_read, BATCHES, report.registers_read,
+        if order == Order::Production { "; ONLY WHAT STEPS 2 TO 4 TAKE (THE PRODUCTION ORDER)" } else { "" }));
     report
 }
 
-fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut impl Out) {
+fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut dyn Out) {
     if batch == 4 && known.hubp_powered.is_none() {
         let all = every_hubp();
         out.line(format_args!("B4 HUBP: NOT READ (THIS BUILD MAY READ {}); WOULD READ, ONLY FOR EACH HUBP n THAT B3 SHOWS POWERED (DOMAIN 2n):", allowed));
@@ -318,7 +438,7 @@ fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut impl 
 
 const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 
-fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
+fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut dyn Out) {
     use R::*;
     match batch {
         1 => {
@@ -443,7 +563,7 @@ impl fmt::Display for Ratio19 {
     }
 }
 
-fn summarize_ddc1(v: &Values, out: &mut impl Out) {
+fn summarize_ddc1(v: &Values, out: &mut dyn Out) {
     use R::*;
     let owner = |s: Option<u32>| match s { Some(0) => "NOBODY", Some(1) => "SOFTWARE", Some(2) => "THE DMCU", Some(_) => "BOTH", None => "-" };
     out.line(format_args!("B11 I2C ENGINE: HELD BY {} (SW REQ {}, DMCU REQ {}); LAST TRANSFER STATUS {}, DONE {}; DDC SELECT {}; DDC1 HW STATUS {}",
@@ -461,7 +581,7 @@ fn summarize_ddc1(v: &Values, out: &mut impl Out) {
         pad(DcGpioDdc1En, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1A, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1DATA_BIT)));
 }
 
-fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut impl Out) {
+fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut dyn Out) {
     use R::*;
     let g = |r: R, f: Field| Opt(v.field(r, p, f));
     out.line(format_args!("B9 HUBP{}: VIEWPORT {}x{} AT {},{}, SW_MODE {}, SWATH {} PTE_ROW {} CHUNK {} MIN_CHUNK {}, CLK_CNTL {}", p,
@@ -482,7 +602,7 @@ fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut impl Out) {
         Hex32(v.get(OtgVupdateParam, t)), Hex32(v.get(OtgVreadyParam, t))));
 }
 
-fn summarize_path(v: &Values, p: u8, out: &mut impl Out) {
+fn summarize_path(v: &Values, p: u8, out: &mut dyn Out) {
     use R::*;
     let g = |r: R, f: Field| Opt(v.field(r, p, f));
     out.line(format_args!("B10 DPP{}: CLOCK {}, FORMAT {}, CNVC {}, DSCL_MODE {}, RECOUT {}x{} AT {},{}, MPC {}x{}, CM BYPASS {}, ICSC {} GAMUT {} DGAM {} BLNDGAM {}", p,
@@ -514,7 +634,7 @@ fn summarize_path(v: &Values, p: u8, out: &mut impl Out) {
         Hex32(v.get(DppclkDtoCtrl, 0)), d0.0, d0.1, d1.0, d1.1, d2.0, d2.1, d3.0, d3.1, Hex32(v.get(RefclkCntl, 0))));
 }
 
-fn summarize_otg(v: &Values, n: u8, out: &mut impl Out) {
+fn summarize_otg(v: &Values, n: u8, out: &mut dyn Out) {
     use R::*;
     let mut regs = [(OtgHTotal, 0u32); 8];
     let wanted = [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgVTotal, OtgVBlankStartEnd, OtgVSyncA, OtgHSyncACntl, OtgVSyncACntl];

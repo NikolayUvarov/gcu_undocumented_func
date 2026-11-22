@@ -264,6 +264,7 @@ impl Model {
                 Step::Wait { reg, mask, value, .. } => assert_eq!(self.read(reg) & mask, value, "wait {} never ends at {:x}", i, reg.offset()),
                 Step::Call(t) => self.tables.push((i, t)),
                 Step::Frames { otg, .. } => assert_eq!(self.read(R::OtgControl.at(otg).unwrap()) & 1, 1, "frames waited for on a stopped generator"),
+                Step::Hold { .. } => {}
                 Step::Reference | Step::Draw | Step::Late | Step::NoUnderflow | Step::ReadBack { .. } | Step::Watch { .. } | Step::Offer | Step::Begin(_) => {} // step 4's, after first light's plan
             }
         }
@@ -325,6 +326,13 @@ fn first_light_programs_the_second_pipe_in_display_cores_order() {
     assert!(at(dcn::TABLE_SETPIXELCLOCK) < step_of(R::OtgHTotal.at(1).unwrap()), "the pixel clock before the timing");
     assert!(at(dcn::TABLE_DIG1TRANSMITTERCONTROL) > step_of(R::DigBeCntl.at(0).unwrap()), "the PHY after its back end");
     assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(0).unwrap()));
+    // The DIG_START pulse: the FIFO held in reset by a step of its own, as Display Core's udelay, in either order; the
+    // survey's log held it 21 ms on the Ryzen besides (213-DRV-0098).
+    let fe = R::DigFeCntl.at(0).unwrap();
+    let steps: Vec<Step> = plan.steps().collect();
+    let n = steps.len();
+    assert_eq!(steps[n - 3..], [Step::Update { reg: fe, mask: 1 << 10, value: 1 << 10 }, Step::Hold { us: dcn::DIG_START_HOLD_US }, Step::Update { reg: fe, mask: 1 << 10, value: 0 }]);
+    assert!(dcn::DIG_START_HOLD_US >= 1);
 }
 
 #[test]
