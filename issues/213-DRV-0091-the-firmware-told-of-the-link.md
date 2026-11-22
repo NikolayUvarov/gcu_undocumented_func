@@ -526,6 +526,16 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - A wait far over 2 ms without a request is the task not run again on time: the scheduler, or another task on its CPU, which is KRN's. Work over it is the step's own.
 - **Host case:** the minute sends case checks both at zero over 5 ms in the model, whose receive wait ends at once.
 
+**2026-11-22, boot 99: the poll gaps are late wake-ups of an idle machine** (release with ca9da3f25; cable reads at 18:23 and 18:28 UTC):
+- **The SERVICE STEPS line:** in every minute without the cameras, the 2 ms receive wait came back after more than 5 ms 373 to 431 times, and after more than 10 ms 252 to 311 times, the longest 18 to 21 ms. The step's own work never passed 5 ms, apart from the tight poll's spin. The RX poll gaps are those waits, one for one.
+- **With CAM's two cameras streaming** (465 to 650 s): 0 waits over 5 ms in two whole minutes (552 and 612 s), the longest 2,979 and 3,204 µs. The minutes at the edges had 194 and 144. Boot 98's camera minute had shown the same: 36 against 294 to 463.
+- **What the kernel's code says** (read, not changed):
+  - IPC deadlines end only on the boot CPU's 1 ms tick (`Scheduler::timers` when cpu == 0, kernel/src/scheduler.rs:1994, 1997, 2070, 2071; :369 to 371; TICK_MS, kernel/src/arch/x86_64/interrupts.rs:7).
+  - `expire` (scheduler.rs:571) readies the task, and `wake_idle` (scheduler.rs:317 to 333) sends an idle CPU one wake IPI until it selects again.
+  - An idle CPU halts in `scheduler::idle` (scheduler.rs:2095 to 2100; `cpu::wait_for_interrupt`, kernel/src/arch/x86_64/cpu.rs:394), with no tick of its own (scheduler.rs:325).
+- **So the late wake-ups come from the kernel's idle-CPU wake path:** a late tick or timers pass on CPU 0, or a wake IPI not sent while `woken[]` stays set. They do not come from the driver or from CPU 4's sharing. That is KRN's, and the owner carries it there.
+- **Not shown:** which of those paths it is. A kernel counter per CPU would tell: IPIs sent, IPIs suppressed, timers passes late.
+
 ## For a successor (state on 2026-11-22)
 
 **Branches and heads** (the WIFI agent's; worktrees under the session's scratchpad, `a-*`):

@@ -310,6 +310,17 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
   - alternating, the labels and the answers' step follow never, off, on (RPQ alone, as on the Ryzen).
 - The 40 `rtw89_*_host.rs` files pass: 4889 cases. The release build builds.
 
+**2026-11-22, boot 99: the tight poll on the hardware** (bench tree a3ce183a4 with 264e3534e, POLL_TIGHT_ALTERNATES true; cable reads at 18:23 and 18:28 UTC; the owner's pings in minutes of both kinds, files S/handoff/wifi/ping/b99-*):
+- **The hardware is fast.** In ON minutes the final submission was fetched within 250 µs for about 95% of sends. Small frames were released within 250 µs of the fetch, full-size ones mostly within 250 to 750 µs.
+  - In OFF minutes the same spans read 2 to 4 ms to the fetch and 0 to the release: both are seen only at the next step. So the 4 to 6 ms of an OFF answer is the loop's.
+- **The in-time answer:**
+  - ON: under 200 bytes mostly 0 to 2 ms; full-size mostly 0 to 4 ms. A smaller bump at 6 to 10 ms is the sends whose 2 ms poll ran out, which then met the late wake-up.
+  - OFF: none under 2 ms; the mode 4 to 6 ms.
+  - About ten tight polls a send, 7,000 to 10,700 a minute.
+- **Caveat:** the late wake-ups of the idle machine (213-DRV-0091, boot 99) make the plain loop look worse than it would be with a mended wake-up. That would give 2 to 6 ms, one or two receive waits plus the step. The tight poll spins past them.
+- **Still to measure:** full-size answers take 2 to 4 ms while their release takes under 0.75 ms. The rest is before the submission: `DataSession::begin` makes the full liveness checks and the reconcile for every send, which the polls make once per CHECK_MS. Arrival-to-submission is the next span to time.
+- The upload comparison of ON against OFF minutes on this boot is the owner's load, read with `paired.py --kind tight`.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
