@@ -1,0 +1,11 @@
+The integer DCTs and the quality scaling of libmind's JPEG code, rewritten in Rust from memory of the Independent JPEG Group's libjpeg release 6b (jpegsrc.v6b.tar.gz, https://www.ijg.org/files/jpegsrc.v6b.tar.gz, SHA-256 75c3ec241e9996504fe02a9ed4d12f16b74ade713972f3db9e65ce95cd27e35d):
+
+- jidctint.c (jpeg_idct_islow), Copyright (C) 1991-1998, Thomas G. Lane: libmind/src/jpegdec.rs, idct8 and idct (158-DRV-0084).
+- jfdctint.c (jpeg_fdct_islow), Copyright (C) 1991-1996, Thomas G. Lane: libmind/src/jpeg.rs, fdct (issue 093).
+- jcparam.c (jpeg_quality_scaling and jpeg_add_quant_table's scaling), Copyright (C) 1991-1998, Thomas G. Lane: libmind/src/jpeg.rs, quantization (issue 093).
+
+What was changed: the C was not copied; the computation was written anew in Rust from memory of it, keeping its constants (the twelve FIX values at CONST_BITS 13), its two passes with PASS1_BITS 2, the order of its operations, its shortcut for a column without AC terms and its descaling. The inverse DCT sums in 64-bit integers, takes coefficients already dequantized, and fills a block without AC coefficients from its DC alone. The forward DCT works on one 8x8 block in place. The quality scaling is the same formula on one table.
+
+this software is based in part on the work of the Independent JPEG Group
+
+The IJG's README of release 6b, whose section LEGAL ISSUES holds its terms, is LICENSES/IJG-README-6b.txt, unaltered.

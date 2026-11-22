@@ -9,6 +9,7 @@ extern crate alloc;
 mod ehci;
 mod hub;
 mod iso_ring;
+mod spill;
 mod xhci;
 
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_MEM, ERR_TIMEOUT};
@@ -967,7 +968,8 @@ fn main(_info: &'static BootInfo) {
     loop {
         let streaming = host.ehci.iter().flatten().any(|bus| bus.streaming.is_some()) || host.roots.iter().flatten().any(|r| r.xhci.streaming());
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if streaming { STREAM_MS } else { SCAN_MS as u32 });
-        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.watch_streams(); } }
+        // A bulk stream's finished transfers go into its spill and their TDs back on the ring (158-DRV-0082).
+        for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.spill_streams(); root.xhci.watch_streams(); } }
         // A controller that stopped with an error is set up again, its devices found anew by the next scan, and it takes
         // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073). So is
         // one that left a command unanswered, the device it stopped at left alone (000-DRV-0075): the boot stick and

@@ -42,8 +42,8 @@ const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken th
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
 // `settle`: a bulk camera's stop after its stream closed, and its settling (158-DRV-0082); `halt_ms`: its last clear-halt's
-// time, for the log.
-struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, settle: choices::Settle, halt_ms: u32 }
+// time, for the log; `attach`: the client's attach count it was claimed under (a later one means usb_host started again).
+struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, settle: choices::Settle, halt_ms: u32, attach: u32 }
 
 // A camera's open stream: the camera (its streaming handle), the frame size it sends, the frames assembled from its
 // packets (or bulk transfers), and counts for the log.
@@ -62,7 +62,16 @@ struct Live {
     // A Motion JPEG stream (158-DRV-0084): frames decoded and dropped, the decodes' time in all and at most, when one last
     // decoded, why the first was dropped, and whether the picture holds a dropped frame's rows.
     mjpeg: bool, decoded: u32, dropped: u32, decode_ns: u64, longest_decode_ns: u64, decoded_ns: u64, why: &'static str, torn: bool,
+    // The streaming interface's number; the camera's error codes asked after frames it marked in error, by code (8: a
+    // reserved one, 9: not answered), and the count of such frames when last asked (158-DRV-0082).
+    interface: u16, codes: [u32; 10], asked_at: u32,
 }
+
+// A camera's error codes asked at most this often a stream: each ask is a control transfer while it streams.
+const ERROR_ASKS: u32 = 8;
+// VS_STREAM_ERROR_CODE_CONTROL's codes (UVC 1.5, 4.3.1.7), and the two that are not.
+const ERROR_CODES: [&str; 10] = ["NO ERROR", "PROTECTED CONTENT", "INPUT BUFFER UNDERRUN", "DATA DISCONTINUITY", "OUTPUT BUFFER UNDERRUN",
+    "OUTPUT BUFFER OVERRUN", "FORMAT CHANGE", "STILL IMAGE CAPTURE ERROR", "A RESERVED CODE", "NOT ANSWERED"];
 
 // The test pattern has a number: `video/synthetic` may ask for two, so the tests have two cameras to open at once.
 enum Source { Pattern(u8), Camera(Live) }
@@ -128,6 +137,13 @@ fn pump(host: &mut Host, live: &mut Live) -> mind::Result<usize> {
             if live.assembler.feed(packet, damaged) == Some(true) { good = true; }
         })?
     };
+    // A frame the camera marked in error (the payload header's ERR bit): its stream's error code asked, which says why.
+    let marked = live.assembler.causes.error_bit;
+    if marked > live.asked_at && live.codes.iter().sum::<u32>() < ERROR_ASKS && live.codes[9] == 0 {
+        live.asked_at = marked;
+        let got = host.control(live.camera, 0xA1, uvc::GET_CUR, (uvc::STREAM_ERROR as u16) << 8, live.interface, 1);
+        live.codes[match got { Ok(n) if n >= 1 => (host.buffer()[0] as usize).min(8), _ => 9 }] += 1;
+    }
     if good {
         if live.good_ns == 0 { mind::println!("[VIDEO] FIRST FRAME AFTER {} MS: {} PACKETS, {} BYTES", (mind::time::monotonic_ns() - live.opened_ns) / 1_000_000, live.packets, live.bytes); }
         live.good_ns = mind::time::monotonic_ns();
@@ -177,10 +193,20 @@ fn timing(live: &Live) -> String {
 // A stream's reads for the log: how many were answered and the longest time between two (158-DRV-0082).
 fn answered(s: &Stream) -> String { format!(" ({} READS ANSWERED, AT MOST {} MS APART)", s.answers, s.apart_ns / 1_000_000) }
 
-// What a camera stream got, for the log.
+// What a camera stream got, for the log: why frames broke and how they ended, the packets, and the camera's error codes
+// are said a line each, since a log record holds 200 bytes (158-DRV-0082); the frames' counts are given.
 fn report(live: &Live) -> String {
-    format!("{} GOOD FRAMES, {} BROKEN (THE LAST {} BYTES OF {}), {} PACKETS OF {} BYTES, {} DAMAGED, FIRST HEADER {:02X?}",
-        live.assembler.good, live.assembler.broken, live.assembler.last_bytes, live.size.exact_bytes().unwrap_or(live.assembler.capacity()), live.packets, live.bytes, live.damaged, &live.header[..live.header_len])
+    let c = live.assembler.causes;
+    mind::println!("[VIDEO]   BROKEN BY: {} ERROR BIT, {} DAMAGED, {} BAD HEADER, {} OVERFLOW, {} BULK START, {} BULK FAILED, {} SIZE; ENDED BY EOF {}, BY FID {}",
+        c.error_bit, c.damaged, c.header, c.overflow, c.bulk_start, c.bulk_failed, c.size, c.by_eof, c.by_fid);
+    mind::println!("[VIDEO]   {} PACKETS OF {} BYTES, {} DAMAGED, FIRST HEADER {:02X?}", live.packets, live.bytes, live.damaged, &live.header[..live.header_len]);
+    let asked: u32 = live.codes.iter().sum();
+    if asked > 0 {
+        let codes: Vec<String> = live.codes.iter().zip(ERROR_CODES).filter(|(n, _)| **n > 0).map(|(n, name)| format!("{} {}", n, name)).collect();
+        mind::println!("[VIDEO]   ITS ERROR CODE, ASKED {} TIMES: {}", asked, codes.join(", "));
+    }
+    format!("{} GOOD FRAMES, {} BROKEN, THE LAST {} BYTES OF {}", live.assembler.good, live.assembler.broken, live.assembler.last_bytes,
+        live.size.exact_bytes().unwrap_or(live.assembler.capacity()))
 }
 
 impl Usb {
@@ -192,7 +218,16 @@ impl Usb {
         self.looked = now.max(1);
         let Some(host) = self.host.as_mut() else { return };
         let mut claimed: Vec<(u32, Interface)> = Vec::new();
-        while claimed.len() < CLAIMED { match host.claim() { Ok(c) => claimed.push(c), Err(_) => break } }
+        // Invalid: a new usb_host instance, which the next claim attaches to; at once, so this look already drops the
+        // cameras of the old one, where the first open after a restart failed (158-DRV-0082).
+        let mut again = true;
+        while claimed.len() < CLAIMED {
+            match host.claim() { Ok(c) => claimed.push(c), Err(mind::Error::Invalid) if again => again = false, Err(_) => break }
+        }
+        // A camera claimed from an earlier usb_host instance is gone with it: its handle names nothing now, and the same
+        // camera is claimed again below under the new one (the Ryzen's, 2026-11-22: `CAMERAS: 0 V, 1 V, 2 IR, 3 IR`).
+        let now_attach = host.attaches();
+        self.cameras.retain(|c| { let stale = c.attach != now_attach; if stale { mind::println!("[VIDEO] CAMERA \"{}\" GONE: USB_HOST STARTED AGAIN", c.name); } !stale });
         // Two interfaces of one device differ only in a handle's low byte.
         let pairs: Vec<(u32, u32, Interface)> = claimed.iter().filter(|(_, i)| i.subclass == uvc::SUBCLASS_CONTROL).filter_map(|&(control, info)| {
             claimed.iter().find(|(h, i)| i.subclass == uvc::SUBCLASS_STREAMING && h & !0xFF == control & !0xFF).map(|&(streaming, _)| (control, streaming, info))
@@ -210,7 +245,7 @@ impl Usb {
             log_formats(&described);
             let modes = camera_modes(&described, info.speed);
             log_modes(&modes);
-            self.cameras.push(Camera { streaming, info: described, name, offered, modes, settle: Default::default(), halt_ms: 0 });
+            self.cameras.push(Camera { streaming, info: described, name, offered, modes, settle: Default::default(), halt_ms: 0, attach: host.attaches() });
             self.cameras.sort_by_key(|c| c.streaming);
             let order: Vec<String> = self.cameras.iter().enumerate().map(|(n, c)| format!("{} \"{}\"", n, c.name)).collect();
             mind::println!("[VIDEO] CAMERAS: {}", order.join(", "));
@@ -410,7 +445,7 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     };
     Ok(Live { camera: camera.streaming, assembler, bulk, size, endpoint, setting, interval_ns: answer.interval().max(1) as u64 * 100,
         packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now, gone: false, streamed, pumps: 0, pumped_ns: 0, longest_gap_ns: 0, copy: Vec::new(), probe_ms,
-        mjpeg, decoded: 0, dropped: 0, decode_ns: 0, longest_decode_ns: 0, decoded_ns: 0, why: "", torn: false })
+        mjpeg, decoded: 0, dropped: 0, decode_ns: 0, longest_decode_ns: 0, decoded_ns: 0, why: "", torn: false, interface: number, codes: [0; 10], asked_at: 0 })
 }
 
 // The camera's stream stopped, with what it got: an isochronous camera back to setting 0. A bulk one's stream in

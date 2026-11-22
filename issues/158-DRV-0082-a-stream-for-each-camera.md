@@ -164,6 +164,50 @@ This holds for that machine, those cameras and that release (MC-12.1).
 - **A limit that stays:** a YUY2 stream of 640×480 or more beside a second camera can break every frame at about 133 KB. That is `usb_host`'s queue of 32 pages (128 KiB), which a camera's burst fills within a few milliseconds of a pump gap. It happened with 640×480 after an MJPEG mode, and with 1280×720 once. MJPEG frames of the same sizes (0.1 to 0.25 MB) stream beside another camera, and the default 320×240 does.
   - **More pages** need more of `usb_host`'s DMA memory, which `init` grants (KRN).
   - **Or the gateway** may choose MJPEG for large sizes when another stream runs.
+- **The spill** (the owner session's next item, 2026-11-22):
+  - **What it does:** `usb_host` no longer leaves a bulk stream's finished TDs on the ring until the gateway takes them. Every STREAM_MS (2 ms), and at each request, it moves their bytes, oldest first, into the stream's spill, and the TDs go back on the ring at once (`Xhci::spill_streams`, `usb_host/src/spill.rs`).
+  - **What the gateway gets:** the spill first, in the same form as before (two length bytes, bit 15 an error, then the bytes, an empty transfer too), then the TDs.
+  - **Its bound:** 1 MiB a stream, eight times the 32 pages. A full spill leaves the transfers on their TDs, so the camera waits as before.
+  - **The log:** the end of a stream says the spill's most and how often it was full (`ITS SPILL HELD n BYTES AT MOST, FULL m TIMES, k LEFT UNREAD`).
+  - **The aim:** a camera's burst then waits on the gateway only when 1 MiB is waiting, not 128 KiB. A 640×480 YUY2 frame is 0.6 MB.
+  - **Host cases:** `tests/usb_spill_host.rs`, for the order, the empty and failed transfers, the bound, and a small buffer taking whole transfers only.
+  - **Run on the Ryzen, 2026-11-22 04:51-04:56 UTC** (release 202611220438, `usb_host` of 5d4087bd6 by `replace`, then put back; camera 1 at 320×240 beside camera 0):
+    - **YUY2 640×480 at 25:** 191 good frames and 87 broken in 12 s, every broken one whole (614 400 bytes, none cut at 133 KB). The spill held 273 KB at most, never full. Before the spill: 0 good of 84, all cut at 133 KB.
+    - **YUY2 1280×720 at 10:** 73 good frames and 45 broken, again whole (1 843 200 bytes); the spill at most 158 KB.
+    - **Camera 1 beside them:** 452 good and 125 broken in 20 s.
+    - **Camera 0 in 640×480 alone:** 294 good and 7 broken in 12 s.
+    - **So the queue limit is mended.** The frames that still break beside a second camera come whole: not lost bytes.
+  - **Why they break, now counted:** each broken frame is counted once for every cause it had (`uvc::Causes`): the payloads' error bit, a host controller's error, a payload header that does not parse, more bytes than a frame holds, a bulk payload that started without a valid header or whose transfer failed, or the wrong size alone. Every frame's end is counted as by EOF or by a new frame ID. The close line gives them (`BY: n ERROR BIT, … SIZE; ENDED BY EOF n, BY FID n`).
+    - A frame counted broken at its exact size points to an overflow: its end was not seen, and the next frame's bytes ran into it. The bulk start count would show whether a payload of a multiple of 4096 bytes ended without a zero-length packet, so that the next payload's header went in as data.
+    - Host cases in `tests/uvc_host.rs`.
+  - **Run on the Ryzen, 2026-11-22 07:12-07:21 UTC** (release 202611220644; `video_gw` of 8a8793af6 and `usb_host` of 5d4087bd6 by `replace`, then both put back; the stub typed on the console):
+
+    | Camera 0 (GDZS-DC004-EFVT-V) | Beside it | Good | Broken | Error bit | Overflow |
+    |---|---|---|---|---|---|
+    | YUY2 640×480 at 25, 12 s | nothing | 300 | 0 | 0 | 0 |
+    | YUY2 640×480 at 25, 12 s | camera 1 at 320×240 | 299 | 8 | 6 | 0 |
+    | YUY2 1280×720 at 10, 12 s | nothing | 117 | 20 | 16 | 0 |
+
+    - **Camera 1** (GDZS-DC004-EFVT-IR) at 320×240 for 45 s, camera 0 beside it for 12 s of them: 1229 good and 90 broken, 88 by the error bit and 2 by overflow.
+    - **Everywhere else 0:** no damaged transfer, no bad header, no spill full, no transfer error.
+    - **So most broken frames are whole frames the camera itself marked in error** (the payload header's ERR bit), not frames the gateway assembled wrong.
+    - **They come under load:** none from one camera at 640×480 (15 MB/s). Some came with a second camera beside it (about 20 MB/s in all), and more from one camera at 1280×720 (18 MB/s).
+    - **A guess, not shown:** the 32 TDs of 4 KiB on the camera's bulk ring last about 7 ms at 18 MB/s. If `usb_host` puts none back meanwhile, the camera sends nothing and its own buffer overflows. It waits like that for another device's synchronous transfer, whose wait takes events but does not spill.
+    - **The causes after `OVERFLOW` were cut:** a log record holds 200 bytes, so the counts of bulk failed, size and the ends by EOF and by FID were lost. The close line is now three lines.
+  - **What the next run says** (written after that run, not run yet):
+    - `usb_host` says each time a bulk ring stood empty: when, for how long, what its spill held, and the transfer or command `usb_host` waited for (`BULK RING EMPTY n AT s S: NO TD t MS, …; WAITING ON SLOT a ENDPOINT b FOR w MS`). Up to 64 such lines a stream, then counts. The stream's end adds `ITS RING STOOD EMPTY n TIMES, t MS IN ALL, AT MOST m MS`. This is the same tool as 000-DRV-0094's for isochronous rings.
+    - `video_gw` asks the camera why (VS_STREAM_ERROR_CODE_CONTROL, GET_CUR) after a frame it marked in error, 8 times a stream at most, and says the codes at the close (`ITS ERROR CODE, ASKED n TIMES: …`). It stops asking once a request is not answered.
+  - **The cameras run of 2026-11-22 10:36–10:38 UTC** (release 202611220957; `video_gw` of 3eb13b74c; `usb_host` of 0cfbcf847, which puts TDs back during other transfers' waits too, 000-DRV-0094 step 2; raw lines in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`):
+    - **The cameras do not answer VS_STREAM_ERROR_CODE_CONTROL.** It was not answered once, and then not asked again.
+    - **Camera 0 at 640×480:** beside camera 1, 197 good and 7 broken (3 by error bit, 4 by size); alone, 198 good and 0 broken.
+    - **Camera 0 at 1280×720 at 10:** 111 good and 1 broken (overflow). The 07:12 run had 117 good and 20 broken, 16 by error bit.
+    - **Camera 1 at 320×240 for 45 s:** 1324 good and 1 broken. The 07:12 run had 1229 and 90.
+    - **The bulk rings** stood empty 1 to 5 times a stream, 0.1 ms at most, never in a wait.
+    - **A guess, not shown:** the camera's error bit nearly went once `usb_host` refilled during other devices' waits (the stick's log writes, a log read over the cable). It was one run each, and the light differed: camera 0 gave about 17 frames a second at 640×480, 25 at 07:12.
+- **A restarted `usb_host` left `video_gw` with stale cameras** (found on that run): the old entries stayed beside the new (`CAMERAS: 0 V, 1 V, 2 IR, 3 IR`), and "camera 1" named a handle of the old instance. Its probe answered not-found.
+  - **The fix:** the client counts its attaches (`Host::attaches`, `libmind/src/usb.rs`), and each camera keeps the count it was claimed under. After its claims, `look` drops a camera of an earlier count (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`); a stream on it fails its next pump and is marked gone.
+  - **On the Ryzen** (the run above, after `usb_host`'s `replace`): the first open after the restart still failed (`"GDZS-DC004-EFVT-IR": PROBE FAILED (NotFound)`), and the next look dropped both cameras (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`) and claimed them again, `CAMERAS: 0 V, 1 IR`. The first look after a restart only learns that the instance is new: its first claim is refused as invalid, and the attach comes at the next claim.
+  - **The mend:** `look` claims once more at once after such a refusal, so that look already drops the old cameras. `Host::claim` itself stays as it is, since `usb_storage`'s recovery reads that refusal as a new instance. Not run on the Ryzen yet. No QEMU device is a camera.
 
 ## Related
 

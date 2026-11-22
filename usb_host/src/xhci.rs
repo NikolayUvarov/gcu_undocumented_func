@@ -2,6 +2,7 @@
 // control and bulk transfers, interrupt IN endpoints kept polling with their reports queued (issue 164), and
 // isochronous endpoints streaming, IN and OUT (000-DRV-0073).
 use core::sync::atomic::{fence, Ordering};
+use crate::spill::Spill;
 use mind::dev::{Dma, Mmio};
 
 pub const TRB: usize = 16;
@@ -27,8 +28,6 @@ const TYPE_ISOCH: u32 = 5;
 // An isochronous TD names the 1 ms frame it runs in (Frame ID, bits 20-30), as Linux does on a host with contiguous frame
 // IDs.
 const FRAME_ID_SHIFT: u32 = 20;
-// The first TD of a stream, and the first after its ring ran dry, goes this many microframes ahead of the controller.
-const FIRST_AHEAD: u32 = 8 * 8;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
@@ -59,6 +58,14 @@ const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 /// A bulk stream's (158-DRV-0082): each a page, as many as leave POOL_KEPT pages of the pool free, BULK_LEAST at least.
 pub const STREAM_TDS: usize = 32; const STREAM_PAGES: usize = 32; const ISO_PAGES: usize = 4; const MAX_STREAMS: usize = 4;
 const POOL_KEPT: usize = 12; const BULK_LEAST: usize = 8;
+/// The bytes a bulk stream's spill holds at most beyond its TDs (158-DRV-0082): eight times the 32 pages on its ring.
+const SPILL_BYTES: usize = 1 << 20;
+/// An isochronous IN stream's spill (000-DRV-0094): the speakerphone's capture for more than half a second.
+const ISO_SPILL_BYTES: usize = 64 * 1024;
+/// How often a wait for a transfer moves the IN streams' finished TDs into their spills (000-DRV-0094).
+const SPILL_IN_WAIT_NS: u64 = 1_000_000;
+/// The times a stream's ring stood empty that are said a line each (000-DRV-0094, 158-DRV-0082); the rest are counted.
+const DRY_SAID: u32 = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done (IN): the bytes received, and an error
@@ -67,9 +74,13 @@ enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done 
 /// packets come back in order and wait until they are taken, then their TDs go on the ring again. An OUT stream puts each
 /// packet it is given on the ring while a TD is free; a TD is free again once the controller sent it. Each TD starts as
 /// soon as possible after the one before (SIA), so a ring that ran dry (a missed packet, under- or overrun) starts
-/// again with the next TD. The streams of an interface end with its setting.
+/// again with the next TD. The streams of an interface end with its setting. An IN stream's finished TDs are moved into
+/// its `spill` as a bulk stream's are, also while usb_host waits for another transfer, so a client that comes late finds
+/// its packets there and the ring stays full (000-DRV-0094).
 /// A bulk IN stream (158-DRV-0082, `bulk`) keeps its TDs on the endpoint's own ring, a page each, and gives them in order,
-/// an empty one too; one that ended in error halts the endpoint (`halted`) until the owner's next take resets it.
+/// an empty one too; one that ended in error halts the endpoint (`halted`) until the owner's next take resets it. Its
+/// finished TDs are moved into `spill` every STREAM_MS and go back on the ring at once, so the camera waits on the client
+/// only when SPILL_BYTES wait.
 pub struct Stream {
     pub slot: u8, pub dci: u8, pub interface: u8, input: bool, pub bulk: bool, halted: bool, ring: Ring, packet: usize, size: usize, pages: [usize; STREAM_PAGES],
     tds: usize, state: [Td; STREAM_TDS], next: usize, oldest: usize,
@@ -80,6 +91,45 @@ pub struct Stream {
     // The microframe the next TD runs in (MFINDEX's count, 14 bits: 2048 frames), None until the first TD or after the
     // ring ran dry; the microframes between two TDs (2^interval).
     uframe: Option<u32>, step: u32,
+    spill: Option<Spill>,
+    // When a TD last ended and when the client last took or put (monotonic ns); a dry ring not yet refilled: when it was
+    // said (uptime ms, ns), those two then, and the transfer usb_host waited for (000-DRV-0094); the time with no TD on
+    // the ring in all and at most, and the times said.
+    end_ns: u64, call_ns: u64, dry_seen: Option<Dry>, empty_ns: u64, longest_ns: u64, said: u32,
+}
+
+// A ring that ran dry, until its next TD (000-DRV-0094).
+#[derive(Clone, Copy)]
+struct Dry { at_ms: u64, at_ns: u64, end_ns: u64, call_ns: u64, wait: Option<Wait> }
+
+// A transfer or command usb_host waits for: its slot and DCI (0: a command), and since when (monotonic ns).
+#[derive(Clone, Copy)]
+struct Wait { slot: u8, dci: u8, since_ns: u64 }
+
+// A time in ms with a tenth.
+struct Ms(u64);
+impl core::fmt::Display for Ms {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { write!(f, "{}.{}", self.0 / 1_000_000, self.0 / 100_000 % 10) }
+}
+// An isochronous IN stream's spill at its end, for the log (000-DRV-0094).
+struct Spilled<'a>(Option<&'a Spill>);
+impl core::fmt::Display for Spilled<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self.0 { Some(s) => write!(f, "; SPILL AT MOST {} BYTES, FULL {} TIMES", s.most, s.refused), None => Ok(()) }
+    }
+}
+// What usb_host waited for when a ring stood empty, for the log: the wait, until when (its end, or the time said), and
+// whether it had ended.
+struct During(Option<Wait>, u64, bool);
+impl core::fmt::Display for During {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        let verb = if self.2 { "WAITED" } else { "WAITING" };
+        match self.0 {
+            Some(w) if w.dci == 0 => write!(f, "{} ON A COMMAND FOR {} MS", verb, Ms(self.1.saturating_sub(w.since_ns))),
+            Some(w) => write!(f, "{} ON SLOT {} ENDPOINT {} FOR {} MS", verb, w.slot, w.dci, Ms(self.1.saturating_sub(w.since_ns))),
+            None => write!(f, "NOT WAITING"),
+        }
+    }
 }
 
 impl Stream {
@@ -95,6 +145,13 @@ pub struct Xhci {
     /// A command had no answer: the controller is set up again, and no command waits on it until then (000-DRV-0075).
     pub stuck: bool,
     pub number: u8, // which of usb_host's xHCI controllers, for the log (213-DRV-0048)
+    // The transfer or command being waited for, and the last one waited for and when it ended (000-DRV-0094).
+    wait: Option<Wait>, waited: Option<(Wait, u64)>,
+    // When the streams' finished TDs were last moved into their spills (000-DRV-0094).
+    spilled_ns: u64,
+    // The microframes a TD's frame must be ahead of the controller's at least (its Isochronous Scheduling Threshold and
+    // one microframe, in whole frames), and how far ahead a stream's first TD goes: a frame more (000-DRV-0094 step 3).
+    soonest: u32, ahead: u32,
 }
 
 /// A log line's controller: nothing for the first, so its lines read as before; `XHCI n: ` for a further one.
@@ -130,6 +187,12 @@ impl Xhci {
         let caplength = mmio.read8(0) as usize; let hcs1 = mmio.read32(0x04); let hcs2 = mmio.read32(0x08); let hcc1 = mmio.read32(0x10);
         let (doorbells, runtime) = ((mmio.read32(0x14) & !3) as usize, (mmio.read32(0x18) & !0x1F) as usize);
         let context = if hcc1 & 4 != 0 { 64 } else { 32 };
+        // HCSPARAMS2's IST: microframes, or frames with bit 3 (xHCI 1.2, 5.3.4); a TD's frame comes after it, as Linux
+        // schedules one (`xhci_get_isoc_frame_id`), and a frame more for the first.
+        let ist = if hcs2 & 8 != 0 { (hcs2 & 7) * 8 } else { hcs2 & 7 };
+        let soonest = ((ist + 1).div_ceil(8) * 8).max(8);
+        let ahead = soonest + 8;
+        mind::println!("[USB] {}ISOCHRONOUS SCHEDULING THRESHOLD {} MICROFRAMES: A TD AT LEAST {} AHEAD, A STREAM'S FIRST {}", Tag(number), ist, soonest, ahead);
         // Take the controller from firmware (USB Legacy Support), then halt and reset it.
         let mut cap = ((hcc1 >> 16) << 2) as usize;
         while cap != 0 {
@@ -160,7 +223,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number };
+            free: u64::MAX << pooled, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], streams: [const { None }; MAX_STREAMS], last: 0, stuck: false, number, wait: None, waited: None, spilled_ns: 0, soonest, ahead };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -262,7 +325,9 @@ impl Xhci {
         Self::enqueue(&mut self.dma, &mut self.command, parameter, 0, control);
         self.doorbell(0, 0);
         let mut result = None;
+        self.begin_wait(control >> 24, 0);
         wait_for(1_500, || { self.pump(); result = self.completion.take(); result.is_some() });
+        self.end_wait();
         self.last = result.map_or(0, |r| r.0);
         if result.is_none() {
             self.stuck = true;
@@ -271,6 +336,10 @@ impl Xhci {
         let (code, slot) = result?;
         (code == SUCCESS).then_some(slot)
     }
+
+    // A wait for a command (`dci` 0) or a transfer begins and ends, for what a ring that stood empty meanwhile says.
+    fn begin_wait(&mut self, slot: u32, dci: u8) { self.wait = Some(Wait { slot: slot as u8, dci, since_ns: mind::time::monotonic_ns() }); }
+    fn end_wait(&mut self) { self.waited = self.wait.take().map(|w| (w, mind::time::monotonic_ns())).or(self.waited); }
 
     /// TRBs on `ring` of endpoint `dci`, then its completion: Ok(residue), or Err(completion code; 0: no answer).
     pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> { self.transfer_for(4_000, slot, dci, ring, trbs) }
@@ -285,11 +354,15 @@ impl Xhci {
     // The next completion on endpoint `dci` of `slot`: Ok(residue), or Err(completion code; 0: no answer).
     fn completion_for(&mut self, attempts: usize, slot: u8, dci: u8) -> Result<u32, u32> {
         let mut result = None;
+        self.begin_wait(slot as u32, dci);
         wait_for(attempts, || {
             self.pump();
+            // The streams' TDs go back on their rings meanwhile: another device's transfer may take tens of ms.
+            if self.streaming() && mind::time::monotonic_ns().saturating_sub(self.spilled_ns) >= SPILL_IN_WAIT_NS { self.spill_streams(); }
             if let Some(entry) = self.done.iter_mut().find(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)) { result = entry.take(); }
             result.is_some()
         });
+        self.end_wait();
         self.last = result.map_or(0, |d| d.code);
         match result { Some(d) if matches!(d.code, SUCCESS | SHORT_PACKET) => Ok(d.residue), Some(d) => Err(d.code), None => Err(0) }
     }
@@ -423,7 +496,8 @@ impl Xhci {
         }
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input, bulk: false, halted: false, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
-            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15) });
+            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15), spill: input.then(|| Spill::new(ISO_SPILL_BYTES)),
+            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0 });
         Some(ring)
     }
     /// A bulk IN stream on endpoint `dci` of `slot` (158-DRV-0082), on `ring`, the endpoint's own, which its context
@@ -438,7 +512,8 @@ impl Xhci {
         }
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input: true, bulk: true, halted: false, ring, packet: PAGE, size: PAGE, pages, tds, state: [Td::Free; STREAM_TDS],
-            next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 });
+            next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1, spill: Some(Spill::new(SPILL_BYTES)),
+            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0 });
         self.take_stream(at, &mut []);
         Some(tds)
     }
@@ -449,7 +524,9 @@ impl Xhci {
         let t = self.streams[at].take()?;
         self.restart(slot, dci, &t.ring, t.halted);
         t.pages[..t.tds].iter().for_each(|&p| self.release(p));
-        mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK STREAM ENDED: {} BYTES, {} WITH ERRORS", Tag(self.number), slot, dci, t.moved, t.damaged);
+        let (most, refused, left) = t.spill.as_ref().map_or((0, 0, 0), |s| (s.most, s.refused, s.len().0));
+        mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK STREAM ENDED: {} BYTES, {} WITH ERRORS; ITS SPILL HELD {} BYTES AT MOST, FULL {} TIMES, {} LEFT UNREAD", Tag(self.number), slot, dci, t.moved, t.damaged, most, refused, left);
+        mind::println!("[USB] {}SLOT {} ENDPOINT {}: ITS RING STOOD EMPTY {} TIMES, {} MS IN ALL, AT MOST {} MS", Tag(self.number), slot, dci, t.dry, Ms(t.empty_ns), Ms(t.longest_ns));
         Some(t.ring)
     }
     /// Whether bulk stream `index` halted on an error: its owner then clears the device's halt and calls `recover_bulk`.
@@ -483,8 +560,9 @@ impl Xhci {
             // A bulk stream ends by end_bulk_stream, which keeps its ring, the endpoint's own; here only with its slot.
             let Some(t) = self.streams[at].as_ref().filter(|t| t.slot == slot && interface.is_none_or(|i| t.interface == i) && (interface.is_none() || !t.bulk)) else { continue };
             let (ring, pages, bulk) = (if t.bulk { 0 } else { t.ring.page }, t.pages, t.bulk);
-            mind::println!("[USB] {}SLOT {} ENDPOINT {}: STREAM ENDED: {} {}, {} MISSED, {} TIMES DRY, {} WITH ERRORS", Tag(self.number), t.slot, t.dci,
-                t.moved, if t.input { "BYTES" } else { "PACKETS SENT" }, t.missed, t.dry, t.damaged);
+            let spilled = Spilled(t.spill.as_ref());
+            mind::println!("[USB] {}SLOT {} ENDPOINT {}: STREAM ENDED: {} {}, {} MISSED, {} TIMES DRY ({} MS WITHOUT A TD, AT MOST {}), {} WITH ERRORS{}", Tag(self.number), t.slot, t.dci,
+                t.moved, if t.input { "BYTES" } else { "PACKETS SENT" }, t.missed, t.dry, Ms(t.empty_ns), Ms(t.longest_ns), t.damaged, spilled);
             if !bulk { self.release(ring); }
             pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p));
             self.streams[at] = None;
@@ -506,7 +584,7 @@ impl Xhci {
         // A bulk TD: its bytes, or an error that halted the endpoint (the TDs after it wait until it is reset).
         if t.bulk {
             let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
-            t.ended_ms = mind::time::uptime_ms() as u64;
+            (t.ended_ms, t.end_ns) = (mind::time::uptime_ms() as u64, mind::time::monotonic_ns());
             if matches!(code, SUCCESS | SHORT_PACKET) {
                 let got = t.packet.saturating_sub((status & 0xFF_FFFF) as usize);
                 t.moved += got as u64;
@@ -514,10 +592,14 @@ impl Xhci {
             } else { t.damaged += 1; t.halted = true; t.state[k] = Td::Done(0, true); }
             return;
         }
-        // A ring that ran dry starts again from the controller's frame with its next TD.
-        if matches!(code, RING_UNDERRUN | RING_OVERRUN) { t.dry += 1; t.uframe = None; return; }
+        // A ring that ran dry starts again from the controller's frame with its next TD, which says how long it stood empty.
+        if matches!(code, RING_UNDERRUN | RING_OVERRUN) {
+            t.dry += 1; t.uframe = None;
+            if t.dry_seen.is_none() { t.dry_seen = Some(Dry { at_ms: mind::time::uptime_ms() as u64, at_ns: mind::time::monotonic_ns(), end_ns: t.end_ns, call_ns: t.call_ns, wait: self.wait }); }
+            return;
+        }
         if code == MISSED_SERVICE { t.uframe = None; }
-        t.ended_ms = mind::time::uptime_ms() as u64;
+        (t.ended_ms, t.end_ns) = (mind::time::uptime_ms() as u64, mind::time::monotonic_ns());
         let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
         let good = matches!(code, SUCCESS | SHORT_PACKET);
         if code == MISSED_SERVICE { t.missed += 1; } else if !good { t.damaged += 1; }
@@ -544,11 +626,22 @@ impl Xhci {
             return;
         }
         // Its frame: the one after the TD before, or a little ahead of the controller; one that fell behind starts anew.
-        let uframe = match t.uframe {
-            Some(u) if (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= 16 => u,
-            _ => (mfindex + FIRST_AHEAD) & 0x3FFF,
-        };
+        let (soonest, first) = (self.soonest, self.ahead);
+        let ahead = t.uframe.filter(|u| (u.wrapping_sub(mfindex) & 0x3FFF) < 0x2000 && (u.wrapping_sub(mfindex) & 0x3FFF) >= soonest);
+        let uframe = ahead.unwrap_or((mfindex + first) & 0x3FFF);
         t.uframe = Some((uframe + t.step) & 0x3FFF);
+        // A dry ring's first TD again (000-DRV-0094): no TD from the last one's end until this one's frame, `first` on.
+        if let (None, Some(d)) = (ahead, t.dry_seen.take()) {
+            let now = mind::time::monotonic_ns();
+            let empty = (now + first as u64 * 125_000).saturating_sub(d.end_ns);
+            (t.empty_ns, t.longest_ns) = (t.empty_ns + empty, t.longest_ns.max(empty));
+            if t.said < DRY_SAID {
+                t.said += 1;
+                mind::println!("[USB] {}SLOT {} ENDPOINT {}: DRY {} AT {}.{:03} S: NO TD {} MS; THE LAST {} MS BEFORE, THE CLIENT {} BEFORE, {} AFTER; {}",
+                    Tag(self.number), t.slot, t.dci, t.dry, d.at_ms / 1000, d.at_ms % 1000, Ms(empty), Ms(d.at_ns.saturating_sub(d.end_ns)), Ms(d.at_ns.saturating_sub(d.call_ns)),
+                    Ms(now.saturating_sub(d.at_ns)), During(d.wait, d.at_ns, false));
+            }
+        }
         let control = TYPE_ISOCH << 10 | IOC | ((uframe >> 3) & 0x7FF) << FRAME_ID_SHIFT | if input { ISP } else { 0 };
         let first = t.next == 0 && t.state.iter().all(|s| *s == Td::Free);
         let trb = Self::enqueue(&mut self.dma, &mut t.ring, address, length as u32, control);
@@ -565,6 +658,12 @@ impl Xhci {
     /// empty ones left out), as far as they fit; their TDs and every other free one go on the ring again. The bytes written.
     pub fn take_stream(&mut self, index: usize, out: &mut [u8]) -> usize {
         let mut written = 0;
+        if let Some(t) = self.streams[index].as_mut() { t.call_ns = mind::time::monotonic_ns(); }
+        // A bulk stream's spill holds its oldest transfers: they come first, and the TDs' only once it is empty.
+        if let Some(spill) = self.streams[index].as_mut().and_then(|t| t.spill.as_mut()) {
+            written = spill.take(out);
+            if !spill.is_empty() { self.refill(index); return written; }
+        }
         loop {
             let Some(t) = self.streams[index].as_mut() else { return written };
             let Td::Done(length, damaged) = t.state[t.oldest] else { break };
@@ -582,7 +681,15 @@ impl Xhci {
             t.state[t.oldest] = Td::Free;
             t.oldest = (t.oldest + 1) % t.tds;
         }
+        self.refill(index);
+        written
+    }
+
+    // Stream `index`'s free TDs back on the ring, in order, and the doorbell rung.
+    fn refill(&mut self, index: usize) {
         let mut queued = false;
+        // A bulk ring with none of its TDs on it stood empty from the last one's end: the camera holds its data meanwhile.
+        let empty = self.streams[index].as_ref().is_some_and(|t| t.bulk && t.moved > 0 && !t.state[..t.tds].iter().any(|s| matches!(s, Td::Armed(_))));
         loop {
             let Some(t) = self.streams[index].as_ref() else { break };
             let (k, packet) = (t.next, t.packet);
@@ -592,13 +699,53 @@ impl Xhci {
             queued = true;
         }
         if let (true, Some(t)) = (queued, self.streams[index].as_ref()) { self.doorbell(t.slot, t.dci as u32); }
-        written
+        if let (true, true, Some(t)) = (queued, empty, self.streams[index].as_mut()) {
+            let now = mind::time::monotonic_ns();
+            let gone = now.saturating_sub(t.end_ns);
+            (t.dry, t.empty_ns, t.longest_ns) = (t.dry + 1, t.empty_ns + gone, t.longest_ns.max(gone));
+            if t.said < DRY_SAID {
+                t.said += 1;
+                // The wait usb_host is in, or the last one when it ended after the ring emptied.
+                let during = match (self.wait, self.waited) {
+                    (Some(w), _) => During(Some(w), now, false),
+                    (None, Some((w, ended))) if ended >= t.end_ns => During(Some(w), ended, true),
+                    _ => During(None, now, false),
+                };
+                let held = t.spill.as_ref().map_or(0, |s| s.len().0);
+                let at = mind::time::uptime_ms() as u64;
+                mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK RING EMPTY {} AT {}.{:03} S: NO TD {} MS, ITS SPILL HOLDING {} BYTES; {}",
+                    Tag(self.number), t.slot, t.dci, t.dry, at / 1000, at % 1000, Ms(gone), held, during);
+            }
+        }
+    }
+
+    /// Each IN stream's finished TDs, oldest first, moved into its spill while it has room, and their TDs back on the
+    /// ring (158-DRV-0082, 000-DRV-0094): called every STREAM_MS and during a wait for a transfer, so a camera's burst
+    /// or a speakerphone's capture does not wait for its client's next take. An isochronous stream's empty packets are
+    /// left out, as its take leaves them.
+    pub fn spill_streams(&mut self) {
+        self.spilled_ns = mind::time::monotonic_ns();
+        for index in 0..MAX_STREAMS {
+            let mut moved = false;
+            loop {
+                let Some(t) = self.streams[index].as_mut() else { break };
+                let Some(spill) = t.spill.as_mut() else { break };
+                let Td::Done(length, damaged) = t.state[t.oldest] else { break };
+                let buffer = t.pages[t.oldest * t.size / PAGE] + t.oldest * t.size % PAGE;
+                if (length > 0 || t.bulk) && !spill.push(self.dma.bytes(buffer, length as usize), damaged) { break; }
+                t.state[t.oldest] = Td::Free;
+                t.oldest = (t.oldest + 1) % t.tds;
+                moved = true;
+            }
+            if moved { self.refill(index); }
+        }
     }
 
     /// OUT stream `index`: the packets in `packets` (two length bytes each, then the packet) go on the ring while TDs are
     /// free. The bytes taken; what is left waits for the client's next call.
     pub fn put_stream(&mut self, index: usize, packets: &[u8]) -> usize {
         let mut at = 0;
+        if let Some(t) = self.streams[index].as_mut() { t.call_ns = mind::time::monotonic_ns(); }
         let mut queued = false;
         while at + 2 <= packets.len() {
             let Some(t) = self.streams[index].as_ref() else { break };
