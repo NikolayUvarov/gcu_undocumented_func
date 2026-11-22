@@ -840,7 +840,7 @@ fn service_writes_every_floor_field_and_names_those_not_read_back(){run(0,true,t
 #[test]
 fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,true,true,|data,c|{
     use crate::receive_service::Event;
-    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    ipc::reset();let mut service=Service::new(data).unwrap().minute_detail(true);assert!(service.step());
     let mut held=vec![];
     for n in 1..=10u32{
         c.borrow_mut().hold_reports=true;
@@ -893,6 +893,31 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};
     drop(service);clean();
 });}
+
+// receive_service::MINUTE_DETAIL, committed false for a machine in use: without it no frame is probed and no release is
+// placed in the beacon interval; with it both are. The minute's sends are counted either way.
+#[test]
+fn service_probes_and_places_releases_only_with_the_minute_detail(){for detail in[false,true]{run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().minute_detail(detail);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());
+    c.borrow_mut().hold_reports=true;
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    ipc::advance(91);assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its deadline");
+    assert_eq!(service.take_held().is_some(),detail,"the held frame's probe");
+    c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert_eq!(service.take_held().is_some(),detail,"the in-time frame's probe");
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{tx,..})=traffic else{panic!("no traffic line")};
+    assert_eq!((tx.late,tx.answered_late,tx.by_tries[1]),(1,1,2),"{tx:?}");
+    let placed=tx.clock.iter().chain(tx.tsf.iter()).sum::<u32>();
+    assert_eq!(placed!=0,detail,"releases placed in the beacon interval: {tx:?}");
+    drop(service);clean();
+});}}
 
 // 213-DRV-0091: the calibrations' lines say PASS or FAIL by Linux's criteria (rtw8852b_rfk.c): DPK's sync at most 200 of
 // DC on I and Q and at least 170 of correlation; IQK's LOK in range and no one-shot failing.

@@ -321,6 +321,15 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **Still to measure:** full-size answers take 2 to 4 ms while their release takes under 0.75 ms. The rest is before the submission: `DataSession::begin` makes the full liveness checks and the reconcile for every send, which the polls make once per CHECK_MS. Arrival-to-submission is the next span to time.
 - The upload comparison of ON against OFF minutes on this boot is the owner's load, read with `paired.py --kind tight`.
 
+**2026-11-22, the minute's detail behind one switch, for landing** (this branch; host cases):
+- **Why:** boot 99's log, counted by script: `rtw89_wifi` printed 30 minute lines, about 4.7 KB, every minute; main prints 3, about 465 bytes. The log holds 2048 records of 200 bytes, so the detail alone fills it in about 68 minutes, where main's three lines take about 11 hours. A late frame added four more lines (HELD FRAME and its registers in three pieces) for the first eight of a boot, then one a minute.
+- **`receive_service::MINUTE_DETAIL`, a bench switch, committed false:**
+  - False prints main's three lines a minute (TRAFFIC, THE BEACONS ABOVE, THE FIRMWARE'S ERROR CODES) and the GOOD LINK probe every tenth minute, as main does. It makes no held-frame probe (HELD FRAME, HELD FRAME'S REGISTERS, IN-TIME FRAME'S REGISTERS) and reads no TSF for the beacon interval's phase.
+  - True prints the 27 detail lines of boot 99 and probes as there.
+  - The counting behind the lines runs either way. It costs CPU and clock reads, not register reads.
+- **Host case** `service_probes_and_places_releases_only_with_the_minute_detail`: without the switch, no probe of the held frame or the in-time one and no release placed in the beacon interval; with it, both probes and the releases placed. The minute's late and tried sends are counted either way. The held-frame case raises the switch.
+- The 40 `rtw89_*_host.rs` files pass: 4890 cases, 0 failed. `02_build.sh` builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
