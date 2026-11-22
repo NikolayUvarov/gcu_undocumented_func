@@ -683,6 +683,83 @@ keeps it so today, each boot a repeat of the experiment.
 - The rest refuses by itself when the state differs: a second running OTG, no monitor on HPD 1, a running DMCUB, an
   unblanked HUBP1.
 
+## Step 4, planned: MIND Core's picture on HDMI-A-1 (no code yet)
+
+The maintainer's goal is MIND Core's own screen on the second monitor, not the engine's squares. Step 4 replaces OPP1's
+test pattern with pixels that pipe 1 fetches from a surface of `display`'s own. Then the compositor draws into that
+surface (acceptance criterion 4).
+
+**Where it starts.** Step 3 has run: OTG1 at 1080p60, DIG A and PHY A in DVI signalling, OPP1 showing the pattern.
+This release runs step 3 at every boot. Step 4 adds stages 9 to 15 after stage 8, in the same frame:
+- each stage is logged with its writes before any is made, and undone with every stage before it if it fails;
+- the firmware's pipe is never written and is read after each stage;
+- the step reads nothing step 1 has not read on the same boot.
+
+**The surface.**
+- **Where:** BAR 0's slot 5 (213-KRN-0271), [0x0100_0000, 0x0240_0000), 20 MiB behind the GOP's framebuffer, which
+  ends at 0xFA_0000. `display` maps it write-combined.
+- **Its GPU address:** HUBP0 scans 0xF4_0000_0000, which is BAR 0's offset 0 and the GOP's framebuffer, and
+  `DCN_VM_FB_LOCATION_BASE` reads 0xF4_0000_0000. So BAR 0 offset X is GPU address 0xF4_0000_0000 + X, and the surface
+  is at **0xF4_0100_0000**. No page table or GART is involved.
+- **Its shape:** 1920x1080, `SURFACE_PIXEL_FORMAT` 8 (32-bit ARGB, the GOP's and Linux's), linear. The pitch is 1920
+  pixels (7680 bytes, a multiple of 256), for 8,294,400 bytes.
+- **The pitch convention.** Display Core writes `PITCH` as the pitch less one (`hubp2_program_size`, not among the
+  files at hand). Linux's own surfaces show right, so step 4 writes 1919. The firmware's HUBP0 holds 0xA00 against the
+  GOP's stride of 2560. That would mean 2561 by this convention, yet DP-2 shows no shear. Either the hardware rounds a
+  linear pitch, or the GOP writes it as is. The picture of stage 10 settles it: a one-pixel diagonal and one-pixel
+  edges shear visibly by a pixel a row if the pitch is off by one.
+
+**The stages:**
+
+| Stage | What it writes (Display Core's order, `dcn20_program_pipe`) | Undo | HDMI-A-1 | DP-2 |
+|---|---|---|---|---|
+| 9 reads (step 1's batch 9) | nothing. It reads the firmware's pipe as a reference: HUBP0's request, DLG and TTU registers; DPP0's format and its scaler and colour bypass; the MPC tree for OPP0 (`MPCC0` `TOP_SEL`, `BOT_SEL`, `OPP_ID`, `MPC_OUT0_MUX`) and the free MPCCs; DCHUBBUB's watermark sets; DCCG's `DPPCLKn_DTO_PARAM` | none | squares | unchanged |
+| 10 draw | no register. `display` fills the surface: a solid colour, a one-pixel white border, and a diagonal from corner to corner | none (the memory is unused) | squares | unchanged |
+| 11 pipe 1's clocks | `DPPCLK1`'s DTO for at least 148.5 MHz (`update_dpp_dto`), DPP1's clock (`dpp_dppclk_control`), HUBP1's DCFCLK (`hubp_clk_cntl`) | restore | squares | unchanged; **watch** (clocks shared with pipe 0's) |
+| 12 DPP1 | input format ARGB 8888; input CSC, gamut remap, gamma and output CSC in bypass; scaler 1:1, recout 1920x1080 | restore | squares | unchanged |
+| 13 HUBP1, blanked | surface config (format 8, linear, rotation 0), `PITCH` 1919, primary address 0xF4_0100_0000, viewport 1920x1080 at 0,0; request size, DLG and TTU from stage 9's reference, for 1920x1080 at 148.5 MHz (`hubp_setup`) | restore | squares | unchanged |
+| 14 MPC | a free MPCC: `TOP_SEL` DPP1, no bottom, `OPP_ID` 1, top only at alpha 255; `MPC_OUT1_MUX` to it (`update_mpcc`) | restore | squares (the pattern still overrides) | unchanged |
+| 15 unblank, pattern off | `HUBP_BLANK_EN` 0, and once a frame has fetched without underflow, `DPG_EN` 0 in OPP1 | pattern back on, then HUBP1 blanked, then 14 to 11 restored (Display Core's disable order) | **the drawn picture**: straight edges, the border all round, the diagonal corner to corner | unchanged; **watch** (memory bandwidth) |
+
+**What the watch adds.** From stage 13, step 4 owns HUBP1. It leaves the attached-HUBP check, which only guarded
+HUBP1's blank, and goes on the route. The firmware's pipe is still read after each stage, and stage 15 also reads:
+- the underflow statuses of HUBP0 and HUBP1 (`HUBP_UNDERFLOW_STATUS`), which the step 3 watch masks;
+- those of OTG0 and OTG1 (`OPTC_UNDERFLOW_OCCURRED_STATUS`, `_CURRENT`).
+
+Any underflow fails the stage. On pipe 0 that is the firmware's DP-2 disturbed; on pipe 1, the request or DLG values
+are wrong. The guard adds DPP1 and the chosen MPCC to the route and keeps DPP0, MPCC0 and HUBP0 refused.
+
+**What cannot be undone:** nothing beyond step 3's. Step 4 writes no PHY, VBIOS table or control bus.
+
+**Not known yet, and how each is met:**
+- **The DLG, TTU and request values.** Display Core computes them with its mode library, which is not at hand. Stage 9
+  reads the firmware's for pipe 0 (2560x1600 at 268.5 MHz) as the reference, and step 4 derives pipe 1's from it for
+  its mode, by the mode ratio. A wrong value shows as HUBP1 underflow: the stage is failed and undone.
+- **The watermarks are global** (DCHUBBUB), set by the firmware for one pipe. Step 4 does not write them, since they
+  are shared with DP-2's pipe. If two pipes underflow on them, setting them is a stage of its own, on the owner's word.
+- **The pitch convention**, settled by stage 15's picture.
+- **That DISPCLK** (DENTIST divider id 0x14) **is enough** for a second pipe at 148.5 MHz. It drives 268.5 MHz now; a
+  shortfall would show as underflow.
+
+**What the maintainer sees:**
+- stages 9 to 14: HDMI-A-1 keeps the squares, and DP-2 keeps MIND Core's screen; watch DP-2 at stage 11 especially;
+- stage 15: the squares give way to `display`'s picture, a solid colour with a white border and a diagonal; watch DP-2
+  then too. Any slant in the border or the diagonal is a pitch or address error.
+
+**The other side: the second screen offered to the compositor.** The compositor is KRN's: `compositor/` changes only
+in KRN tasks. `wm` is APP's. It is point 4 of DRV's request to KRN, which 213-KRN-0271 keeps for after a picture
+from `display`'s own framebuffer, that is, after stage 15. What to ask of KRN then is a versioned interface, a new
+version of `display.wit` or one of its own, which KRN owns, through which `display` tells the compositor:
+- that a second screen exists, and when it appears or goes (HPD 1);
+- its width, height and pitch in bytes, and its pixel format: 32-bit `0x00RRGGBB` in memory order B, G, R, A, as the
+  GOP's;
+- where its pixels are: a shared mapping of the surface, which `display` lends, or BAR 0's range;
+- when a frame may be shown: OTG1's vertical blank, which `display` sees by its frame count.
+
+First as a mirror: the compositor copies the same changed pixels into both screens, and `wm` needs nothing. Then
+extended: a second screen of its own, for which `wm` (APP) needs its size and place from the compositor, to be asked
+of APP then. `display` writes its side against KRN's interface.
+
 ## Related
 
 [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
