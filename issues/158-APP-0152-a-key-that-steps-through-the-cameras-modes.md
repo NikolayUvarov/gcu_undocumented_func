@@ -1,6 +1,6 @@
 # 158-APP-0152 — A key in `camera` and `wm`'s camera that steps through the camera's modes
 
-**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (the stepping written and host-tested, 2026-11-21) · **Blocked by:** `DRV`: [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md) (`video.wit` 1.1's `modes` and `opened`, on DRV's branch `claude/158-DRV-0082-two-cameras-and-their-modes`, not in `main` yet), for the calls alone · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
+**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written, 2026-11-22; the `vfs` suite's run and the Ryzen's cameras left) · **Blocked by:** — (`video.wit` 1.1's `modes` and `opened`, [158-DRV-0083](../issues-done/158-DRV-0083-a-cameras-modes-listed-and-chosen.done), in `main` since round 169) · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
 
 **Asked by:** DRV, `APP/2026-11-21T1259Z-DRV-request-a-key-in-camera-that-steps-through-the-cameras-modes.md` on `internal-dev-messages`, at the maintainer's word of 2026-11-21: «переключение камеры должно быть доступно и из самого приложения, как устройства, так и её режимов». Numbered on 2026-11-21.
 
@@ -44,4 +44,17 @@ Once `video.wit` 1.1's `modes(camera)` is on a branch to build against:
   - a mode in words, `640x480 at 30/s YUY2`.
 - **Tested:** `tests/camera_host.rs`, `the_cameras_modes_stepped_and_named`.
 - **Left:** the calls and the keys in `camera` once `video.wit` 1.1 is in `main` (no other track's unlanded branch is merged here), the `vfs` suite's check against the three test modes, and the Ryzen's cameras with DRV.
+
+## Progress (2026-11-22)
+
+- **`video.wit` 1.1 landed** in round 169, with DRV's 158-DRV-0082 to 0084.
+- **Wired into `camera`:**
+  - `-m n` picks a mode at its own size and rate, checked with `modes.rs`'s `chosen`;
+  - `m` and Shift+`m` step through the offered modes with `step`. Each opens at the mode's own size and rate, with a frame buffer of that size, the place on the screen worked out again; the mode before is opened again if one does not open;
+  - `[CAMERA] OPENED … : MODE 1 (OF 0 TO 2), 320x240 at 10/s SYNTHETIC`, from `opened`, and the window's title with the mode;
+  - a 1.0 gateway (`modes` rejected) and a camera with one offered mode are named and left as they are;
+  - `n` reads the next camera's modes.
+- **A buffer given up** for another mode's drops its shared capability.
+- **The `vfs` suite's camera check** now steps the test pattern's three modes with `m` and Shift+`m`, takes a still at `-m 0` (640×480), and refuses `-m 7` with the count. Its run on x86 is under way.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`, 4.12.
 
