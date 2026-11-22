@@ -1818,6 +1818,85 @@ fn the_ryzens_tables_taken_back_for_an_unplug_and_run_again() {
     as_before(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
 }
 
+// Table 76 waits for a PHY A status the model shows while the stages run: its DISABLE stops by the time limit once it is gone.
+fn waiting_76() -> Vec<u8> {
+    tables([mov(seg(1, 0xA0), 1), mov(PHY_A_CNTL0, 0x0020_0001), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), wait_bit(PHY_A_CNTL0, 28, 8), vec![EOT]].concat())
+}
+
+#[test]
+fn an_unplug_whose_undo_goes_wrong_logs_the_held_detail_in_the_production_order_and_one_that_goes_right_two_lines() {
+    let (good, waiting) = (good(), waiting_76());
+    // What goes wrong: nothing; stage 8's off call stopping; screen_gone not taken; the firmware's pipe changed by the hardware.
+    for case in 0..4 {
+        let mut e = engine();
+        e.frame_us = DP2;
+        e.set.push((PHY_A_CNTL0, 1 << 28));
+        let before = e.regs.clone();
+        let (outcome, mut lit, _) = light_up(wide(), if case == 1 { &waiting } else { &good }, &mut e, 16);
+        assert_eq!(outcome, Outcome::Stopped { done: 16 }, "case {}", case);
+        e.set.clear();
+        if case == 2 { e.refuse_gone = Some(ScreenRefused::NoScreen); }
+        let firmwares = watched(&lit.l)[0];
+        if case == 3 { e.hook = Some((seg(2, 0x20B0), firmwares, 0xBAD)); }
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let same = light::take_back(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, &mut held);
+        let log = held.inner.0;
+        let last = log.last().unwrap().clone();
+        assert!(log[0].starts_with("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES 16 TO 1 ("), "case {}: {}", case, log[0]);
+        assert!(last.starts_with("STEP 3 TAKEN BACK IN "), "case {}: {}", case, last);
+        let at = |p: &str| log.iter().position(|x| x.starts_with(p));
+        match case {
+            // Gone right: the two notes only, as on boot 94.
+            0 => { assert!(same); assert_eq!(log.len(), 2, "{:#?}", log); assert!(last.ends_with(" MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE UNCHANGED"), "{}", last); }
+            // A stage's undo gone wrong: the detail held before it, its own lines, every line after it, then the last line saying so.
+            1 | 2 => {
+                assert!(same, "{:#?}", log);
+                let (wrong, first) = if case == 1 { ("U8 TABLE 76 STOPPED (", "U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO") } else { ("U16 SCREEN_GONE NOT TAKEN: NO SCREEN; THE UNDO GOES ON", "U16 ") };
+                let w = at(wrong).unwrap_or_else(|| panic!("case {}: {:#?}", case, log));
+                assert!(at(first).unwrap() <= w);
+                assert!(log[w..].iter().any(|x| x.starts_with("U1 OTG CLOCKS UNDONE")), "case {}: {:#?}", case, &log[w..]);
+                assert!(at("U0 RESTORED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION").unwrap() > w);
+                assert!(last.ends_with("THE FIRMWARE'S PIPE UNCHANGED; 1 STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE"), "case {}: {}", case, last);
+                // Every journaled write put back all the same (PHY A's status bit, read into the journal, aside).
+                as_before(&e, &before, &[PHY_A_CNTL0]);
+                assert_eq!(e.regs[&PHY_A_CNTL0] & !(1 << 28), before.get(&PHY_A_CNTL0).copied().unwrap_or(0));
+            }
+            // The firmware's pipe changed: the whole take-back's detail logged before the last line.
+            _ => {
+                assert!(!same);
+                assert!(at("U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO").is_some() && at("U1 OTG CLOCKS UNDONE").is_some(), "{:#?}", log);
+                assert!(last.ends_with("THE FIRMWARE'S PIPE CHANGED"), "{}", last);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_builds_own_undo_after_the_stages_logs_an_off_call_that_stops_in_the_production_order() {
+    let img = waiting_76();
+    let mut e = engine();
+    e.frame_us = DP2;
+    // The status shown for the first 300 ms: past stage 8, which ends within stage 5's two frames and some tables' steps,
+    // and gone before the build's undo, which comes after stage 9's count of 30 frames and stage 15's watch.
+    e.window.push((PHY_A_CNTL0, 1 << 28, 0, 300_000));
+    let before = e.regs.clone();
+    let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+    let mut journal = Box::new(light::Journal::default());
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    let (outcome, _) = light::run_timed(&wide(), &mut e, &mut interp, &mut journal, 16, true, &mut held);
+    let log = held.inner.0;
+    assert_eq!(outcome, Outcome::Undone { done: 16 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    let w = log.iter().position(|x| x.starts_with("U8 TABLE 76 STOPPED (")).unwrap_or_else(|| panic!("{:#?}", log));
+    assert!(log[..w].iter().any(|x| x.starts_with("STEP 3 RAN 16 OF 16 STAGES (")), "the held detail before it");
+    assert!(log[w..].iter().any(|x| x.starts_with("U1 OTG CLOCKS UNDONE")));
+    assert!(log.last().unwrap().ends_with("THE FIRMWARE'S PIPE UNCHANGED; 1 STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE"), "{}", log.last().unwrap());
+    // Every journaled write put back but the mark, which this undo keeps (PHY A's status bit, read into the journal, aside).
+    as_before(&e, &before, &[PHY_A_CNTL0, reg(R::OtgVerticalInterrupt2Position, 1)]);
+    assert_eq!(e.regs[&PHY_A_CNTL0] & !(1 << 28), before.get(&PHY_A_CNTL0).copied().unwrap_or(0));
+}
+
 // The model as step 1 finds the Ryzen: everything steps 3 and 4 take from it (pipe 0's reference as boot 70 read it),
 // HPD 1 sensing HDMI-A-1's monitor and enabled.
 fn plugged() -> Engine {

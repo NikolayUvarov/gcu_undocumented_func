@@ -1286,8 +1286,9 @@ fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> 
 /// the stage wrote is put back, last first, and then every register only the off call wrote, so that all are as before
 /// the stage (PHY A was off). The PHY's own control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a
 /// write to its data register is a write into the PHY, so putting it back would write stale values into the PHY. What
-/// the stage set inside the PHY stays; the undo says how much.
-fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, at_once: bool, out: &mut dyn Out) {
+/// the stage set inside the PHY stays; the undo says how much. Whether something in it went wrong: the off call's table
+/// stopped, or the compositor did not take screen_gone (every write is put back all the same).
+fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, at_once: bool, out: &mut dyn Out) -> bool {
     let p = light.choice.output.phy as u32;
     let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
     // At once (an underflow): the stage's own writes put back, last first, before any line is logged.
@@ -1297,10 +1298,11 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
         let Some((w, old, stage)) = journal.items[i] else { continue };
         if stage == n && w.reg().offset() != cr_addr && w.reg().offset() != cr_data { e.write(w, old); }
     }
-    let mut off = Journal::default();
+    let (mut off, mut wrong) = (Journal::default(), false);
     if let Some(t) = light.off_call(n) {
         if let Err(why) = call(light, e, interp, &mut off, t, 'U', n, true, out) {
             out.line(format_args!("U{} TABLE {} STOPPED ({}); RESTORING STAGE {}'S WRITES ANYWAY", n, t.index(), why, n));
+            wrong = true;
         }
     }
     let (mut restored, mut addresses, mut data) = (0, 0, 0);
@@ -1337,10 +1339,28 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
     if n == 16 {
         match e.gone() {
             Ok(()) => out.line(format_args!("U{} SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO", n)),
-            Err(why) => out.line(format_args!("U{} SCREEN_GONE NOT TAKEN: {}; THE UNDO GOES ON", n, why)),
+            Err(why) => { out.line(format_args!("U{} SCREEN_GONE NOT TAKEN: {}; THE UNDO GOES ON", n, why)); wrong = true; }
         }
     }
     out.line(format_args!("U{} {} UNDONE: {} WRITES RESTORED", n, STAGE_NAMES[n as usize - 1], restored));
+    wrong
+}
+
+/// Stages `last` to 1 undone, last first, for a take-back that is not a failure's (an unplug, the build's own undo): the
+/// production order holds their detail, so a stage whose undo went wrong has it logged at once, and every line after it.
+/// How many went wrong.
+fn undo_all<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, last: u8, out: &mut dyn Out) -> u8 {
+    let mut wrong = 0;
+    for m in (1..=last).rev() { if undo(light, e, interp, journal, m, false, out) { out.failed(); wrong += 1; } }
+    wrong
+}
+
+// The end of a take-back's last line: what went wrong in it, if anything, logged above it.
+struct Wrong(u8);
+impl fmt::Display for Wrong {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.0 > 0 { write!(f, "; {} STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE", self.0) } else { Ok(()) }
+    }
 }
 
 /// Step 3: stages 1 to `allowed`, each logged with its writes before any is made, the firmware's pipe read before and
@@ -1470,10 +1490,11 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
     }
     if then_undo && allowed > 0 {
         out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", allowed, STAGES, journal.len, allowed));
-        for m in (1..=allowed).rev() { undo(light, e, interp, journal, m, false, out); }
+        let wrong = undo_all(light, e, interp, journal, allowed, out);
         let same = light.watch.read(e).ok().map(|a| light.watch.changed(&baseline, &a).is_none());
-        out.note(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", allowed, STAGES,
-            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+        if same != Some(true) { out.failed(); }
+        out.note(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}", allowed, STAGES,
+            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, Wrong(wrong)));
         return (Outcome::Undone { done: allowed }, times);
     }
     out.note(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
@@ -1482,21 +1503,23 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
 
 /// Steps 3 and 4 taken back for an unplug (213-DRV-0096): stages `done` to 1 undone, last first, as a failure's undo
 /// takes them back (stage 16's first lets the compositor go: screen_gone), then the mark put back as it was before step 3,
-/// so that a monitor plugged in runs the stages again, and the journal emptied for that run. Whether the firmware's pipe
-/// reads as it did when step 3 began.
+/// so that a monitor plugged in runs the stages again, and the journal emptied for that run. A stage whose undo went
+/// wrong, or a firmware's pipe that does not read as before, has the detail logged before the last line. Whether the
+/// firmware's pipe reads as it did when step 3 began.
 pub fn take_back<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, done: u8, out: &mut dyn Out) -> bool {
     out.part();
     let (start, done) = (e.now_us(), done.min(STAGES));
     out.note(format_args!("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES {} TO 1 ({} WRITES)", done, journal.len));
-    for m in (1..=done).rev() { undo(light, e, interp, journal, m, false, out); }
+    let wrong = undo_all(light, e, interp, journal, done, out);
     if let Some((w, was)) = journal.mark.take() {
         e.write(w, was);
         out.line(format_args!("U0 RESTORED {} = {:08X}: THE MARK OF STAGES IN PLACE CLEARED", Name(w.reg()), was));
     }
     let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
     journal.clear();
-    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}", Ms(e.now_us().saturating_sub(start)),
-        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+    if same != Some(true) { out.failed(); }
+    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}{}", Ms(e.now_us().saturating_sub(start)),
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, Wrong(wrong)));
     same == Some(true)
 }
 

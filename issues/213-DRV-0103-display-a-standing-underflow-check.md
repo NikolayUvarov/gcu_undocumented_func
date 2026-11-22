@@ -118,6 +118,26 @@ PIPE`.
     the ten minutes after give the old line.
   - The running bench keeps the old line until the next display change.
 
+**A take-back that went wrong was not logged (found 2026-11-22, fixed the same day on the owner session's word).**
+- **The flaw:** in the production order, `light::take_back` (0096's) held its `U` lines and never called `failed()`. A
+  table that stopped in an off call, a `screen_gone` the compositor did not take, or a firmware's pipe that read CHANGED
+  showed only in the final `STEP 3 TAKEN BACK IN ...` line. The build's own undo after the stages (`UNDO_AFTER_STAGES`)
+  had the same flaw. Every journaled write was put back all the same.
+- **Since then:**
+  - `undo` says whether its stage went wrong: the off call's table stopped, or `screen_gone` was not taken.
+  - Both undos run their stages through `undo_all`. A stage that went wrong has the detail held so far logged at once
+    (`failed()`), and every line after it.
+  - A firmware's pipe that does not read UNCHANGED logs the held detail before the last line.
+  - The last line then ends `; n STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE`. One that went right keeps its two lines,
+    as on boot 94.
+  - **Host cases** (production order):
+    - an unplug gone right: two lines;
+    - stage 8's off call stopping: its `U8 TABLE 76 STOPPED` line logged, with the detail before it and every undo after;
+    - `screen_gone` not taken;
+    - the firmware's pipe changed: the whole detail logged;
+    - the build's own undo with stage 8's off call stopping.
+  - Not shown on the hardware: no take-back there has gone wrong.
+
 **Not shown by it:**
 - the check finding anything on the hardware, and so its undo after the offer and `screen_gone` there;
 - the watch of 60 (`SHORT_WATCH`);
@@ -190,10 +210,11 @@ This replaces the section of the same name in 213-DRV-0095, which describes the 
 | `claude/213-DRV-0095-display-the-monitors-own-mode` | 1e148b81f | the EDID's mode (0095), on 0092's | in `main` since round 172 (7346ab3d5, 2026-11-22 15:19 UTC) |
 | `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | landing request posted; waits for the next round |
 | `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | 8823e6433 | `HOTPLUG` (code 5e63d41b4, on a71a47b83; the rest text); both criteria met on boot 94 | landing paragraph given; after 0098 |
-| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, then 9acc0b773's dark spans) | after 0096 |
+| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, then 9acc0b773's dark spans and the take-back's detail, above) | after 0096 |
 
 **The bench:** the release on the Ryzen since about 16:10 UTC runs a5c933530's `display` with `HOTPLUG`,
-`STANDING_CHECK` and `SHORT_WATCH` true. Its standing check's line is the one before 9acc0b773, without dark spans.
+`STANDING_CHECK` and `SHORT_WATCH` true. Its standing check's line is the one before 9acc0b773, without dark spans, and
+its take-back holds a failure's detail.
 
 **LEG9 restarted at 15:21 UTC** and wiped `/tmp`: the worktrees and the scratch scripts. Nothing pushed was lost.
 - **To work on a branch again:** `git -C <main checkout> worktree add --detach <path> origin/<branch>`, commit there,
@@ -213,7 +234,7 @@ nothing.
 - **`SHORT_WATCH`** (this task): the watch of 60 frames, only with `STANDING_CHECK`. The build refuses it otherwise.
 
 **The host cases:**
-- **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 111 cases on this
+- **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 113 cases on this
   branch's code.
 - **With the Ryzen's tables:** with `MIND_AMD_VBIOS` naming the Ryzen's VBIOS image, they also run the Ryzen's own
   tables.
@@ -242,16 +263,7 @@ nothing.
   - his look at the 3440x1440 picture (0095's criterion 4).
 - **For the owner session:**
   - the decision on the proposal above (the offer before the watch);
-  - this task's criterion 2: the bench's watch is now 60, with the check;
   - closing 0098 and 0096 once they have landed.
-- **Open in the code: a take-back's failure detail is not logged.** In the production order `light::take_back` (0096)
-  holds its `U` lines and never calls `failed()`. A table that stops inside an off call, or a firmware's pipe that reads
-  CHANGED, shows only in the final `STEP 3 TAKEN BACK IN ... THE FIRMWARE'S PIPE ...` line. It still puts back every
-  journaled write.
-  - **The fix,** not yet made: `undo` says whether a table stopped, and `take_back` calls `failed()` before its final
-    line when one did or the pipe does not read UNCHANGED.
-  - **Its host case:** a table stopped in stage 16's off call during a take-back. Its `U16 TABLE ... STOPPED` line is
-    logged in the production order.
 
 ## Acceptance criteria
 
