@@ -2,6 +2,7 @@
 // control and bulk transfers, interrupt IN endpoints kept polling with their reports queued (issue 164), and
 // isochronous endpoints streaming, IN and OUT (000-DRV-0073).
 use core::sync::atomic::{fence, Ordering};
+use crate::spill::Spill;
 use mind::dev::{Dma, Mmio};
 
 pub const TRB: usize = 16;
@@ -59,6 +60,8 @@ const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 /// A bulk stream's (158-DRV-0082): each a page, as many as leave POOL_KEPT pages of the pool free, BULK_LEAST at least.
 pub const STREAM_TDS: usize = 32; const STREAM_PAGES: usize = 32; const ISO_PAGES: usize = 4; const MAX_STREAMS: usize = 4;
 const POOL_KEPT: usize = 12; const BULK_LEAST: usize = 8;
+/// The bytes a bulk stream's spill holds at most beyond its TDs (158-DRV-0082): eight times the 32 pages on its ring.
+const SPILL_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done (IN): the bytes received, and an error
@@ -69,7 +72,9 @@ enum Td { Free, Armed(u64), Done(u16, bool) } // Armed: its TRB's address; Done 
 /// soon as possible after the one before (SIA), so a ring that ran dry (a missed packet, under- or overrun) starts
 /// again with the next TD. The streams of an interface end with its setting.
 /// A bulk IN stream (158-DRV-0082, `bulk`) keeps its TDs on the endpoint's own ring, a page each, and gives them in order,
-/// an empty one too; one that ended in error halts the endpoint (`halted`) until the owner's next take resets it.
+/// an empty one too; one that ended in error halts the endpoint (`halted`) until the owner's next take resets it. Its
+/// finished TDs are moved into `spill` every STREAM_MS and go back on the ring at once, so the camera waits on the client
+/// only when SPILL_BYTES wait.
 pub struct Stream {
     pub slot: u8, pub dci: u8, pub interface: u8, input: bool, pub bulk: bool, halted: bool, ring: Ring, packet: usize, size: usize, pages: [usize; STREAM_PAGES],
     tds: usize, state: [Td; STREAM_TDS], next: usize, oldest: usize,
@@ -80,6 +85,7 @@ pub struct Stream {
     // The microframe the next TD runs in (MFINDEX's count, 14 bits: 2048 frames), None until the first TD or after the
     // ring ran dry; the microframes between two TDs (2^interval).
     uframe: Option<u32>, step: u32,
+    spill: Option<Spill>,
 }
 
 impl Stream {
@@ -423,7 +429,7 @@ impl Xhci {
         }
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input, bulk: false, halted: false, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
-            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15) });
+            missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15), spill: None });
         Some(ring)
     }
     /// A bulk IN stream on endpoint `dci` of `slot` (158-DRV-0082), on `ring`, the endpoint's own, which its context
@@ -438,7 +444,7 @@ impl Xhci {
         }
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input: true, bulk: true, halted: false, ring, packet: PAGE, size: PAGE, pages, tds, state: [Td::Free; STREAM_TDS],
-            next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 });
+            next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1, spill: Some(Spill::new(SPILL_BYTES)) });
         self.take_stream(at, &mut []);
         Some(tds)
     }
@@ -449,7 +455,8 @@ impl Xhci {
         let t = self.streams[at].take()?;
         self.restart(slot, dci, &t.ring, t.halted);
         t.pages[..t.tds].iter().for_each(|&p| self.release(p));
-        mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK STREAM ENDED: {} BYTES, {} WITH ERRORS", Tag(self.number), slot, dci, t.moved, t.damaged);
+        let (most, refused, left) = t.spill.as_ref().map_or((0, 0, 0), |s| (s.most, s.refused, s.len().0));
+        mind::println!("[USB] {}SLOT {} ENDPOINT {}: BULK STREAM ENDED: {} BYTES, {} WITH ERRORS; ITS SPILL HELD {} BYTES AT MOST, FULL {} TIMES, {} LEFT UNREAD", Tag(self.number), slot, dci, t.moved, t.damaged, most, refused, left);
         Some(t.ring)
     }
     /// Whether bulk stream `index` halted on an error: its owner then clears the device's halt and calls `recover_bulk`.
@@ -565,6 +572,11 @@ impl Xhci {
     /// empty ones left out), as far as they fit; their TDs and every other free one go on the ring again. The bytes written.
     pub fn take_stream(&mut self, index: usize, out: &mut [u8]) -> usize {
         let mut written = 0;
+        // A bulk stream's spill holds its oldest transfers: they come first, and the TDs' only once it is empty.
+        if let Some(spill) = self.streams[index].as_mut().and_then(|t| t.spill.as_mut()) {
+            written = spill.take(out);
+            if !spill.is_empty() { self.refill(index); return written; }
+        }
         loop {
             let Some(t) = self.streams[index].as_mut() else { return written };
             let Td::Done(length, damaged) = t.state[t.oldest] else { break };
@@ -582,6 +594,12 @@ impl Xhci {
             t.state[t.oldest] = Td::Free;
             t.oldest = (t.oldest + 1) % t.tds;
         }
+        self.refill(index);
+        written
+    }
+
+    // Stream `index`'s free TDs back on the ring, in order, and the doorbell rung.
+    fn refill(&mut self, index: usize) {
         let mut queued = false;
         loop {
             let Some(t) = self.streams[index].as_ref() else { break };
@@ -592,7 +610,25 @@ impl Xhci {
             queued = true;
         }
         if let (true, Some(t)) = (queued, self.streams[index].as_ref()) { self.doorbell(t.slot, t.dci as u32); }
-        written
+    }
+
+    /// Each bulk stream's finished TDs, oldest first, moved into its spill while it has room, and their TDs back on the
+    /// ring (158-DRV-0082): called every STREAM_MS, so a camera's burst does not wait for its client's next take.
+    pub fn spill_streams(&mut self) {
+        for index in 0..MAX_STREAMS {
+            let mut moved = false;
+            loop {
+                let Some(t) = self.streams[index].as_mut() else { break };
+                let Some(spill) = t.spill.as_mut() else { break };
+                let Td::Done(length, damaged) = t.state[t.oldest] else { break };
+                let buffer = t.pages[t.oldest * t.size / PAGE] + t.oldest * t.size % PAGE;
+                if !spill.push(self.dma.bytes(buffer, length as usize), damaged) { break; }
+                t.state[t.oldest] = Td::Free;
+                t.oldest = (t.oldest + 1) % t.tds;
+                moved = true;
+            }
+            if moved { self.refill(index); }
+        }
     }
 
     /// OUT stream `index`: the packets in `packets` (two length bytes each, then the packet) go on the ring while TDs are

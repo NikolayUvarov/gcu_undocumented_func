@@ -164,6 +164,14 @@ This holds for that machine, those cameras and that release (MC-12.1).
 - **A limit that stays:** a YUY2 stream of 640×480 or more beside a second camera can break every frame at about 133 KB. That is `usb_host`'s queue of 32 pages (128 KiB), which a camera's burst fills within a few milliseconds of a pump gap. It happened with 640×480 after an MJPEG mode, and with 1280×720 once. MJPEG frames of the same sizes (0.1 to 0.25 MB) stream beside another camera, and the default 320×240 does.
   - **More pages** need more of `usb_host`'s DMA memory, which `init` grants (KRN).
   - **Or the gateway** may choose MJPEG for large sizes when another stream runs.
+- **The spill** (the owner session's next item, 2026-11-22):
+  - **What it does:** `usb_host` no longer leaves a bulk stream's finished TDs on the ring until the gateway takes them. Every STREAM_MS (2 ms), and at each request, it moves their bytes, oldest first, into the stream's spill, and the TDs go back on the ring at once (`Xhci::spill_streams`, `usb_host/src/spill.rs`).
+  - **What the gateway gets:** the spill first, in the same form as before (two length bytes, bit 15 an error, then the bytes, an empty transfer too), then the TDs.
+  - **Its bound:** 1 MiB a stream, eight times the 32 pages. A full spill leaves the transfers on their TDs, so the camera waits as before.
+  - **The log:** the end of a stream says the spill's most and how often it was full (`ITS SPILL HELD n BYTES AT MOST, FULL m TIMES, k LEFT UNREAD`).
+  - **The aim:** a camera's burst then waits on the gateway only when 1 MiB is waiting, not 128 KiB. A 640×480 YUY2 frame is 0.6 MB.
+  - **Host cases:** `tests/usb_spill_host.rs`, for the order, the empty and failed transfers, the bound, and a small buffer taking whole transfers only.
+  - **Not run on the Ryzen yet:** the owner session's word comes first, the maintainer having left his windows on the screen. No QEMU device is a bulk camera.
 
 ## Related
 
