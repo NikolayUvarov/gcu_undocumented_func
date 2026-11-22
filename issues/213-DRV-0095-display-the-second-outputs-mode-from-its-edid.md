@@ -264,6 +264,41 @@ The stage-by-stage runs and stage 15's watch are its safeguard, as for stage 15.
 - **So there is no smaller step.** The monitor's own mode needs HDMI signalling. The owner session asked for HDMI
   signalling first at today's 1920x1080 (VIC 16, 148.5 MHz), then the mode.
 
+## The mode from the EDID (fifth commit)
+
+Behind `MODE_FROM_EDID` (committed false), with `EDID_ALLOWED`. `light::mode_from_edid` takes the EDID's preferred
+timing in HDMI signalling when:
+- the sink has an HDMI block;
+- the timing is progressive and one an OTG takes;
+- its clock is within HDMI's 340 MHz without scrambling and the sink's own limit;
+- its surface fits slot 5.
+
+Otherwise it takes today's 1920x1080 in the signalling `HDMI_SIGNALLING` asks for. `display` logs which, and why.
+
+**What follows the mode:**
+- **The surface** (`picture::Size`): its pitch is rounded up to 64 pixels. For 3440x1440 that is 3456 pixels (13,824
+  bytes), 19,906,560 bytes in all; a larger one is refused before any stage.
+- **Stage 10's picture** is drawn at that size, its text naming it, and read back at points that follow the size.
+- **Stage 13** writes the pitch field 3455, the viewport, recout and MPC size 3440x1440.
+- **Stage 16** offers 3440x1440 at a pitch of 13,824 bytes.
+- **At 1920x1080** everything is as before: the same samples, pitch and lines.
+
+**On the model at 3440x1440, 324 MHz**, with boot 70's reference at 48 MHz, all 16 stages run and are undone whole:
+- **Stage 9:** REF/PIX 0.1481, PER_HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57, LINE 509, REQ 9664 (54
+  requests a line), next start 5988.
+- **The global sync:** VSTARTUP 52 (stage 3's), VUPDATE offset 900 and width 387, VREADY 362.
+- **QoS:** high watermark 2133.
+- **The AVI infoframe:** VIC 0, no aspect code.
+
+**With the Ryzen's tables** (warm state), at 324 MHz:
+- table 12 takes the short path in 308 steps and 33 writes, among them the four RDPCS values for 324 MHz (0x1783C
+  0xB028003E, 0x1782C 0x00010660, 0x17830 0x00000011, 0x1781C 0x80000001), none through the PHY's bus;
+- table 4 takes 33 steps;
+- table 76 takes 300 steps.
+
+**Seen on the hardware:** nothing of it yet. Stage 10 draws 2.4 times as many pixels as at 1080p, so it takes about
+2.5 s, not 1 s.
+
 ## Plan
 
 1. **Batch 11, read-only** (first commit), then its run on the Ryzen on the owner session's word, with

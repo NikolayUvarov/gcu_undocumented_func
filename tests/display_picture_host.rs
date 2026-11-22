@@ -20,9 +20,9 @@ fn every_character_it_draws_has_a_glyph_of_its_own() {
 
 #[test]
 fn the_lines_say_what_shows_them_and_the_build_is_drawn_in_upper_case_and_cut() {
-    let l = Lines { build: "1c65c3cb3abc+CHANGES" };
+    let l = Lines::new("1c65c3cb3abc+CHANGES", picture::Size::FIRST);
     assert_eq!((l.len(0), l.len(1), l.len(2), l.len(3)), (9, 7, 18, 26));
-    let long = Lines { build: "0123456789012345678901234567890123456789" };
+    let long = Lines::new("0123456789012345678901234567890123456789", picture::Size::FIRST);
     assert_eq!(long.len(3), picture::MAX_CHARS);
     // Each line centred on the panel and inside it.
     for n in 0..4 {
@@ -42,7 +42,7 @@ fn the_lines_say_what_shows_them_and_the_build_is_drawn_in_upper_case_and_cut() 
 
 #[test]
 fn the_border_the_diagonals_and_the_cross_are_where_they_should_be() {
-    let l = Lines { build: "X" };
+    let l = Lines::new("X", picture::Size::FIRST);
     for (x, y) in [(0, 0), (WIDTH - 1, 0), (0, HEIGHT - 1), (WIDTH - 1, HEIGHT - 1), (11, 500), (WIDTH - 12, 500), (900, 11), (900, HEIGHT - 12)] {
         assert_eq!(pixel(&l, x, y), WHITE, "border at {},{}", x, y);
     }
@@ -59,10 +59,10 @@ fn the_border_the_diagonals_and_the_cross_are_where_they_should_be() {
 #[test]
 fn a_pitch_off_by_one_pixel_leans_every_edge() {
     // The picture drawn at its pitch, then scanned a pixel a row too wide or too narrow, as a wrong PITCH would scan it.
-    let l = Lines { build: "TEST" };
+    let l = Lines::new("TEST", picture::Size::FIRST);
     let mut surface = vec![0u32; WIDTH * HEIGHT + 2 * HEIGHT];
     let mut row = [0u32; WIDTH];
-    for y in 0..HEIGHT { picture::row(&l, y, &mut row); surface[y * WIDTH..][..WIDTH].copy_from_slice(&row); }
+    for y in 0..HEIGHT { picture::row(&l, y, &mut row[..]); surface[y * WIDTH..][..WIDTH].copy_from_slice(&row); }
     for pitch in [WIDTH + 1, WIDTH - 1] {
         let scanned = |x: usize, y: usize| surface[y * pitch + x];
         // At its own pitch the left border is white on every row; off by one, it has left the left edge from row 12 on.
@@ -74,4 +74,23 @@ fn a_pitch_off_by_one_pixel_leans_every_edge() {
     }
     let own = |x: usize, y: usize| surface[y * WIDTH + x];
     assert_eq!((0..HEIGHT).filter(|&y| (0..picture::BORDER).all(|x| own(x, y) == WHITE)).count(), HEIGHT);
+}
+
+#[test]
+fn the_picture_follows_its_surface_the_monitors_own_mode_with_its_pitch_rounded() {
+    // 3440x1440 (213-DRV-0095): its pitch 3456 pixels, 19,906,560 bytes, within slot 5's 20 MiB.
+    let size = picture::Size::for_mode(3440, 1440);
+    assert_eq!((size.pitch, size.bytes()), (3456, 19_906_560));
+    assert_eq!(picture::Size::for_mode(1920, 1080), picture::Size::FIRST);
+    let l = Lines::new("TEST", size);
+    assert_eq!(l.len(2), 18, "HDMI-A-1 3440X1440");
+    for (x, y) in [(0, 0), (3439, 1439), (11, 700), (3428, 700)] { assert_eq!(pixel(&l, x, y), WHITE, "{},{}", x, y); }
+    // The diagonals at y = 100: x = 100 x 3439 / 1439; the cross at x = 1720; the panel's text centred.
+    let dx = (100 * 3439 + 719) / 1439;
+    assert_eq!((pixel(&l, dx, 100), pixel(&l, 3439 - dx, 100), pixel(&l, 1720, 100), pixel(&l, 300, 100)), (WHITE, WHITE, WHITE, BACKGROUND));
+    let s = picture::samples(size);
+    assert_eq!(s[..4], [(0, 0), (3439, 1439), (5, 720), (1720, 100)]);
+    assert_eq!((pixel(&l, s[7].0, s[7].1), pixel(&l, s[8].0, s[8].1)), (TEXT, PANEL), "the first letter's dot, then the panel");
+    // First light's samples as stage 10 read them before.
+    assert_eq!(picture::samples(picture::Size::FIRST), [(0, 0), (1919, 1079), (5, 540), (960, 100), (178, 100), (1741, 100), (300, 100), (695, 340), (705, 340)]);
 }
