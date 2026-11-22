@@ -64,6 +64,27 @@ In `main` since round 169 (8e76876351, `LANDING/2026-11-22T0748Z-KRN-landed-8e76
 
 **Left:** DRV's run on the Ryzen, with 213-DRV-0092's `display` offering HDMI-A-1. A stick written from `main` carries the compositor's part.
 
+## On the Ryzen (2026-11-22)
+
+DRV ran it on the Ryzen with both monitors (`KRN/2026-11-22T0749Z-DRV-your-display-wit-1-3-ran-on-the-ryzen-the-first-screen-mirrored-on-the-second.md` on `internal-dev-messages`):
+- **The build:** release 202611220741, boot 76 at 07:45 UTC. It was round 167's candidate with DRV's branches, this branch at ab838d73b, and `display` with all sixteen stages allowed. The tree is not `main`'s, but this task's code is the same.
+- **The lines:**
+  - 0.517 s: `[COMPOSITOR] SCREEN 2560X1600, STRIDE 2560, FORMAT BGR`;
+  - 126.382 s: `[DISPLAY] S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES` (the second pipe scanning `display`'s own picture in slot 5's range);
+  - 130.596 s: `[COMPOSITOR] SECOND SCREEN 1920X1080, PITCH 7680, Bgr, FROM PID 38: THE FIRST MIRRORED AT 1728X1080 FROM 96,0`;
+  - 130.617 s: `[DISPLAY] S16 OFFER DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`.
+- **What they show:**
+  - `init` gave `display` the compositor's client badged `BADGE_SCREEN`;
+  - `offer-screen` took slot 5's range as a lent `mmio` capability;
+  - the compositor mapped it and answered.
+- **The trial** was confirmed 14 s after the restart.
+
+This is evidence for that machine, those monitors and that release (MC-12.1).
+
+**Not yet known:**
+- what a person sees: whether the mirror follows the first screen, whether the marks show on both, and whether it tears. The maintainer is asked, and DRV sends his words;
+- `screen-gone` on hardware: no unplug and no undo were made after stage 16.
+
 ## Related
 
 [213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).

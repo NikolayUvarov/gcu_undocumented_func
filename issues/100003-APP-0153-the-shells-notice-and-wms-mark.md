@@ -1,6 +1,6 @@
 # 100003-APP-0153 — What waits for the user on MIND Hub: the shell's notice and `wm`'s mark
 
-**Type:** tools (the shell, `wm`, `improve`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, 2026-11-21; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 6 · **Roadmap:** track G · **Constitution:** MC-10.2, MC-11.5, MC-11.11, MC-12.1
+**Type:** tools (the shell, `wm`, `improve`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU on x86, in `main` since round 169, 2026-11-22; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), stage 6 · **Roadmap:** track G · **Constitution:** MC-10.2, MC-11.5, MC-11.11, MC-12.1
 
 ## Problem
 
