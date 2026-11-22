@@ -71,6 +71,16 @@ const HELD_PROBES:u32=8;
 // 213-DRV-0091 step 2, a bench switch: true (as now) sets port 0 for INFRA once linked; false leaves it as before step 2.
 const PORT_AS_LINUX:bool=true;
 use data_mode::Phase;
+#[path="detection_floor.rs"] pub(crate) mod detection_floor;
+// 213-DRV-0102: the beacons of the joined BSS measured before its floor is written; whether the floor is due (a link or a
+// recovery since), set, or refused for the band (said once).
+const FLOOR_BEACONS:u32=8;
+// When it alternates: Linux's values and those found before the first write, what this minute holds, whether the switch
+// at the minute's boundary is still to be made (a send pending postpones it to the next poll), and switches that failed.
+struct FloorState{enabled:bool,alternates:bool,due:bool,set:bool,refused:bool,linux:Option<detection_floor::Floor>,found:Option<[u32;4]>,
+    kind:data_mode::FloorKind,switch_due:bool,failures:u32}
+impl Default for FloorState{fn default()->Self{Self{enabled:detection_floor::DETECTION_FLOOR_AS_LINUX,alternates:detection_floor::DETECTION_FLOOR_ALTERNATES,
+    due:false,set:false,refused:false,linux:None,found:None,kind:data_mode::FloorKind::None,switch_due:false,failures:0}}}
 fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
 struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
     full_since:Option<u64>}
@@ -118,7 +128,7 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // 213-DRV-0091 step 2: port 0 set for INFRA, and its change due at a time: a beacon interval and a millisecond after the
     // H2Cs, as Linux's rtw89_mac_port_cfg_func_sw waits before it turns the port's function off.
     port_linked:bool,port_due:Option<(u64,bool)>,
-    tx_watch:TxWatch,
+    tx_watch:TxWatch,floor:FloorState,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -162,7 +172,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
-            linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default()})
+            linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default(),floor:FloorState::default()})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -178,6 +188,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn take_firmware_error(&mut self)->Option<data_mode::FirmwareError>{self.data().take_firmware_error()}
     #[cfg(test)]
     pub(crate) fn take_held(&mut self)->Option<Event>{self.tx_watch.held.take()}
+    #[cfg(test)]
+    pub(crate) fn floor_as_linux(&mut self,on:bool,alternates:bool){self.floor.enabled=on;self.floor.alternates=alternates}
+    #[cfg(test)]
+    pub(crate) fn floor_registers(&mut self)->[u32;4]{self.data().floor_registers()}
     #[cfg(test)]
     pub(crate) fn data_held(&mut self)->data_mode::Held{self.data().held()}
     #[cfg(test)]
@@ -302,7 +316,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
-        self.tell_link()?;
+        self.tell_link()?;self.set_floor();
         self.listened(now)?;self.holes(now);self.signals(now);
         let waiting=self.frames.count as u32;
         for waiter in &mut self.waiters{
@@ -352,6 +366,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let after=probed.then(||self.data().probe());
                 let event=Event::Linked{channel,bssid,aid:change,was,before,after};
                 let now=time::monotonic_ns()/1_000_000;
+                if change.is_some(){self.floor.due=true;}
                 if PORT_AS_LINUX&&change.is_some()!=self.port_linked{self.port_due=Some((now.saturating_add(PORT_WAIT_MS),change.is_some()));}
                 if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
             }
@@ -380,6 +395,59 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let now_us=time::monotonic_ns()/1000;
         let clock_us=(c.beacon_at_us!=0&&now_us>=c.beacon_at_us).then(||(now_us-c.beacon_at_us)%interval);
         Phase{clock_us,tsf_us:self.data().tsf().map(|tsf|tsf%interval),interval_us:c.beacon_interval_us}
+    }
+    // 213-DRV-0102: the detection floor, once due and the joined BSS's beacons measured, on 2.4 GHz only; no send pending.
+    fn set_floor(&mut self){
+        if !self.floor.enabled||self.pending.is_some(){return}
+        if self.floor.alternates&&self.floor.switch_due{self.switch_floor();}
+        if !self.floor.due{return}
+        let channel=self.data().channel();
+        if channel>14{
+            self.floor.due=false;
+            if !self.floor.refused{self.floor.refused=true;self.floor_event(Event::FloorRefused{channel});}return
+        }
+        let c=self.data().counts();if c.bss_measured<FLOOR_BEACONS{return}
+        let Some(dbm)=c.bss_dbm() else{return};let floor=detection_floor::for_rssi(dbm);
+        if self.floor.alternates{
+            // The values found are read once, before any write; a link or a recovery writes this minute's kind again.
+            self.floor.due=false;
+            if let(Some(linux),Some(found))=(self.floor.linux,self.floor.found){
+                let fields=if self.floor.kind==data_mode::FloorKind::On{detection_floor::fields(&linux)}else{detection_floor::restore(&linux,&found)};
+                if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}return
+            }
+            let found=self.data().floor_registers();self.floor.found=Some(found);self.floor.linux=Some(floor);
+            self.floor_event(Event::FloorAlternates{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,found});
+            return
+        }
+        let written=self.data().write_floor(&detection_floor::fields(&floor)).is_ok();
+        self.floor.due=false;self.floor.set=written;
+        let registers=self.data().floor_registers();
+        self.floor_event(Event::FloorSet{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,written,registers});
+    }
+    // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: at a minute's boundary, off first, then Linux's, each field read back.
+    fn switch_floor(&mut self){
+        use data_mode::FloorKind;
+        let(Some(linux),Some(found))=(self.floor.linux,self.floor.found) else{self.floor.switch_due=false;return};
+        let next=if self.floor.kind==FloorKind::Off{FloorKind::On}else{FloorKind::Off};
+        let fields=match(self.floor.kind,next){
+            (_,FloorKind::On)=>Some(detection_floor::fields(&linux)),
+            (FloorKind::On,_)=>Some(detection_floor::restore(&linux,&found)),
+            _=>None,
+        };
+        if let Some(fields)=fields{
+            if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}else if next==FloorKind::On{self.floor.set=true;}
+        }
+        self.floor.kind=next;self.floor.switch_due=false;
+    }
+    fn floor_event(&mut self,event:Event){if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}}
+    // 213-DRV-0102: the minute's PPDU reports by signal, taken, and the floor's registers now.
+    fn floor_minute(&mut self)->data_mode::FloorMinute{
+        let(ppdu_rssi,unparsed)=self.data().take_ppdu_rssi();let c=self.data().counts();
+        let minute=data_mode::FloorMinute{ppdu_rssi,unparsed,registers:self.data().floor_registers(),bss_dbm:c.bss_dbm(),measured:c.bss_measured,
+            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures)};
+        // The next minute holds the other kind, switched at the next poll with no send pending.
+        if self.floor.alternates&&self.floor.linux.is_some(){self.floor.switch_due=true;}
+        minute
     }
     // 213-DRV-0091: the minute's sends, taken: the next minute starts at zero, a full spell going on counted to now.
     fn tx_minute(&mut self,now:u64)->data_mode::TxMinute{
@@ -425,7 +493,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
             ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,
             refused:(self.minutes==1&&c.refused.count!=0).then_some(c.refused),sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe,
-            errors:c.errors,polls:self.data().take_polls(),tx:self.tx_minute(now)};
+            errors:c.errors,polls:self.data().take_polls(),tx:self.tx_minute(now),floor:self.floor_minute()};
         if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
     }
     // The counts now, for a hole's lines.
@@ -585,6 +653,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         loop{
             let more=self.step();if let Some(event)=self.event.take(){events(event)}
             if let Some(r)=self.owner.as_deref_mut().and_then(|data|data.take_recovery()){
+                // 213-DRV-0102: a recovery may have reset the BB; the floor is written again.
+                if self.floor.set||self.floor.found.is_some(){self.floor.due=true;}
                 events(Event::Recovered{count:r.count,ser:r.ser,cmac:r.cmac,bb_us:r.bb_us,restored:r.restored,waited_us:r.waited_us,after_reconcile:r.after_reconcile})}
             if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
                 events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,

@@ -90,6 +90,9 @@ pub(crate) fn parse(descriptor: [u32; 3], payload: &[u8]) -> Option<Report> {
 pub(crate) fn weakness(signal_dbm: i8) -> u8 { (-i16::from(signal_dbm)).clamp(1, 255) as u8 }
 
 /// A report as the receive ring gave it: the descriptor's words after the buffer's PCIe word, its bytes after them.
+/// 213-DRV-0102: a received frame's PPDU count and rate, from its descriptor's word 1, which its report repeats.
+pub(crate) fn key(buffer: &[u8]) -> Option<(u8, u16)> { word(buffer, 8).map(count_rate) }
+
 pub(crate) fn from_packet(packet: rxdesc::Packet, buffer: &[u8]) -> Option<Report> {
     parse([word(buffer, 4)?, word(buffer, 8)?, word(buffer, 16)?], packet.bytes(buffer)?)
 }

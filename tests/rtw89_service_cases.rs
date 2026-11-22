@@ -594,6 +594,88 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
     let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0,intx:None};drop(service);clean();
 });}
 
+// 213-DRV-0102: the detection floor is Linux's arithmetic for the joined access point's RSSI (phy.c at 05f7e89): at
+// -60 dBm OFDM PD 9, CCK PD 0xAD and EDCCA 66, and each clamp at its edge.
+#[test]
+fn the_detection_floor_is_linuxs_arithmetic_for_the_aps_rssi(){
+    use crate::service::detection_floor::*;
+    assert!(!DETECTION_FLOOR_AS_LINUX,"committed as the driver was");
+    assert_eq!(for_rssi(-60),Floor{ofdm_pd:9,cck_pd:0xad,edcca:66});
+    // OFDM: the lower clamp (8 + 23) down to -79 dBm, then 2 dB a step, the upper (70 + 23) from -17 dBm.
+    assert_eq!([-100,-79,-77,-61,-17,0].map(|d|for_rssi(d).ofdm_pd),[0,0,1,9,31,31]);
+    // CCK: max(igi - 23, -18) - 110 as a byte, -128 at and below -105 dBm.
+    assert_eq!([-110,-105,-104,-60,0].map(|d|for_rssi(d).cck_pd),[0x80,0x80,0x81,0xad,0xe9]);
+    // EDCCA: igi + 15, at least 66 (EDCCA_TH_L2H_LB).
+    assert_eq!([-100,-59,-58,-20].map(|d|for_rssi(d).edcca),[66,66,67,105]);
+    assert_eq!(fields(&for_rssi(-60)),[(0x4860,0x7c0,9<<6),(0x4860,1<<30,1<<30),(0x4b64,0xff00_0000,0xad00_0000),
+        (0x4b74,1<<30,1<<30),(0x4884,0xff00_ffff,0x4200_4242)]);
+}
+
+// 213-DRV-0102: with the switch on, the floor is written once the joined BSS's beacons are measured (their reports'
+// signal), read back, and counted in the minute line with every report by its signal.
+#[test]
+fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event};
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,false);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);
+    let mut set=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(e@Event::FloorSet{..})=service.take_event(){set=Some(e);break}}
+    // FIVE's report is -63 dBm: igi 47, OFDM PD (47 - 31) >> 1 = 8, CCK 24 - 110 = -86 (0xAA), EDCCA 66.
+    let Some(Event::FloorSet{dbm:-63,measured:8,ofdm_pd:8,cck_pd:0xaa,edcca:66,written:true,registers,..})=set else{panic!("{set:?}")};
+    assert_eq!((registers[0]>>6&31,registers[0]>>30&1,registers[1]>>24,registers[2]>>30&1,registers[3]&0xff,registers[3]>>24),(8,1,0xaa,1,66,66));
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{floor,..})=traffic else{panic!("no traffic line")};
+    assert!(floor.set&&floor.bss_dbm==Some(-63)&&floor.measured>=8,"{floor:?}");
+    assert_eq!(floor.ppdu_rssi[8],floor.ppdu_rssi.iter().sum::<u32>(),"-63 dBm in the -60 to -64 bin: {floor:?}");
+    assert!(floor.ppdu_rssi[8]>=8,"{floor:?}");assert_eq!(floor.registers,registers);
+    let _=Event::FloorRefused{channel:36};drop(service);clean();
+});}
+
+// 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
+// then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
+#[test]
+fn service_alternates_the_detection_floor_by_the_minute(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::{fields,for_rssi}};
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{dbm:-63,measured:8,found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");assert_eq!(service.floor_registers(),found,"nothing written yet");
+    let linux=fields(&for_rssi(-63));let is_linux=|r:[u32;4]|linux.iter().all(|&(at,mask,value)|{
+        let i=[0x4860,0x4b64,0x4b74,0x4884].iter().position(|a|*a==at).unwrap();r[i]&mask==value});
+    // Each minute's line: the kind it held and its registers.
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let kinds:Vec<_>=minutes.iter().map(|m|(m.on(),m.off())).collect();
+    assert_eq!(kinds,[(false,false),(false,true),(true,false),(false,true)],"the partial minute, then off, on, off");
+    assert_eq!(minutes[1].registers,found);assert!(is_linux(minutes[2].registers),"{:X?}",minutes[2].registers);
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
+    assert!(minutes.iter().all(|m|m.switch_failures==0));
+    // A send pending at the boundary: the switch waits for the next poll with none pending, not for the next minute.
+    // (Held within LATE_MS: sent a second before the boundary.)
+    for _ in 0..59{c.borrow_mut().incoming.push(packet());ipc::advance(999);assert!(service.step());assert!(service.take_event().is_none());}
+    c.borrow_mut().hold_reports=true;let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let mut line=None;
+    for _ in 0..40{ipc::advance(100);assert!(service.step());if let Some(e@Event::Traffic{..})=service.take_event(){line=Some(e);break}}
+    let Some(Event::Traffic{floor,..})=line else{panic!("no line")};assert!(floor.on(),"the minute that ended held Linux's");
+    assert!(is_linux(service.floor_registers()),"still Linux's while the send is pending");
+    c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());assert!(ipc::response(send).is_some());
+    ipc::advance(5);assert!(service.step());assert_eq!(service.floor_registers(),found,"switched at the next poll");
+    drop(service);clean();
+});}
+
 // 213-DRV-0091: a late frame the MAC holds is probed while it holds it: the first HELD_PROBES of a run, then one a minute;
 // a frame released in time after the first is probed once beside them. The minute line counts the late frames released,
 // those acknowledged at the first try and their median hold, and the frame buffer's full spells.

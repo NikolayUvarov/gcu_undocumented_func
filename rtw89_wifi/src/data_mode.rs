@@ -143,7 +143,7 @@ impl core::fmt::Debug for Snapshot{
 pub const PROBE_MAC:[usize;41]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8520,0x8524,
     0x9eb0,0xc2c0,0xc348,0xc400,0xc160,0xc164,0xc800,0xc804,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,
     0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
-pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
+pub const PROBE_BB:[usize;17]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x4b74,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
     0xc70,0x700,0x2344];
 pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
 #[derive(Clone,Copy,Eq,PartialEq)]
@@ -212,7 +212,27 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
     pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors,
     // 213-DRV-0091: when the joined BSS's last beacon was taken from the ring (the bus clock, µs), and its interval.
-    pub beacon_at_us:u64,pub beacon_interval_us:u32}
+    pub beacon_at_us:u64,pub beacon_interval_us:u32,
+    // 213-DRV-0102: every PPDU report by its signal in 5 dB bins from -20 dBm down (the last below -100), and those
+    // that do not parse; the joined BSS's beacons measured and their signals' sum; the beacon just taken (its number and
+    // count and rate) whose report is awaited.
+    pub ppdu_rssi:[u32;17],pub ppdu_unparsed:u32,pub bss_measured:u32,pub bss_signal_sum:i64,pub bss_beacon:Option<(u64,(u8,u16))>,
+    pub beacon_now:bool}
+/// 213-DRV-0102: the joined access point's mean signal, once some of its beacons were measured.
+impl Counts{pub(crate) fn bss_dbm(&self)->Option<i8>{(self.bss_measured!=0).then(||(self.bss_signal_sum/i64::from(self.bss_measured))as i8)}}
+/// 213-DRV-0102: a minute's PPDU reports by signal (5 dB bins from -20 dBm down) and the detection floor's registers.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool,
+    pub kind:FloorKind,pub switch_failures:u32}
+/// 213-DRV-0102: what a minute held when the floor alternates (DETECTION_FLOOR_ALTERNATES): not yet alternating, the
+/// values found, or Linux's.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub enum FloorKind{#[default]None,Off,On}
+impl FloorMinute{
+    /// The minute held Linux's floor throughout, or the values found (DETECTION_FLOOR_ALTERNATES).
+    pub fn on(&self)->bool{self.kind==FloorKind::On}
+    pub fn off(&self)->bool{self.kind==FloorKind::Off}
+}
 /// 213-DRV-0091: what may hold a fetched frame in the MAC, read directly at a late send (no RF, no indirect window, no
 /// H2C): the coexistence control byte and the scoreboard; MACID pause (SS_MACID_PAUSE_0) and sleep (MACID_SLEEP_0);
 /// CTN_TXEN; port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF;
@@ -220,7 +240,7 @@ pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub p
 /// rings' indexes. BB: the monitor set's 0x980, the EDCCA level and its reports, TX collision.
 pub const HELD_MAC:[usize;26]=[0x70,0xac,0x9eb0,0xc2c0,0xc348,0xc400,0xc404,0xc408,0xc40c,0xc414,0xc434,0xc438,0xc43c,0xc600,
     0xc6ec,0xd200,0xd220,0xda10,0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0x1050,0x1054];
-pub const HELD_BB:[usize;5]=[0x980,0x1738,0x173c,0x4884,0xc70];
+pub const HELD_BB:[usize;8]=[0x980,0x1738,0x173c,0x4884,0xc70,0x4860,0x4b64,0x4b74];
 #[derive(Clone,Copy,Eq,PartialEq)]
 pub struct Held{pub mac:[u32;HELD_MAC.len()],pub bb:[u32;HELD_BB.len()]}
 impl core::fmt::Debug for Held{
@@ -260,7 +280,7 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
                 if beacon{self.counts.other_beacons=self.counts.other_beacons.saturating_add(1);}return Ok(true)
             }
             if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){
-                self.counts.beacons=self.counts.beacons.saturating_add(1);self.counts.beacon_at_us=now;
+                self.counts.beacons=self.counts.beacons.saturating_add(1);self.counts.beacon_at_us=now;self.counts.beacon_now=true;
                 if m.len()>=34{self.counts.beacon_interval_us=u32::from(u16::from_le_bytes([m[32],m[33]]))*1024;}
             }
             if full{self.counts.pressure=self.counts.pressure.saturating_add(1);return Ok(true)}
@@ -276,6 +296,23 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
             Ok(tx::Receive::Rpq|tx::Receive::TxReport{..})=>Ok(true),
             Ok(_)=>Err(super::Error::Malformed),
             Err(error)=>{self.error=Some(error);Err(super::Error::PacketHandler)},
+        }
+    }
+    // 213-DRV-0102: the joined BSS's beacon taken just now is remembered by its number, count and rate, for its report.
+    fn frame(&mut self,now:u64,number:u64,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
+        self.counts.beacon_now=false;let taken=self.packet(now,rx::Channel::Rxq,packet,buffer,full);
+        if core::mem::take(&mut self.counts.beacon_now){self.counts.bss_beacon=crate::ppdu::key(buffer).map(|key|(number,key));}
+        taken
+    }
+    // 213-DRV-0102: every report by its signal; the one after the BSS's beacon, of its count and rate, measures the BSS.
+    fn report(&mut self,frame:Option<u64>,packet:rxdesc::Packet,buffer:&[u8]){
+        let c=&mut *self.counts;
+        let Some(report)=crate::ppdu::from_packet(packet,buffer) else{c.ppdu_unparsed=c.ppdu_unparsed.saturating_add(1);return};
+        let bin=((-20-i16::from(report.signal_dbm)).max(0)/5).min(16)as usize;c.ppdu_rssi[bin]=c.ppdu_rssi[bin].saturating_add(1);
+        if let Some((number,key))=c.bss_beacon.take(){
+            if frame==Some(number)&&(report.count,report.rate)==key{
+                c.bss_measured=c.bss_measured.saturating_add(1);c.bss_signal_sum+=i64::from(report.signal_dbm);
+            }
         }
     }
 }
@@ -602,6 +639,22 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn held(&mut self)->Held{
         let bus=&mut *self.session.bus;
         Held{mac:HELD_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)),bb:HELD_BB.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))}
+    }
+    /// 213-DRV-0102: the detection floor's four BB registers (detection_floor::REGISTERS order).
+    pub(crate) fn floor_registers(&mut self)->[u32;4]{
+        let bus=&mut *self.session.bus;
+        [0x4860,0x4b64,0x4b74,0x4884].map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))
+    }
+    /// 213-DRV-0102: fields of the detection floor written: (register, mask, value), each read back.
+    pub(crate) fn write_floor(&mut self,fields:&[(usize,u32,u32)])->io::Result<()>{
+        let bus=&mut *self.session.bus;
+        for &(at,mask,value) in fields{io::modify32(bus,0x10000+at,mask,value&mask)?;
+            if io::read32(bus,0x10000+at)?&mask!=value&mask{return Err(Fault::new(FaultKind::PowerState,0x10000+at,value))}}
+        Ok(())
+    }
+    /// 213-DRV-0102: the minute's PPDU reports by signal, taken: the next minute's start at zero.
+    pub(crate) fn take_ppdu_rssi(&mut self)->([u32;17],u32){
+        let r=(self.counts.ppdu_rssi,self.counts.ppdu_unparsed);self.counts.ppdu_rssi=[0;17];self.counts.ppdu_unparsed=0;r
     }
     /// 213-DRV-0091: port 0's TSF, its high word read before and after the low one.
     pub(crate) fn tsf(&mut self)->Option<u64>{

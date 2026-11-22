@@ -99,7 +99,14 @@ pub enum Event {
     Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64,
         bssid: [u8; 6], other_beacons: u64, refused: Option<data_mode::Refused>, sent: u64,
         acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe>, errors: data_mode::Errors,
-        polls: [crate::rx::Polls; 2], tx: data_mode::TxMinute },
+        polls: [crate::rx::Polls; 2], tx: data_mode::TxMinute, floor: data_mode::FloorMinute },
+    /// 213-DRV-0102: the detection floor written as Linux's DIG and EDCCA would hold it for the joined access point at
+    /// `dbm` (the mean of `measured` beacons), and the registers read back; or not written on a band never joined before.
+    FloorSet { channel: u8, dbm: i8, measured: u32, ofdm_pd: u8, cck_pd: u8, edcca: u8, written: bool, registers: [u32; 4] },
+    FloorRefused { channel: u8 },
+    /// DETECTION_FLOOR_ALTERNATES: Linux's values for the AP at `dbm` and those `found` before any write; the next whole
+    /// minute holds the found ones, the one after Linux's, and so on.
+    FloorAlternates { channel: u8, dbm: i8, measured: u32, ofdm_pd: u8, cck_pd: u8, edcca: u8, found: [u32; 4] },
     /// A late frame's probe while the MAC still holds it (`held`, the n-th late), or once a frame released in time beside
     /// it (213-DRV-0091): the time since its submission, where in the beacon interval it was submitted and is now, and
     /// what may hold it.
