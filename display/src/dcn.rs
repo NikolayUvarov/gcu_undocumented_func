@@ -104,10 +104,14 @@ pub enum R {
     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
     // Read by batch 9 for the firmware's HUBP, written for pipe 1 by stage 13 as hubp2_vready_at_or_After_vsync does.
     HubpreqDebugDb,
+    // Read by batch 11 only (213-DRV-0095): the I2C engine and DDC line 1 (HDMI-A-1's, DC_GPIO_DDC1), as Display Core's
+    // dce_i2c_hw and hw_ddc read them; never DC_I2C_DATA, whose read moves its index.
+    DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
+    MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 143] = {
+pub const ALL: [R; 155] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -135,7 +139,9 @@ pub const ALL: [R; 143] = {
      MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
      DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
      HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
-     HubpreqDebugDb]
+     HubpreqDebugDb,
+     DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
+     MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y]
 };
 
 impl R {
@@ -151,6 +157,9 @@ impl R {
             DchubbubArbWatermark => 20,
             DchubbubArbDfReqOutstand => 1,
             DchubbubArbSatLevel => 1,
+            DcI2cTransaction => 4,
+            DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | MicrosecondTimeBaseDiv
+                | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y => 1,
             DchubbubArbDramStateCntl => 1,
             DchubbubArbWatermarkChangeCntl => 1,
             DchubbubGlobalTimerCntl => 1,
@@ -272,6 +281,10 @@ impl R {
             DsclHorzScaleRatio => (2, 0xCF1 + 0x16B * i),
             DsclVertScaleRatio => (2, 0xCF5 + 0x16B * i),
             HubpreqDebugDb => (2, 0x5F6 + 0xDC * i),
+            DcI2cControl => (2, 0x1E98), DcI2cArbitration => (2, 0x1E99), DcI2cSwStatus => (2, 0x1E9B), DcI2cDdc1HwStatus => (2, 0x1E9C),
+            DcI2cDdc1Speed => (2, 0x1EA2), DcI2cDdc1Setup => (2, 0x1EA3), DcI2cTransaction => (2, 0x1EAE + i),
+            MicrosecondTimeBaseDiv => (1, 0x7B), DcGpioDdc1Mask => (2, 0x28D0), DcGpioDdc1A => (2, 0x28D1), DcGpioDdc1En => (2, 0x28D2),
+            DcGpioDdc1Y => (2, 0x28D3),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -385,6 +398,10 @@ impl R {
             DsclHorzScaleRatio => "SCL_HORZ_FILTER_SCALE_RATIO",
             DsclVertScaleRatio => "SCL_VERT_FILTER_SCALE_RATIO",
             HubpreqDebugDb => "HUBPREQ_DEBUG_DB",
+            DcI2cControl => "DC_I2C_CONTROL", DcI2cArbitration => "DC_I2C_ARBITRATION", DcI2cSwStatus => "DC_I2C_SW_STATUS",
+            DcI2cDdc1HwStatus => "DC_I2C_DDC1_HW_STATUS", DcI2cDdc1Speed => "DC_I2C_DDC1_SPEED", DcI2cDdc1Setup => "DC_I2C_DDC1_SETUP",
+            DcI2cTransaction => "DC_I2C_TRANSACTION", MicrosecondTimeBaseDiv => "MICROSECOND_TIME_BASE_DIV",
+            DcGpioDdc1Mask => "DC_GPIO_DDC1_MASK", DcGpioDdc1A => "DC_GPIO_DDC1_A", DcGpioDdc1En => "DC_GPIO_DDC1_EN", DcGpioDdc1Y => "DC_GPIO_DDC1_Y",
         }
     }
 
@@ -403,6 +420,8 @@ impl R {
             CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
                 | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
                 | DmcubGpintDataout | DmcubTimerCurrent => "",
+            DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | DcI2cTransaction
+                | MicrosecondTimeBaseDiv | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y => "",
             HubpAddrConfig | HubpTilingConfig | HubpPriViewportStart | HubpPriViewportDimension | HubpReqSizeConfig | HubpReqSizeConfigC | HubpClkCntl => "HUBP",
             HubpreqSurfaceControl | HubpreqExpansionMode | HubpreqTtuQosWm | HubpreqGlobalTtuCntl | HubpreqSurf0TtuCntl0 | HubpreqSurf0TtuCntl1 | HubpreqCur0TtuCntl0 | HubpreqCur0TtuCntl1 | HubpreqVmMxL1TlbCntl | HubpreqBlankOffset0 | HubpreqBlankOffset1 | HubpreqDstDimensions | HubpreqDstAfterScaler | HubpreqPrefetchSettings | HubpreqVblankParameters0 | HubpreqVblankParameters1 | HubpreqVblankParameters2 | HubpreqVblankParameters3 | HubpreqVblankParameters4 | HubpreqNomParameters0 | HubpreqNomParameters1 | HubpreqNomParameters4 | HubpreqNomParameters5 | HubpreqPerLineDeliveryPre | HubpreqPerLineDelivery | HubpreqCursorSettings | HubpreqRefFreqToPixFreq | HubpreqDstYDeltaDrqLimit => "HUBPREQ",
             HubpretControl => "HUBPRET",
@@ -553,6 +572,25 @@ pub mod field {
     pub const HUBP_UNDERFLOW_CLEAR: Field = f(31, 1);
     /// DCN_TTU_QOS_WM, and the QoS fields of DCN_SURF0_TTU_CNTL0 and DCN_CUR0_TTU_CNTL0.
     pub const QOS_LEVEL_LOW_WM: Field = f(0, 14);
+    /// The I2C engine and DDC line 1 (dcn_2_1_0_sh_mask.h): who holds the engine, its last transfer, the line's set-up.
+    pub const DC_I2C_REG_RW_CNTL_STATUS: Field = f(2, 2);
+    pub const DC_I2C_SW_USE_I2C_REG_REQ: Field = f(20, 1);
+    pub const DC_I2C_DMCU_USE_I2C_REG_REQ: Field = f(24, 1);
+    pub const DC_I2C_SW_STATUS_BITS: Field = f(0, 2);
+    pub const DC_I2C_SW_DONE: Field = f(2, 1);
+    pub const DC_I2C_DDC1_HW_STATUS_BITS: Field = f(0, 2);
+    pub const DC_I2C_DDC1_ENABLE: Field = f(6, 1);
+    pub const DC_I2C_DDC1_TIME_LIMIT: Field = f(24, 8);
+    pub const DC_I2C_DDC1_THRESHOLD: Field = f(0, 2);
+    pub const DC_I2C_DDC1_PRESCALE: Field = f(16, 16);
+    pub const DC_I2C_DDC_SELECT: Field = f(8, 3);
+    pub const MICROSECOND_TIME_BASE: Field = f(0, 7);
+    pub const XTAL_REF_DIV: Field = f(8, 7);
+    pub const DC_GPIO_DDC1CLK_MASK: Field = f(0, 1);
+    pub const DC_GPIO_DDC1DATA_MASK: Field = f(8, 1);
+    pub const AUX_PAD1_MODE: Field = f(16, 1);
+    pub const DC_GPIO_DDC1CLK_BIT: Field = f(0, 1);
+    pub const DC_GPIO_DDC1DATA_BIT: Field = f(8, 1);
     pub const QOS_LEVEL_HIGH_WM: Field = f(16, 14);
     pub const QOS_LEVEL_FIXED: Field = f(24, 4);
     pub const QOS_RAMP_DISABLE: Field = f(28, 1);
