@@ -222,7 +222,17 @@ pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub p
 impl Counts{pub(crate) fn bss_dbm(&self)->Option<i8>{(self.bss_measured!=0).then(||(self.bss_signal_sum/i64::from(self.bss_measured))as i8)}}
 /// 213-DRV-0102: a minute's PPDU reports by signal (5 dB bins from -20 dBm down) and the detection floor's registers.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool}
+pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool,
+    pub kind:FloorKind,pub switch_failures:u32}
+/// 213-DRV-0102: what a minute held when the floor alternates (DETECTION_FLOOR_ALTERNATES): not yet alternating, the
+/// values found, or Linux's.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub enum FloorKind{#[default]None,Off,On}
+impl FloorMinute{
+    /// The minute held Linux's floor throughout, or the values found (DETECTION_FLOOR_ALTERNATES).
+    pub fn on(&self)->bool{self.kind==FloorKind::On}
+    pub fn off(&self)->bool{self.kind==FloorKind::Off}
+}
 /// 213-DRV-0091: what may hold a fetched frame in the MAC, read directly at a late send (no RF, no indirect window, no
 /// H2C): the coexistence control byte and the scoreboard; MACID pause (SS_MACID_PAUSE_0) and sleep (MACID_SLEEP_0);
 /// CTN_TXEN; port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF;

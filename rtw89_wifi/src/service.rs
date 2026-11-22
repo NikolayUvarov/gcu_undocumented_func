@@ -75,8 +75,12 @@ use data_mode::Phase;
 // 213-DRV-0102: the beacons of the joined BSS measured before its floor is written; whether the floor is due (a link or a
 // recovery since), set, or refused for the band (said once).
 const FLOOR_BEACONS:u32=8;
-struct FloorState{enabled:bool,due:bool,set:bool,refused:bool}
-impl Default for FloorState{fn default()->Self{Self{enabled:detection_floor::DETECTION_FLOOR_AS_LINUX,due:false,set:false,refused:false}}}
+// When it alternates: Linux's values and those found before the first write, what this minute holds, whether the switch
+// at the minute's boundary is still to be made (a send pending postpones it to the next poll), and switches that failed.
+struct FloorState{enabled:bool,alternates:bool,due:bool,set:bool,refused:bool,linux:Option<detection_floor::Floor>,found:Option<[u32;4]>,
+    kind:data_mode::FloorKind,switch_due:bool,failures:u32}
+impl Default for FloorState{fn default()->Self{Self{enabled:detection_floor::DETECTION_FLOOR_AS_LINUX,alternates:detection_floor::DETECTION_FLOOR_ALTERNATES,
+    due:false,set:false,refused:false,linux:None,found:None,kind:data_mode::FloorKind::None,switch_due:false,failures:0}}}
 fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
 struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
     full_since:Option<u64>}
@@ -185,7 +189,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     #[cfg(test)]
     pub(crate) fn take_held(&mut self)->Option<Event>{self.tx_watch.held.take()}
     #[cfg(test)]
-    pub(crate) fn floor_as_linux(&mut self,on:bool){self.floor.enabled=on}
+    pub(crate) fn floor_as_linux(&mut self,on:bool,alternates:bool){self.floor.enabled=on;self.floor.alternates=alternates}
+    #[cfg(test)]
+    pub(crate) fn floor_registers(&mut self)->[u32;4]{self.data().floor_registers()}
     #[cfg(test)]
     pub(crate) fn data_held(&mut self)->data_mode::Held{self.data().held()}
     #[cfg(test)]
@@ -392,7 +398,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     }
     // 213-DRV-0102: the detection floor, once due and the joined BSS's beacons measured, on 2.4 GHz only; no send pending.
     fn set_floor(&mut self){
-        if !self.floor.enabled||!self.floor.due||self.pending.is_some(){return}
+        if !self.floor.enabled||self.pending.is_some(){return}
+        if self.floor.alternates&&self.floor.switch_due{self.switch_floor();}
+        if !self.floor.due{return}
         let channel=self.data().channel();
         if channel>14{
             self.floor.due=false;
@@ -400,16 +408,46 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         }
         let c=self.data().counts();if c.bss_measured<FLOOR_BEACONS{return}
         let Some(dbm)=c.bss_dbm() else{return};let floor=detection_floor::for_rssi(dbm);
+        if self.floor.alternates{
+            // The values found are read once, before any write; a link or a recovery writes this minute's kind again.
+            self.floor.due=false;
+            if let(Some(linux),Some(found))=(self.floor.linux,self.floor.found){
+                let fields=if self.floor.kind==data_mode::FloorKind::On{detection_floor::fields(&linux)}else{detection_floor::restore(&linux,&found)};
+                if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}return
+            }
+            let found=self.data().floor_registers();self.floor.found=Some(found);self.floor.linux=Some(floor);
+            self.floor_event(Event::FloorAlternates{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,found});
+            return
+        }
         let written=self.data().write_floor(&detection_floor::fields(&floor)).is_ok();
         self.floor.due=false;self.floor.set=written;
         let registers=self.data().floor_registers();
         self.floor_event(Event::FloorSet{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,written,registers});
     }
+    // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: at a minute's boundary, off first, then Linux's, each field read back.
+    fn switch_floor(&mut self){
+        use data_mode::FloorKind;
+        let(Some(linux),Some(found))=(self.floor.linux,self.floor.found) else{self.floor.switch_due=false;return};
+        let next=if self.floor.kind==FloorKind::Off{FloorKind::On}else{FloorKind::Off};
+        let fields=match(self.floor.kind,next){
+            (_,FloorKind::On)=>Some(detection_floor::fields(&linux)),
+            (FloorKind::On,_)=>Some(detection_floor::restore(&linux,&found)),
+            _=>None,
+        };
+        if let Some(fields)=fields{
+            if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}else if next==FloorKind::On{self.floor.set=true;}
+        }
+        self.floor.kind=next;self.floor.switch_due=false;
+    }
     fn floor_event(&mut self,event:Event){if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}}
     // 213-DRV-0102: the minute's PPDU reports by signal, taken, and the floor's registers now.
     fn floor_minute(&mut self)->data_mode::FloorMinute{
         let(ppdu_rssi,unparsed)=self.data().take_ppdu_rssi();let c=self.data().counts();
-        data_mode::FloorMinute{ppdu_rssi,unparsed,registers:self.data().floor_registers(),bss_dbm:c.bss_dbm(),measured:c.bss_measured,set:self.floor.set}
+        let minute=data_mode::FloorMinute{ppdu_rssi,unparsed,registers:self.data().floor_registers(),bss_dbm:c.bss_dbm(),measured:c.bss_measured,
+            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures)};
+        // The next minute holds the other kind, switched at the next poll with no send pending.
+        if self.floor.alternates&&self.floor.linux.is_some(){self.floor.switch_due=true;}
+        minute
     }
     // 213-DRV-0091: the minute's sends, taken: the next minute starts at zero, a full spell going on counted to now.
     fn tx_minute(&mut self,now:u64)->data_mode::TxMinute{
@@ -616,7 +654,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let more=self.step();if let Some(event)=self.event.take(){events(event)}
             if let Some(r)=self.owner.as_deref_mut().and_then(|data|data.take_recovery()){
                 // 213-DRV-0102: a recovery may have reset the BB; the floor is written again.
-                if self.floor.set{self.floor.due=true;}
+                if self.floor.set||self.floor.found.is_some(){self.floor.due=true;}
                 events(Event::Recovered{count:r.count,ser:r.ser,cmac:r.cmac,bb_us:r.bb_us,restored:r.restored,waited_us:r.waited_us,after_reconcile:r.after_reconcile})}
             if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
                 events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,

@@ -91,6 +91,37 @@ One change, one measurement:
   - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 - **Not covered by a host case:** the 5 GHz refusal, since the cases run on channel 6. It is one line, read from the code.
 
+**2026-11-22, the floor alternating by the minute** (the same branch; host cases, not run):
+- **Why.** The late frames follow the hour (213-DRV-0091). So a floor-off series against a floor-on series an hour later would compare two hours, not two floors.
+- **`detection_floor::DETECTION_FLOOR_ALTERNATES`**, committed false.
+  - With it and DETECTION_FLOOR_AS_LINUX true, the driver reads the four registers once the joined BSS's beacons are measured, before any write: the values found.
+  - It announces the alternation:
+
+    ```
+    [RTW89] DETECTION FLOOR ON c TO ALTERNATE BY THE MINUTE, THE NEXT ONE OFF: LINUX'S OFDM PD …, CCK PD …, EDCCA … FOR THE AP AT d DBM (n BEACONS); FOUND 4860=… 4B64=… 4B74=… 4884=… (213-DRV-0102)
+    ```
+
+  - From the first whole minute after that, it holds the values found for a minute, then Linux's for the next, turn and turn about.
+  - It switches at the minute line's boundary, at the first poll with no send pending.
+  - Each field is read back at every switch. Linux's own DIG rewrites these fields every two seconds while it runs.
+  - A link or an outlasted recovery writes the minute's kind again.
+- **Each minute's floor line names what that minute held,** `THIS MINUTE FLOOR ON` or `THIS MINUTE FLOOR OFF`. Its registers are read at the minute's end, and a switch not as written is said.
+  - The PPDU histogram runs in both kinds of minute. The OFF minutes give the faint share the old baseline lacks, and the ON minutes show what stops being detected.
+- **The measurement:** one series of 5-minute starts with both switches true, reported as paired minutes. Each ON minute is set against the mean of its OFF neighbours, by:
+  - late frames per send;
+  - the late frames' median hold;
+  - PPDU;
+  - the faint share.
+
+  Adjacent minutes of one boot cancel the hour and the start.
+- **Host case** `service_alternates_the_detection_floor_by_the_minute`, on the model's clock:
+  - the partial minute, then off, on, off;
+  - the values found unchanged while off, and restored exactly after on;
+  - Linux's fields while on;
+  - a send pending across a boundary keeps the floor until the next poll after its release, not until the next minute.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the starts series), [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the busy channel), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver; DIG, EDCCA and AIFS left).

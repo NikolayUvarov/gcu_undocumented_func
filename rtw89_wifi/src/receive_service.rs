@@ -104,6 +104,9 @@ pub enum Event {
     /// `dbm` (the mean of `measured` beacons), and the registers read back; or not written on a band never joined before.
     FloorSet { channel: u8, dbm: i8, measured: u32, ofdm_pd: u8, cck_pd: u8, edcca: u8, written: bool, registers: [u32; 4] },
     FloorRefused { channel: u8 },
+    /// DETECTION_FLOOR_ALTERNATES: Linux's values for the AP at `dbm` and those `found` before any write; the next whole
+    /// minute holds the found ones, the one after Linux's, and so on.
+    FloorAlternates { channel: u8, dbm: i8, measured: u32, ofdm_pd: u8, cck_pd: u8, edcca: u8, found: [u32; 4] },
     /// A late frame's probe while the MAC still holds it (`held`, the n-th late), or once a frame released in time beside
     /// it (213-DRV-0091): the time since its submission, where in the beacon interval it was submitted and is now, and
     /// what may hold it.

@@ -329,8 +329,11 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
             let [pd, cck, limit, edcca] = floor.registers;
-            mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; SET AS LINUX: {} (213-DRV-0102)",
-                channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, if floor.set { "YES" } else { "NO" });
+            let held = if floor.on() { "THIS MINUTE FLOOR ON" } else if floor.off() { "THIS MINUTE FLOOR OFF" }
+                else if floor.set { "SET AS LINUX" } else { "AS FOUND" };
+            mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; {}{} (213-DRV-0102)",
+                channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, held,
+                if floor.switch_failures != 0 { "; A SWITCH NOT AS WRITTEN" } else { "" });
             let r = floor.ppdu_rssi;
             mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
             mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {} (213-DRV-0102)", channel, &r[9..], floor.unparsed);
@@ -396,6 +399,9 @@ fn served(event: receive_service::Event) {
             mind::println!("[RTW89] DETECTION FLOOR ON {} AS LINUX FOR THE AP AT {} DBM ({} BEACONS): OFDM PD {} (-{} DBM), CCK PD {:02X} ({} DBM), EDCCA {} ({} DBM){}; 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X} (213-DRV-0102)",
                 channel, dbm, measured, ofdm_pd, 102 - 2 * i16::from(ofdm_pd), cck_pd, cck_pd as i8, edcca, i16::from(edcca) - 128,
                 if written { "" } else { ", NOT AS WRITTEN" }, pd, cck, limit, level),
+        receive_service::Event::FloorAlternates { channel, dbm, measured, ofdm_pd, cck_pd, edcca, found: [pd, cck, limit, level] } =>
+            mind::println!("[RTW89] DETECTION FLOOR ON {} TO ALTERNATE BY THE MINUTE, THE NEXT ONE OFF: LINUX'S OFDM PD {}, CCK PD {:02X}, EDCCA {} FOR THE AP AT {} DBM ({} BEACONS); FOUND 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X} (213-DRV-0102)",
+                channel, ofdm_pd, cck_pd, edcca, dbm, measured, pd, cck, limit, level),
         receive_service::Event::FloorRefused { channel } =>
             mind::println!("[RTW89] DETECTION FLOOR NOT SET ON CHANNEL {}: ITS VALUES ARE KNOWN FOR 2.4 GHZ 20 MHZ ONLY (213-DRV-0102)", channel),
         receive_service::Event::SerStep { count, from, to, since_us, polls: [q, p] } =>

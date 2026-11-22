@@ -616,7 +616,7 @@ fn the_detection_floor_is_linuxs_arithmetic_for_the_aps_rssi(){
 #[test]
 fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,true,true,|data,c|{
     use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event};
-    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true);
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,false);
     let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
     c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
     assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
@@ -635,6 +635,45 @@ fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,
     assert_eq!(floor.ppdu_rssi[8],floor.ppdu_rssi.iter().sum::<u32>(),"-63 dBm in the -60 to -64 bin: {floor:?}");
     assert!(floor.ppdu_rssi[8]>=8,"{floor:?}");assert_eq!(floor.registers,registers);
     let _=Event::FloorRefused{channel:36};drop(service);clean();
+});}
+
+// 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
+// then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
+#[test]
+fn service_alternates_the_detection_floor_by_the_minute(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::{fields,for_rssi}};
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{dbm:-63,measured:8,found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");assert_eq!(service.floor_registers(),found,"nothing written yet");
+    let linux=fields(&for_rssi(-63));let is_linux=|r:[u32;4]|linux.iter().all(|&(at,mask,value)|{
+        let i=[0x4860,0x4b64,0x4b74,0x4884].iter().position(|a|*a==at).unwrap();r[i]&mask==value});
+    // Each minute's line: the kind it held and its registers.
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let kinds:Vec<_>=minutes.iter().map(|m|(m.on(),m.off())).collect();
+    assert_eq!(kinds,[(false,false),(false,true),(true,false),(false,true)],"the partial minute, then off, on, off");
+    assert_eq!(minutes[1].registers,found);assert!(is_linux(minutes[2].registers),"{:X?}",minutes[2].registers);
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
+    assert!(minutes.iter().all(|m|m.switch_failures==0));
+    // A send pending at the boundary: the switch waits for the next poll with none pending, not for the next minute.
+    // (Held within LATE_MS: sent a second before the boundary.)
+    for _ in 0..59{c.borrow_mut().incoming.push(packet());ipc::advance(999);assert!(service.step());assert!(service.take_event().is_none());}
+    c.borrow_mut().hold_reports=true;let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let mut line=None;
+    for _ in 0..40{ipc::advance(100);assert!(service.step());if let Some(e@Event::Traffic{..})=service.take_event(){line=Some(e);break}}
+    let Some(Event::Traffic{floor,..})=line else{panic!("no line")};assert!(floor.on(),"the minute that ended held Linux's");
+    assert!(is_linux(service.floor_registers()),"still Linux's while the send is pending");
+    c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());assert!(ipc::response(send).is_some());
+    ipc::advance(5);assert!(service.step());assert_eq!(service.floor_registers(),found,"switched at the next poll");
+    drop(service);clean();
 });}
 
 // 213-DRV-0091: a late frame the MAC holds is probed while it holds it: the first HELD_PROBES of a run, then one a minute;

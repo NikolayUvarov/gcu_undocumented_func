@@ -4,6 +4,10 @@
 /// False (as the driver was): the floor stays as the initial PHY left it. True: written once the joined access point's
 /// RSSI is measured, on a 2.4 GHz 20 MHz channel only, and again after a recovery or a new link.
 pub(crate) const DETECTION_FLOOR_AS_LINUX: bool = false;
+/// A bench mode, false: with it and DETECTION_FLOOR_AS_LINUX true, the floor is Linux's for one minute and the values
+/// found before the first write for the next, turn and turn about from the first whole minute after the beacons are
+/// measured (off first), so that adjacent minutes of one boot compare the two.
+pub(crate) const DETECTION_FLOOR_ALTERNATES: bool = false;
 
 // phy.c: pd_low_th_offset 16, plus PD_TH_SB_FLTR_CMP_VAL 7 on the AX generation and PD_TH_BW20_CMP_VAL 0 (phy.h).
 const UNDER_REGION: i16 = 16 + 7;
@@ -47,6 +51,11 @@ pub(crate) const CCK_PD: usize = 0x4b64;
 pub(crate) const CCK_LIMIT: usize = 0x4b74;
 pub(crate) const EDCCA: usize = 0x4884;
 pub(crate) const REGISTERS: [usize; 4] = [PD, CCK_PD, CCK_LIMIT, EDCCA];
+
+/// The same fields with the values `found` in the four registers (REGISTERS' order) before the first write.
+pub(crate) fn restore(floor: &Floor, found: &[u32; 4]) -> [(usize, u32, u32); 5] {
+    fields(floor).map(|(at, mask, _)| (at, mask, found[REGISTERS.iter().position(|r| *r == at).unwrap_or(0)] & mask))
+}
 
 /// The fields written, as `rtw89_phy_dig_dyn_pd_th` and `rtw89_phy_edcca_thre_calc` write them: (register, mask, value).
 pub(crate) fn fields(floor: &Floor) -> [(usize, u32, u32); 5] {
