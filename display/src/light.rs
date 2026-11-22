@@ -493,20 +493,22 @@ impl fmt::Display for Bytes<'_> {
 
 /// Step 3 ready to run: the plan of the eight stages, the guard and the watch, for one firmware and choice.
 pub struct Light {
-    pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard,
+    pub firmware: Firmware, pub choice: Choice, pub timing: Timing, pub signal: Signal, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard,
     watch: Watch, attached: Watch,
     /// Step 4's reference, when step 1 read it (stage 9 refuses without it), and the build stage 10's picture names.
     pub reference: Option<Reference>, pub build: &'static str,
 }
 
 impl Light {
-    pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> {
+    pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> { Light::new_with(firmware, choice, timing, Signal::Dvi) }
+    /// As `new`, in DVI or HDMI signalling (213-DRV-0095).
+    pub fn new_with(firmware: Firmware, choice: Choice, timing: Timing, signal: Signal) -> Result<Light, Refusal> {
         let guard = Guard::new(&firmware, &choice)?;
-        let mut plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
+        let mut plan = first_light(choice.pipe, choice.output, &timing, signal, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
         dcn::second_pipe(&mut plan).map_err(Refusal::Plan)?;
         let mut starts = [plan.len(); STAGES as usize + 1];
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
-        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
+        Ok(Light { firmware, choice, timing, signal, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
     }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
@@ -538,9 +540,10 @@ impl Light {
         out.line(format_args!("S0 THE FIRMWARE'S PIPE ({}): OTG{} OPP{} DIG {} FRONT END, PHY {}, HUBPS {}{}{}{}; NEVER WRITTEN, READ AFTER EACH STAGE ({} REGISTERS)",
             if expected { "AS THE SURVEY EXPECTS: STEP 1 NOT READ" } else { "AS STEP 1 FOUND" }, f.otg, f.opp, LETTERS[f.dig_fe as usize], LETTERS[f.phy as usize],
             f.hubps[0] as u8, f.hubps[1] as u8, f.hubps[2] as u8, f.hubps[3] as u8, self.watch.len()));
-        out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN DVI SIGNALLING (CTA VIC 16)",
+        out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN {} SIGNALLING (CTA VIC {})",
             c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
-            self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0));
+            self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0,
+            match self.signal { Signal::Dvi => "DVI", Signal::Hdmi => "HDMI" }, crate::timing::vic_of(&self.timing).unwrap_or(0)));
         for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
             out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM {} ON", n, c.pipe.otg, ATTACHED_FROM));
         }

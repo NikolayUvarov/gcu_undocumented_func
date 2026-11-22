@@ -203,6 +203,34 @@ made, as in the stages:
 
 The stage-by-stage runs and stage 15's watch are its safeguard, as for stage 15.
 
+**Built (fourth commit), behind `HDMI_SIGNALLING` (committed false), at today's 1920x1080 (VIC 16, 148.5 MHz):**
+- **The stages:** the same stages, clock, pipe and surface as now, so stage numbers and switches stay as they are.
+- **Stage 6 (FRONT END):** table 4 in HDMI mode, then DIG_FE_CNTL, then Display Core's HDMI writes on DIG front end A,
+  each logged before it is made and undone with the stage. They sit in stage 6 because
+  `enc1_stream_encoder_hdmi_set_stream_attribute` itself runs table 4 and then sets the HDMI engine. There are 18
+  writes and one wait:
+  - `HDMI_CONTROL`;
+  - `HDMI_VBI_PACKET_CONTROL`;
+  - `HDMI_GC`;
+  - `AFMT_CNTL`'s audio clock (`enc1_update_generic_info_packet` sets it for any generic packet);
+  - the generic packets' conflict awaited clear and then cleared, index 0;
+  - the AVI header and its 8 words;
+  - immediate update;
+  - `HDMI_GENERIC_PACKET_CONTROL0` (send and continue) and `_CONTROL1` (line 2).
+- **Tables 12 and 76:** in HDMI mode too (encoder mode 3).
+- **The AVI infoframe** (CTA-861 version 2, 13 bytes):
+  - RGB, with the active format as the picture;
+  - full-range RGB (Q = 2), since the pixels are full range;
+  - VIC 16 and 16:9.
+
+  For 3440x1440 it carries VIC 0 and no aspect code: CTA-861 has none for 64:27 outside its VICs.
+- **No audio:** the audio infoframe stays off. Display Core turns it on even without audio.
+- **On the model with the Ryzen's tables** (warm state), in HDMI mode at 148.5 MHz:
+  - table 12 takes the short path in 310 steps (308 in DVI) and 33 writes, none through the PHY's bus;
+  - table 4 takes 33 steps and 5 writes;
+  - table 76 takes 289 steps and 23 writes;
+  - everything is undone to the last register.
+
 ## Progress (2026-11-22)
 
 **Boot 77 (release 202611220908, 3b67f7528, switches 11/16/false): batch 11 ran clean.**
