@@ -1,6 +1,6 @@
 # 352-APP-0157 — The shell's `install`: MIND Core from a live boot onto a disk of this machine
 
-**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done on x86 in QEMU by hand, 2026-11-21; the `iso` suite's run, KRN's, and aarch64 left) · **Blocked by:** — ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), the installer's service, is in `main`, round 165) · **Main task:** 352, through [352-UPD-0048](352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md) · **Roadmap:** track C (update) and G · **Constitution:** MC-3.11, MC-10.3, MC-12.3
+**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (in `main` since round 169, 2026-11-22; the `iso` suite's run on x86 and aarch64 is UPD's, in its landing request `LANDING/2026-11-22T0807Z-UPD-ready-352-upd-0048-the-install-checked-in-the-iso-suite.md`) · **Blocked by:** — ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), the installer's service, is in `main`, round 165) · **Main task:** 352, through [352-UPD-0048](352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md) · **Roadmap:** track C (update) and G · **Constitution:** MC-3.11, MC-10.3, MC-12.3
 
 **Recorded by:** the tools track, 2026-11-21, from KRN's request in `issues/requests-APP.md` ("The shell's `install` command, for 352-UPD-0048").
 
