@@ -312,7 +312,7 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
-        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e } => {
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e, polls: [q, p] } => {
             if let Some(r) = refused { for (n, (length, head)) in r.frames[..r.count].iter().enumerate() {
                 mind::println!("[RTW89] REFUSED FRAME {} OF THE FIRST {}: {} BYTES, {:02X?}", n + 1, r.count, length, head);
             } }
@@ -322,6 +322,8 @@ fn served(event: receive_service::Event) {
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], other_beacons);
             mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN; HISR0 HALT_C2H {}, WDT_TIMEOUT {} (213-DRV-0091)",
                 channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
+            mind::println!("[RTW89] TRAFFIC ON {}: RX POLLS: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {}; OF {} (213-DRV-0091)",
+                channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
             if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
         }
         receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
@@ -356,6 +358,9 @@ fn served(event: receive_service::Event) {
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
+        receive_service::Event::SerStep { count, from, to, since_us, polls: [q, p] } =>
+            mind::println!("[RTW89] SER_DBG_INFO STEP {}: {:08X} -> {:08X}, SEEN {} US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {} (213-DRV-0091)",
+                count, from, to, since_us, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting),
         receive_service::Event::HaltStatus { count, hisr, ctrl, ser, intx } =>
             mind::println!("[RTW89] HISR0 HALT BITS {}: {:08X} ({}{}) WITH HALT_C2H_CTRL {:08X}; SER_DBG_INFO {:08X}; PCI INTX {}; CLEARED AS LINUX DOES, NOTHING ANSWERED (213-DRV-0091)",
                 count, hisr, if hisr & (1 << 21) != 0 { "HALT_C2H " } else { "" }, if hisr & (1 << 22) != 0 { "WDT_TIMEOUT" } else { "" }, ctrl, ser,

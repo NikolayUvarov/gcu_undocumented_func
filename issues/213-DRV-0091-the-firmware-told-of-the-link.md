@@ -390,6 +390,39 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - This is one meeting only.
   - The count's rise of 30 between 66 and 666 s of this boot, during the display's stage runs, is not explained. In boot 65 it rose by 1 or 2 at a time.
 
+**2026-11-22, the recoveries under load, and an instrument to place them** (reading of boots 74 to 79, then branch `claude/213-DRV-0091-the-recoveries-placed`, on step 2's 3c6a1de2b; host cases, not run):
+- **The count's rises against what ran** (each ten-minute window between GOOD LINK probes, `wf-bench/windows.py`; the loads from the bench log):
+  - Without boot 74's first ten minutes (+30, during the display's stages 1 to 15 and the start of a duplex audio run), the windows with USB or audio load gave +14 in about 60 minutes. The idle windows gave +5 in about 140, about 2 an hour, as boot 65's night did.
+  - The load is not the whole story. A window with the audio run on gave 0, and an idle one gave +2.
+- **What the minute lines say about our own task's starvation: nothing either way.**
+  - In every window, including those with rises, the driver's minute lines kept their 60 s within 2 to 20 ms, the inbox was never full, and the frames kept stayed at 1000 to 1200 a minute.
+  - Sampled once a minute, that cannot show a stall of tens of ms between two polls of the ring.
+- **The change:**
+  - **Every step of SER_DBG_INFO placed.** Each data-mode check reads SER_DBG_INFO, one register. When it moves:
+
+    ```
+    [RTW89] SER_DBG_INFO STEP n: a -> b, SEEN t US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP g US, MOST WAITING w; RPQ … (213-DRV-0091)
+    ```
+
+    The step lies between the two checks.
+  - **The ring's polls.** `rx::Rings::receive` keeps, for RXQ and RPQ:
+    - the longest time between two of its polls;
+    - the most descriptors waiting at one poll, the hardware index ahead of the host's, out of 256.
+
+    The minute line gives them and starts them again:
+
+    ```
+    [RTW89] TRAFFIC ON c: RX POLLS: RXQ LONGEST GAP g US, MOST WAITING w; RPQ LONGEST GAP g US, MOST WAITING w; OF 256 (213-DRV-0091)
+    ```
+
+- **What it tells.** If our task is starved, a step should follow a long gap or a ring near full. If not, steps come with short gaps and a low backlog. The runs planned are an hour under load (duplex audio, with two-camera video if the console allows) and an idle hour, on the same build.
+- **Host case:** `service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls`. It covers:
+  - three frames waiting at one poll;
+  - a silent recovery's step from 0 to 1, placed with its time since the check before and the polls so far;
+  - the minute line's polls, and the next minute's starting again.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

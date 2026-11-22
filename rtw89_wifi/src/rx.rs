@@ -32,7 +32,12 @@ pub enum Outcome{Empty,Packet(rxdesc::Packet),Dropped(rxdesc::Error)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct Stop{pub request:Option<Fault>,pub hci:Option<Fault>,pub idle:Option<Fault>}
 
-pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,copied:Option<rxdesc::Packet>,_exclusive:PhantomData<&'a mut[u8]>}
+/// One channel's polls since they were last taken (213-DRV-0091): the longest time between two, and the most descriptors
+/// found waiting at one (the hardware index ahead of the host's, out of DESCRIPTORS).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Polls{pub longest_gap_us:u64,pub most_waiting:u16}
+pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,copied:Option<rxdesc::Packet>,
+    polls:[Polls;2],last_poll:[Option<u64>;2],_exclusive:PhantomData<&'a mut[u8]>}
 impl<'a> Rings<'a>{
     /// # Safety
     /// The complete used region is exclusive coherent WB DMA on x86-64, mapped at `physical`, with UC BAR access.
@@ -53,12 +58,16 @@ impl<'a> Rings<'a>{
             base.as_ptr().add(descriptor).cast::<u32>().write_volatile((BUFFER_BYTES as u32).to_le());
             base.as_ptr().add(descriptor+4).cast::<u32>().write_volatile(((physical+buffer as u64)as u32).to_le());
         }}
-        Ok(Self{base,physical,session,host:[0;2],state:State::Allocated,copied:None,_exclusive:PhantomData})
+        Ok(Self{base,physical,session,host:[0;2],state:State::Allocated,copied:None,polls:[Polls::default();2],last_poll:[None;2],_exclusive:PhantomData})
     }
     pub fn state(&self)->State{self.state}
     /// Only a fully copied and parsed packet from the latest receive call, even if its release later failed.
     /// Metadata names that call's output buffer; it does not establish successful descriptor release.
     pub(crate) fn copied_packet(&self)->Option<rxdesc::Packet>{self.copied}
+    /// RXQ's and RPQ's polls since the last take (213-DRV-0091), without taking them.
+    pub fn polls(&self)->[Polls;2]{self.polls}
+    /// The same, taken: the next counts start at zero.
+    pub fn take_polls(&mut self)->[Polls;2]{core::mem::take(&mut self.polls)}
     pub fn physical(&self)->u64{self.physical}
     pub(crate) fn session(&self)->u64{self.session}
     fn poison<T>(&mut self,result:Result<T,Error>)->Result<T,Error>{if result.is_err(){self.state=State::Faulted;}result}
@@ -120,11 +129,17 @@ impl<'a> Rings<'a>{
         if budget_us==0||budget_us>1_000_000{return Err(Error::Budget);}
         if output.len()<BUFFER_BYTES{return Err(Error::Output);}
         let channel=channel.index();
+        // 213-DRV-0091: the time since this channel's last poll, and below the descriptors waiting at this one.
+        let now=bus.now_us();
+        if let Some(last)=self.last_poll[channel]{let p=&mut self.polls[channel];p.longest_gap_us=p.longest_gap_us.max(now.saturating_sub(last));}
+        self.last_poll[channel]=Some(now);
         let result=(||{
             let mut timed=TimedIo::new(bus,u64::from(budget_us));
             let index=io::read32(&mut timed,INDEX[channel])?;
             let hardware=((index>>16)&0xfff)as usize;
             if index&0xfff!=u32::from(self.host[channel])||hardware>=DESCRIPTORS{return Err(Error::Index);}
+            let waiting=((hardware+DESCRIPTORS-self.host[channel]as usize)%DESCRIPTORS)as u16;
+            self.polls[channel].most_waiting=self.polls[channel].most_waiting.max(waiting);
             if hardware==self.host[channel]as usize{timed.delay_us(0)?;return Ok(Outcome::Empty);}
             fence(Ordering::Acquire);
             let at=BUFFERS_AT+(channel*DESCRIPTORS+self.host[channel]as usize)*BUFFER_STRIDE;
