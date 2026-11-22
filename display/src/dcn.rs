@@ -101,10 +101,11 @@ pub enum R {
     CmDgamControl, CmBlndgamControl, MpccTopSel, MpccBotSel, MpccOppId, MpccControl,
     MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
     DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
+    HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 135] = {
+pub const ALL: [R; 142] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -130,7 +131,8 @@ pub const ALL: [R; 135] = {
      DsclRecoutSize, DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl,
      CmDgamControl, CmBlndgamControl, MpccTopSel, MpccBotSel, MpccOppId, MpccControl,
      MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
-     DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl]
+     DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
+     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio]
 };
 
 impl R {
@@ -259,6 +261,13 @@ impl R {
             DppclkDtoCtrl => (1, 0xB6),
             DppclkDtoParam => (1, 0x99 + i),
             RefclkCntl => (1, 0x49),
+            HubpreqVmidSettings0 => (2, 0x609 + 0xDC * i),
+            HubpreqFlipControl => (2, 0x61B + 0xDC * i),
+            HubpreqVmSystemApertureLow => (2, 0x637 + 0xDC * i),
+            HubpreqVmSystemApertureHigh => (2, 0x638 + 0xDC * i),
+            DsclTapControl => (2, 0xCED + 0x16B * i),
+            DsclHorzScaleRatio => (2, 0xCF1 + 0x16B * i),
+            DsclVertScaleRatio => (2, 0xCF5 + 0x16B * i),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -364,6 +373,13 @@ impl R {
             DppclkDtoCtrl => "DPPCLK_DTO_CTRL",
             DppclkDtoParam => "DTO_PARAM",
             RefclkCntl => "REFCLK_CNTL",
+            HubpreqVmidSettings0 => "VMID_SETTINGS_0",
+            HubpreqFlipControl => "DCSURF_FLIP_CONTROL",
+            HubpreqVmSystemApertureLow => "DCN_VM_SYSTEM_APERTURE_LOW_ADDR",
+            HubpreqVmSystemApertureHigh => "DCN_VM_SYSTEM_APERTURE_HIGH_ADDR",
+            DsclTapControl => "SCL_TAP_CONTROL",
+            DsclHorzScaleRatio => "SCL_HORZ_FILTER_SCALE_RATIO",
+            DsclVertScaleRatio => "SCL_VERT_FILTER_SCALE_RATIO",
         }
     }
 
@@ -376,7 +392,7 @@ impl R {
             VtgControl => "VTG", OppPipeControl => "OPP_PIPE", DpgControl | DpgDimensions | DpgOffsetSegment => "DPG",
             DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
             DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl => "HUBP",
-            HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh => "HUBPREQ",
+            HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh | HubpreqVmidSettings0 | HubpreqFlipControl | HubpreqVmSystemApertureLow | HubpreqVmSystemApertureHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => "",
             CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
@@ -387,7 +403,7 @@ impl R {
             HubpretControl => "HUBPRET",
             DppControl => "DPP_TOP",
             CnvcSurfacePixelFormat | CnvcFormatControl => "CNVC_CFG",
-            DsclSclMode | DsclControl | DsclRecoutStart | DsclRecoutSize | DsclMpcSize | DsclLbDataFormat => "DSCL",
+            DsclSclMode | DsclControl | DsclRecoutStart | DsclRecoutSize | DsclMpcSize | DsclLbDataFormat | DsclTapControl | DsclHorzScaleRatio | DsclVertScaleRatio => "DSCL",
             CmControl | CmIcscControl | CmGamutRemapControl | CmDgamControl | CmBlndgamControl => "CM",
             MpccTopSel | MpccBotSel | MpccOppId | MpccControl => "MPCC",
             MpcOutMux => "MPC_OUT",
@@ -522,6 +538,10 @@ pub mod field {
     pub const DTO_PHASE: Field = f(0, 8); // DPPCLKn_DTO_PHASE
     pub const DTO_MODULO: Field = f(16, 8);
     pub const WATERMARK_14: Field = f(0, 14);
+    pub const HUBP_CLOCK_ENABLE: Field = f(0, 1);
+    pub const HUBP_VREADY_AT_OR_AFTER_VSYNC: Field = f(8, 1);
+    pub const HUBP_UNDERFLOW_STATUS: Field = f(28, 3);
+    pub const OPTC_UNDERFLOW_OCCURRED_STATUS: Field = f(10, 1);
     pub const PGFSM_POWER_ON: u32 = 0;
 }
 
@@ -604,14 +624,21 @@ pub enum Step {
     Reference,
     /// Step 4's picture (stage 10): drawn into `display`'s own surface (BAR 0's slot 5); no register written.
     Draw,
+    /// Step 4's stages 11 to 15: their writes are built from stage 9's reference when it has run.
+    Late,
+    /// No new underflow on the firmware's pipe or on pipe 1 since stage 9 (their HUBPs' and ODMs' statuses).
+    NoUnderflow,
 }
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
 /// Step 3's stages 1 to 8 (first light), then step 4's from 9 (213-DRV-0092: MIND Core's picture on the second output).
-pub const STAGES: u8 = 10;
+pub const STAGES: u8 = 15;
 pub const FIRST_LIGHT: u8 = 8;
+/// The first stage that writes pipe 1's HUBP, DPP or MPC (the guard lets them through from here).
+pub const PIPE_WRITES_FROM: u8 = 11;
 pub const STAGE_NAMES: [&str; STAGES as usize] =
-    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY", "REFERENCE", "DRAW"];
+    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY", "REFERENCE", "DRAW",
+     "PIPE CLOCKS", "DPP", "HUBP", "MPC", "UNBLANK"];
 
 /// The pipe a plan drives: its timing generator, OPP and DIG front end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -670,13 +697,13 @@ impl Plan {
     pub fn get(&self, i: usize) -> Option<Step> { self.steps[..self.len].get(i).copied().flatten() }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
-    fn push(&mut self, step: Step) -> Result<(), PlanError> {
+    pub(crate) fn push(&mut self, step: Step) -> Result<(), PlanError> {
         if self.len == MAX_STEPS { return Err(PlanError::Full); }
         self.steps[self.len] = Some(step);
         self.len += 1;
         Ok(())
     }
-    fn update(&mut self, reg: Reg, fields: &[(Field, u32)]) -> Result<(), PlanError> {
+    pub(crate) fn update(&mut self, reg: Reg, fields: &[(Field, u32)]) -> Result<(), PlanError> {
         let (mask, value) = fields.iter().fold((0, 0), |(m, v), (field, x)| (m | field.mask(), v | field.put(*x)));
         self.push(Step::Update { reg, mask, value })
     }
@@ -785,13 +812,21 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     Ok(plan)
 }
 
-/// Step 4's stages after first light's (213-DRV-0092): 9, the reference; 10, the picture drawn.
+/// Step 4's stages after first light's (213-DRV-0092): 9, the reference; 10, the picture drawn; 11 to 15, built from
+/// the reference when stage 9 has run.
 pub fn second_pipe(plan: &mut Plan) -> Result<(), PlanError> {
     plan.push(Step::Begin(9))?;
     plan.push(Step::Reference)?;
     plan.push(Step::Begin(10))?;
     plan.push(Step::Draw)?;
+    for n in PIPE_WRITES_FROM..=STAGES { plan.push(Step::Begin(n))?; plan.push(Step::Late)?; }
     Ok(())
+}
+
+/// The steps of stage `n` in `plan` (its markers left out).
+pub fn steps_in(plan: &Plan, n: u8) -> impl Iterator<Item = Step> + '_ {
+    let mut current = 0;
+    plan.steps().filter(move |s| if let Step::Begin(m) = s { current = *m; false } else { current == n })
 }
 
 fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {

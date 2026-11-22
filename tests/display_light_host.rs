@@ -427,9 +427,15 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
 // The firmware's pipe as runs 3 to 7 read OTG0 (2560x1600 in 2720x1646) and HUBP0, with DLG values for a 100 MHz
 // reference clock by Display Core's formulas (the hardware's own are batch 9's).
 fn ryzen_reference() -> light::Reference {
+    // Pipe 0's registers pipe 1 copies: each its index plus a mark, so that a copy shows where it came from; MPCC_CONTROL
+    // as a single layer's (top layer only, alpha 255).
+    let mut copies = [0u32; light::COPIED.len()];
+    for (i, c) in copies.iter_mut().enumerate() { *c = 0x00C0_0000 | i as u32; }
+    copies[light::COPIED.len() - 1] = 0x00FF_0002;
     light::Reference { pipe: 0, otg: 0, h_total: 2719, v_total: 1645, h_blank_end: 112, v_blank_end: 43, width: 2560,
         ref_to_pix: 195_264, per_htotal: 259_335, refcyc_h_blank_end: 41, dlg_v_blank_end: 43, line_delivery: 953,
-        req_delivery: 24_396, pitch_field: 0xA00 }
+        req_delivery: 24_396, pitch_field: 0xA00, line_delivery_pre: 953, req_delivery_pre: 24_396, fb_base: 0xF4_0000_0000,
+        mpc_free: true, vready: 1, copies }
 }
 fn step4(reference: Option<light::Reference>) -> Light {
     let (f, c) = EXPECTED;
@@ -496,6 +502,89 @@ fn stages_9_and_10_measure_the_firmwares_clock_derive_pipe_1_and_draw_the_pictur
 }
 
 #[test]
+fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares() {
+    let r = ryzen_reference();
+    let l = step4(Some(r));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 }, "{:#?}", &log[log.len().saturating_sub(16)..]);
+    let g = |reg: R, i: u8| e.regs.get(&self::reg(reg, i)).copied().unwrap_or(0);
+    // Pipe 1's HUBP on the surface: GPU 0xF4_0100_0000, pitch field 1919, 1920x1080 from 0,0, unblanked.
+    assert_eq!((g(R::HubpreqPrimarySurfaceAddressHigh, 1), g(R::HubpreqPrimarySurfaceAddress, 1)), (0xF4, 0x0100_0000));
+    assert_eq!(g(R::HubpreqSurfacePitch, 1), 1919);
+    assert_eq!((g(R::HubpPriViewportStart, 1), g(R::HubpPriViewportDimension, 1)), (0, 1080 << 16 | 1920));
+    assert_eq!(g(R::HubpCntl, 1) & 0x1101, 0x100, "unblanked, TTU on, VREADY as the firmware's");
+    // Its DLG and TTU as stage 9 derived them; the rest copied from pipe 0.
+    assert_eq!(g(R::HubpreqRefFreqToPixFreq, 1), ((number_after(&log, "S9 OTG0 COUNTED", "THE REFERENCE CLOCK ") << 19) / 148_500) as u32);
+    for (i, reg) in light::COPIED.iter().enumerate().filter(|(_, r)| **r != R::MpccControl) {
+        assert_eq!(g(*reg, 1), r.copies[i], "{}", reg.name());
+    }
+    // DPP1 clocked with a 1920x1080 recout, HUBP1 clocked; MPCC1 from DPP1 to OPP1, its output mux on MPCC1; the
+    // pattern off.
+    assert_eq!((g(R::DppControl, 1) & 0x10, g(R::HubpClkCntl, 1) & 1), (0x10, 1));
+    assert_eq!((g(R::DsclRecoutSize, 1), g(R::DsclMpcSize, 1)), (1080 << 16 | 1920, 1080 << 16 | 1920));
+    assert_eq!((g(R::MpccTopSel, 1), g(R::MpccBotSel, 1), g(R::MpccOppId, 1), g(R::MpccControl, 1), g(R::MpcOutMux, 1)), (1, 0xF, 1, 0x00FF_0002, 1));
+    assert_eq!(g(R::DpgControl, 1) & 1, 0);
+    // Every write of stages 11 to 15 to pipe 1's blocks or OPP1's pattern generator; nothing of pipe 0's.
+    let first_late = log.iter().position(|x| x.starts_with("S11 WROTE ")).unwrap();
+    for x in log[first_late..].iter().filter(|x| x.contains(" WROTE ")) {
+        let at = u32::from_str_radix(x.split(" AT ").nth(1).unwrap().split(' ').next().unwrap(), 16).unwrap();
+        assert!(l.guard().check(Reg::new(at).unwrap()) != Err(Refused::Firmware(at)), "{}", x);
+        assert!(l.guard().check_at(Reg::new(at).unwrap(), 11).is_ok(), "{}", x);
+    }
+    for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    // The log: the pitch, and no new underflow twice.
+    assert!(log.iter().any(|x| x == "S13 PITCH FIELD 1919 (1920 PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP0 HOLDS 2560"));
+    assert_eq!(log.iter().filter(|x| x.starts_with("S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1")).count(), 2);
+    // The attached HUBP is watched until stage 10, then is step 4's own.
+    for n in 5..=15u8 { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED", n))), n <= 10, "stage {}", n); }
+    // The guard keeps pipe 1's blocks shut to first light's stages, and pipe 0's to all.
+    for (reg, i) in [(R::HubpCntl, 1u8), (R::DppControl, 1), (R::MpccTopSel, 1), (R::MpcOutMux, 1)] {
+        let x = Reg::new(self::reg(reg, i)).unwrap();
+        assert_eq!(l.guard().check_at(x, 8), Err(Refused::OffRoute(x.offset())), "{}", reg.name());
+        assert!(l.guard().check_at(x, 11).is_ok(), "{}", reg.name());
+    }
+    for (reg, i) in [(R::HubpCntl, 0u8), (R::DppControl, 0), (R::MpccTopSel, 0)] {
+        let x = Reg::new(self::reg(reg, i)).unwrap();
+        assert_eq!(l.guard().check_at(x, 15), Err(Refused::Firmware(x.offset())), "{}", reg.name());
+    }
+    // With the undo, everything back as before, pipe 1 included.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    assert_eq!(run_light(&l, &good(), &mut e, 15, true).0, Outcome::Undone { done: 15 });
+    restored_but(&e, &before, &[]);
+}
+
+#[test]
+fn an_underflow_at_stage_15_or_a_busy_mpcc_fails_and_is_undone_whole() {
+    // HUBP1's underflow status set once it is set up: stage 15 sees it new, fails, and undoes 15 to 1.
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.hook = Some((reg(R::HubpCntl, 1), reg(R::HubpCntl, 1), 1 << 28));
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    match outcome { Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == reg(R::HubpCntl, 1) => {}, o => panic!("{:?} {:#?}", o, &log[log.len().saturating_sub(12)..]) }
+    assert!(log.iter().any(|x| x == "STEP 3 FAILED AT STAGE 15 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    restored_but(&e, &before, &[reg(R::HubpCntl, 1)]);
+    assert_eq!(e.regs[&reg(R::DpgControl, 1)] & 1, before.get(&reg(R::DpgControl, 1)).copied().unwrap_or(0) & 1);
+    // Pipe 1's MPCC in use: stage 9 fails as it builds stages 11 to 15, before any of pipe 1 is written.
+    let l = step4(Some(light::Reference { mpc_free: false, ..ryzen_reference() }));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (outcome, _) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 9, why: Failure::PipeNotFree });
+    assert!(!writes(&e).iter().any(|w| w.0 == reg(R::HubpCntl, 1) || w.0 == reg(R::MpccTopSel, 1)));
+    // A build of 0 names stages 11 to 15 with what they will do.
+    let mut log = Log(vec![]);
+    light::describe(&l, false, &mut log);
+    assert!(log.0.iter().any(|x| x.starts_with("S13 WOULD SET HUBP1, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH 1919")));
+}
+
+#[test]
 fn stage_9_without_a_reference_and_stage_10_without_a_surface_fail_and_are_undone_whole() {
     let mut e = engine();
     e.frame_us = 16_675;
@@ -513,17 +602,24 @@ fn stage_9_without_a_reference_and_stage_10_without_a_surface_fail_and_are_undon
     assert!(log.iter().any(|x| x.starts_with("S10 DRAW FAILED: SLOT 5'S SURFACE IS NOT MAPPED")));
     restored_but(&e, &before, &[]);
     // Step 1's values give the reference only when all its batches were read and they name the firmware's pipe.
-    let (f, _) = EXPECTED;
+    let (f, c) = EXPECTED;
     let mut s = found();
-    assert_eq!(light::reference(&s, &f), None, "found() holds no batch 9 values");
+    assert_eq!(light::reference(&s, &f, &c), None, "found() holds no batch 9 values");
+    let want = ryzen_reference();
     for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
         (R::HubpPriViewportDimension, 1600 << 16 | 2560), (R::HubpreqRefFreqToPixFreq, 195_264), (R::HubpreqDstDimensions, 259_335),
-        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 24_396), (R::HubpreqSurfacePitch, 0xA00)] {
+        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 24_396), (R::HubpreqSurfacePitch, 0xA00),
+        (R::HubpreqPerLineDeliveryPre, 953), (R::HubpreqSurf0TtuCntl1, 24_396), (R::DcnVmFbLocationBase, 0xF400)] {
         s.set(r, 0, v);
     }
-    assert_eq!(light::reference(&s, &f), Some(ryzen_reference()));
+    for (r, v) in light::COPIED.iter().zip(want.copies) { s.set(*r, 0, v); }
+    s.set(R::HubpCntl, 0, 0x000F_0102); // HUBP_VREADY_AT_OR_AFTER_VSYNC 1
+    s.set(R::MpccTopSel, 1, 0xF); s.set(R::MpcOutMux, 1, 0xF);
+    assert_eq!(light::reference(&s, &f, &c), Some(want));
+    s.set(R::MpccTopSel, 1, 1);
+    assert_eq!(light::reference(&s, &f, &c).map(|r| r.mpc_free), Some(false), "pipe 1's MPCC in use");
     s.set_batches(9);
-    assert_eq!(light::reference(&s, &f), None, "batch 10 not read");
+    assert_eq!(light::reference(&s, &f, &c), None, "batch 10 not read");
 }
 
 #[test]

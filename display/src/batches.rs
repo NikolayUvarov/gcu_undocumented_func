@@ -96,7 +96,7 @@ const DMCUB_TAIL: [R; 10] = {
      DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1, DmcubGpintDataout]
 };
 /// Batch 9: the firmware's HUBP as step 4's reference (`hubp2_setup`'s request, DLG and TTU registers, and its viewport).
-const HUBP_REFERENCE: [R; 36] = {
+const HUBP_REFERENCE: [R; 40] = {
     use R::*;
     [HubpAddrConfig, HubpTilingConfig, HubpPriViewportStart, HubpPriViewportDimension, HubpReqSizeConfig, HubpReqSizeConfigC,
      HubpClkCntl, HubpreqSurfaceControl, HubpreqExpansionMode, HubpreqTtuQosWm, HubpreqGlobalTtuCntl, HubpreqSurf0TtuCntl0,
@@ -104,13 +104,15 @@ const HUBP_REFERENCE: [R; 36] = {
      HubpreqBlankOffset1, HubpreqDstDimensions, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0,
      HubpreqVblankParameters1, HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4,
      HubpreqNomParameters0, HubpreqNomParameters1, HubpreqNomParameters4, HubpreqNomParameters5, HubpreqPerLineDeliveryPre,
-     HubpreqPerLineDelivery, HubpreqCursorSettings, HubpreqRefFreqToPixFreq, HubpreqDstYDeltaDrqLimit, HubpretControl]
+     HubpreqPerLineDelivery, HubpreqCursorSettings, HubpreqRefFreqToPixFreq, HubpreqDstYDeltaDrqLimit, HubpretControl,
+     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh]
 };
 /// Batch 10: the firmware's DPP (its clock, format, scaler and colour stages).
-const DPP_REFERENCE: [R; 14] = {
+const DPP_REFERENCE: [R; 17] = {
     use R::*;
     [DppControl, CnvcSurfacePixelFormat, CnvcFormatControl, DsclSclMode, DsclControl, DsclRecoutStart, DsclRecoutSize,
-     DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl, CmDgamControl, CmBlndgamControl]
+     DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl, CmDgamControl, CmBlndgamControl,
+     DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio]
 };
 /// Batch 10: the MPC tree, DCHUBBUB's arbitration and DCCG's DPP clocks, shared by every pipe.
 const MPCC_STATE: [R; 4] = [R::MpccTopSel, R::MpccBotSel, R::MpccOppId, R::MpccControl];
@@ -218,7 +220,7 @@ impl fmt::Display for Opt {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Report { pub batches_read: u8, pub registers_read: usize }
 
-/// Every value a run read, for step 3 to choose its pipe from (all ten batches: 282 registers).
+/// Every value a run read, for step 3 to choose its pipe from (all ten batches: 289 registers).
 pub const STORE: usize = 320;
 #[derive(Clone, Copy, Debug)]
 pub struct Store { items: [Option<(R, u8, u32)>; STORE], len: usize, batches: u8 }
