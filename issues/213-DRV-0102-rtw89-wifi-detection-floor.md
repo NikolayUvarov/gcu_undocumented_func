@@ -192,8 +192,40 @@ One change, one measurement:
   - It is one machine, one access point (−61 dBm, channel 8), one afternoon, one boot, and minutes of about 145 sends.
   - Nothing of the CCK floor or EDCCA's 66: neither was in force.
   - Whether 0x4B64 and 0x4B74 take writes.
-- **A reading beside it:** the read at 3191 s uploaded 425 KB in about 24 s, about 17 KB/s, against Linux's 480 to 826 KB/s on this channel. That is one upload, under the answer path of 213-DRV-0104.
+- **A reading beside it**, from the Effector agent's own lines (the gateway's `open-file … admitted` to the agent's `COMPLETED` or `FAILED`):
+  - The read admitted at 3152.0 s failed at 3166.3 s (`POST /api/commands/file: Transport`, `collect_file: io`).
+  - The next, admitted at 3177.4 s, completed at 3191.2 s: 424,855 bytes in 13.8 s, about 31 KB/s.
+  - The read at 136.2 s took 77,671 bytes in 2.2 s, about 35 KB/s.
+  - Linux does 480 to 826 KB/s on this channel. These are two uploads and a failure, under the answer path of 213-DRV-0104.
 - **Next:** the same paired minutes on the boot with a95ed0064, where the ON minutes hold EDCCA's 66 and the CCK fields as far as they take.
+
+**2026-11-22, the histogram's end bins mended** (this branch; host cases, not run on the Ryzen):
+- **What Linux does with a PPDU status not addressed to it** (05f7e89):
+  - `rtw89_core_parse_phy_status_ie01` returns before it reads IE 1's RSSI_AVG_FD when `!phy_ppdu->to_self` (core.c:2006). So `rpl_avg` keeps the 0 of its initializer (core.c:3237).
+  - `rtw89_core_rx_parse_phy_sts` still calls `__rtw8852bx_convert_rpl_to_rssi` (core.c:2164; rtw8852b_common.c:1990). That moves each path by 0 less the header's average, wrapping as a u8.
+  - The result is used only where nothing reads it as a signal: the station's averages are kept for `to_self` reports alone (core.c:1906), and a frame's signal comes from a report matched to it.
+  - **So Linux never measures the signal of other stations' OFDM PPDUs.** Ours copied the same arithmetic, and those reports fell into the end bins.
+- **The change:**
+  - `ppdu::Report` keeps the header's stronger path uncorrected (`header_dbm`) beside Linux's signal, and says how the paths were moved (`Conversion`):
+    - `Header`: a break, or an IE walk that failed;
+    - `Rpl`: by IE 0 or IE 1, with the header's average less the RPL;
+    - `NoRpl`: none was read, and Linux moved the paths by 0.
+  - A frame's signal is unchanged: Linux's.
+  - The minute's histogram bins a `NoRpl` report apart, by the header (`ppdu_no_rpl`). The existing two lines now hold the others only, and the second says how many went apart. Two lines give the no-RPL bins, and one gives how far the header's average reads over the RPL in the OFDM reports to us (the scale between the two histograms):
+
+    ```
+    [RTW89] TRAFFIC ON c: PPDU BY SIGNAL, ON FROM -65 DBM: [...], THE LAST BELOW -100; UNPARSED u; NO RPL n (213-DRV-0102)
+    [RTW89] TRAFFIC ON c: NO RPL BY THE HEADER, 5 DB BINS FROM -20 DBM: [...] (213-DRV-0102)
+    [RTW89] TRAFFIC ON c: NO RPL BY THE HEADER, ON FROM -65 DBM: [...], THE LAST BELOW -100 (213-DRV-0102)
+    [RTW89] TRAFFIC ON c: OFDM TO US: THE HEADER'S AVERAGE x.y DB OVER THE RPL, ON n REPORTS (213-DRV-0102)
+    ```
+
+  - The captured data frame to us has its header 4.5 dB over its RPL (average 106, RPL 97). How far that holds for other stations' frames is not known: it is the header's own measure, not Linux's.
+- **Host cases:**
+  - `an_ofdm_report_not_to_this_radio_keeps_the_headers_signal_beside_linuxs` (tests/rtw89_ppdu_host.rs): DATA with `to_self` cleared gives Linux's wrapped +17 dBm and the header's −56. Below OFDM 6 Mb/s there is no RPL either.
+  - The captured reports' conversions are checked as well.
+  - `service_writes_the_detection_floor_once_the_aps_beacons_are_measured` also bins such a report apart at −55 to −59 dBm and counts the 4.5 dB over the RPL.
+  - The 40 `rtw89_*_host.rs` files pass: 4888 cases, 0 failed. The release build builds.
 
 ## For a successor (state on 2026-11-22, 14:40 UTC)
 

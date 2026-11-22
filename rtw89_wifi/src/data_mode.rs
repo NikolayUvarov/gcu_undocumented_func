@@ -215,15 +215,16 @@ pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub p
     pub beacon_at_us:u64,pub beacon_interval_us:u32,
     // 213-DRV-0102: every PPDU report by its signal in 5 dB bins from -20 dBm down (the last below -100), and those
     // that do not parse; the joined BSS's beacons measured and their signals' sum; the beacon just taken (its number and
-    // count and rate) whose report is awaited.
+    // count and rate) whose report is awaited. The reports with no RPL (OFDM not to this radio) by the header's paths
+    // uncorrected, apart; the header's average over the RPL (half-dB summed, and how many) in the OFDM reports to us.
     pub ppdu_rssi:[u32;17],pub ppdu_unparsed:u32,pub bss_measured:u32,pub bss_signal_sum:i64,pub bss_beacon:Option<(u64,(u8,u16))>,
-    pub beacon_now:bool}
+    pub beacon_now:bool,pub ppdu_no_rpl:[u32;17],pub ofdm_header_over:(i64,u32)}
 /// 213-DRV-0102: the joined access point's mean signal, once some of its beacons were measured.
 impl Counts{pub(crate) fn bss_dbm(&self)->Option<i8>{(self.bss_measured!=0).then(||(self.bss_signal_sum/i64::from(self.bss_measured))as i8)}}
 /// 213-DRV-0102: a minute's PPDU reports by signal (5 dB bins from -20 dBm down) and the detection floor's registers.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool,
-    pub kind:FloorKind,pub switch_failures:u32,pub written:FloorWrite}
+    pub kind:FloorKind,pub switch_failures:u32,pub written:FloorWrite,pub no_rpl:[u32;17],pub header_over:(i64,u32)}
 /// 213-DRV-0102: the detection floor's registers, in detection_floor::REGISTERS' order.
 pub(crate) const FLOOR_REGISTERS:[usize;4]=[0x4860,0x4b64,0x4b74,0x4884];
 /// 213-DRV-0102: a floor's write: the registers (bits in FLOOR_REGISTERS' order) not read back as written, and of those
@@ -264,7 +265,19 @@ pub struct Phase{pub clock_us:Option<u64>,pub tsf_us:Option<u64>,pub interval_us
 /// those never, and their median hold; the times the service's frame buffer was full and the longest.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_try:u32,pub not_acked:u32,pub median_hold_ms:u64,
-    pub full_times:u32,pub full_longest_ms:u64}
+    pub full_times:u32,pub full_longest_ms:u64,
+    // 213-DRV-0104: sends answered at their deadline, refused busy and parked; parked frames released and of them
+    // acknowledged; what the minute held when SEND_BEHIND_LATE alternates (None: it does not), and the switch otherwise.
+    pub answered_late:u32,pub busy:u32,pub parked:u32,pub parked_released:u32,pub parked_acked:u32,pub behind:FloorKind,pub behind_fixed:bool}
+impl TxMinute{
+    /// 213-DRV-0104: what the minute held of SEND_BEHIND_LATE, for its line.
+    pub fn behind_label(&self)->&'static str{
+        match(self.behind,self.behind_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE BEHIND LATE ON",(FloorKind::Off,_)=>"THIS MINUTE BEHIND LATE OFF",
+            (FloorKind::None,true)=>"BEHIND LATE ALWAYS",(FloorKind::None,false)=>"BEHIND LATE NEVER",
+        }
+    }
+}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
@@ -311,10 +324,21 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
         taken
     }
     // 213-DRV-0102: every report by its signal; the one after the BSS's beacon, of its count and rate, measures the BSS.
+    // A report with no RPL is binned apart by the header's paths: Linux's moved signal for it means nothing.
     fn report(&mut self,frame:Option<u64>,packet:rxdesc::Packet,buffer:&[u8]){
+        use crate::ppdu::Conversion;
         let c=&mut *self.counts;
         let Some(report)=crate::ppdu::from_packet(packet,buffer) else{c.ppdu_unparsed=c.ppdu_unparsed.saturating_add(1);return};
-        let bin=((-20-i16::from(report.signal_dbm)).max(0)/5).min(16)as usize;c.ppdu_rssi[bin]=c.ppdu_rssi[bin].saturating_add(1);
+        let bin=|dbm:i8|((-20-i16::from(dbm)).max(0)/5).min(16)as usize;
+        match report.conversion{
+            Conversion::NoRpl=>{let b=bin(report.header_dbm);c.ppdu_no_rpl[b]=c.ppdu_no_rpl[b].saturating_add(1);}
+            conversion=>{
+                let b=bin(report.signal_dbm);c.ppdu_rssi[b]=c.ppdu_rssi[b].saturating_add(1);
+                if let Conversion::Rpl{header_over,ofdm:true}=conversion{
+                    let o=&mut c.ofdm_header_over;o.0=o.0.saturating_add(i64::from(header_over));o.1=o.1.saturating_add(1);
+                }
+            }
+        }
         if let Some((number,key))=c.bss_beacon.take(){
             if frame==Some(number)&&(report.count,report.rate)==key{
                 c.bss_measured=c.bss_measured.saturating_add(1);c.bss_signal_sum+=i64::from(report.signal_dbm);
@@ -687,9 +711,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         }
         Ok(done)
     }
-    /// 213-DRV-0102: the minute's PPDU reports by signal, taken: the next minute's start at zero.
-    pub(crate) fn take_ppdu_rssi(&mut self)->([u32;17],u32){
-        let r=(self.counts.ppdu_rssi,self.counts.ppdu_unparsed);self.counts.ppdu_rssi=[0;17];self.counts.ppdu_unparsed=0;r
+    /// 213-DRV-0102: the minute's PPDU reports by signal, those with no RPL, the unparsed and the header over the RPL,
+    /// taken: the next minute's start at zero.
+    pub(crate) fn take_ppdu_rssi(&mut self)->([u32;17],[u32;17],u32,(i64,u32)){
+        let c=&mut self.counts;
+        (core::mem::take(&mut c.ppdu_rssi),core::mem::take(&mut c.ppdu_no_rpl),core::mem::take(&mut c.ppdu_unparsed),core::mem::take(&mut c.ofdm_header_over))
     }
     /// 213-DRV-0091: port 0's TSF, its high word read before and after the low one.
     pub(crate) fn tsf(&mut self)->Option<u64>{

@@ -326,6 +326,10 @@ fn served(event: receive_service::Event) {
                 channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
             mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
                 channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
+            // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
+            let behind = tx.behind_label();
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
+                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
             let [pd, cck, limit, edcca] = floor.registers;
@@ -345,7 +349,15 @@ fn served(event: receive_service::Event) {
             }
             let r = floor.ppdu_rssi;
             mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
-            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {} (213-DRV-0102)", channel, &r[9..], floor.unparsed);
+            let n = floor.no_rpl;
+            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {}; NO RPL {} (213-DRV-0102)",
+                channel, &r[9..], floor.unparsed, n.iter().sum::<u32>());
+            mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &n[..9]);
+            mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, ON FROM -65 DBM: {:?}, THE LAST BELOW -100 (213-DRV-0102)", channel, &n[9..]);
+            let (sum, count) = floor.header_over;
+            let tenths = if count == 0 { 0 } else { (sum * 5 + if sum < 0 { -(i64::from(count) / 2) } else { i64::from(count) / 2 }) / i64::from(count) };
+            mind::println!("[RTW89] TRAFFIC ON {}: OFDM TO US: THE HEADER'S AVERAGE {}{}.{} DB OVER THE RPL, ON {} REPORTS (213-DRV-0102)",
+                channel, if tenths < 0 { "-" } else { "" }, tenths.abs() / 10, tenths.abs() % 10, count);
             let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
             mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
                 channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
