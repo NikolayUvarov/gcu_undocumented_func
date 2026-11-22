@@ -128,7 +128,58 @@ PIPE`.
 This is that boot, on that machine with its two monitors (MC-12.1, 12.9).
 
 
-## For a successor (state on 2026-11-22, 15:45 UTC)
+**The short watch on the hardware** (the boot after 94, bench tree 047917b60, `SHORT_WATCH`, `STANDING_CHECK` and
+`HOTPLUG` true; read over the cable at 16:14 UTC):
+- **The offer:** `THE SECOND SCREEN OFFERED 2165.7 MS AFTER DISPLAY'S START`, at 5.635 s of the boot. That is 4.0 s
+  sooner than with the watch of 300.
+- **`STEP 3'S TIMES (MS)`:** IN ALL 2028.9; 15 1040.3; 15'S WATCH 998.3; 9'S COUNT 510.5.
+- **S15:** `WATCHED 60 FRAMES IN 998 MS CLEAN, LONGEST GAP 26 US AT FRAME 53`.
+- **The start lines:** HPD 1 followed, and the standing check's start line naming `THE WATCH 60 FRAMES`.
+
+## A proposal: the offer before the watch (2026-11-22; not built, the owner session's decision)
+
+**Where the time goes.** What the maintainer saw at boot 94 as «через некоторое время появилось изображение заставки», then
+the screen, is stage 10's picture shown through stage 15's watch before stage 16's offer: 5 s with the watch of 300,
+1 s with that of 60. Of the 2.17 s to the offer with the short watch:
+- the watch takes 1.0 s;
+- stage 9's count, 0.51 s;
+- the waits of stages 5, 13 and 15, 78 ms;
+- the 20 ms pace of about 20 lines, some 0.4 s;
+- step 2, 0.11 s.
+
+**The proposal: stage 16's offer right after stage 15's pattern goes off, then the watch.**
+- **Unchanged:** stage 15's first check (three frames behind the pattern, and no new underflow) still comes before the
+  pattern goes off, and before the offer.
+- **On any finding of the watch,** the standing check's undo, which this task has already built and tested:
+  1. stage 15's writes put back at once (the pattern on, HUBP1 blanked);
+  2. `screen_gone`;
+  3. stages 14 to 1.
+- **The offer refused:** the watch runs all the same, and the stop comes after it, as stage 16 not ready does now.
+- **What it gains:** the mirror about 1 s sooner with the short watch (the offer at about 1.2 s after `display`'s
+  start), or 5 s with the watch of 300.
+- **What it costs in safety:**
+  - **A failed watch then shows the desktop on HDMI-A-1 for up to a second before the screen goes dark,** where now it
+    shows stage 10's picture. The compositor gets `screen_gone` within that second. That path ran twice on boot 94 (the
+    take-backs), but never after an underflow.
+  - **The compositor's first full copy into the surface (19.9 MB at 3440x1440) falls inside the watch,** not after it.
+    That is load the second screen will carry anyway. Watching under it tests more of the real use, not less, but it is
+    a change in what the watch has shown on boots 75 to 94.
+  - **The order of the first undo writes and `screen_gone` stays:** the pipe is blanked first.
+  - **No check is weakened:** the frames before the pattern goes off, the per-frame watch and the standing check after
+    it all stay.
+- **What it would need:**
+  - stage 16 moved before the watch in the plan, so that the watch is stage 16's last step or a stage 17;
+  - the watch's failure path ending with `screen_gone`, with host cases for:
+    - an underflow during the watch after the offer;
+    - an offer refused before a clean watch;
+    - one refused before a failing watch.
+- **Not proposed:**
+  - dropping the watch for the standing check alone. The check reads once a second, so an underflow on DP-2's pipe would
+    stand up to a second before the undo, against one frame with the watch.
+  - a shorter count in stage 9 (decided: 30).
+  - a lower line pace. That is the log's rule, not `display`'s.
+
+## For a successor (state on 2026-11-22, 16:45 UTC)
 
 This replaces the section of the same name in 213-DRV-0095, which describes the state before 0098.
 
@@ -137,12 +188,14 @@ This replaces the section of the same name in 213-DRV-0095, which describes the 
 | Branch | Head | What | Where it is |
 |---|---|---|---|
 | `claude/213-DRV-0095-display-the-monitors-own-mode` | 1e148b81f | the EDID's mode (0095), on 0092's | in `main` since round 172 (7346ab3d5, 2026-11-22 15:19 UTC) |
-| `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | landing request posted for 598045d8f; waits for the next round |
-| `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | d5585699d | `HOTPLUG` (code 5e63d41b4, on a71a47b83; then text) | after 0098 and its hardware run with the maintainer |
-| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, on 5e63d41b4) | after 0096; boot 93 is its first run |
+| `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | landing request posted; waits for the next round |
+| `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | 8823e6433 | `HOTPLUG` (code 5e63d41b4, on a71a47b83; the rest text); both criteria met on boot 94 | landing paragraph given; after 0098 |
+| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, then 9acc0b773's dark spans) | after 0096 |
 
-LEG9 restarted at 15:21 UTC and wiped everything under `/tmp`: the worktrees and the scratch scripts. Nothing that had
-been pushed was lost.
+**The bench:** the release on the Ryzen since about 16:10 UTC runs a5c933530's `display` with `HOTPLUG`,
+`STANDING_CHECK` and `SHORT_WATCH` true. Its standing check's line is the one before 9acc0b773, without dark spans.
+
+**LEG9 restarted at 15:21 UTC** and wiped `/tmp`: the worktrees and the scratch scripts. Nothing pushed was lost.
 - **To work on a branch again:** `git -C <main checkout> worktree add --detach <path> origin/<branch>`, commit there,
   then `git push origin HEAD:refs/heads/<branch>`.
 
@@ -154,53 +207,51 @@ nothing.
   - `UNDO_AFTER_STAGES`.
 - **`SURVEY_ORDER`** (0098): true gives the survey's order of boots 70 to 81; false, the committed value, gives the
   production order.
-- **`HOTPLUG`** (0096): HPD 1 followed after the stages.
-  - It needs `STAGES_ALLOWED` above 0 and not `UNDO_AFTER_STAGES`.
-  - It is not on the bench until the maintainer is at the monitor. What HPD 1 does in the monitor's standby is not
-    known (0096, "A monitor in standby").
-- **`STANDING_CHECK`** (this task) needs stage 15 or 16 in place and not `UNDO_AFTER_STAGES`. It works with `HOTPLUG`
-  on or off.
+- **`HOTPLUG`** (0096): HPD 1 followed after the stages. It needs `STAGES_ALLOWED` above 0 and not `UNDO_AFTER_STAGES`.
+- **`STANDING_CHECK`** (this task) needs stage 15 or 16 in place and not `UNDO_AFTER_STAGES`. With `HOTPLUG` it rides
+  the 50 ms polls (about 585 checks in ten minutes), without it a loop of its own (600).
 - **`SHORT_WATCH`** (this task): the watch of 60 frames, only with `STANDING_CHECK`. The build refuses it otherwise.
-- **The bench of boots 84 to 91:**
-  - `BATCHES_ALLOWED` 11 and `STAGES_ALLOWED` 16;
-  - `EDID_ALLOWED`, `HDMI_SIGNALLING` and `MODE_FROM_EDID` true;
-  - `UNDO_AFTER_STAGES` and `SURVEY_ORDER` false.
-
-  Boot 93's release added `STANDING_CHECK` true, with `SHORT_WATCH` and `HOTPLUG` false.
 
 **The host cases:**
-- **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 110 cases on this
+- **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 111 cases on this
   branch's code.
 - **With the Ryzen's tables:** with `MIND_AMD_VBIOS` naming the Ryzen's VBIOS image, they also run the Ryzen's own
   tables.
-  - The copy the owner session kept was under `/tmp` and went with the restart.
   - The image must never enter the repository, a commit, an issue or a message.
-  - **Getting it back:** it is the image inside the ACPI VFCT table: offset 52 names its header, the header's bytes 24
-    to 27 its length, and the image follows the header's 28 bytes, as `atom::vfct_image` reads it.
-  - **Where to look for that table:** the Ryzen's `init` copies the ACPI tables to `log:acpi/` at every boot (`ACPI
-    TABLES: 26 IN log:acpi/`). Fetching it from there is the owner session's (the Effector server or the cable).
+  - The owner session has the ACPI VFCT table outside the repository. The image is inside it: offset 52 names its
+    header, the header's bytes 24 to 27 its length, and the image follows the header's 28 bytes, as `atom::vfct_image`
+    reads it. That table is what the Ryzen's `init` copies to `log:acpi/` at every boot.
 - **The full suite:** `scripts/host_tests.sh` runs them all. On LEG9 its ssh tests need
   `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd`, which the owner session puts back after a restart. Heavy
-  runs on LEG9 take `/tmp/claude-1000/heavy.lock` with `flock`.
+  runs take `/tmp/claude-1000/heavy.lock` with `flock`.
 
 **The hardware evidence:**
 - **The survey's order:** boots 70 to 81 (0092, 0095).
-- **The production order:** boots 84 to 89 and 91, the release of a71a47b83, 6.16 to 6.18 s from `display`'s start to
-  the offer, every watch clean (0098's table).
-- **The standing check:** boot 93 (above), 50 minutes, nothing found.
-- **The logs:** the owner session's copies under `/tmp` were wiped with the restart, but for boot 93's, which the owner
-  session kept under its handoff directory. The boots' own logs stay on the Ryzen's log volume (`BOOTNNNN.LOG`).
+- **The production order:** boots 84 to 89 and 91, 6.16 to 6.18 s to the offer (0098's table).
+- **The standing check:** boot 93, 50 minutes, nothing found.
+- **0096's run with the maintainer:** boot 94 (0096's issue).
+- **The short watch:** the boot after 94, the offer at 2165.7 ms.
+- **The logs:** the owner session keeps boot 93's, boot 94's to 1168 s and the short-watch boot's cable read under its
+  handoff directory. Its copies of boots 84 to 91 went with the restart; the boots' own logs stay on the Ryzen's log
+  volume.
 
 **What waits:**
 - **For the maintainer:**
-  - 0096's run at the monitor, with the questions on standby in its issue;
   - his decision on 0099's proposal;
   - 0097's cold path, which is his decision;
-  - his look at the 3440x1440 picture (0095's criterion 4), now with `wm` in front.
+  - his look at the 3440x1440 picture (0095's criterion 4).
 - **For the owner session:**
-  - `SHORT_WATCH`'s value for the bench, after boot 93;
-  - the VBIOS image fetched again for the display suites' Ryzen cases;
-  - closing 0098 once it has landed.
+  - the decision on the proposal above (the offer before the watch);
+  - this task's criterion 2: the bench's watch is now 60, with the check;
+  - closing 0098 and 0096 once they have landed.
+- **Open in the code: a take-back's failure detail is not logged.** In the production order `light::take_back` (0096)
+  holds its `U` lines and never calls `failed()`. A table that stops inside an off call, or a firmware's pipe that reads
+  CHANGED, shows only in the final `STEP 3 TAKEN BACK IN ... THE FIRMWARE'S PIPE ...` line. It still puts back every
+  journaled write.
+  - **The fix,** not yet made: `undo` says whether a table stopped, and `take_back` calls `failed()` before its final
+    line when one did or the pipe does not read UNCHANGED.
+  - **Its host case:** a table stopped in stage 16's off call during a take-back. Its `U16 TABLE ... STOPPED` line is
+    logged in the production order.
 
 ## Acceptance criteria
 
@@ -208,9 +259,10 @@ nothing.
   the mark kept; the firmware's pipe and a request timeout alike; a transient that is over within the second still
   counted by its latched status; an underflow one frame after the watch ends caught within a second; the watch 300
   unless 60 is given with the check.
-- [ ] On the Ryzen: the check running after the offer, its ten-minute line seen, nothing found, with the watch of 300;
-  then the owner session's choice of the bench's watch. The first part was seen on boot 93: 50 minutes, five lines,
-  nothing found. The choice is still to come.
+- [x] On the Ryzen: the check running after the offer, its ten-minute line seen, nothing found, with the watch of 300;
+  then the owner session's choice of the bench's watch. Boot 93: 50 minutes, five lines, nothing found, the watch of 300.
+  The owner session chose the watch of 60 for the bench, with the check, at 16:10 UTC. The boot after 94 offered at
+  2165.7 ms, its 60 frames clean. That machine with its two monitors (MC-12.1).
 
 ## Related
 
