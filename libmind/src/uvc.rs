@@ -13,6 +13,8 @@ pub const SET_CUR: u8 = 0x01;
 pub const GET_CUR: u8 = 0x81;
 pub const PROBE: u8 = 1;
 pub const COMMIT: u8 = 2;
+/// VS_STREAM_ERROR_CODE_CONTROL: why the camera last marked a payload in error (158-DRV-0082).
+pub const STREAM_ERROR: u8 = 6;
 
 const CS_INTERFACE: u8 = 0x24;
 const VC_HEADER: u8 = 1;

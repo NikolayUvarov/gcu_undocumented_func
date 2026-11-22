@@ -179,10 +179,28 @@ This holds for that machine, those cameras and that release (MC-12.1).
     - **So the queue limit is mended.** The frames that still break beside a second camera come whole: not lost bytes.
   - **Why they break, now counted:** each broken frame is counted once for every cause it had (`uvc::Causes`): the payloads' error bit, a host controller's error, a payload header that does not parse, more bytes than a frame holds, a bulk payload that started without a valid header or whose transfer failed, or the wrong size alone. Every frame's end is counted as by EOF or by a new frame ID. The close line gives them (`BY: n ERROR BIT, … SIZE; ENDED BY EOF n, BY FID n`).
     - A frame counted broken at its exact size points to an overflow: its end was not seen, and the next frame's bytes ran into it. The bulk start count would show whether a payload of a multiple of 4096 bytes ended without a zero-length packet, so that the next payload's header went in as data.
-    - Host cases in `tests/uvc_host.rs`. Not run on the Ryzen yet.
+    - Host cases in `tests/uvc_host.rs`.
+  - **Run on the Ryzen, 2026-11-22 07:12-07:21 UTC** (release 202611220644; `video_gw` of 8a8793af6 and `usb_host` of 5d4087bd6 by `replace`, then both put back; the stub typed on the console):
+
+    | Camera 0 (GDZS-DC004-EFVT-V) | Beside it | Good | Broken | Error bit | Overflow |
+    |---|---|---|---|---|---|
+    | YUY2 640×480 at 25, 12 s | nothing | 300 | 0 | 0 | 0 |
+    | YUY2 640×480 at 25, 12 s | camera 1 at 320×240 | 299 | 8 | 6 | 0 |
+    | YUY2 1280×720 at 10, 12 s | nothing | 117 | 20 | 16 | 0 |
+
+    - **Camera 1** (GDZS-DC004-EFVT-IR) at 320×240 for 45 s, camera 0 beside it for 12 s of them: 1229 good and 90 broken, 88 by the error bit and 2 by overflow.
+    - **Everywhere else 0:** no damaged transfer, no bad header, no spill full, no transfer error.
+    - **So most broken frames are whole frames the camera itself marked in error** (the payload header's ERR bit), not frames the gateway assembled wrong.
+    - **They come under load:** none from one camera at 640×480 (15 MB/s). Some came with a second camera beside it (about 20 MB/s in all), and more from one camera at 1280×720 (18 MB/s).
+    - **A guess, not shown:** the 32 TDs of 4 KiB on the camera's bulk ring last about 7 ms at 18 MB/s. If `usb_host` puts none back meanwhile, the camera sends nothing and its own buffer overflows. It waits like that for another device's synchronous transfer, whose wait takes events but does not spill.
+    - **The causes after `OVERFLOW` were cut:** a log record holds 200 bytes, so the counts of bulk failed, size and the ends by EOF and by FID were lost. The close line is now three lines.
+  - **What the next run says** (written after that run, not run yet):
+    - `usb_host` says each time a bulk ring stood empty: when, for how long, what its spill held, and the transfer or command `usb_host` waited for (`BULK RING EMPTY n AT s S: NO TD t MS, …; WAITING ON SLOT a ENDPOINT b FOR w MS`). Up to 64 such lines a stream, then counts. The stream's end adds `ITS RING STOOD EMPTY n TIMES, t MS IN ALL, AT MOST m MS`. This is the same tool as 000-DRV-0094's for isochronous rings.
+    - `video_gw` asks the camera why (VS_STREAM_ERROR_CODE_CONTROL, GET_CUR) after a frame it marked in error, 8 times a stream at most, and says the codes at the close (`ITS ERROR CODE, ASKED n TIMES: …`). It stops asking once a request is not answered.
 - **A restarted `usb_host` left `video_gw` with stale cameras** (found on that run): the old entries stayed beside the new (`CAMERAS: 0 V, 1 V, 2 IR, 3 IR`), and "camera 1" named a handle of the old instance. Its probe answered not-found.
   - **The fix:** the client counts its attaches (`Host::attaches`, `libmind/src/usb.rs`), and each camera keeps the count it was claimed under. After its claims, `look` drops a camera of an earlier count (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`); a stream on it fails its next pump and is marked gone.
-  - **Not run on the Ryzen yet.** No QEMU device is a camera.
+  - **On the Ryzen** (the run above, after `usb_host`'s `replace`): the first open after the restart still failed (`"GDZS-DC004-EFVT-IR": PROBE FAILED (NotFound)`), and the next look dropped both cameras (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`) and claimed them again, `CAMERAS: 0 V, 1 IR`. The first look after a restart only learns that the instance is new: its first claim is refused as invalid, and the attach comes at the next claim.
+  - **The mend:** `look` claims once more at once after such a refusal, so that look already drops the old cameras. `Host::claim` itself stays as it is, since `usb_storage`'s recovery reads that refusal as a new instance. Not run on the Ryzen yet. No QEMU device is a camera.
 
 ## Related
 
