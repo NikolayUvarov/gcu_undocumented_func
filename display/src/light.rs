@@ -54,8 +54,11 @@ pub struct Reference {
     pub line_delivery_pre: u32, pub req_delivery_pre: u32,
     /// The frame buffer's GPU address (DCN_VM_FB_LOCATION_BASE), for the surface's.
     pub fb_base: u64,
-    /// Whether pipe 1's MPCC and its OPP's output mux are free (0xF).
-    pub mpc_free: bool,
+    /// The MPC tree as batch 10 read it: pipe 1's MPCC (TOP_SEL, OPP_ID), its OPP's output mux, and the firmware's
+    /// OPP's mux and its MPCC's BOT_SEL. The firmware wires every MPCC n from DPP n to OPP n (213-DRV-0092, boot 70).
+    pub mpcc_top: u32, pub mpcc_opp: u32, pub mux: u32, pub firmware_mux: u32, pub firmware_bot: u32,
+    /// REFCLK_CNTL (0: the crystal) and DCHUBBUB_GLOBAL_TIMER_CNTL (its reference divider), the reference clock's route.
+    pub refclk_cntl: u32, pub timer_cntl: u32,
     /// The firmware's HUBP's HUBP_VREADY_AT_OR_AFTER_VSYNC (its DCHUBP_CNTL, batch 4).
     pub vready: u32,
     /// The firmware's pipe's registers stage 12 to 14 copy, in `COPIED`'s order.
@@ -85,12 +88,15 @@ pub fn reference(s: &Store, f: &Firmware, c: &Choice) -> Option<Reference> {
     let mut copies = [0u32; COPIED.len()];
     for (slot, r) in copies.iter_mut().zip(COPIED) { *slot = s.get(r, pipe)?; }
     let (q, o) = (c.pipe.otg, c.pipe.opp);
-    let mpc_free = s.field(R::MpccTopSel, q, MPCC_SEL)? == 0xF && s.field(R::MpcOutMux, o, MPCC_SEL)? == 0xF;
+    let sel = |r: R, i: u8| s.field(r, i, MPCC_SEL);
     Some(Reference {
         line_delivery_pre: s.field(R::HubpreqPerLineDeliveryPre, pipe, REFCYC_PER_LINE_DELIVERY_L)?,
         req_delivery_pre: s.field(R::HubpreqSurf0TtuCntl1, pipe, REFCYC_PER_REQ_DELIVERY)?,
         fb_base: (s.field(R::DcnVmFbLocationBase, 0, VM_16MIB)? as u64) << 24,
-        mpc_free, copies, vready: s.field(R::HubpCntl, pipe, HUBP_VREADY_AT_OR_AFTER_VSYNC)?,
+        mpcc_top: sel(R::MpccTopSel, q)?, mpcc_opp: sel(R::MpccOppId, q)?, mux: sel(R::MpcOutMux, o)?,
+        firmware_mux: sel(R::MpcOutMux, f.opp)?, firmware_bot: sel(R::MpccBotSel, pipe)?,
+        refclk_cntl: s.get(R::RefclkCntl, 0)?, timer_cntl: s.get(R::DchubbubGlobalTimerCntl, 0)?,
+        copies, vready: s.field(R::HubpCntl, pipe, HUBP_VREADY_AT_OR_AFTER_VSYNC)?,
         pipe, otg: t,
         h_total: s.field(R::OtgHTotal, t, COUNTER_LOW)?, v_total: s.field(R::OtgVTotal, t, COUNTER_LOW)?,
         h_blank_end: s.field(R::OtgHBlankStartEnd, t, COUNTER_HIGH)?, v_blank_end: s.field(R::OtgVBlankStartEnd, t, COUNTER_HIGH)?,
@@ -564,8 +570,12 @@ pub enum Failure {
     StartedAgain,
     /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
     NoReference,
-    /// Stages 11 to 15 could not be built from the reference (pipe 1's MPCC busy, or the plan).
-    PipeNotFree,
+    /// Pipe 1's MPCC belongs to another OPP, or is in the firmware's tree (its OPP's mux, or its MPCC's bottom).
+    MpccInUse { mpcc: u8, opp_id: u32, firmware_mux: u32, firmware_bot: u32 },
+    /// Pipe 1's OPP's output mux names another MPCC.
+    OutputMuxInUse { opp: u8, mux: u32 },
+    /// Stages 11 to 15 do not fit a plan.
+    PlanFull,
     /// An underflow, new since stage 9, at this HUBP's or ODM's register.
     Underflow { offset: u32, value: u32 },
     /// Stage 10: the surface is not mapped, or a sample read back differs from what was drawn.
@@ -582,6 +592,14 @@ pub enum Failure {
     JournalFull,
 }
 
+impl Failure {
+    /// A failure of what step 4 found or prepared, not of the hardware: stage 9 or 10 then stops without undoing.
+    pub fn not_ready(&self) -> bool {
+        matches!(self, Failure::NoReference | Failure::NoFrames(_) | Failure::MpccInUse { .. } | Failure::OutputMuxInUse { .. }
+            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. })
+    }
+}
+
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -589,7 +607,10 @@ impl fmt::Display for Failure {
             Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT"),
             Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
             Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
-            Failure::PipeNotFree => f.write_str("PIPE 1'S MPCC OR ITS OPP'S OUTPUT MUX IS IN USE, OR ITS PLAN DOES NOT FIT"),
+            Failure::MpccInUse { mpcc, opp_id, firmware_mux, firmware_bot } => write!(f,
+                "MPCC{} IS IN USE: ITS OPP_ID {:X} (ITS OWN OR 15 WANTED), THE FIRMWARE'S MUX {:X} AND MPCC BOTTOM {:X} (NOT {} WANTED)", mpcc, opp_id, firmware_mux, firmware_bot, mpcc),
+            Failure::OutputMuxInUse { opp, mux } => write!(f, "OPP{}'S OUTPUT MUX NAMES MPCC {:X} (ITS OWN OR 15 WANTED)", opp, mux),
+            Failure::PlanFull => f.write_str("STAGES 11 TO 15 DO NOT FIT A PLAN"),
             Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
@@ -613,6 +634,8 @@ pub enum Outcome {
     Failed { stage: u8, why: Failure },
     /// Stages 1 to `done` ran, then were undone, last first, as the build asks.
     Undone { done: u8 },
+    /// Stage `stage` (9 or 10, which write no register) was not ready: stages 1 to `done` stay as they are.
+    NotReady { done: u8, stage: u8, why: Failure },
 }
 
 /// The interpreter's machine for step 3: reads, writes through the guard into the journal, each write logged; the time
@@ -767,25 +790,35 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let us = e.now_us().saturating_sub(start).max(1);
     let (h0, v0) = ((r.h_total + 1) as u64, (r.v_total + 1) as u64);
     let pixel_khz = (h0 * v0 * frames as u64 * 1000 / us) as u32;
-    let reference_khz = ((r.ref_to_pix as u64 * pixel_khz as u64) >> 19) as u32;
+    // The reference clock, by PER_HTOTAL (Display Core's ref/pix x htotal x 2^8, which the firmware follows) and by
+    // REF_FREQ_TO_PIX_FREQ (which on the Ryzen it does not: 0.1632 for 48 MHz over 268.5); a crystal's round MHz kept.
+    let by_htotal = (r.per_htotal as u64 * pixel_khz as u64 / (h0 * 256)) as u32;
+    let by_ratio = ((r.ref_to_pix as u64 * pixel_khz as u64) >> 19) as u32;
+    let round_mhz = (by_htotal + 500) / 1000 * 1000;
+    let reference_khz = if by_htotal.abs_diff(round_mhz) * 200 <= round_mhz { round_mhz } else { by_htotal };
     let millihertz = frames as u64 * 1_000_000_000 / us;
     out.line(format_args!("S{} OTG{} COUNTED {} FRAMES IN {} US: {}.{:03} HZ, ITS PIXEL CLOCK {} KHZ; THE REFERENCE CLOCK {} KHZ",
         n, r.otg, frames, us, millihertz / 1000, millihertz % 1000, pixel_khz, reference_khz));
-    // The formulas (Display Core's dml21_rq_dlg_get_dlg_params, display_rq_dlg_calc_21.c, Linux v7.0) on the firmware's own pipe.
-    let at = |ratio: u32, x: u64| ((ratio as u64 * x) >> 19) as u32;
-    let (per0, hbe0, line0) = (at(r.ref_to_pix, h0 * 256), at(r.ref_to_pix, r.h_blank_end as u64), at(r.ref_to_pix, r.width as u64));
-    out.line(format_args!("S{} PIPE {} BY FORMULA: PER HTOTAL {} (SET {}), H_BLANK_END {} (SET {}), LINE {} (SET {}), V_BLANK_END {} (DLG {})",
-        n, r.pipe, per0, r.per_htotal, hbe0, r.refcyc_h_blank_end, line0, r.line_delivery, r.v_blank_end, r.dlg_v_blank_end));
-    // Pipe 1 for step 3's mode, with the firmware's requests per line scaled to its width.
+    out.line(format_args!("S{} THE REFERENCE CLOCK: {} KHZ BY PER_HTOTAL, {} KHZ BY REF_FREQ_TO_PIX_FREQ; REFCLK_CNTL {:08X} ({}), GLOBAL TIMER {:08X} (REFDIV {})",
+        n, by_htotal, by_ratio, r.refclk_cntl, if r.refclk_cntl & 1 == 0 { "THE CRYSTAL" } else { "ANOTHER SOURCE" }, r.timer_cntl, r.timer_cntl & 0xF));
+    // The formulas (Display Core's dml21_rq_dlg_get_dlg_params, display_rq_dlg_calc_21.c, Linux v7.0) on the firmware's
+    // own pipe, with that clock: they test what the firmware followed, not the formulas (it sets its own DLG).
+    let ratio0 = ((reference_khz as u64) << 19) / pixel_khz.max(1) as u64;
+    let at = |ratio: u64, x: u64| ((ratio * x) >> 19) as u32;
+    let (per0, hbe0, line0) = (at(ratio0, h0 * 256), at(ratio0, r.h_blank_end as u64), at(ratio0, r.width as u64));
+    out.line(format_args!("S{} PIPE {} BY FORMULA: REF/PIX {} (SET {}), PER HTOTAL {} (SET {}), H_BLANK_END {} (SET {}), LINE {} (SET {}), V_BLANK_END {} (DLG {})",
+        n, r.pipe, crate::batches::Ratio19(Some(ratio0 as u32)), crate::batches::Ratio19(Some(r.ref_to_pix)), per0, r.per_htotal, hbe0,
+        r.refcyc_h_blank_end, line0, r.line_delivery, r.v_blank_end, r.dlg_v_blank_end));
+    // Pipe 1 for step 3's mode, as Display Core computes it: a linear 32-bit surface asks 256 bytes, 64 pixels, a request.
     let otg = light.timing.otg().map_err(|_| Failure::NoReference)?;
     let pix1 = light.timing.pixel_khz.max(1) as u64;
     let ratio1 = ((reference_khz as u64) << 19) / pix1;
     let h1 = otg.h_total as u64 + 1;
-    let line1 = ((ratio1 * light.timing.h_active as u64) >> 19) as u32;
-    let round = |a: u64, b: u64| (a + b / 2) / b.max(1);
-    let requests0 = if r.req_delivery > 0 { round(r.line_delivery as u64 * 1024, r.req_delivery as u64) } else { 0 };
-    let requests1 = round(requests0 * light.timing.h_active as u64, r.width.max(1) as u64).max(1);
-    let req1 = (line1 as u64 * 1024 / requests1) as u32;
+    // Each value from the clocks themselves, as Display Core's doubles give it (truncated last), not from the rounded ratio.
+    let refcyc = |x: u64| (reference_khz as u64 * x / pix1) as u32;
+    let line1 = refcyc(light.timing.h_active as u64);
+    let requests1 = (light.timing.h_active as u64).div_ceil(64).max(1);
+    let req1 = refcyc(light.timing.h_active as u64 * 1024 / requests1);
     // The prefetch's delivery in the same proportion to the line's as the firmware's.
     let scaled = |x: u32, num: u32, den: u32| if den == 0 { x } else { (x as u64 * num as u64 / den as u64) as u32 };
     // The underflow statuses now, so that stage 15 fails on a new one only.
@@ -794,10 +827,12 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let underflow = [status(e, R::HubpCntl, r.pipe)?, status(e, R::OptcInputGlobalControl, r.otg)?, status(e, R::HubpCntl, q)?,
                      status(e, R::OptcInputGlobalControl, q)?];
     let d = Derived {
-        firmware_pixel_khz: pixel_khz, reference_khz, ref_to_pix: ratio1 as u32, per_htotal: ((ratio1 * h1 * 256) >> 19) as u32,
-        refcyc_h_blank_end: ((ratio1 * otg.h_blank_end as u64) >> 19) as u32, dlg_v_blank_end: otg.v_blank_end, line_delivery: line1,
+        firmware_pixel_khz: pixel_khz, reference_khz, ref_to_pix: ratio1 as u32, per_htotal: refcyc(h1 * 256),
+        refcyc_h_blank_end: refcyc(otg.h_blank_end as u64), dlg_v_blank_end: otg.v_blank_end, line_delivery: line1,
         req_delivery: req1, min_dst_y_next_start: otg.v_blank_start * 4,
-        line_delivery_pre: scaled(line1, r.line_delivery_pre, r.line_delivery), req_delivery_pre: scaled(req1, r.req_delivery_pre, r.req_delivery),
+        // The prefetch's at the same rate as the line's (Display Core's for a vertical ratio of 1), or the firmware's proportion.
+        line_delivery_pre: if r.line_delivery == 0 { line1 } else { scaled(line1, r.line_delivery_pre, r.line_delivery) },
+        req_delivery_pre: if r.req_delivery == 0 { req1 } else { scaled(req1, r.req_delivery_pre, r.req_delivery) },
         underflow,
     };
     out.line(format_args!("S{} PIPE {} FOR {}x{} AT {} KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} ({} REQUESTS A LINE)",
@@ -814,13 +849,18 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
 /// prefetch and the derived DLG and TTU; its MPCC to its OPP; then unblanked and the pattern off.
 pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Failure> {
     use R::*;
-    if !r.mpc_free { return Err(Failure::PipeNotFree); }
     let (q, o) = (light.choice.pipe.otg, light.choice.pipe.opp);
+    // Pipe 1's MPCC: unused (15) or already its own OPP's, and outside the firmware's tree; its OPP's mux free or on it.
+    let mine = |x: u32, own: u32| x == 0xF || x == own;
+    if !mine(r.mpcc_opp, o as u32) || r.firmware_mux == q as u32 || (r.firmware_bot == q as u32 && r.pipe != q) {
+        return Err(Failure::MpccInUse { mpcc: q, opp_id: r.mpcc_opp, firmware_mux: r.firmware_mux, firmware_bot: r.firmware_bot });
+    }
+    if !mine(r.mux, q as u32) { return Err(Failure::OutputMuxInUse { opp: o, mux: r.mux }); }
     let (w, h) = (light.timing.h_active as u32, light.timing.v_active as u32);
-    let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::PipeNotFree);
+    let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::PlanFull);
     let mut p = Plan::default();
-    let put = |p: &mut Plan, reg: R, i: u8, fields: &[(dcn::Field, u32)]| -> Result<(), Failure> { p.update(at(reg, i)?, fields).map_err(|_| Failure::PipeNotFree) };
-    let mark = |p: &mut Plan, n: u8| p.push(Step::Begin(n)).map_err(|_| Failure::PipeNotFree);
+    let put = |p: &mut Plan, reg: R, i: u8, fields: &[(dcn::Field, u32)]| -> Result<(), Failure> { p.update(at(reg, i)?, fields).map_err(|_| Failure::PlanFull) };
+    let mark = |p: &mut Plan, n: u8| p.push(Step::Begin(n)).map_err(|_| Failure::PlanFull);
     mark(&mut p, 11)?;
     put(&mut p, DppControl, q, &[(DPP_CLOCK_ENABLE, 1)])?;
     put(&mut p, HubpClkCntl, q, &[(HUBP_CLOCK_ENABLE, 1)])?;
@@ -863,11 +903,11 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, MpcOutMux, o, &[(MPCC_SEL, q as u32)])?;
     mark(&mut p, 15)?;
     put(&mut p, HubpCntl, q, &[(HUBP_BLANK_EN, 0), (HUBP_TTU_DISABLE, 0)])?;
-    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PipeNotFree)?;
-    p.push(Step::NoUnderflow).map_err(|_| Failure::PipeNotFree)?;
+    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
+    p.push(Step::NoUnderflow).map_err(|_| Failure::PlanFull)?;
     put(&mut p, DpgControl, o, &[(DPG_EN, 0)])?;
-    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PipeNotFree)?;
-    p.push(Step::NoUnderflow).map_err(|_| Failure::PipeNotFree)?;
+    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
+    p.push(Step::NoUnderflow).map_err(|_| Failure::PlanFull)?;
     Ok(p)
 }
 
@@ -1001,6 +1041,18 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
             Ok(()) => {
                 out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len()));
                 if (ATTACHED_FROM..dcn::PIPE_WRITES_FROM).contains(&n) && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
+            }
+            // Stage 9 reads and derives, stage 10 draws into memory nothing scans: when either is not ready, no register of
+            // theirs needs undoing, and stages 1 to 8 stay. A firmware's pipe changed or a register unreadable still undoes.
+            Err(why) if (n == 9 || n == 10) && why.not_ready() => {
+                out.line(format_args!("S{} {} NOT READY: {}; STAGES 1 TO {} STAY AS THEY ARE, STEP 4 STOPS HERE", n, name, why, n - 1));
+                if then_undo {
+                    out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", n - 1, STAGES, journal.len, n - 1));
+                    for m in (1..n).rev() { undo(light, e, interp, journal, m, out); }
+                }
+                out.line(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {}: STAGE {} NOT READY; {} WRITES MADE {}", n - 1, STAGES, n, journal.len,
+                    if then_undo { "ARE UNDONE" } else { "ARE LEFT IN PLACE" }));
+                return Outcome::NotReady { done: n - 1, stage: n, why };
             }
             Err(why) => {
                 out.line(format_args!("S{} {} FAILED: {}; UNDOING STAGES {} TO 1", n, name, why, n));
