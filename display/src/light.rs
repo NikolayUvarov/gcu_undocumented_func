@@ -753,7 +753,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let millihertz = frames as u64 * 1_000_000_000 / us;
     out.line(format_args!("S{} OTG{} COUNTED {} FRAMES IN {} US: {}.{:03} HZ, ITS PIXEL CLOCK {} KHZ; THE REFERENCE CLOCK {} KHZ",
         n, r.otg, frames, us, millihertz / 1000, millihertz % 1000, pixel_khz, reference_khz));
-    // The formulas (Display Core's dml20_rq_dlg_get_dlg_params, as recalled) on the firmware's own pipe.
+    // The formulas (Display Core's dml21_rq_dlg_get_dlg_params, display_rq_dlg_calc_21.c, Linux v7.0) on the firmware's own pipe.
     let at = |ratio: u32, x: u64| ((ratio as u64 * x) >> 19) as u32;
     let (per0, hbe0, line0) = (at(r.ref_to_pix, h0 * 256), at(r.ref_to_pix, r.h_blank_end as u64), at(r.ref_to_pix, r.width as u64));
     out.line(format_args!("S{} PIPE {} BY FORMULA: PER HTOTAL {} (SET {}), H_BLANK_END {} (SET {}), LINE {} (SET {}), V_BLANK_END {} (DLG {})",
