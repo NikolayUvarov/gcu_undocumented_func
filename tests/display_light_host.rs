@@ -328,7 +328,7 @@ fn a_build_stops_after_its_allowed_stage_and_leaves_the_rest_unwritten() {
 // Every register written is back to its value before step 3, but for the status bits the model itself sets.
 fn restored_but(e: &Engine, before: &HashMap<u32, u32>, except: &[u32]) {
     for (o, _) in writes(e) {
-        if except.contains(&o) { continue; }
+        if except.contains(&o) || o == reg(R::OtgVerticalInterrupt2Position, 1) { continue; } // the once-a-boot mark stays
         let status = e.set.iter().chain(e.follow.iter()).filter(|(at, _)| *at == o).fold(0, |m, (_, bits)| m | bits);
         let value = |m: &HashMap<u32, u32>| m.get(&o).copied().unwrap_or(0) & !status;
         assert_eq!(value(&e.regs), value(before), "{:05X} not restored", o);
@@ -620,6 +620,48 @@ fn stage_9_without_a_reference_and_stage_10_without_a_surface_fail_and_are_undon
     assert_eq!(light::reference(&s, &f, &c).map(|r| r.mpc_free), Some(false), "pipe 1's MPCC in use");
     s.set_batches(9);
     assert_eq!(light::reference(&s, &f, &c), None, "batch 10 not read");
+}
+
+#[test]
+fn step_3_runs_once_a_boot_by_the_mark_it_leaves_in_its_otg() {
+    let mark = reg(R::OtgVerticalInterrupt2Position, 1);
+    // The first start leaves the mark before stage 1 and keeps it through the undo.
+    let mut e = engine();
+    let (outcome, log) = run(&good(), &mut e, 1);
+    assert_eq!(outcome, Outcome::Stopped { done: 1 });
+    assert_eq!(writes(&e)[0], (mark, light::RESTART_MARK));
+    assert!(log.iter().any(|x| x == "S0 MARKED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 = 5A5A (WAS 00000000): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT"), "{:#?}", log);
+    let mut undone = engine();
+    let img = good();
+    let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    light::run_then_undo(&l, &mut undone, &mut interp, &mut light::Journal::default(), 2, &mut Log(vec![]));
+    assert_eq!(undone.regs[&mark], light::RESTART_MARK);
+    // A start again in the same boot finds it and writes nothing.
+    let mut again = engine();
+    again.regs.insert(mark, light::RESTART_MARK);
+    let (outcome, log) = run(&good(), &mut again, STAGES);
+    assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+    assert!(writes(&again).is_empty());
+    assert!(log.iter().any(|x| x == "STEP 3 NOT RUN: DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT (OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 HOLDS 5A5A)"), "{:#?}", log);
+    // A build that may run no stage leaves no mark.
+    let mut none = engine();
+    run(&good(), &mut none, 0);
+    assert!(writes(&none).is_empty());
+}
+
+#[test]
+fn display_asks_for_the_stack_steps_3_and_4_need() {
+    // linker.ld's PT_GNU_STACK size is the stack display runs on (262-KRN-0164); without it a task has 64 KiB.
+    let ld = include_str!("../display/linker.ld");
+    assert!(ld.contains("stack PT_GNU_STACK FLAGS(6);"));
+    let at = ld.find(".stack (NOLOAD) : { . = . + 0x").expect("no .stack section") + ".stack (NOLOAD) : { . = . + 0x".len();
+    let size = usize::from_str_radix(ld[at..].split(';').next().unwrap(), 16).unwrap();
+    assert_eq!(size, light::STACK_BYTES);
+    assert!(2 * light::STEP3_STACK_BYTES <= size, "{} needed of {}", light::STEP3_STACK_BYTES, size);
+    // The 64 KiB that faulted on 2026-11-22 would not have passed this bound.
+    assert!(2 * light::STEP3_STACK_BYTES > 64 * 1024, "{}", light::STEP3_STACK_BYTES);
 }
 
 #[test]

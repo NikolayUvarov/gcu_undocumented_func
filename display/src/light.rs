@@ -121,6 +121,21 @@ pub struct Derived {
 /// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
 pub const SURFACE_OFFSET: u64 = 0x0100_0000;
 
+/// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
+/// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row. Half of
+/// display's stack (linker.ld) bounds it, so that the frames' own locals keep the rest: on 2026-11-22 the 64 KiB a task
+/// has by default faulted at its guard page as step 3 began (boot 69, release 202611220523).
+pub const STEP3_STACK_BYTES: usize = core::mem::size_of::<Interpreter>() + core::mem::size_of::<Journal>()
+    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::WIDTH;
+/// The stack display asks for (linker.ld's PT_GNU_STACK).
+pub const STACK_BYTES: usize = 0x40000;
+const _: () = assert!(2 * STEP3_STACK_BYTES <= STACK_BYTES, "steps 3 and 4 need more stack than display asks for");
+
+/// The mark a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its interrupt off): a start
+/// of display again in the same boot finds it and runs no stage. A machine boot clears OTG1's registers (step 1 read
+/// them all 0 after every boot, though Linux had driven OTG1 before it), PHY A's not.
+pub const RESTART_MARK: u32 = 0x5A5A;
+
 /// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
 pub const MEASURED_FRAMES: u32 = 30;
 pub const MEASURE_LIMIT_US: u64 = 2_000_000;
@@ -545,6 +560,8 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
 pub enum Failure {
     Unreadable(u32),
     Refused(Refused),
+    /// display started again in this boot: step 3's OTG holds the mark of a start before.
+    StartedAgain,
     /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
     NoReference,
     /// Stages 11 to 15 could not be built from the reference (pipe 1's MPCC busy, or the plan).
@@ -569,6 +586,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Failure::Unreadable(o) => write!(f, "{:05X} COULD NOT BE READ", o),
+            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT"),
             Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
             Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
             Failure::PipeNotFree => f.write_str("PIPE 1'S MPCC OR ITS OPP'S OUTPUT MUX IS IN USE, OR ITS PLAN DOES NOT FIT"),
@@ -939,6 +957,20 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
+    // Once a boot: a start of display again in this boot (init restarts a program that faults) finds the mark and runs no
+    // stage; else the mark is left before stage 1, and never undone.
+    if allowed > 0 {
+        let Some(mark) = R::OtgVerticalInterrupt2Position.at(light.choice.pipe.otg) else { return Outcome::Failed { stage: 0, why: Failure::StartedAgain } };
+        let was = match read(e, mark) { Ok(v) => v, Err(why) => { out.line(format_args!("STEP 3 NOT RUN: ITS MARK: {}", why)); return Outcome::Failed { stage: 0, why }; } };
+        if was & 0x7FFF == RESTART_MARK {
+            out.line(format_args!("STEP 3 NOT RUN: {} ({} HOLDS {:04X})", Failure::StartedAgain, Name(mark), was));
+            return Outcome::Failed { stage: 0, why: Failure::StartedAgain };
+        }
+        let Ok(w) = light.guard.check(mark) else { return Outcome::Failed { stage: 0, why: Failure::StartedAgain } };
+        e.write(w, RESTART_MARK);
+        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT",
+            Name(mark), RESTART_MARK, was));
+    }
     let attached = match light.attached.read(e) {
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE ATTACHED HUBPS: {}", why)); return Outcome::Failed { stage: 0, why }; }
