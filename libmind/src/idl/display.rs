@@ -2,7 +2,8 @@
 //! The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
 //! it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
 //! mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2);
-//! a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272).
+//! a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272), kept in shape or
+//! stretched as the shell chooses (1.4, 213-KRN-0273).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,13 +13,14 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:display";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy; `denied`: a
 /// `remote` from a client with no mark of its own (1.2), or a second screen from a client not badged
-/// `BADGE_SCREEN` (1.3); `bad-screen`: a second screen whose shape the lent pixels do not hold, or whose format or
-/// size the compositor does not draw (1.3).
+/// `BADGE_SCREEN` (1.3), or a fit from a client with a badge (1.4); `bad-screen`: a second screen whose shape the lent
+/// pixels do not hold, or whose format or size the compositor does not draw (1.3). `no-screen` also answers `mirror`
+/// while no second screen is offered (1.4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Error { #[default] NoScreen = 0, NoMemory = 1, Denied = 2, BadScreen = 3 }
@@ -69,6 +71,33 @@ impl Wire for PixelFormat {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// 1.4 (213-KRN-0273): how the first screen is shown on the second. `keep`: its shape kept, as large as the second
+/// holds, centred, black around it (1.3's way, and the compositor's choice until told otherwise). `stretch`: it fills
+/// the second screen, each axis scaled on its own. Either way the second screen shows the whole first screen, its
+/// marks among it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Fit { #[default] Keep = 0, Stretch = 1 }
+impl Fit {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Keep), 1 => Some(Self::Stretch), _ => None } }
+}
+impl Wire for Fit {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// The second screen now: its size in pixels, the fit, and the picture of the first screen on it (its size; it
+/// lies centred).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mirror { pub width: u16, pub height: u16, pub fit: Fit, pub picture_width: u16, pub picture_height: u16 }
+impl Wire for Mirror {
+    const MAX: usize = <u16 as Wire>::MAX + <u16 as Wire>::MAX + <Fit as Wire>::MAX + <u16 as Wire>::MAX + <u16 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.width.encode(w)?; self.height.encode(w)?; self.fit.encode(w)?; self.picture_width.encode(w)?; self.picture_height.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { width: Wire::decode(r)?, height: Wire::decode(r)?, fit: Wire::decode(r)?, picture_width: Wire::decode(r)?, picture_height: Wire::decode(r)? }) }
 }
 
 pub fn mode(endpoint: Endpoint) -> Result<Mode> {
@@ -140,6 +169,31 @@ pub fn screen_gone(endpoint: Endpoint) -> Result<core::result::Result<(), Error>
     Ok(Ok(()))
 }
 
+/// Chooses the fit, for the second screen now and those offered after it, until the next choice or the compositor's
+/// restart. Only a client with no badge may choose (the shell's, and the copies it lends the programs it starts);
+/// a remote path's or a driver's gets `denied`.
+pub fn mirror_fit(endpoint: Endpoint, fit: Fit) -> Result<core::result::Result<(), Error>> {
+    let words = [7 | MAJOR << 8 | ((fit) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// The second screen and how the first is shown on it; `no-screen` while none is offered. Any client may ask.
+pub fn mirror(endpoint: Endpoint) -> Result<core::result::Result<Mirror, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 9, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Mirror as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `display` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -149,6 +203,8 @@ pub enum Request {
     Remote { state: RemoteState },
     OfferScreen { width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize },
     ScreenGone,
+    MirrorFit { fit: Fit },
+    Mirror,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -187,6 +243,18 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::ScreenGone, Call::words(request, cap)))
         }
+        7 => {
+            wire::body(request, cap, [0xff0000, 0x0], CAP_KIND_NONE, false)?;
+            let Some(fit) = Fit::from_code(wire::field(&words, 0, 16, 8)) else { wire::discard(request, cap); return Err(Reject::Invalid) };
+            Ok((Request::MirrorFit { fit }, Call::words(request, cap)))
+        }
+        8 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 9, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Mirror, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -213,4 +281,12 @@ pub fn reply_offer_screen(call: Call, value: core::result::Result<(), Error>) ->
 pub fn reply_screen_gone(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_mirror_fit(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_mirror(call: Call, value: core::result::Result<&Mirror, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

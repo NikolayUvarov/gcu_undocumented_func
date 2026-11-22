@@ -8,11 +8,11 @@
 // framebuffer only, so no capture holds them and no program can hide them. It logs the screen, each screen put in
 // front and its first seconds of frames (213-KRN-0098), and whose screen is in front (750-KRN-0192).
 // A display driver may offer a second screen (display.wit 1.3, 213-KRN-0272): the first is mirrored into it, scaled to
-// fit and centred, with the same marks.
+// fit and centred, or stretched over it as the shell chooses (1.4, 213-KRN-0273), with the same marks.
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
-use mind::display::{fit, remote_center, remote_of, remote_pixel, shown, source_of, Remote, BADGE_SCREEN};
-use mind::idl::display::{self, Error, Mode, PixelFormat, RemoteState, Request};
+use mind::display::{placed, remote_center, remote_of, remote_pixel, shown, source_of, Remote, BADGE_SCREEN};
+use mind::idl::display::{self, Error, Fit, Mirror, Mode, PixelFormat, RemoteState, Request};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
@@ -85,17 +85,26 @@ struct Second { map: Mapping, width: usize, height: usize, pitch: usize, format:
 
 impl Second {
     // A driver's offer checked against what it lent: the shape inside the mapping, a format drawn here.
-    fn new(info: &BootInfo, width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize) -> Result<Second, Error> {
+    fn new(info: &BootInfo, width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize, fit: Fit) -> Result<Second, Error> {
         let (width, height, pitch) = (width as usize, height as usize, pitch as usize);
         if width == 0 || height == 0 || pitch % 4 != 0 || pitch < width * 4 { return Err(Error::BadScreen); }
         let map = Mapping::new(pixels).map_err(|_| Error::NoMemory)?;
         if map.len() < pitch * height { return Err(Error::BadScreen); }
-        let (x, y, w, h) = fit((info.width, info.height), (width, height));
-        let (Some(cols), Some(rows)) = (Pages::new(w * 4), Pages::new(h * 4)) else { return Err(Error::NoMemory) };
-        let second = Second { map, width, height, pitch: pitch / 4, format: if format == PixelFormat::Rgb { PIXEL_RGB } else { PIXEL_BGR }, at: (x, y), size: (w, h), cols, rows };
-        for c in 0..w { unsafe { core::ptr::write((second.cols.address() as *mut u32).add(c), source_of(c, w, info.width) as u32); } }
-        for r in 0..h { unsafe { core::ptr::write((second.rows.address() as *mut u32).add(r), source_of(r, h, info.height) as u32); } }
+        let (Some(cols), Some(rows)) = (Pages::new(width * 4), Pages::new(height * 4)) else { return Err(Error::NoMemory) };
+        let mut second = Second { map, width, height, pitch: pitch / 4, format: if format == PixelFormat::Rgb { PIXEL_RGB } else { PIXEL_BGR }, at: (0, 0), size: (1, 1), cols, rows };
+        second.place(info, fit);
         Ok(second)
+    }
+    // The picture for a fit, and the first screen's column and row each of its columns and rows shows (the tables hold the
+    // whole screen's width and height, the largest picture).
+    fn place(&mut self, info: &BootInfo, fit: Fit) {
+        let (x, y, w, h) = placed(fit == Fit::Stretch, (info.width, info.height), (self.width, self.height));
+        (self.at, self.size) = ((x, y), (w, h));
+        for c in 0..w { unsafe { core::ptr::write((self.cols.address() as *mut u32).add(c), source_of(c, w, info.width) as u32); } }
+        for r in 0..h { unsafe { core::ptr::write((self.rows.address() as *mut u32).add(r), source_of(r, h, info.height) as u32); } }
+    }
+    fn mirror(&self, fit: Fit) -> Mirror {
+        Mirror { width: self.width as u16, height: self.height as u16, fit, picture_width: self.size.0 as u16, picture_height: self.size.1 as u16 }
     }
     fn col(&self, c: usize) -> usize { unsafe { core::ptr::read((self.cols.address() as *const u32).add(c)) as usize } }
     fn row(&self, r: usize) -> usize { unsafe { core::ptr::read((self.rows.address() as *const u32).add(r)) as usize } }
@@ -135,7 +144,7 @@ impl Second {
 }
 
 // A driver's offer or its screen gone, answered after the second screen changed (213-KRN-0272).
-fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, shadow: *const u32, valid: bool, lines: &mut u32) {
+fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: Fit, shadow: *const u32, valid: bool, lines: &mut u32) {
     if badge != BADGE_SCREEN {
         say(lines, format_args!("[COMPOSITOR] SECOND SCREEN REFUSED: PID {} (BADGE {}) IS NO DISPLAY DRIVER (MC-3.11)", sender, badge));
         if let Request::OfferScreen { pixels, .. } = request { let _ = mind::ipc::drop_cap(pixels); }
@@ -145,13 +154,13 @@ fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16
     match request {
         Request::OfferScreen { width, height, pitch, format, pixels } => {
             drop(second.take()); // the screen before, unmapped first
-            let made = Second::new(info, width, height, pitch, format, pixels);
+            let made = Second::new(info, width, height, pitch, format, pixels, fit);
             let _ = mind::ipc::drop_cap(pixels); // the mapping keeps the range
             match &made {
                 Ok(s) => {
                     s.redraw(info, shadow, valid);
-                    say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, {:?}, FROM PID {}: THE FIRST MIRRORED AT {}X{} FROM {},{}",
-                                            width, height, pitch, format, sender, s.size.0, s.size.1, s.at.0, s.at.1));
+                    say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, {:?}, FROM PID {}: THE FIRST MIRRORED AT {}X{} FROM {},{}{}",
+                                            width, height, pitch, format, sender, s.size.0, s.size.1, s.at.0, s.at.1, stretched(fit)));
                 }
                 Err(error) => say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, FROM PID {} REFUSED: {:?}", width, height, pitch, sender, error)),
             }
@@ -167,6 +176,33 @@ fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16
     }
 }
 
+fn stretched(fit: Fit) -> &'static str { if fit == Fit::Stretch { ", STRETCHED" } else { "" } }
+
+// The fit chosen or asked for (213-KRN-0273): only a client with no badge chooses; the second screen now is drawn again.
+fn mirror(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: &mut Fit, shadow: *const u32, valid: bool, lines: &mut u32) {
+    let Request::MirrorFit { fit: chosen } = request else {
+        let _ = display::reply_mirror(call, second.as_ref().map(|s| s.mirror(*fit)).as_ref().ok_or(Error::NoScreen));
+        return;
+    };
+    if badge != 0 {
+        say(lines, format_args!("[COMPOSITOR] MIRROR FIT REFUSED: PID {} (BADGE {}) MAY NOT CHOOSE IT (MC-3.11)", sender, badge));
+        let _ = display::reply_mirror_fit(call, Err(Error::Denied));
+        return;
+    }
+    if chosen != *fit {
+        *fit = chosen;
+        match second.as_mut() {
+            Some(s) => {
+                s.place(info, chosen);
+                s.redraw(info, shadow, valid);
+                say(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): THE FIRST AT {}X{} FROM {},{} ON THE SECOND SCREEN'S {}X{}", chosen, sender, s.size.0, s.size.1, s.at.0, s.at.1, s.width, s.height));
+            }
+            None => say(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): FOR A SECOND SCREEN OFFERED LATER", chosen, sender)),
+        }
+    }
+    let _ = display::reply_mirror_fit(call, Ok(()));
+}
+
 // What a request lit: the capture dot, the camera mark or a remote mark.
 enum Lit { Capture, Camera, Remote(Remote, RemoteState) }
 
@@ -176,7 +212,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
     let lit = match request {
         Request::Capture => Some(Lit::Capture), Request::Camera => Some(Lit::Camera), Request::Mode => None,
         Request::Remote { state } => remote_of(badge).map(|mark| Lit::Remote(mark, state)),
-        Request::OfferScreen { .. } | Request::ScreenGone => None, // second_screen's
+        Request::OfferScreen { .. } | Request::ScreenGone | Request::MirrorFit { .. } | Request::Mirror => None, // second_screen's and mirror's
     };
     let _ = match request {
         Request::Camera => display::reply_camera(call),
@@ -194,7 +230,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
             };
             display::reply_capture(call, copy)
         }
-        Request::OfferScreen { .. } | Request::ScreenGone => Ok(()),
+        Request::OfferScreen { .. } | Request::ScreenGone | Request::MirrorFit { .. } | Request::Mirror => Ok(()),
     };
     lit
 }
@@ -222,6 +258,7 @@ fn main(info: &'static BootInfo) {
     let mut watch = Watch::default();
     let mut second: Option<Second> = None; // a second screen a driver lent (213-KRN-0272)
     let mut second_lines = 0u32;
+    let mut fit = Fit::Keep; // how the first screen is shown on the second (213-KRN-0273), until the shell chooses
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {
@@ -323,7 +360,9 @@ fn main(info: &'static BootInfo) {
         match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if frame == Frame::Busy { 1 } else { FRAME_MS }) {
             Ok(request) => match display::decode(&request, RECEIVED_CAP) {
                 Ok((decoded @ (Request::OfferScreen { .. } | Request::ScreenGone), call)) =>
-                    second_screen(info, decoded, call, request.badge, request.sender, &mut second, shadow, valid, &mut second_lines),
+                    second_screen(info, decoded, call, request.badge, request.sender, &mut second, fit, shadow, valid, &mut second_lines),
+                Ok((decoded @ (Request::MirrorFit { .. } | Request::Mirror), call)) =>
+                    mirror(info, decoded, call, request.badge, request.sender, &mut second, &mut fit, shadow, valid, &mut second_lines),
                 Ok((decoded, call)) => match serve(info, source.as_ref(), decoded, call, request.badge, request.sender, &mut remote_lines) {
                     Some(Lit::Capture) => captured = Some(mind::time::uptime_ms()),
                     Some(Lit::Camera) => filmed = Some(mind::time::uptime_ms()),
