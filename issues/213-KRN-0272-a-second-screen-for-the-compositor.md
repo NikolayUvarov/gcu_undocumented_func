@@ -1,0 +1,48 @@
+# 213-KRN-0272 — A second screen for the compositor: `display.wit` 1.3, offered by a display driver and mirrored into
+
+**Type:** `compositor`, IDL (`display.wit` 1.3, `mmio` handles), `init` · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0092 · **Priority:** P1 · **Status:** in progress (made, 2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.11, MC-6.1, MC-12.1, MC-12.3, MC-12.4
+
+## Problem
+
+`display` lit the Ryzen's second output (HDMI-A-1) on 2026-11-22 with the engine's test pattern, through [213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md)'s grant. DRV's next stage (213-DRV-0092) puts a picture of its own in the range of BAR 0 init granted it, and unblanks the second pipe on it. After that the pixels of a second screen exist, and nothing in the system knows of them.
+
+DRV asked for an interface on 2026-11-22 (`KRN/2026-11-22T0459Z-DRV-request-a-second-screen-offered-to-the-compositor-by-display.md` on `internal-dev-messages`). Through it a display driver tells the compositor:
+- that a second screen exists, and when it comes or goes;
+- its shape;
+- where its pixels are, as a mapping the driver lends;
+- and, if wanted, when a frame may be shown.
+
+A mirror of the first screen comes first; an extended screen comes later, with `wm`.
+
+## Plan
+
+1. **`display.wit` 1.3**, served by the compositor:
+   - `offer-screen(width, height, pitch, format, pixels: borrow<mmio>)`: the shape (pitch in bytes; `bgr` or `rgb`) and the pixels, a copy of the driver's MMIO range: a lease, as `borrow<…>` is. Offering again replaces the screen before.
+   - `screen-gone()`: the compositor lets the mapping go before it answers, so the driver may then revoke its range.
+   - Only a client badged `mind::display::BADGE_SCREEN` (3) may call either; others get `denied`, and a shape the range does not hold gets `bad-screen`.
+   - No frame timing yet: the compositor writes at its own pace (15 ms), and the second screen may tear.
+2. **The IDL tool** takes `mmio` as a handle kind (`CAP_KIND_MMIO`).
+3. **`init`** gives `display` its client of the compositor, badged `BADGE_SCREEN`, in `SLOT_DISPLAY`, when the compositor runs.
+4. **The compositor mirrors the first screen into the second:**
+   - The largest picture of the first screen's shape the second holds, centred, and black around it (`mind::display::fit`). On the Ryzen, 2560x1600 on 1920x1080 is 1728x1080 from x 96.
+   - Each picture pixel shows the nearest pixel of the shadow copy.
+   - After the first full drawing, only the picture pixels that show a changed span are written (`shown`).
+   - The marks the first screen shows (capture, camera, remote) are drawn on the picture too, so no program can hide them there either.
+   - On x86 the range maps write-combining, as 213-KRN-0271 maps an MMIO range in the boot framebuffer's BAR.
+5. **Not in this task:**
+   - frame timing (vertical blank) from the driver;
+   - an extended screen, whose layout `wm` needs (APP's to ask for);
+   - a second screen on any other machine.
+
+## Acceptance criteria
+
+- [x] `tests/compositor_mirror_host.rs`: the Ryzen's two shapes and others fit centred; each picture pixel shows the nearest source pixel in bounds; a changed source span touches exactly the picture pixels that show it.
+- [ ] Builds for x86 and aarch64; the IDL fuzzer with `display` 1.3; every gate group passes on both architectures (the compositor runs in all of them, with no second screen).
+- [ ] **On the Ryzen** (DRV, with 213-DRV-0092's `display`): the compositor logs `SECOND SCREEN 1920X1080 …: THE FIRST MIRRORED AT 1728X1080 FROM 96,0`, and the maintainer sees MIND Core's screen on both monitors, the marks on both.
+- [ ] docs/idl and docs/api say what changed.
+
+**Not covered:** whether the second screen tears, and how much; the frame timing is the next step if it does.
+
+## Related
+
+[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
