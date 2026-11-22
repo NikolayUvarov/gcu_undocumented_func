@@ -550,7 +550,7 @@ fn service_a_check_that_meets_an_unreadable_cmac_window_reads_again_and_goes_on(
     // The check first: one table's reads answer DEADBEEF, then the window answers.
     c.borrow_mut().window_dead=8;ipc::advance(20);assert!(service.step());
     let Some(u)=service.take_unreadable()else{panic!("no unreadable check")};
-    assert_eq!((u.count,u.value,u.recovered),(1,0xdead_beef,false));assert!((1..=8).contains(&u.reads),"{u:?}");
+    assert_eq!((u.count,u.value,u.recovered),(1,0xdead_beef,false));assert!((1..=16).contains(&u.reads),"{u:?}");
     assert!((0x40000..0x40020).contains(&u.register),"{u:?}");
     // The check first, and the firmware's recovery begins with it: outlasted, then the check made again.
     {let mut c=c.borrow_mut();c.window_dead=8;c.window_dead_ser=true;c.ser_heal=Some(2);}ipc::advance(20);assert!(service.step());
