@@ -1,6 +1,6 @@
 # 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written and run on the Ryzen; steps 2 and 3 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written and run on the Ryzen; step 2 written, not run there yet; step 3 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -56,6 +56,14 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
   - That fits the guess that the cable's transfers starved the rings, but does not show it: no dry ring fell in a transfer's wait.
   - A run with a log read in its middle would name the transfer.
 - **Criterion 3 is not met:** DCI 5 ran dry once at the close, and steps 2 and 3 are not written. All of this holds for that machine, that board and that release (MC-12.1).
+
+- **Step 2, written** (not run on the Ryzen yet):
+  - An isochronous IN stream has a spill of 64 KiB, more than half a second of the speakerphone's capture. Its finished TDs go into it as a bulk stream's do, and back on the ring at once.
+  - `usb_host` does this every STREAM_MS, and now also every millisecond while it waits for a transfer of another device (`completion_for`). So a client that comes late, or a transfer of the cable's converter, no longer leaves the ring empty. The same holds for the cameras' bulk rings (158-DRV-0082).
+  - Empty packets are left out of the spill, as the take leaves them out. A full spill leaves the packets on their TDs, so the ring can still run dry then, and says so.
+  - The end line adds the spill's most and how often it was full.
+  - Command waits are left as they were: a command may change the slot's endpoints.
+  - QEMU's `usb-audio` has no IN endpoint, so the QEMU suites do not reach this path. The Ryzen run is its evidence.
 
 ## Related
 
