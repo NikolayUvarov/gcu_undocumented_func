@@ -11172,6 +11172,39 @@ def usbaudio_suite(args):
           f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
           f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
           f"unplugged, the codec again", flush=True)
+    audiostub_check(args)
+
+
+def audiostub_check(args):
+    """000-DRV-0093: tests/audio_stub opens capture and playback together through audio_gw on QEMU's usb-audio, which has
+    no capture: it says so, plays its tone for 3 s, counts the frames it played and ends with the hardware tests'
+    marker line. The capture side of a duplex run is evidence on a real device only (the Ryzen's speakerphone)."""
+    if not args.audio_elf:
+        print("SKIP: audiostub: tests/audio_stub is not built (scripts/x86_fixtures.sh)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: audiostub needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-audiostub-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"audiostub.elf": Path(args.audio_elf).read_bytes()})
+        wav = Path(temp) / "stub.wav"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, audio="none", audio_card="HDA",
+                extra=["-audiodev", f"wav,id=ssnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=ssnd,id=uac"])
+        try:
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "ATTACHED")
+                if "ATTACHED" in log:
+                    break
+            require(log, "[AUDIO] USB")
+            out = vm.command("audiostub duplex 3 440", timeout=40)
+            require(out, "AUDIO STUB: NO CAPTURE")
+            ended = re.search(r"AUDIO STUB: ENDED AT \d+ MS OF UPTIME \((\d+) MS\): CAPTURE NONE: 0 BUFFERS, 0 FRAMES, 0 OVERFLOWS; PLAYBACK (\d+) FRAMES AT 440 HZ", out)
+            assert ended and int(ended[1]) >= 3000 and int(ended[2]) >= 3 * 48_000 * 8 // 10, out
+            require(out, "*** AUDIO DUPLEX Complete. Data collected ***")
+        finally:
+            vm.close()
+    print(f"PASS: audiostub duplex: no capture on QEMU's usb-audio, said; {ended[2]} frames of a 440 Hz tone played in {ended[1]} ms, and the marker line (000-DRV-0093)", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -19985,6 +20018,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
+    parser.add_argument("--audio-elf", help="test-only ELF built from tests/audio_stub (capture and playback together in the usbaudio suite, 000-DRV-0093); found where the fixture scripts put it")
     parser.add_argument("--video-elf", help="test-only ELF built from tests/video_stub (two cameras at once in the cameras suite, 158-DRV-0082); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
@@ -20036,6 +20070,9 @@ def main():
     # The cameras suite's stub (158-DRV-0082): x86, where the suite runs.
     stub = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-video-target/x86_64-unknown-none/release/video_stub"
     args.video_elf = args.video_elf or (str(stub) if args.arch == "x86_64" and stub.exists() else None)
+    # The usbaudio suite's duplex stub (000-DRV-0093): x86, where the suite runs.
+    duplex = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-audio-target/x86_64-unknown-none/release/audio_stub"
+    args.audio_elf = args.audio_elf or (str(duplex) if args.arch == "x86_64" and duplex.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
