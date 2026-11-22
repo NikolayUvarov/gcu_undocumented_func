@@ -630,17 +630,20 @@ pub enum Step {
     NoUnderflow,
     /// Read the register back and log it with its field, against what the stage last wrote to it.
     ReadBack { reg: Reg, field: Field },
+    /// Stage 16: the surface offered to the compositor as the second screen (213-KRN-0272, `display.wit` 1.3).
+    Offer,
 }
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
 /// Step 3's stages 1 to 8 (first light), then step 4's from 9 (213-DRV-0092: MIND Core's picture on the second output).
-pub const STAGES: u8 = 15;
+pub const STAGES: u8 = 16;
 pub const FIRST_LIGHT: u8 = 8;
-/// The first stage that writes pipe 1's HUBP, DPP or MPC (the guard lets them through from here).
+/// The first stage that writes pipe 1's HUBP, DPP or MPC (the guard lets them through from here), and the last.
 pub const PIPE_WRITES_FROM: u8 = 11;
+pub const PIPE_WRITES_TO: u8 = 15;
 pub const STAGE_NAMES: [&str; STAGES as usize] =
     ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY", "REFERENCE", "DRAW",
-     "PIPE CLOCKS", "DPP", "HUBP", "MPC", "UNBLANK"];
+     "PIPE CLOCKS", "DPP", "HUBP", "MPC", "UNBLANK", "OFFER"];
 
 /// The pipe a plan drives: its timing generator, OPP and DIG front end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -821,7 +824,9 @@ pub fn second_pipe(plan: &mut Plan) -> Result<(), PlanError> {
     plan.push(Step::Reference)?;
     plan.push(Step::Begin(10))?;
     plan.push(Step::Draw)?;
-    for n in PIPE_WRITES_FROM..=STAGES { plan.push(Step::Begin(n))?; plan.push(Step::Late)?; }
+    for n in PIPE_WRITES_FROM..=PIPE_WRITES_TO { plan.push(Step::Begin(n))?; plan.push(Step::Late)?; }
+    plan.push(Step::Begin(16))?;
+    plan.push(Step::Offer)?;
     Ok(())
 }
 

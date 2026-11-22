@@ -1,6 +1,6 @@
 # 213-DRV-0092 — `display`: MIND Core's picture on the Ryzen's second output
 
-**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — for stages 9 to 15; KRN (the compositor's second screen, a versioned interface) for the last criterion · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — (the compositor's second screen: KRN's display.wit 1.3, [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), merged here for stage 16) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -11,8 +11,8 @@ pattern generator, and the compositor to draw into that surface.
 
 ## Plan
 
-Step 4 adds stages 9 to 15 after step 3's eight, in the same frame:
-- `STAGES_ALLOWED` counts on to 15; the committed value stays 0;
+Step 4 adds stages 9 to 16 after step 3's eight, in the same frame:
+- `STAGES_ALLOWED` counts on to 16; the committed value stays 0;
 - each stage is logged with every write before any is made, and undone with every stage before it if it fails;
 - the firmware's pipe (DP-2) is never written and is read after every stage;
 - nothing is read that step 1 has not read on the same boot.
@@ -25,8 +25,9 @@ Step 4 adds stages 9 to 15 after step 3's eight, in the same frame:
   0xF4_0100_0000.
 - **Its shape:** 1920x1080, `SURFACE_PIXEL_FORMAT` 8 (32-bit ARGB), linear. The pitch is 1920 pixels (7680 bytes).
 - **The pitch convention.** The `PITCH` field holds the pitch less one, as Display Core writes it, so 1919. The
-  firmware's HUBP0 holds 0xA00 against the GOP's stride of 2560, unexplained. Stage 15's picture settles it, and the
-  log gives both the field written and HUBP0's.
+  firmware's HUBP0 holds 0xA00 against the GOP's stride of 2560. Both conventions are straight on this machine, so the
+  hardware rounds the field and 1919 and 1920 give the same row (Progress, "The pitch"). The log gives the field
+  written, HUBP0's, and the field read back.
 
 | Stage | What it does | Undo | HDMI-A-1 | DP-2 |
 |---|---|---|---|---|
@@ -37,6 +38,7 @@ Step 4 adds stages 9 to 15 after step 3's eight, in the same frame:
 | 13 HUBP1, blanked | surface, pitch, address, viewport, request, DLG and TTU | restore | squares | unchanged |
 | 14 MPC | a free MPCC from DPP1 to OPP1 | restore | squares (the pattern overrides) | unchanged |
 | 15 unblank, pattern off | `HUBP_BLANK_EN` 0, then `DPG_EN` 0 | pattern on, HUBP1 blanked, 14 to 11 restored | **the drawn picture** | unchanged; **watched** |
+| 16 offer | `offer_screen` (display.wit 1.3): 1920x1080, pitch 7680 bytes, `bgr`, slot 5 lent; no register written | `screen_gone`, before stage 15's undo | **MIND Core's screen**: DP-2's mirrored at 1728x1080 from x 96, black either side | unchanged |
 
 **Stage 10's picture is its own evidence**, so that a photo of the monitor says what it shows:
 - in large block letters (a small font built in), the release's version and `MIND CORE / DISPLAY / HDMI-A-1 1920x1080`;
@@ -56,13 +58,18 @@ and 15. Stages 9 and 10 may run once their host cases pass.
 0x300): THE SHORT PATH`, or `... THE LONG PATH: n WRITES THROUGH ITS BUS`. So a long path never passes unnoticed in a
 log (213-DRV-0086, "Table 12's cold path").
 
-**The other side:** a second screen offered to the compositor. KRN owns the compositor; the owner session sends KRN
+**The other side:** a second screen offered to the compositor. KRN owns the compositor; the owner session sent KRN
 the request.
 - **What `display` gives it:** that a second screen exists and when it comes or goes (HPD 1); its width, height,
   pitch in bytes and format (0x00RRGGBB, the GOP's); where its pixels are (a mapping `display` lends); and when a
   frame may be shown (OTG1's vertical blank).
 - **The mirror first:** the compositor copies the same changed pixels into both screens. An extended screen comes
   later, and needs APP's `wm` too.
+- **KRN's answer** ([213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), display.wit 1.3):
+  - `offer-screen(width, height, pitch, format, pixels: borrow<mmio>)` and `screen-gone()`, from a client badged
+    `BADGE_SCREEN`, which init gives `display` in `SLOT_DISPLAY`;
+  - the compositor mirrors the first screen into the second, scaled to fit and centred, and only what changed;
+  - 1.3 has no vertical blank: the compositor draws when its own frame comes.
 
 ## Progress (2026-11-22)
 
@@ -194,6 +201,31 @@ interface.
   - **An underflow:** HUBP1 is blanked again behind the pattern at once. Everything is then undone, and HDMI-A-1 goes
     dark.
 
+**Stage 16** (KRN's 213-KRN-0272 merged, ab838d73b). `screen.rs` is `display`'s client of the compositor:
+- **The offer:** it offers the surface with what stage 16 passes (1920x1080, a row 7680 bytes apart), in `bgr` (the
+  picture's 0x00RRGGBB words), with slot 5 lent as an MMIO capability (copied: `display` keeps its range).
+- **Without a client in `SLOT_DISPLAY`:** `UNAVAILABLE`, and no call.
+- **The answers** are named as step 4 names them: `NO SCREEN`, `NO MEMORY`, `DENIED`, `BAD SCREEN`, or `CALL` for a call
+  that failed or an answer outside the interface.
+- **Not ready:** a refused offer stops step 4 with stages 1 to 15 in place, and with them the picture on HDMI-A-1.
+- **The undo:** `screen_gone` comes first, then stage 15 is taken back. A refused `screen_gone` is logged, and the undo
+  goes on.
+- **Host cases:**
+  - `display_light_host.rs`, 30:
+    - stage 16 offers once, after stage 15's last write, and writes no register;
+    - the undo order, with `screen_gone` refused too;
+    - each refusal as not ready, with the undo the build asks for;
+    - the lines of a build that stops at 15, and of a build of 0.
+  - `display_screen_host.rs`, 3: the offer and `screen_gone` run through libmind's generated client and a model of the
+    IPC into the generated `decode`, with the compositor's answers by its `second_screen`'s rules and back:
+    - 1920x1080, pitch 7680, `bgr` and an MMIO capability, as the compositor decodes them;
+    - denied without `BADGE_SCREEN`;
+    - `bad-screen` for a range that does not hold the shape, or for a pitch given in pixels;
+    - a memory capability in place of MMIO refused by the schema check;
+    - an undefined answer and a failed call taken as `CALL`.
+- **On the Ryzen:** nothing of stage 16 has run there. HDMI-A-1 should then show DP-2's screen, mirrored at 1728x1080
+  from x 96, black either side.
+
 ## Acceptance criteria
 
 - [ ] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
@@ -201,7 +233,7 @@ interface.
 - [ ] Stage 10's picture, read back on the model, has the border, the diagonals, the cross and the letters in place.
 - [ ] On the Ryzen, HDMI-A-1 shows stage 10's picture through pipe 1 with straight edges, while DP-2 keeps MIND Core's
   screen through stages 11 to 15; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
-- [ ] With KRN's interface: the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's.
+- [ ] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's.
 
 ## Related
 

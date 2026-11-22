@@ -36,9 +36,27 @@ pub trait Poke { fn write(&mut self, reg: Writable, value: u32); }
 pub trait Clock { fn now_us(&mut self) -> u64; fn delay_us(&mut self, us: u32); }
 /// Step 4's surface (BAR 0's slot 5): a row of pixels written, a pixel read back; false or None when it is not mapped.
 pub trait Canvas { fn row(&mut self, y: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize) -> Option<u32>; }
-/// What steps 3 and 4 run on: reads, guarded writes, time, and step 4's surface.
-pub trait Engine: Bus + Poke + Clock + Canvas {}
-impl<T: Bus + Poke + Clock + Canvas> Engine for T {}
+/// Why the compositor did not take the second screen (213-KRN-0272): no client of it was granted (it does not run), its
+/// own answers (`display.wit` 1.3's errors), or the call itself failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenRefused { Unavailable, NoScreen, NoMemory, Denied, BadScreen, Call }
+impl fmt::Display for ScreenRefused {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            ScreenRefused::Unavailable => "NO CLIENT OF IT (SLOT_DISPLAY) WAS GRANTED", ScreenRefused::NoScreen => "NO SCREEN",
+            ScreenRefused::NoMemory => "NO MEMORY TO MAP IT", ScreenRefused::Denied => "DENIED", ScreenRefused::BadScreen => "THE SHAPE DOES NOT FIT THE RANGE",
+            ScreenRefused::Call => "THE CALL FAILED",
+        })
+    }
+}
+/// Step 4's second screen offered to the compositor, and taken back: the surface's shape; its pixels are slot 5's.
+pub trait Screens {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused>;
+    fn gone(&mut self) -> Result<(), ScreenRefused>;
+}
+/// What steps 3 and 4 run on: reads, guarded writes, time, step 4's surface, and the compositor.
+pub trait Engine: Bus + Poke + Clock + Canvas + Screens {}
+impl<T: Bus + Poke + Clock + Canvas + Screens> Engine for T {}
 
 /// Step 4's reference (213-DRV-0092): the firmware's pipe as step 1's batches 2, 4, 9 and 10 read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,6 +532,8 @@ impl Light {
                 n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
             Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
+            Step::Offer => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST",
+                n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH * 4)),
             Step::Late | Step::Begin(_) => {}
         }
     }
@@ -578,6 +598,8 @@ pub enum Failure {
     OutputMuxInUse { opp: u8, mux: u32 },
     /// Stages 11 to 15 do not fit a plan.
     PlanFull,
+    /// Stage 16: the compositor did not take the second screen.
+    Screen(ScreenRefused),
     /// An underflow, new since stage 9, at this HUBP's or ODM's register.
     Underflow { offset: u32, value: u32 },
     /// Stage 10: the surface is not mapped, or a sample read back differs from what was drawn.
@@ -595,10 +617,10 @@ pub enum Failure {
 }
 
 impl Failure {
-    /// A failure of what step 4 found or prepared, not of the hardware: stage 9 or 10 then stops without undoing.
+    /// A failure of what step 4 found or prepared, not of the hardware: stage 9, 10 or 16 then stops without undoing.
     pub fn not_ready(&self) -> bool {
         matches!(self, Failure::NoReference | Failure::NoFrames(_) | Failure::MpccInUse { .. } | Failure::OutputMuxInUse { .. }
-            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. })
+            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. } | Failure::Screen(_))
     }
 }
 
@@ -614,6 +636,7 @@ impl fmt::Display for Failure {
             Failure::OutputMuxInUse { opp, mux } => write!(f, "OPP{}'S OUTPUT MUX NAMES MPCC {:X} (ITS OWN OR 15 WANTED)", opp, mux),
             Failure::PlanFull => f.write_str("STAGES 11 TO 15 DO NOT FIT A PLAN"),
             Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
+            Failure::Screen(why) => write!(f, "THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: {}", why),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
@@ -746,6 +769,12 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                     if field.get(v) & !field.get(d.underflow[i]) != 0 { return Err(Failure::Underflow { offset: x.offset(), value: v }); }
                 }
                 out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
+            }
+            Step::Offer => {
+                let (w, h, pitch) = (picture::WIDTH as u16, picture::HEIGHT as u16, (picture::PITCH * 4) as u32);
+                e.offer(w, h, pitch).map_err(Failure::Screen)?;
+                out.line(format_args!("S{} OFFERED THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
+                    n, w, h, pitch));
             }
             Step::Late | Step::Begin(_) => {}
         }
@@ -995,6 +1024,13 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
             n, LETTERS[p as usize], addresses, data));
     }
     if n == 10 { out.line(format_args!("U{} THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET", n)); }
+    // Stage 16's undo, before stage 15's blanks the pipe: the compositor lets the surface go (screen_gone).
+    if n == 16 {
+        match e.gone() {
+            Ok(()) => out.line(format_args!("U{} SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO", n)),
+            Err(why) => out.line(format_args!("U{} SCREEN_GONE NOT TAKEN: {}; THE UNDO GOES ON", n, why)),
+        }
+    }
     out.line(format_args!("U{} {} UNDONE: {} WRITES RESTORED", n, STAGE_NAMES[n as usize - 1], restored));
 }
 
@@ -1063,9 +1099,10 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
                 out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len()));
                 if (ATTACHED_FROM..dcn::PIPE_WRITES_FROM).contains(&n) && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
             }
-            // Stage 9 reads and derives, stage 10 draws into memory nothing scans: when either is not ready, no register of
-            // theirs needs undoing, and stages 1 to 8 stay. A firmware's pipe changed or a register unreadable still undoes.
-            Err(why) if (n == 9 || n == 10) && why.not_ready() => {
+            // Stage 9 reads and derives, stage 10 draws into memory nothing scans, stage 16 offers: when one is not ready, no
+            // register of its needs undoing, and the stages before it stay (after 16's, the picture on the second output on
+            // its own). A firmware's pipe changed or a register unreadable still undoes.
+            Err(why) if (n == 9 || n == 10 || n == 16) && why.not_ready() => {
                 out.line(format_args!("S{} {} NOT READY: {}; STAGES 1 TO {} STAY AS THEY ARE, STEP 4 STOPS HERE", n, name, why, n - 1));
                 if then_undo {
                     out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", n - 1, STAGES, journal.len, n - 1));

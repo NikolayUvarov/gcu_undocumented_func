@@ -16,7 +16,7 @@ use batches::{Bus, Out, Store};
 use dcn::{Reg, Step, R};
 // Step 3's stages (first light); step 4's come after them (213-DRV-0092).
 const STAGES: u8 = dcn::FIRST_LIGHT;
-use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, Writable, EXPECTED, HDMI_A_1};
+use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, ScreenRefused, Screens, Writable, EXPECTED, HDMI_A_1};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -129,7 +129,7 @@ fn the_guard_refuses_every_block_of_the_firmwares_pipe_and_all_off_the_route() {
 // --- the model ---
 
 #[derive(Clone, Debug, PartialEq)]
-enum Ev { Line(String), Write(u32, u32), Read(u32) }
+enum Ev { Line(String), Write(u32, u32), Read(u32), Offer(u16, u16, u32), Gone }
 
 #[derive(Default)]
 struct Engine {
@@ -150,6 +150,18 @@ struct Engine {
     frame_us: u64,
     // Step 4's surface, made at its first row; none when `no_surface`.
     surface: Vec<u32>, no_surface: bool,
+    // The compositor's answers to stage 16's offer and to screen_gone (display.wit 1.3); none: it takes them.
+    refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
+}
+impl Screens for Engine {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> {
+        self.ev.push(Ev::Offer(width, height, pitch));
+        self.refuse_offer.map_or(Ok(()), Err)
+    }
+    fn gone(&mut self) -> Result<(), ScreenRefused> {
+        self.ev.push(Ev::Gone);
+        self.refuse_gone.map_or(Ok(()), Err)
+    }
 }
 impl Canvas for Engine {
     fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
@@ -541,7 +553,7 @@ fn stage_9_on_what_boot_70_read_takes_its_reference_clock_from_per_htotal() {
     assert_eq!(cntl, [0x000F_001B, 0x000F_001A]);
     assert!(log.iter().any(|x| x == "S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)"));
     assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919"));
-    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 15 AS THIS BUILD ALLOWS"));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 16 AS THIS BUILD ALLOWS"));
 }
 
 #[test]
@@ -679,7 +691,7 @@ fn an_underflow_at_stage_15_fails_and_is_undone_whole_and_a_busy_mpcc_stops_step
         assert_eq!(outcome, Outcome::NotReady { done: 8, stage: 9, why });
         assert!(!writes(&e).iter().any(|w| w.0 == reg(R::HubpCntl, 1) || w.0 == reg(R::MpccTopSel, 1)));
         assert!(log.iter().any(|x| x.starts_with(&format!("S9 REFERENCE NOT READY: {}; STAGES 1 TO 8 STAY AS THEY ARE, STEP 4 STOPS HERE", why))), "{:#?}", &log[log.len() - 4..]);
-        assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 8 OF 15: STAGE 9 NOT READY;") && log.last().unwrap().ends_with("ARE LEFT IN PLACE"));
+        assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 8 OF 16: STAGE 9 NOT READY;") && log.last().unwrap().ends_with("ARE LEFT IN PLACE"));
         assert_eq!(e.regs[&reg(R::DigBeEnCntl, 0)] & 1, 1, "first light's back end left enabled");
     }
     // A build of 0 names stages 11 to 15 with what they will do.
@@ -737,6 +749,92 @@ fn stage_9_without_a_reference_and_stage_10_without_a_surface_stop_with_first_li
     assert_eq!(light::reference(&s, &f, &c), Some(want));
     s.set_batches(9);
     assert_eq!(light::reference(&s, &f, &c), None, "batch 10 not read");
+}
+
+#[test]
+fn stage_16_offers_the_surface_as_display_wit_1_3_has_it_and_its_undo_lets_it_go_before_stage_15_blanks() {
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    // One offer, after stage 15's last write: 1920x1080, a row 7680 bytes apart, pixels slot 5's; nothing let go.
+    let offers: Vec<usize> = e.ev.iter().enumerate().filter(|(_, x)| matches!(x, Ev::Offer(..))).map(|(i, _)| i).collect();
+    assert_eq!(offers.len(), 1);
+    assert_eq!(e.ev[offers[0]], Ev::Offer(1920, 1080, 7680));
+    assert!(!e.ev[offers[0]..].iter().any(|x| matches!(x, Ev::Write(..) | Ev::Gone)), "no write after the offer");
+    assert!(log.iter().any(|x| x == "S16 OFFERED THE SECOND SCREEN: 1920x1080, PITCH 7680 BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT"));
+    assert!(log.iter().any(|x| x.starts_with("S16 OFFER DONE; THE FIRMWARE'S PIPE UNCHANGED")));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS"));
+    // Stage 16 writes no register: the writes are stage 15's.
+    let mut fifteen = engine();
+    fifteen.frame_us = 16_675;
+    run_light(&l, &good(), &mut fifteen, 15, false);
+    assert_eq!(writes(&e), writes(&fifteen));
+    // The undo: screen_gone first, then stage 15's writes restored; every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::Undone { done: 16 });
+    let gone = e.ev.iter().position(|x| *x == Ev::Gone).expect("screen_gone");
+    assert_eq!(e.ev.iter().filter(|x| **x == Ev::Gone).count(), 1);
+    let offer = e.ev.iter().position(|x| matches!(x, Ev::Offer(..))).unwrap();
+    let last_15 = writes(&fifteen).len();
+    let writes_before_gone = e.ev[..gone].iter().filter(|x| matches!(x, Ev::Write(..))).count();
+    assert!(offer < gone && writes_before_gone == last_15, "screen_gone before any undo write: {} writes before it, {} by stage 15", writes_before_gone, last_15);
+    let u16 = log.iter().position(|x| x == "U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO").unwrap();
+    let u15 = log.iter().position(|x| x.starts_with("U15 ")).unwrap();
+    assert!(u16 < u15);
+    restored_but(&e, &before, &[]);
+    // screen_gone refused: said so, and the undo goes on.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.refuse_gone = Some(ScreenRefused::NoScreen);
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::Undone { done: 16 });
+    assert!(log.iter().any(|x| x == "U16 SCREEN_GONE NOT TAKEN: NO SCREEN; THE UNDO GOES ON"), "{:#?}", log.iter().filter(|x| x.starts_with("U16")).collect::<Vec<_>>());
+    restored_but(&e, &before, &[]);
+}
+
+#[test]
+fn stage_16_refused_or_without_a_client_stops_with_the_picture_on_the_second_output() {
+    let l = step4(Some(ryzen_reference()));
+    for refused in [ScreenRefused::Unavailable, ScreenRefused::NoScreen, ScreenRefused::NoMemory, ScreenRefused::Denied, ScreenRefused::BadScreen, ScreenRefused::Call] {
+        let mut e = engine();
+        e.frame_us = 16_675;
+        e.refuse_offer = Some(refused);
+        let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+        assert_eq!(outcome, Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(refused) }, "{:#?}", &log[log.len().saturating_sub(6)..]);
+        assert!(log.iter().any(|x| x == &format!("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: {}; STAGES 1 TO 15 STAY AS THEY ARE, STEP 4 STOPS HERE", refused)),
+            "{:#?}", &log[log.len().saturating_sub(4)..]);
+        assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 16: STAGE 16 NOT READY;") && log.last().unwrap().ends_with("ARE LEFT IN PLACE"));
+        // Pipe 1 left unblanked on the surface, screen_gone not called.
+        assert_eq!(e.regs[&reg(R::HubpCntl, 1)] & 1, 0);
+        assert!(!e.ev.contains(&Ev::Gone));
+    }
+    // Refused with the undo the build asks for: stages 15 to 1 undone, screen_gone not called, every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.refuse_offer = Some(ScreenRefused::Unavailable);
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(ScreenRefused::Unavailable) });
+    assert!(log.iter().any(|x| x.starts_with("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: NO CLIENT OF IT (SLOT_DISPLAY) WAS GRANTED")));
+    assert!(log.last().unwrap().ends_with("ARE UNDONE"));
+    assert!(!e.ev.contains(&Ev::Gone));
+    restored_but(&e, &before, &[]);
+    // A build of 15 names stage 16 with what it would do; a build of 0 too.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (_, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(log.iter().any(|x| x == "S16 OFFER: NOT RUN (THIS BUILD MAY RUN 15); WOULD:"));
+    assert!(log.iter().any(|x| x == "S16 WOULD OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: 1920x1080, PITCH 7680 BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST"));
+    assert!(!e.ev.iter().any(|x| matches!(x, Ev::Offer(..))));
+    let mut log = Log(vec![]);
+    light::describe(&l, false, &mut log);
+    assert!(log.0.iter().any(|x| x.starts_with("S16 WOULD OFFER THE SURFACE TO THE COMPOSITOR")), "{:#?}", log.0.iter().filter(|x| x.starts_with("S16")).collect::<Vec<_>>());
 }
 
 #[test]

@@ -11,15 +11,18 @@ extern crate alloc;
 #[allow(dead_code)] mod edid;
 #[allow(dead_code)] mod light;
 #[allow(dead_code)] mod picture;
+mod screen;
 #[allow(dead_code)] mod timing;
 use alloc::boxed::Box;
 use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ, SLOT_MEM};
+// The paths screen.rs is written against (its host cases model them).
+use mind::{abi, dev, idl, ipc, sys};
 use mind::dev::{cap_info, device_config, Mmio};
 
 /// How many of step 1's ten batches this build may read. 0 maps no register and reads none: it logs each batch and the
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
-/// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 to 15 step 4's (213-DRV-0092). 0 makes no
+/// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 to 16 step 4's (213-DRV-0092). 0 makes no
 /// writer: it logs each stage with every write it would make. Raised one run at a time, on the DRV owner session's word,
 /// and only with BATCHES_ALLOWED at 10 (all of step 1).
 const STAGES_ALLOWED: u8 = 0;
@@ -158,6 +161,11 @@ impl light::Poke for Writer {
         let offset = reg.reg().offset() as usize;
         if offset + 4 <= self.0.len() { self.0.write32(offset, value); }
     }
+}
+// Stage 16 through screen.rs's client of the compositor, slot 5 lent as its pixels.
+impl light::Screens for Writer {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.offer(width, height, pitch) }
+    fn gone(&mut self) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.gone() }
 }
 impl light::Canvas for Writer {
     fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
