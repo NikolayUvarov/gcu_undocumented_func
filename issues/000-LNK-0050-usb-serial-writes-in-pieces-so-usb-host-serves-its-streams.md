@@ -1,6 +1,6 @@
 # 000-LNK-0050 — `usb_serial` writes in pieces of 256 bytes, so `usb_host` serves its streams between them
 
-**Type:** driver (`usb_serial`) · **Owner:** `LNK` (done by DRV's CAM agent under the LNK owner's word, 2026-11-22, for 000-DRV-0094) · **Priority:** P2 · **Status:** in progress (2026-11-22: written and host-tested; the suites and the Ryzen's run to come) · **Blocked by:** — · **Roadmap:** 800 · **Constitution:** MC-12.1, MC-12.2
+**Type:** driver (`usb_serial`) · **Owner:** `LNK` (done by DRV's CAM agent under the LNK owner's word, 2026-11-22, for 000-DRV-0094) · **Priority:** P2 · **Status:** in progress (2026-11-22: written, host-tested and through QEMU's suites; the Ryzen's run to come) · **Blocked by:** — · **Roadmap:** 800 · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -23,7 +23,7 @@ With 0094's step 2 the IN rings stay full through such waits, but the playback (
 ## Acceptance criteria
 
 - [x] A host case: the pieces of every length are in order, none longer than 256 bytes, none skipped (`tests/serial_host.rs`, `a_write_goes_in_pieces_of_at_most_256_bytes_in_order`).
-- [ ] QEMU's `link` and `usbaudio` suites pass.
+- [x] QEMU's `link` and `usbaudio` suites pass. (2026-11-22, LEG9, on 50f714052: `link` through QEMU's FT232, which writes through the same pieces; `usbaudio` with the audiostub check; `usb` too.)
 - [ ] On the Ryzen, run D again (`audiostub duplex 300 0` with one log read in its middle): no dry playback ring in the read.
 - [ ] The cable's throughput before and after, measured as a log read of a known size timed, shows the link no slower. Holds for that machine, that converter and that release (MC-12.1).
 
