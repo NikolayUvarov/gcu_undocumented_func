@@ -91,6 +91,8 @@ A model and a serial number are asked of `DRV` for `block.wit` when the first re
 
 Each `iso` suite printed its PASS line, which comes only after the written disk has booted alone with the store on its partition 3.
 
+**In `main` since round 170** (a5eb750470, `LANDING/2026-11-22T1006Z-KRN-landed-731b133d.md` on `internal-dev-messages`). Every gate group passed on both architectures, the `iso` suite's install among them.
+
 **Found on the way:** `init` looks for the store's partition on no legacy IDE disk (`STORE_DRIVERS` has no `ata`). A system installed on an IDE disk therefore boots with no partition for its store; it says `store.txt NAMES PARTITION …: NO DISK HAS IT`. The check boots the written disk on AHCI, as a PC's disk is. Whether the installer should refuse or warn about an IDE disk is open.
 
 **Left:**
