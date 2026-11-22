@@ -20,9 +20,18 @@ Each step ends with something a person or a log can check, and none of it is pro
 
 ## Acceptance criteria
 
-- [ ] `display` runs on the Ryzen from the boot image and logs the engine's state as the survey has it.
-- [ ] The HDMI monitor shows the engine's test pattern at a stated mode while the DP monitor keeps MIND Core's screen; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
-- [ ] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a model of the blocks.
+- [x] `display` runs on the Ryzen from the boot image and logs the engine's state as the survey has it (step 1, all
+  eight batches, 2026-11-21).
+- The HDMI monitor shows the engine's test pattern at a stated mode while the DP monitor keeps MIND Core's screen; the
+  maintainer saw both. This holds for that machine and its two monitors (MC-12.1). Recorded in two parts, which together
+  are this criterion:
+  - [x] the HDMI monitor shows the colour squares at 1920x1080 (CTA VIC 16, 148.5 MHz, DVI signalling), and the DP
+    monitor shows MIND Core's screen after the stages; the maintainer saw both (2026-11-22, below);
+  - [ ] the DP monitor keeps MIND Core's screen through every stage, with no flicker, blank or loss of signal. On
+    2026-11-22 it was not watched during the stages: open.
+- [x] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a
+  model of the blocks (`tests/display_host.rs`, `display_light_host.rs`; on the Ryzen's tables, the watched run's 95
+  writes in its order).
 - [ ] With KRN's part: MIND Core's screen on both monitors.
 
 ## Progress (2026-11-21)
@@ -615,6 +624,64 @@ the plan below holds.
     places); stage 8 failing at table 76's one wait (the lanes' `TX_ACK`). Each is undone whole: every register as
     before, the firmware's pipe unchanged, and the off calls run to their end, but when the missing status is the one
     the DISABLE waits for too.
+
+## First light on the Ryzen (2026-11-22, watched)
+
+The maintainer chose to run stages 2 to 8, watched.
+- **The run:** release 202611220438, slot A confirmed 04:42:59 UTC; the bench tree at 1c65c3cb3 (this branch at
+  965154171 merged), with `BATCHES_ALLOWED` 8, `STAGES_ALLOWED` 8 and `UNDO_AFTER_STAGES` false; boot 66, after a
+  restart out of Linux. 413 `[DISPLAY]` lines, none dropped.
+- **Step 1:** all eight batches as before, the DMCUB held in reset. Step 3 assessed the expected pipes, HUBP1 attached
+  and blanked.
+- **Each stage's line, at seconds of the boot:**
+  - `S1 OTG CLOCKS DONE` at 46.5;
+  - `S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES` and `S2 PIXEL CLOCK DONE` at 51.4;
+  - `S3 TIMING DONE` at 56.3;
+  - `S4 TEST PATTERN DONE` at 60.6;
+  - `S5 OTG1_OTG_CONTROL ... SHOWED ITS STATUS IN 5 US`, `S5 OTG1 COUNTED 2 FRAMES IN 25 MS` and `S5 START DONE` at 64.9;
+  - `S6 TABLE 4 DONE: 31 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES` at 69.1;
+  - `S7 BACK END DONE` at 73.3;
+  - `S8 TABLE 76 DONE: 286 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES` and `S8 PHY DONE` at 78.0.
+- After each stage came `THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`, and after 5 to 8 `THE ATTACHED HUBPS
+  UNCHANGED, BLANKED (1 REGISTERS)`. The run ended with `STEP 3 STOPPED AFTER STAGE 8 OF 8 AS THIS BUILD ALLOWS; 95
+  WRITES MADE ARE LEFT IN PLACE`, `178 REGISTERS READ BY STEP 1, 95 WRITES BY STEP 3` and `COMMAND 0006 AFTER STEP 1`.
+- **The maintainer's words:** «второй монитор показывает цветные квадраты, на первом лог загрузки mind core;
+  моргания не видел, так как не смотрел на экран». That is: the second monitor (HDMI-A-1) shows the colour squares;
+  the first (DP-2) shows MIND Core's boot log; he saw no flicker because he was not looking at the screen.
+- So the squares on HDMI-A-1 and MIND Core's screen on DP-2 after the stages were seen. Whether DP-2 flickered during
+  the stages was not watched, and stays open.
+- This is his look, at that machine with those two monitors, in that release (MC-12.1). It is not a guarantee for
+  another machine, monitor, mode or boot (MC-12.9).
+
+**The tables on the hardware against the model.**
+- **Table 12 took a shorter path** than on the model: 308 steps and 33 writes against 530 and 111.
+  - The branch is PHY A's `RDPCSTX0_RDPCSTX_SCRATCH` (dword 0x2937, byte 0x177DC), read right after the table's first
+    write.
+  - On the hardware it held 0x300; on the model 0. The VBIOS uses it as its mark of a PHY it has set up: the long path
+    clears it, sets PHY A up (the reset, the SRAM, and all 37 writes through the control register bus), and writes
+    0x300 at its end.
+  - Seeded with 0x300 alone, the model takes the hardware's path; 0x100 or 0x200 do not.
+  - So on the hardware **no write went through PHY A's control register bus**: `RDPCS_TX_CR_DATA` was written 0
+    times, `RDPCS_TX_CR_ADDR` 0 times. The residue this record feared did not arise in this run.
+  - The mark, and what is set up behind it, were there before MIND Core started. The machine had come from Linux,
+    where the DMCUB lit HDMI-A-1. Whether a cold boot (power off) clears the mark is not known. If it does, table 12
+    takes the long path, which has not run on this hardware yet.
+- **Tables 4 and 76 took the model's path:** the same steps, calls, delays and writes (31, 2, 2 µs, 5; 286, 9, 420 µs,
+  23).
+- **Line by line**, the model seeded with the hardware's values before step 3 (every register step 3 wrote: `WARM` in
+  the host cases) makes all 95 writes of the run in its order, at its registers and values. Two status bits differ,
+  both carried by a read-modify-write:
+  - the lanes' `TX_ACK` in `RDPCSTX_PHY_CNTL3` (still set on the hardware just after `TX_REQ` fell);
+  - bit 24 of `DIG0_DIG_FE_CNTL` at the `DIG_START` pulse (1 at its first write, 0 at its second).
+- The model now answers as the hardware did: `DPCS_SYMCLK_CLOCK_ON` while the gate is off or the clock enabled, and
+  `MPLLB_STATE` while a lane's `MPLL_EN` is set. The host cases run the Ryzen's tables from both states (fc8490ad4).
+
+**This release at every boot.** 202611220438 runs the eight stages at each boot and leaves them; the owner session
+keeps it so today, each boot a repeat of the experiment.
+- One reason to watch for: a boot that does not come through Linux (a power-off, a cold start). If it clears PHY A's
+  mark, table 12 takes the long path, with its 37 writes into PHY A, never run on this hardware yet, and unwatched.
+- The rest refuses by itself when the state differs: a second running OTG, no monitor on HPD 1, a running DMCUB, an
+  unblanked HUBP1.
 
 ## Related
 
