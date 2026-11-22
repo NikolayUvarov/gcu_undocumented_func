@@ -420,3 +420,24 @@ fn broken_frames_say_why_and_frames_how_they_ended() {
     assert_eq!(bulk.transfer(&mut b, &[2, 1 | EOF, 1, 1, 1, 1, 1, 1, 1, 1], 4096), Some(true), "a new FID ends the spoiled frame; this payload's EOF a good one");
     assert_eq!((b.causes.bulk_start, b.broken, b.good), (1, 1, 1));
 }
+
+// 158-DRV-0083: the Ryzen's two cameras' YUY2 modes as Linux lists them (`v4l2-ctl --list-formats-ext` on the Ryzen,
+// 2026-11-22, uvcvideo of Linux 7.0): the same sizes in the same order at the same intervals (100 ns units; Linux
+// shows 0.267 s, 3.750 fps, for 2666666). `rate` alone differs: it is whole frames a second, rounded down (3).
+#[test]
+fn the_ryzens_cameras_list_their_yuy2_modes_as_linux_does() {
+    let linux: [(&str, &[(u16, u16, u32)]); 2] = [
+        ("0471-a6ca", &[(640, 480, 400_000), (1920, 1080, 2_666_666), (1600, 1200, 2_000_000), (1280, 1024, 2_000_000), (1280, 960, 1_111_111), (1280, 720, 1_000_000),
+            (1024, 768, 666_666), (800, 600, 500_000), (2048, 1536, 2_666_666), (640, 360, 333_333), (352, 288, 333_333), (320, 240, 333_333), (160, 120, 333_333)]),
+        ("0471-a6cd", &[(640, 480, 333_333), (1920, 1080, 2_000_000), (1280, 1024, 2_000_000), (1280, 960, 2_000_000), (1280, 720, 1_000_000), (1024, 768, 1_000_000),
+            (960, 720, 666_666), (800, 600, 500_000), (640, 360, 333_333), (432, 240, 333_333), (352, 288, 333_333), (320, 240, 333_333)]),
+    ];
+    for (name, want) in linux {
+        let camera = ryzen_camera(name);
+        let got: Vec<(u16, u16, u32)> = camera.modes().iter().filter(|m| m.encoding == Encoding::Yuy2).map(|m| (m.width, m.height, m.interval)).collect();
+        assert_eq!(got, want.to_vec(), "{name}");
+        let mjpeg = camera.modes().iter().filter(|m| m.encoding == Encoding::Mjpeg).count();
+        assert_eq!(mjpeg, if name == "0471-a6ca" { 13 } else { 12 }, "{name}: as many MJPG sizes as Linux lists");
+    }
+    assert_eq!(ryzen_camera("0471-a6ca").modes().iter().find(|m| m.encoding == Encoding::Yuy2 && m.width == 1920).map(|m| m.rate()), Some(3), "3.75 a second rounds down");
+}
