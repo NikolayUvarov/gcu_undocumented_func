@@ -296,6 +296,22 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
   - After the change, all 40 pass, and the release build builds.
 
+**2026-11-22, 04:57–05:07 UTC, step 2's first run on the Ryzen, back to back** (release 202611220438, boot 66, its driver 07e59deb9). Step 2 is 611499237, which is 07e59deb9 plus the port alone, put in by `replace`. Channel 8, UZ, three 6 MB downloads each, by the sender's figures:
+
+| Driver | 6 MB downloads | The stack's KiB/s | BSS beacons a minute | Sends outrun a minute | Holes, stops |
+|---|---|---|---|---|---|
+| Step 2 (replace) | 306, 186, 193 KB/s | 260, 157, 167 | 581, 579, 577 | 0, 5, 20 | none |
+| 07e59deb9 (boot image) | 247, 265, 346 KB/s | 214, 245, 249 | 579, 582 | 2, 2 | none |
+| Step 2 (replace again) | 347, 340, 312 KB/s | 260, 252, 248 | 576, 577 | 0, 2 | none |
+
+- **The port:**
+  - `PORT 0 SET FOR INFRA ON CHANNEL 8` came 0.10 s after `THE FIRMWARE TOLD: CONNECTED`, each time.
+  - PORT_CFG (0xC400) read C004 before and after the link's H2Cs, and 1E81C after the port step. Under the check's mask 0x13E1F that is 1281C, the INFRA expectation.
+- **The error masks in data mode** (the probe now reads them): DMAC_ERR_IMR 0x8520 and CMAC_ERR_IMR 0xC160 read FFFFFFFF, as written. RX_ERR_FLAG_IMR 0xC804, which neither this driver nor Linux writes, reads 00202800.
+- **The rate:** no difference is shown. The spread within the step 2 sets (186 to 347) is larger than between the drivers. Step 2's first set had 20 late sends in its third minute; its second set had 2.
+- **The cameras' usb_host replaces** (04:51:25 and 04:55:41, just before this run) left no line from the driver beyond its minute lines.
+- **Left running:** the boot image's driver, 07e59deb9.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
