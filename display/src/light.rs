@@ -35,7 +35,7 @@ pub trait Poke { fn write(&mut self, reg: Writable, value: u32); }
 /// A monotonic clock and a delay.
 pub trait Clock { fn now_us(&mut self) -> u64; fn delay_us(&mut self, us: u32); }
 /// Step 4's surface (BAR 0's slot 5): a row of pixels written, a pixel read back; false or None when it is not mapped.
-pub trait Canvas { fn row(&mut self, y: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize) -> Option<u32>; }
+pub trait Canvas { fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32>; }
 /// Why the compositor did not take the second screen (213-KRN-0272): no client of it was granted (it does not run), its
 /// own answers (`display.wit` 1.3's errors), or the call itself failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,7 +105,7 @@ fn copied(r: &Reference, reg: R) -> u32 { COPIED.iter().position(|&c| c == reg).
 
 /// The reference from step 1's values, once all its batches were read and they name one firmware's pipe.
 pub fn reference(s: &Store, f: &Firmware, c: &Choice) -> Option<Reference> {
-    if s.batches() < crate::batches::BATCHES { return None; }
+    if s.batches() < crate::batches::STEP3_BATCHES { return None; }
     let pipe = (0..4u8).find(|&n| f.hubps[n as usize])?;
     let t = f.otg;
     let mut copies = [0u32; COPIED.len()];
@@ -163,16 +163,57 @@ const SKIPPED: u8 = 0x80;
 
 /// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
 pub const SURFACE_OFFSET: u64 = 0x0100_0000;
+/// Slot 5's length: [0x0100_0000, 0x0240_0000) of BAR 0 (213-KRN-0271).
+pub const SURFACE_BYTES: usize = 0x0140_0000;
 
 /// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
 /// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row. Half of
 /// display's stack (linker.ld) bounds it, so that the frames' own locals keep the rest: on 2026-11-22 the 64 KiB a task
 /// has by default faulted at its guard page as step 3 began (boot 69, release 202611220523).
 pub const STEP3_STACK_BYTES: usize = core::mem::size_of::<Interpreter>() + core::mem::size_of::<Journal>()
-    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::WIDTH;
+    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::MAX_WIDTH;
 /// The stack display asks for (linker.ld's PT_GNU_STACK).
 pub const STACK_BYTES: usize = 0x40000;
 const _: () = assert!(2 * STEP3_STACK_BYTES <= STACK_BYTES, "steps 3 and 4 need more stack than display asks for");
+
+/// Where step 3's mode came from (213-DRV-0095).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModeFrom {
+    /// The EDID's preferred timing, in HDMI signalling.
+    Edid,
+    /// Today's mode instead: the EDID not read, the sink not HDMI, no preferred timing or a bad one, its clock over HDMI's
+    /// 340 MHz without scrambling or the sink's own limit, or its surface over slot 5.
+    NotRead, NotHdmi, NoPreferred, Bad, OverClock { khz: u32, limit: u32 }, Surface { bytes: usize },
+}
+impl fmt::Display for ModeFrom {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ModeFrom::Edid => f.write_str("THE EDID'S PREFERRED TIMING"),
+            ModeFrom::NotRead => f.write_str("TODAY'S: THE EDID WAS NOT READ"),
+            ModeFrom::NotHdmi => f.write_str("TODAY'S: THE SINK HAS NO HDMI BLOCK"),
+            ModeFrom::NoPreferred => f.write_str("TODAY'S: THE EDID HAS NO PREFERRED TIMING"),
+            ModeFrom::Bad => f.write_str("TODAY'S: ITS PREFERRED TIMING IS INTERLACED OR NOT ONE AN OTG TAKES"),
+            ModeFrom::OverClock { khz, limit } => write!(f, "TODAY'S: ITS PREFERRED TIMING'S {} KHZ IS OVER {} KHZ", khz, limit),
+            ModeFrom::Surface { bytes } => write!(f, "TODAY'S: ITS SURFACE'S {} BYTES DO NOT FIT SLOT 5'S {}", bytes, SURFACE_BYTES),
+        }
+    }
+}
+
+/// The mode for step 3: the EDID's preferred timing in HDMI signalling, when the sink is HDMI and the timing fits HDMI
+/// without scrambling (340 MHz), the sink's own TMDS limit, and slot 5's surface at its pitch; else `fallback` in
+/// `signal`, with why.
+pub fn mode_from_edid(edid: Option<&crate::edid::Edid>, fallback: Timing, signal: Signal) -> (Timing, Signal, ModeFrom) {
+    let today = |why| (fallback, signal, why);
+    let Some(e) = edid else { return today(ModeFrom::NotRead) };
+    if e.hdmi.is_none() { return today(ModeFrom::NotHdmi); }
+    let Some(p) = e.preferred() else { return today(ModeFrom::NoPreferred) };
+    if p.interlaced || p.otg().is_err() { return today(ModeFrom::Bad); }
+    let limit = crate::timing::TMDS_NO_SCRAMBLING_KHZ.min(e.max_tmds_khz());
+    if p.pixel_khz > limit { return today(ModeFrom::OverClock { khz: p.pixel_khz, limit }); }
+    let s = picture::Size::for_mode(p.h_active as usize, p.v_active as usize);
+    if s.bytes() > SURFACE_BYTES || s.width > picture::MAX_WIDTH { return today(ModeFrom::Surface { bytes: s.bytes() }); }
+    (p, Signal::Hdmi, ModeFrom::Edid)
+}
 
 /// The mark a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its interrupt off): a start
 /// of display again in the same boot finds it and runs no stage. A machine boot clears OTG1's registers (step 1 read
@@ -225,6 +266,8 @@ pub enum Refusal {
     NoFreeFrontEnd,
     /// The chosen pipe's blocks overlap the firmware's (a DIG block both use).
     Overlap,
+    /// The mode's surface does not fit slot 5 (213-DRV-0095): its bytes.
+    Surface { bytes: usize },
     /// A powered HUBP follows step 3's timing generator and is not blanked: it would fetch once the generator runs.
     AttachedHubp(u8),
     /// The display microcontroller is enabled and not held in reset: it may own the PHYs and pixel clocks the VBIOS
@@ -236,7 +279,7 @@ pub enum Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL {})", batch, crate::batches::BATCHES),
+            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ITS FIRST {})", batch, crate::batches::STEP3_BATCHES),
             Refusal::RunningOtgs(n) => write!(f, "{} TIMING GENERATORS RUN, NOT ONE", n),
             Refusal::BackEnds(n) => write!(f, "{} DIG BACK ENDS ARE ENABLED, NOT ONE", n),
             Refusal::HdmiDriven => f.write_str("PHY A (HDMI-A-1) IS ALREADY DRIVEN"),
@@ -248,6 +291,7 @@ impl fmt::Display for Refusal {
             Refusal::AttachedHubp(n) => write!(f, "HUBP{} FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED", n),
             Refusal::DmcubRuns => f.write_str("THE DMCUB IS ENABLED AND NOT IN RESET: IT MAY OWN WHAT THE VBIOS TABLES PROGRAM"),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
+            Refusal::Surface { bytes } => write!(f, "THE MODE'S SURFACE, {} BYTES, DOES NOT FIT SLOT 5'S {}", bytes, SURFACE_BYTES),
         }
     }
 }
@@ -258,7 +302,7 @@ const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 /// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync),
 /// and it does not run while batch 8 shows the DMCUB enabled and out of reset.
 pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
-    if s.batches() < crate::batches::BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
+    if s.batches() < crate::batches::STEP3_BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
     if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
     let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
     let runs = (0..4).filter(|&t| running(t)).count() as u8;
@@ -292,6 +336,17 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
 /// Why the guard refused a write: the byte offset, and whose it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused { Firmware(u32), OffRoute(u32) }
+
+/// Step 2's writes (213-DRV-0095, `ddc.rs`): the I2C engine's control, arbitration, DDC1's speed and set-up, its four
+/// transactions and buffer, and DDC1's pad mask; nothing else, whatever the pipe.
+pub const DDC_WRITES: [R; 7] = [R::DcI2cControl, R::DcI2cArbitration, R::DcI2cDdc1Speed, R::DcI2cDdc1Setup, R::DcI2cTransaction,
+                                R::DcI2cData, R::DcGpioDdc1Mask];
+/// A write of step 2: one of `DDC_WRITES`' registers (any of the four transactions), else refused.
+pub fn ddc_writable(reg: Reg) -> Result<Writable, Refused> {
+    let o = reg.offset();
+    let ok = DDC_WRITES.iter().any(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o)));
+    if ok { Ok(Writable(reg)) } else { Err(Refused::OffRoute(o)) }
+}
 
 const fn seg1(d: u32) -> u32 { (dcn::SEGMENT[1] + d) * 4 }
 const fn seg2(d: u32) -> u32 { (dcn::SEGMENT[2] + d) * 4 }
@@ -482,20 +537,26 @@ impl fmt::Display for Bytes<'_> {
 
 /// Step 3 ready to run: the plan of the eight stages, the guard and the watch, for one firmware and choice.
 pub struct Light {
-    pub firmware: Firmware, pub choice: Choice, pub timing: Timing, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard,
+    pub firmware: Firmware, pub choice: Choice, pub timing: Timing, pub signal: Signal,
+    /// Step 4's surface for the mode (first light's 1920x1080, or the mode's with its pitch rounded to 64 pixels).
+    pub surface: picture::Size, plan: Plan, starts: [usize; STAGES as usize + 1], guard: Guard,
     watch: Watch, attached: Watch,
     /// Step 4's reference, when step 1 read it (stage 9 refuses without it), and the build stage 10's picture names.
     pub reference: Option<Reference>, pub build: &'static str,
 }
 
 impl Light {
-    pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> {
+    pub fn new(firmware: Firmware, choice: Choice, timing: Timing) -> Result<Light, Refusal> { Light::new_with(firmware, choice, timing, Signal::Dvi) }
+    /// As `new`, in DVI or HDMI signalling (213-DRV-0095).
+    pub fn new_with(firmware: Firmware, choice: Choice, timing: Timing, signal: Signal) -> Result<Light, Refusal> {
         let guard = Guard::new(&firmware, &choice)?;
-        let mut plan = first_light(choice.pipe, choice.output, &timing, Signal::Dvi, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
+        let mut plan = first_light(choice.pipe, choice.output, &timing, signal, Pattern::ColorSquares, firmware.protected()).map_err(Refusal::Plan)?;
         dcn::second_pipe(&mut plan).map_err(Refusal::Plan)?;
         let mut starts = [plan.len(); STAGES as usize + 1];
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
-        Ok(Light { firmware, choice, timing, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
+        let surface = picture::Size::for_mode(timing.h_active as usize, timing.v_active as usize);
+        if surface.bytes() > SURFACE_BYTES || surface.width > picture::MAX_WIDTH { return Err(Refusal::Surface { bytes: surface.bytes() }); }
+        Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN" })
     }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
@@ -527,9 +588,10 @@ impl Light {
         out.line(format_args!("S0 THE FIRMWARE'S PIPE ({}): OTG{} OPP{} DIG {} FRONT END, PHY {}, HUBPS {}{}{}{}; NEVER WRITTEN, READ AFTER EACH STAGE ({} REGISTERS)",
             if expected { "AS THE SURVEY EXPECTS: STEP 1 NOT READ" } else { "AS STEP 1 FOUND" }, f.otg, f.opp, LETTERS[f.dig_fe as usize], LETTERS[f.phy as usize],
             f.hubps[0] as u8, f.hubps[1] as u8, f.hubps[2] as u8, f.hubps[3] as u8, self.watch.len()));
-        out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN DVI SIGNALLING (CTA VIC 16)",
+        out.line(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN {} SIGNALLING (CTA VIC {})",
             c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
-            self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0));
+            self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0,
+            match self.signal { Signal::Dvi => "DVI", Signal::Hdmi => "HDMI" }, crate::timing::vic_of(&self.timing).unwrap_or(0)));
         for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
             out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM {} ON", n, c.pipe.otg, ATTACHED_FROM));
         }
@@ -548,13 +610,13 @@ impl Light {
                 n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
                 self.reference.map_or(0, |r| r.pipe))),
             Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
-                n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
+                n, verb, self.surface.width, self.surface.height, self.surface.pitch, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
             Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
             Step::Watch { frames } => out.line(format_args!("S{} {} WATCH {} FRAMES OF OTG{} WITH THE PATTERN OFF, READING WITHOUT SLEEP: AT EACH FRAME BOTH PIPES' HUBP AND ODM; THE FIRMWARE'S UNDERFLOWING OR TIMING OUT UNDOES AT ONCE; PIPE {}'S KEPT BY FRAME, CLEARED AND WATCHED ON, THEN FAIL THE STAGE",
                 n, verb, frames, self.choice.pipe.otg, self.choice.pipe.otg)),
             Step::Offer => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST",
-                n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH * 4)),
+                n, verb, self.surface.width, self.surface.height, self.surface.pitch * 4)),
             Step::Late | Step::Begin(_) => {}
         }
     }
@@ -566,7 +628,7 @@ impl Light {
                 for step in dcn::steps_in(p, n) { self.step_line(n, verb, step, out); }
                 if n == 13 {
                     out.line(format_args!("S{} PITCH FIELD {} ({} PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP{} HOLDS {} FOR ITS {} PIXELS",
-                        n, picture::PITCH - 1, picture::PITCH, self.reference.map_or(0, |r| r.pipe), self.reference.map_or(0, |r| r.pitch_field),
+                        n, self.surface.pitch - 1, self.surface.pitch, self.reference.map_or(0, |r| r.pipe), self.reference.map_or(0, |r| r.pitch_field),
                         self.reference.map_or(0, |r| r.width)));
                 }
             }
@@ -575,7 +637,7 @@ impl Light {
                 match n {
                     11 => out.line(format_args!("S{} {} TURN ON DPP{}'S AND HUBP{}'S CLOCKS (ITS WRITES SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q)),
                     12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
-                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, picture::PITCH - 1)),
+                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.surface.pitch - 1)),
                     14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
                     _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, WATCH_FRAMES)),
                 }
@@ -796,7 +858,7 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                 out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
             }
             Step::Offer => {
-                let (w, h, pitch) = (picture::WIDTH as u16, picture::HEIGHT as u16, (picture::PITCH * 4) as u32);
+                let (w, h, pitch) = (light.surface.width as u16, light.surface.height as u16, (light.surface.pitch * 4) as u32);
                 e.offer(w, h, pitch).map_err(Failure::Screen)?;
                 out.line(format_args!("S{} OFFERED THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
                     n, w, h, pitch));
@@ -1051,7 +1113,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, HubpreqCur0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, REFCYC_PER_REQ_DELIVERY.get(copied(r, HubpreqCur0TtuCntl0))),
         (QOS_LEVEL_FIXED, QOS_LEVEL), (QOS_RAMP_DISABLE, 0)])?;
     let surface = r.fb_base + SURFACE_OFFSET;
-    put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, picture::PITCH as u32 - 1)])?;
+    put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, light.surface.pitch as u32 - 1)])?;
     p.push(Step::ReadBack { reg: at(HubpreqSurfacePitch, q)?, field: PITCH }).map_err(|_| Failure::PlanFull)?;
     put(&mut p, HubpreqPrimarySurfaceAddressHigh, q, &[(WHOLE, (surface >> 32) as u32)])?;
     put(&mut p, HubpreqPrimarySurfaceAddress, q, &[(WHOLE, surface as u32)])?;
@@ -1083,23 +1145,22 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     Ok(p)
 }
 
-/// The samples stage 10 reads back: the corners, the border's middle, the cross, both diagonals and the first letter.
-pub const SAMPLES: [(usize, usize); 9] = [(0, 0), (1919, 1079), (5, 540), (960, 100), (178, 100), (1741, 100), (300, 100), (695, 340), (705, 340)];
-
 /// Stage 10: the picture drawn row by row into slot 5's memory, a few pixels read back. No register written.
 fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> Result<(), Failure> {
-    let lines = picture::Lines { build: light.build };
-    let mut row = [0u32; picture::WIDTH];
-    for y in 0..picture::HEIGHT {
+    let size = light.surface;
+    let lines = picture::Lines::new(light.build, size);
+    let mut row = [0u32; picture::MAX_WIDTH];
+    for y in 0..size.height {
         picture::row(&lines, y, &mut row);
-        if !e.row(y, &row) { return Err(Failure::NoSurface); }
+        if !e.row(y, size.pitch, &row[..size.width]) { return Err(Failure::NoSurface); }
     }
-    for (x, y) in SAMPLES {
-        if e.sample(x, y) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
+    let samples = picture::samples(size);
+    for (x, y) in samples {
+        if e.sample(x, y, size.pitch) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
     }
     out.line(format_args!("S{} DRAWN: {}x{} AT SLOT 5'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
-        picture::WIDTH, picture::HEIGHT, picture::PITCH, picture::PITCH * 4, SAMPLES.len()));
-    out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD {}", n, light.build));
+        size.width, size.height, size.pitch, size.pitch * 4, samples.len()));
+    out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 {}X{} / BUILD {}", n, size.width, size.height, light.build));
     Ok(())
 }
 

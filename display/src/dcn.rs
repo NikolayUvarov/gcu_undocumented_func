@@ -104,10 +104,18 @@ pub enum R {
     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
     // Read by batch 9 for the firmware's HUBP, written for pipe 1 by stage 13 as hubp2_vready_at_or_After_vsync does.
     HubpreqDebugDb,
+    // Read by batch 11 only (213-DRV-0095): the I2C engine and DDC line 1 (HDMI-A-1's, DC_GPIO_DDC1), as Display Core's
+    // dce_i2c_hw and hw_ddc read them; never DC_I2C_DATA, whose read moves its index.
+    DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
+    MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y,
+    // Step 2's (213-DRV-0095): the engine's buffer, written and read only by the EDID read, never by a batch.
+    DcI2cData,
+    // HDMI signalling's (213-DRV-0095): the DIG front end's HDMI and AFMT registers, written by stage 6.
+    HdmiControl, HdmiVbiPacketControl, HdmiGc, HdmiGenericPacketControl0, HdmiGenericPacketControl1, AfmtCntl, AfmtVbiPacketControl, AfmtVbiPacketControl1, AfmtGenericHdr, AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 143] = {
+pub const ALL: [R; 173] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -135,7 +143,10 @@ pub const ALL: [R; 143] = {
      MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
      DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
      HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
-     HubpreqDebugDb]
+     HubpreqDebugDb,
+     DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
+     MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y, DcI2cData,
+     HdmiControl, HdmiVbiPacketControl, HdmiGc, HdmiGenericPacketControl0, HdmiGenericPacketControl1, AfmtCntl, AfmtVbiPacketControl, AfmtVbiPacketControl1, AfmtGenericHdr, AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7]
 };
 
 impl R {
@@ -144,6 +155,7 @@ impl R {
         use R::*;
         match self {
             DigFeCntl | DigBeCntl | DigBeEnCntl | PhypllPixclkResyncCntl | HpdIntStatus | HpdControl => DIGS,
+            HdmiControl | HdmiVbiPacketControl | HdmiGc | HdmiGenericPacketControl0 | HdmiGenericPacketControl1 | AfmtCntl | AfmtVbiPacketControl | AfmtVbiPacketControl1 | AfmtGenericHdr | AfmtGeneric0 | AfmtGeneric1 | AfmtGeneric2 | AfmtGeneric3 | AfmtGeneric4 | AfmtGeneric5 | AfmtGeneric6 | AfmtGeneric7 => DIGS,
             DomainPgStatus => 2 * PIPES, // HUBP n is domain 2n, DPP n is 2n + 1 (dcn20_hubp_pg_control)
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => 1,
@@ -151,6 +163,9 @@ impl R {
             DchubbubArbWatermark => 20,
             DchubbubArbDfReqOutstand => 1,
             DchubbubArbSatLevel => 1,
+            DcI2cTransaction => 4,
+            DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | MicrosecondTimeBaseDiv
+                | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => 1,
             DchubbubArbDramStateCntl => 1,
             DchubbubArbWatermarkChangeCntl => 1,
             DchubbubGlobalTimerCntl => 1,
@@ -272,6 +287,27 @@ impl R {
             DsclHorzScaleRatio => (2, 0xCF1 + 0x16B * i),
             DsclVertScaleRatio => (2, 0xCF5 + 0x16B * i),
             HubpreqDebugDb => (2, 0x5F6 + 0xDC * i),
+            DcI2cControl => (2, 0x1E98), DcI2cArbitration => (2, 0x1E99), DcI2cSwStatus => (2, 0x1E9B), DcI2cDdc1HwStatus => (2, 0x1E9C),
+            DcI2cDdc1Speed => (2, 0x1EA2), DcI2cDdc1Setup => (2, 0x1EA3), DcI2cTransaction => (2, 0x1EAE + i),
+            MicrosecondTimeBaseDiv => (1, 0x7B), DcGpioDdc1Mask => (2, 0x28D0), DcGpioDdc1A => (2, 0x28D1), DcGpioDdc1En => (2, 0x28D2),
+            DcGpioDdc1Y => (2, 0x28D3), DcI2cData => (2, 0x1EB2),
+            HdmiControl => (2, 0x2071 + 0x100 * i),
+            HdmiVbiPacketControl => (2, 0x2075 + 0x100 * i),
+            HdmiGc => (2, 0x207B + 0x100 * i),
+            HdmiGenericPacketControl0 => (2, 0x2078 + 0x100 * i),
+            HdmiGenericPacketControl1 => (2, 0x2095 + 0x100 * i),
+            AfmtCntl => (2, 0x20E6 + 0x100 * i),
+            AfmtVbiPacketControl => (2, 0x20AB + 0x100 * i),
+            AfmtVbiPacketControl1 => (2, 0x20E7 + 0x100 * i),
+            AfmtGenericHdr => (2, 0x208C + 0x100 * i),
+            AfmtGeneric0 => (2, 0x208D + 0x100 * i),
+            AfmtGeneric1 => (2, 0x208E + 0x100 * i),
+            AfmtGeneric2 => (2, 0x208F + 0x100 * i),
+            AfmtGeneric3 => (2, 0x2090 + 0x100 * i),
+            AfmtGeneric4 => (2, 0x2091 + 0x100 * i),
+            AfmtGeneric5 => (2, 0x2092 + 0x100 * i),
+            AfmtGeneric6 => (2, 0x2093 + 0x100 * i),
+            AfmtGeneric7 => (2, 0x2094 + 0x100 * i),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -385,6 +421,28 @@ impl R {
             DsclHorzScaleRatio => "SCL_HORZ_FILTER_SCALE_RATIO",
             DsclVertScaleRatio => "SCL_VERT_FILTER_SCALE_RATIO",
             HubpreqDebugDb => "HUBPREQ_DEBUG_DB",
+            DcI2cControl => "DC_I2C_CONTROL", DcI2cArbitration => "DC_I2C_ARBITRATION", DcI2cSwStatus => "DC_I2C_SW_STATUS",
+            DcI2cDdc1HwStatus => "DC_I2C_DDC1_HW_STATUS", DcI2cDdc1Speed => "DC_I2C_DDC1_SPEED", DcI2cDdc1Setup => "DC_I2C_DDC1_SETUP",
+            DcI2cTransaction => "DC_I2C_TRANSACTION", MicrosecondTimeBaseDiv => "MICROSECOND_TIME_BASE_DIV",
+            DcGpioDdc1Mask => "DC_GPIO_DDC1_MASK", DcGpioDdc1A => "DC_GPIO_DDC1_A", DcGpioDdc1En => "DC_GPIO_DDC1_EN", DcGpioDdc1Y => "DC_GPIO_DDC1_Y",
+            DcI2cData => "DC_I2C_DATA",
+            HdmiControl => "HDMI_CONTROL",
+            HdmiVbiPacketControl => "HDMI_VBI_PACKET_CONTROL",
+            HdmiGc => "HDMI_GC",
+            HdmiGenericPacketControl0 => "HDMI_GENERIC_PACKET_CONTROL0",
+            HdmiGenericPacketControl1 => "HDMI_GENERIC_PACKET_CONTROL1",
+            AfmtCntl => "AFMT_CNTL",
+            AfmtVbiPacketControl => "AFMT_VBI_PACKET_CONTROL",
+            AfmtVbiPacketControl1 => "AFMT_VBI_PACKET_CONTROL1",
+            AfmtGenericHdr => "AFMT_GENERIC_HDR",
+            AfmtGeneric0 => "AFMT_GENERIC_0",
+            AfmtGeneric1 => "AFMT_GENERIC_1",
+            AfmtGeneric2 => "AFMT_GENERIC_2",
+            AfmtGeneric3 => "AFMT_GENERIC_3",
+            AfmtGeneric4 => "AFMT_GENERIC_4",
+            AfmtGeneric5 => "AFMT_GENERIC_5",
+            AfmtGeneric6 => "AFMT_GENERIC_6",
+            AfmtGeneric7 => "AFMT_GENERIC_7",
         }
     }
 
@@ -395,7 +453,8 @@ impl R {
         match self {
             OptcDataSourceSelect | OptcDataFormatControl | OptcInputClockControl | OptcInputGlobalControl => "ODM",
             VtgControl => "VTG", OppPipeControl => "OPP_PIPE", DpgControl | DpgDimensions | DpgOffsetSegment => "DPG",
-            DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
+            DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG",
+            HdmiControl | HdmiVbiPacketControl | HdmiGc | HdmiGenericPacketControl0 | HdmiGenericPacketControl1 | AfmtCntl | AfmtVbiPacketControl | AfmtVbiPacketControl1 | AfmtGenericHdr | AfmtGeneric0 | AfmtGeneric1 | AfmtGeneric2 | AfmtGeneric3 | AfmtGeneric4 | AfmtGeneric5 | AfmtGeneric6 | AfmtGeneric7 => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
             DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl | HubpreqDebugDb => "HUBP",
             HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh | HubpreqVmidSettings0 | HubpreqFlipControl | HubpreqVmSystemApertureLow | HubpreqVmSystemApertureHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
@@ -403,6 +462,8 @@ impl R {
             CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
                 | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
                 | DmcubGpintDataout | DmcubTimerCurrent => "",
+            DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | DcI2cTransaction
+                | MicrosecondTimeBaseDiv | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => "",
             HubpAddrConfig | HubpTilingConfig | HubpPriViewportStart | HubpPriViewportDimension | HubpReqSizeConfig | HubpReqSizeConfigC | HubpClkCntl => "HUBP",
             HubpreqSurfaceControl | HubpreqExpansionMode | HubpreqTtuQosWm | HubpreqGlobalTtuCntl | HubpreqSurf0TtuCntl0 | HubpreqSurf0TtuCntl1 | HubpreqCur0TtuCntl0 | HubpreqCur0TtuCntl1 | HubpreqVmMxL1TlbCntl | HubpreqBlankOffset0 | HubpreqBlankOffset1 | HubpreqDstDimensions | HubpreqDstAfterScaler | HubpreqPrefetchSettings | HubpreqVblankParameters0 | HubpreqVblankParameters1 | HubpreqVblankParameters2 | HubpreqVblankParameters3 | HubpreqVblankParameters4 | HubpreqNomParameters0 | HubpreqNomParameters1 | HubpreqNomParameters4 | HubpreqNomParameters5 | HubpreqPerLineDeliveryPre | HubpreqPerLineDelivery | HubpreqCursorSettings | HubpreqRefFreqToPixFreq | HubpreqDstYDeltaDrqLimit => "HUBPREQ",
             HubpretControl => "HUBPRET",
@@ -553,6 +614,47 @@ pub mod field {
     pub const HUBP_UNDERFLOW_CLEAR: Field = f(31, 1);
     /// DCN_TTU_QOS_WM, and the QoS fields of DCN_SURF0_TTU_CNTL0 and DCN_CUR0_TTU_CNTL0.
     pub const QOS_LEVEL_LOW_WM: Field = f(0, 14);
+    /// The DIG front end's HDMI and AFMT fields (dcn_2_1_0_sh_mask.h), as enc1_stream_encoder_hdmi_set_stream_attribute
+    /// and enc1_update_generic_info_packet set them.
+    pub const HDMI_KEEPOUT_MODE: Field = f(0, 1);
+    pub const HDMI_DATA_SCRAMBLE_EN: Field = f(1, 1);
+    pub const HDMI_CLOCK_CHANNEL_RATE: Field = f(2, 1);
+    pub const HDMI_NO_EXTRA_NULL_PACKET_FILLED: Field = f(3, 1);
+    pub const HDMI_PACKET_GEN_VERSION: Field = f(4, 1);
+    pub const HDMI_DEEP_COLOR_ENABLE: Field = f(24, 1);
+    pub const HDMI_DEEP_COLOR_DEPTH: Field = f(28, 2);
+    pub const HDMI_NULL_SEND: Field = f(0, 1);
+    pub const HDMI_GC_SEND: Field = f(4, 1);
+    pub const HDMI_GC_CONT: Field = f(5, 1);
+    pub const HDMI_ACP_SEND: Field = f(12, 1);
+    pub const HDMI_GC_AVMUTE: Field = f(0, 1);
+    pub const AFMT_AUDIO_CLOCK_EN: Field = f(0, 1);
+    pub const AFMT_GENERIC_CONFLICT: Field = f(16, 1);
+    pub const AFMT_GENERIC_CONFLICT_CLR: Field = f(17, 1);
+    pub const AFMT_GENERIC_INDEX: Field = f(28, 4);
+    pub const AFMT_GENERIC0_IMMEDIATE_UPDATE: Field = f(2, 1);
+    pub const HDMI_GENERIC0_SEND: Field = f(0, 1);
+    pub const HDMI_GENERIC0_CONT: Field = f(1, 1);
+    pub const HDMI_GENERIC0_LINE: Field = f(0, 16);
+    /// The I2C engine and DDC line 1 (dcn_2_1_0_sh_mask.h): who holds the engine, its last transfer, the line's set-up.
+    pub const DC_I2C_REG_RW_CNTL_STATUS: Field = f(2, 2);
+    pub const DC_I2C_SW_USE_I2C_REG_REQ: Field = f(20, 1);
+    pub const DC_I2C_DMCU_USE_I2C_REG_REQ: Field = f(24, 1);
+    pub const DC_I2C_SW_STATUS_BITS: Field = f(0, 2);
+    pub const DC_I2C_SW_DONE: Field = f(2, 1);
+    pub const DC_I2C_DDC1_HW_STATUS_BITS: Field = f(0, 2);
+    pub const DC_I2C_DDC1_ENABLE: Field = f(6, 1);
+    pub const DC_I2C_DDC1_TIME_LIMIT: Field = f(24, 8);
+    pub const DC_I2C_DDC1_THRESHOLD: Field = f(0, 2);
+    pub const DC_I2C_DDC1_PRESCALE: Field = f(16, 16);
+    pub const DC_I2C_DDC_SELECT: Field = f(8, 3);
+    pub const MICROSECOND_TIME_BASE: Field = f(0, 7);
+    pub const XTAL_REF_DIV: Field = f(8, 7);
+    pub const DC_GPIO_DDC1CLK_MASK: Field = f(0, 1);
+    pub const DC_GPIO_DDC1DATA_MASK: Field = f(8, 1);
+    pub const AUX_PAD1_MODE: Field = f(16, 1);
+    pub const DC_GPIO_DDC1CLK_BIT: Field = f(0, 1);
+    pub const DC_GPIO_DDC1DATA_BIT: Field = f(8, 1);
     pub const QOS_LEVEL_HIGH_WM: Field = f(16, 14);
     pub const QOS_LEVEL_FIXED: Field = f(24, 4);
     pub const QOS_RAMP_DISABLE: Field = f(28, 1);
@@ -766,6 +868,50 @@ fn reg(r: R, inst: u8) -> Result<Reg, PlanError> { r.at(inst).ok_or(PlanError::N
 /// alone. The order is Display Core's for a TMDS stream: the timing generator's clocks, the pixel clock, the timing,
 /// the OPP and its pattern, the generator started and seen running, then the front end, the back end and the PHY.
 /// It is a plan, not a guarantee (MC-12.3): it has run nowhere yet.
+/// The AVI infoframe for `timing` (CTA-861 version 2, 13 bytes): RGB, active format as the picture, full-range RGB, the
+/// timing's VIC and its picture aspect when it is one of the CTA table's, else VIC 0 and no aspect (CTA-861 has no code
+/// for 64:27 outside its VICs). As AFMT_GENERIC_HDR's word and AFMT_GENERIC_0 to 7's, the checksum first.
+pub fn avi_infoframe(timing: &Timing) -> (u32, [u32; 8]) {
+    let vic = crate::timing::vic_of(timing).unwrap_or(0);
+    let aspect: u8 = match vic { 0 => 0, 1 => 1, _ => 2 };
+    let header = [0x82u8, 0x02, 0x0D];
+    let mut sb = [0u8; 32];
+    sb[1] = 0x10; // A0: active format information present; Y: RGB
+    sb[2] = aspect << 4 | 0x8; // M: the picture's aspect; R: as the coded frame
+    sb[3] = 2 << 2; // Q: full-range RGB
+    sb[4] = vic;
+    let sum = header.iter().chain(&sb[1..14]).fold(0u8, |s, b| s.wrapping_add(*b));
+    sb[0] = 0u8.wrapping_sub(sum);
+    let mut words = [0u32; 8];
+    for (k, w) in words.iter_mut().enumerate() { *w = u32::from_le_bytes([sb[4 * k], sb[4 * k + 1], sb[4 * k + 2], sb[4 * k + 3]]); }
+    (u32::from_le_bytes([header[0], header[1], header[2], 0]), words)
+}
+
+/// HDMI signalling on DIG front end `d` (enc1_stream_encoder_hdmi_set_stream_attribute, enc2_update_hdmi_info_packet;
+/// Linux v7.0), after table 4 in HDMI mode: the HDMI engine, the general control and null packets, AVMUTE off, and the
+/// AVI infoframe as generic packet 0, sent every frame on line 2. No audio: its infoframe is left off.
+fn hdmi_stream(plan: &mut Plan, d: u8, timing: &Timing) -> Result<(), PlanError> {
+    use field::*;
+    use R::*;
+    plan.update(reg(HdmiControl, d)?, &[(HDMI_PACKET_GEN_VERSION, 1), (HDMI_KEEPOUT_MODE, 1), (HDMI_DEEP_COLOR_ENABLE, 0), (HDMI_DATA_SCRAMBLE_EN, 0),
+        (HDMI_NO_EXTRA_NULL_PACKET_FILLED, 1), (HDMI_CLOCK_CHANNEL_RATE, 0), (HDMI_DEEP_COLOR_DEPTH, 0)])?;
+    plan.update(reg(HdmiVbiPacketControl, d)?, &[(HDMI_GC_CONT, 1), (HDMI_GC_SEND, 1), (HDMI_NULL_SEND, 1), (HDMI_ACP_SEND, 0)])?;
+    plan.update(reg(HdmiGc, d)?, &[(HDMI_GC_AVMUTE, 0)])?;
+    let (header, words) = avi_infoframe(timing);
+    plan.update(reg(AfmtCntl, d)?, &[(AFMT_AUDIO_CLOCK_EN, 1)])?;
+    plan.wait(reg(AfmtVbiPacketControl, d)?, AFMT_GENERIC_CONFLICT, 0, 500)?;
+    plan.update(reg(AfmtVbiPacketControl, d)?, &[(AFMT_GENERIC_CONFLICT_CLR, 1)])?;
+    plan.update(reg(AfmtVbiPacketControl, d)?, &[(AFMT_GENERIC_INDEX, 0)])?;
+    plan.update(reg(AfmtGenericHdr, d)?, &[(WHOLE, header)])?;
+    for (r, w) in [AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7].into_iter().zip(words) {
+        plan.update(reg(r, d)?, &[(WHOLE, w)])?;
+    }
+    plan.update(reg(AfmtVbiPacketControl1, d)?, &[(AFMT_GENERIC0_IMMEDIATE_UPDATE, 1)])?;
+    plan.update(reg(HdmiGenericPacketControl0, d)?, &[(HDMI_GENERIC0_CONT, 1), (HDMI_GENERIC0_SEND, 1)])?;
+    plan.update(reg(HdmiGenericPacketControl1, d)?, &[(HDMI_GENERIC0_LINE, 2)])?;
+    Ok(())
+}
+
 pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, pattern: Pattern, protected: Protected) -> Result<Plan, PlanError> {
     use field::*;
     use R::*;
@@ -821,6 +967,8 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     plan.push(Step::Begin(6))?;
     plan.push(Step::Call(Table::DigEncoderStreamSetup { dig: d, mode, lanes: 4, pclk_10khz: timing.pixel_khz / 10, bpc: PANEL_8BIT_PER_COLOR }))?;
     plan.update(reg(DigFeCntl, d)?, &[(DIG_SOURCE_SELECT, t as u32), (TMDS_PIXEL_ENCODING, 0), (TMDS_COLOR_FORMAT, 0)])?;
+
+    if signal == Signal::Hdmi { hdmi_stream(&mut plan, d, timing)?; }
 
     // The back end's mode and front end (dcn10_link_encoder_setup, connect_dig_be_to_fe), then the PHY.
     plan.push(Step::Begin(7))?;

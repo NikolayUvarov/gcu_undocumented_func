@@ -172,6 +172,9 @@ pub fn cta(vic: u8) -> Option<Timing> {
     })
 }
 
+/// The CTA VIC whose timing `t` is, of those `cta` knows; None for any other timing.
+pub fn vic_of(t: &Timing) -> Option<u8> { [1u8, 4, 16, 19, 31].into_iter().find(|&v| cta(v).as_ref() == Some(t)) }
+
 /// First light's mode for a sink that lists `vics`: CTA 1080p60 (VIC 16) where it is listed, else 720p60 (VIC 4), else
 /// 640x480 (VIC 1, which every CTA sink must take); all within one DVI link.
 pub fn first_light_mode(vics: &[u8]) -> Timing {
