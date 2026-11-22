@@ -637,6 +637,40 @@ fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,
     let _=Event::FloorRefused{channel:36};drop(service);clean();
 });}
 
+// 213-DRV-0104, SEND_BEHIND_LATE: with the switch, a send while one is late (answered at its deadline, its release
+// awaited) goes on the ring behind it with its call open, and is answered at its own release with its true outcome; the
+// late one, parked, is counted released late and is not sent again. A third while one is parked and the next is late
+// too is refused busy. Without the switch the second is refused busy, as before. RPQ alone, no firmware report (fault 7),
+// the releases held back as the MAC holds the frames.
+#[test]
+fn service_sends_behind_a_late_frame_when_the_switch_is_on(){for behind in[false,true]{run(7,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().send_behind_late(behind);service.rpq_alone();assert!(service.step());
+    let sent=|id:usize|{let(w,b)=ipc::response(id).unwrap();assert_eq!(w,[2<<16,0]);wlanhw::Sent::decode(&mut Reader::new(&b[..2])).unwrap()};
+    c.borrow_mut().hold_rpq=true;
+    let a=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(a).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(a).acked,"A answered at its deadline");
+    assert!(matches!(service.take_event(),Some(Event::LateFrame{count:1,..})));
+    let b=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    if !behind{error(b,wlanhw::Error::Busy);assert_eq!(c.borrow().published,1);c.borrow_mut().hold_rpq=false;ipc::advance(5);assert!(service.step());
+        drop(service);clean();return}
+    assert!(ipc::response(b).is_none(),"B taken, its call open");assert_eq!(c.borrow().published,2,"B on the ring behind A");
+    // Both released within B's time: B answered with its outcome, A counted as a late frame released.
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());
+    assert_eq!(sent(b),wlanhw::Sent{acked:true,attempts:1});
+    let event=service.take_event();assert!(matches!(event,Some(Event::LateRelease{acked:true,attempts:1,..})),"{event:?}");
+    // D late, E behind it and late too: F is refused, one parked at a time; then both released, nothing sent again.
+    c.borrow_mut().hold_rpq=true;
+    let d=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());ipc::advance(91);assert!(service.step());assert!(!sent(d).acked);
+    let e=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(e).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(e).acked,"E answered at its deadline");
+    let f=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(f,wlanhw::Error::Busy);
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());ipc::advance(5);assert!(service.step());
+    assert_eq!(c.borrow().published,4,"A, B, D and E once each");
+    let g=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(sent(g).acked,"sends go on");
+    let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
+});}}
+
 // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
 // then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
 #[test]
@@ -673,6 +707,36 @@ fn service_alternates_the_detection_floor_by_the_minute(){run(0,true,true,|data,
     assert!(is_linux(service.floor_registers()),"still Linux's while the send is pending");
     c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());assert!(ipc::response(send).is_some());
     ipc::advance(5);assert!(service.step());assert_eq!(service.floor_registers(),found,"switched at the next poll");
+    drop(service);clean();
+});}
+
+// 213-DRV-0102: every field of the floor is written and read back on its own. Two registers that keep their value whatever
+// is written (the Ryzen's 0x4B64 and 0x4B74, boot 93) are named as read as before the write, and EDCCA's level after them is
+// still written: boot 93's ON minutes stopped at 0x4B64 and never wrote 0x4B74 or 0x4884.
+#[test]
+fn service_writes_every_floor_field_and_names_those_not_read_back(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::for_rssi};
+    ipc::reset();c.borrow_mut().write_ignored=vec![0x14b64,0x14b74];
+    let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let linux=for_rssi(-63);let on=minutes[2];assert!(on.on(),"{on:?}");
+    assert_eq!((on.registers[0]>>6&31,on.registers[0]>>30&1),(u32::from(linux.ofdm_pd),1),"the OFDM floor: {:X?}",on.registers);
+    assert_eq!((on.registers[1],on.registers[2]),(found[1],found[2]),"0x4B64 and 0x4B74 keep what they held");
+    assert_eq!((on.registers[3]>>24,on.registers[3]&0xffff),(u32::from(linux.edcca),u32::from(linux.edcca)*0x101),"EDCCA written after them");
+    assert_eq!((on.written,on.switch_failures),(crate::btc_session::data_mode::FloorWrite{unread:0b0110,unchanged:0b0110},0),"named, not a failed switch");
+    for off in [minutes[1],minutes[3]]{assert!(off.off());assert_eq!((off.written,off.switch_failures),(Default::default(),0));}
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
     drop(service);clean();
 });}
 

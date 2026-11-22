@@ -11,6 +11,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
     // Whole receive buffers, after `incoming`: frames with their PPDU count and rate, and captured reports (213-DRV-0087).
     pub buffers:Vec<Vec<u8>>,
+    // 213-DRV-0102: registers that keep their value whatever is written (the Ryzen's 0x4B64 and 0x4B74, boot 93).
+    pub write_ignored:Vec<usize>,
     // 213-DRV-0091: the next reads of the indirect window that answer DEADBEEF, and whether the first of them begins a
     // firmware recovery as `ser` does (the Ryzen's boot 62).
     pub window_dead:usize,pub window_dead_ser:bool,
@@ -24,6 +26,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     // 213-DRV-0091: sends' final reports held back while `hold_reports`, given at the first read after it is cleared:
     // a frame the MAC holds, then sends once.
     pub hold_reports:bool,pub held_reports:Vec<[u8;32]>,
+    // 213-DRV-0104: sends' RPQ releases held back the same way (the RPQ-alone path, its frames held in the MAC).
+    pub hold_rpq:bool,pub held_rpq:Vec<u32>,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -90,7 +94,7 @@ impl Device{
         let seq=u16::from_le_bytes(wd[48..50].try_into().unwrap())&0x7fff;
         let unacked=u32::from(self.control.borrow().unacked);
         let ctl=Self::word(&wd,8);let rpq=u32::from(if self.control.borrow().fault==14{seq+1}else{seq})<<16|unacked<<13|((ctl>>17)&31)<<8|(ctl>>24);
-        self.raw().inject_packet(1,7,&rpq.to_le_bytes());
+        if self.control.borrow().hold_rpq{self.control.borrow_mut().held_rpq.push(rpq);}else{self.raw().inject_packet(1,7,&rpq.to_le_bytes());}
         if self.control.borrow().fault!=7{
             let mut c2h=[0;32];c2h[..4].copy_from_slice(&(1u32|9<<2|1<<8).to_le_bytes());c2h[4]=32;
             c2h[8..12].copy_from_slice(&(u32::from(seq&15)<<8|unacked<<6).to_le_bytes());c2h[20..24].copy_from_slice(&256u32.to_le_bytes());
@@ -98,6 +102,7 @@ impl Device{
         }
     }
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
+        if self.control.borrow().write_ignored.contains(&at){return Ok(())}
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
         let filter_fault=self.control.borrow().filter_fault;
         if self.active&&(at==0x160||at==0x168){self.control.borrow_mut().halt_h2c_writes+=1;}
@@ -186,6 +191,8 @@ impl RegisterIo for Device{
         }
         if !self.control.borrow().hold_reports&&!self.control.borrow().held_reports.is_empty(){
             let held=std::mem::take(&mut self.control.borrow_mut().held_reports);for c2h in held{self.raw().inject_c2h(&c2h);}}
+        if !self.control.borrow().hold_rpq&&!self.control.borrow().held_rpq.is_empty(){
+            let held=std::mem::take(&mut self.control.borrow_mut().held_rpq);for rpq in held{self.raw().inject_packet(1,7,&rpq.to_le_bytes());}}
         if at==0x164&&self.raw().get(0x164,4)==0&&!self.control.borrow().halt_codes.is_empty(){
             let code=self.control.borrow_mut().halt_codes.remove(0);self.raw().put(0x16c,4,code);self.raw().put(0x164,4,1);
             let isr=self.raw().get(0x1a4,4)|1<<21;self.raw().put(0x1a4,4,isr);}

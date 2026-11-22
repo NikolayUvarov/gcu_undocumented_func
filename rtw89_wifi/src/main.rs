@@ -333,7 +333,16 @@ fn served(event: receive_service::Event) {
                 else if floor.set { "SET AS LINUX" } else { "AS FOUND" };
             mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; {}{} (213-DRV-0102)",
                 channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, held,
-                if floor.switch_failures != 0 { "; A SWITCH NOT AS WRITTEN" } else { "" });
+                if floor.switch_failures != 0 { "; A WRITE FAULTED" } else { "" });
+            // Every field is written; one not read back is named, apart from the switch (213-DRV-0102, boot 93).
+            let w = floor.written;
+            if w.unread != 0 {
+                let names = |m: u8| [(1, " 4860"), (2, " 4B64"), (4, " 4B74"), (8, " 4884")].map(|(b, n)| if m & b != 0 { n } else { "" });
+                let (same, other) = (names(w.unchanged), names(w.unread & !w.unchanged));
+                mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR: EVERY FIELD WRITTEN; READ AS BEFORE THE WRITE:{}{}{}{}{}; READ OTHERWISE:{}{}{}{}{} (213-DRV-0102)",
+                    channel, same[0], same[1], same[2], same[3], if w.unchanged == 0 { " NONE" } else { "" },
+                    other[0], other[1], other[2], other[3], if w.unread & !w.unchanged == 0 { " NONE" } else { "" });
+            }
             let r = floor.ppdu_rssi;
             mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
             mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {} (213-DRV-0102)", channel, &r[9..], floor.unparsed);
