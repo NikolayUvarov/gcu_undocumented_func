@@ -3,9 +3,12 @@
 // camera: what a camera sees (issue 158), through the video gateway's client the shell lends in SLOT_CAMERA once the
 // user agreed (REQUEST_CAMERA). It shows the stream on its screen (a window in wm), takes a still as a BMP, or records
 // an AVI of Motion JPEG frames (as `record`, issue 093). While the stream is open the compositor shows the camera mark.
+// The camera's modes (video.wit 1.1, 158-APP-0152): -m picks one, m and Shift+m step through those offered, each opened
+// at its own size and rate; the mode in use is in the log and the title.
 extern crate alloc;
 #[path = "../../shell/src/bmp.rs"]
 mod bmp;
+mod modes;
 mod pick;
 
 use alloc::format;
@@ -25,12 +28,18 @@ mind::request!(REQUEST_CAMERA | REQUEST_FILES);
 const CAMERA: Endpoint = Endpoint(SLOT_CAMERA);
 const QUALITY: u8 = 75;
 
-struct Options { width: usize, height: usize, rate: u8, camera: u8, still: Option<String>, video: Option<(u32, String)> }
+struct Options { width: usize, height: usize, rate: u8, camera: u8, mode: Option<u16>, still: Option<String>, video: Option<(u32, String)> }
+
+// The stream's size and rate: as asked, or a mode's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Shape { width: usize, height: usize, rate: u8 }
+
+impl Shape { fn bytes(&self) -> usize { self.width * self.height * 4 } }
 
 fn options(args: &str) -> Result<Options, String> {
-    let mut options = Options { width: 320, height: 240, rate: 10, camera: 0, still: None, video: None };
+    let mut options = Options { width: 320, height: 240, rate: 10, camera: 0, mode: None, still: None, video: None };
     let mut words = args.split_whitespace();
-    let usage = || String::from("usage: camera [-c n] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]");
+    let usage = || String::from("usage: camera [-c n] [-m mode] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]");
     while let Some(word) = words.next() {
         match word {
             "-z" => {
@@ -39,6 +48,7 @@ fn options(args: &str) -> Result<Options, String> {
             }
             "-r" => options.rate = words.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?,
             "-c" => options.camera = words.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?,
+            "-m" => options.mode = Some(words.next().and_then(|s| s.parse().ok()).ok_or_else(usage)?),
             "-s" => options.still = Some(String::from(words.next().ok_or_else(usage)?)),
             "-t" => {
                 let seconds = words.next().and_then(|s| s.parse().ok()).filter(|&s| s > 0).ok_or_else(usage)?;
@@ -53,7 +63,13 @@ fn options(args: &str) -> Result<Options, String> {
 // The frame buffer the gateway writes into: shared once, lent writable for each read and revoked after it.
 struct Buffer { pages: Pages, cap: usize }
 
+// A buffer given up for another mode's takes its shared capability with it; the pages go after.
+impl Drop for Buffer { fn drop(&mut self) { let _ = mind::ipc::drop_cap(self.cap); } }
+
 impl Buffer {
+    // A buffer for frames of `bytes`; None without the memory or the share.
+    fn new(bytes: usize) -> Option<Buffer> { let pages = Pages::new(bytes)?; let cap = pages.share().ok()?; Some(Buffer { pages, cap }) }
+
     fn read(&mut self, bytes: usize) -> Result<(idl::Frame, &[u32]), String> {
         let lent = mind::ipc::mint(self.cap, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0).map_err(|e| format!("cannot lend the buffer: {:?}", e))?;
         let read = idl::read(CAMERA, bytes as u32, lent);
@@ -96,89 +112,155 @@ fn write_still(path: &str, pixels: &[u32], width: usize, height: usize) -> Resul
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Asked { Nothing, Quit, Next }
+enum Asked { Nothing, Quit, Next, Mode(bool) }
 
-// Esc or q: the stream is closed before the program ends; n or Tab: the next camera (158-APP-0147).
+// Esc or q: the stream is closed before the program ends; n or Tab: the next camera (158-APP-0147); m and Shift+m: the
+// next and the earlier mode (158-APP-0152).
 fn asked() -> Asked {
     let mut asked = Asked::Nothing;
     while let Some(key) = mind::input::read_key() {
         if key.is_escape() || key.char() == Some('q') { asked = Asked::Quit; }
         else if asked == Asked::Nothing && matches!(key.char(), Some('n' | '\t')) { asked = Asked::Next; }
+        else if asked == Asked::Nothing && matches!(key.char(), Some('m' | 'M')) { asked = Asked::Mode(key.char() == Some('m')); }
     }
     asked
 }
 
-// The cameras the gateway lists, and the one shown.
-struct Cameras { list: mind::idl::codec::List<idl::Camera, 4>, current: usize }
+fn open(camera: usize, shape: Shape) -> mind::sys::Result<Result<(), idl::Error>> { idl::open(CAMERA, camera as u8, shape.width as u16, shape.height as u16, shape.rate) }
+
+// The modes the gateway lists for `camera`; None from a gateway of video.wit 1.0, which rejects the call.
+fn modes_of(camera: usize) -> Option<Vec<idl::Mode>> {
+    match idl::modes(CAMERA, camera as u8) {
+        Ok(Ok(list)) => Some(list.as_slice().to_vec()),
+        Ok(Err(error)) => { mind::println!("[CAMERA] THE GATEWAY LISTS NO MODES FOR CAMERA {}: {:?}", camera, error); Some(Vec::new()) }
+        Err(_) => None,
+    }
+}
+
+// The cameras the gateway lists, the one shown, its modes and the one in use.
+struct Cameras { list: mind::idl::codec::List<idl::Camera, 4>, current: usize, modes: Option<Vec<idl::Mode>>, mode: Option<usize>, mode_text: String }
 
 impl Cameras {
     fn name(&self) -> &str { self.list.as_slice()[self.current].name.as_str() }
-    fn title(&self) -> String { pick::title(self.current, self.list.len(), self.name()) }
+    fn title(&self) -> String {
+        let title = pick::title(self.current, self.list.len(), self.name());
+        if self.mode_text.is_empty() { title } else { format!("{title}, {}", self.mode_text) }
+    }
+    fn offered(&self) -> Vec<bool> { self.modes.iter().flatten().map(|m| m.offered).collect() }
+
+    // After an open: what the gateway opened (video.wit 1.1's `opened`), in the log and the title.
+    fn opened(&mut self, shape: Shape) {
+        let mut line = format!("[CAMERA] OPENED {} {}X{} AT {}/S", self.name(), shape.width, shape.height, shape.rate);
+        (self.mode, self.mode_text) = (None, String::new());
+        if let Ok(Ok(o)) = idl::opened(CAMERA) {
+            let count = self.modes.as_ref().map_or(0, Vec::len);
+            let what = modes::describe(o.mode.encoding as usize, o.mode.width, o.mode.height, o.mode.rate);
+            if (o.index as usize) < count {
+                self.mode = Some(o.index as usize);
+                line += &format!(": MODE {} (OF 0 TO {}), {}", o.index, count - 1, what);
+            } else {
+                line += &format!(": NONE OF ITS {} MODES, {}", count, what);
+            }
+            if o.scaled { line += ", SCALED BY THE GATEWAY"; }
+            self.mode_text = what;
+        }
+        mind::println!("{}", line);
+        if let Some(surface) = mind::windowed::surface() { surface.set_title(&self.title()); }
+    }
 }
 
 // The stream moved to the next camera, at the same size and rate; the one before again if the next does not open.
-fn switch(cameras: &mut Cameras, options: &Options) {
+fn switch(cameras: &mut Cameras, shape: Shape) {
     let count = cameras.list.len();
     if count < 2 { mind::println!("[CAMERA] ONE CAMERA ONLY: {}", cameras.name()); return; }
     let before = cameras.current;
     let next = pick::next(before, count);
     let _ = idl::close(CAMERA);
-    let open = |index: usize| idl::open(CAMERA, index as u8, options.width as u16, options.height as u16, options.rate);
-    match open(next) {
+    match open(next, shape) {
         Ok(Ok(())) => {
             cameras.current = next;
             mind::println!("[CAMERA] SWITCHED TO {} ({}/{})", cameras.name(), next + 1, count);
         }
         other => {
             let name = cameras.list.as_slice()[next].name.as_str();
-            mind::println!("[CAMERA] {} DID NOT OPEN AT {}X{} {}/S ({:?}); BACK TO {}", name, options.width, options.height, options.rate, other, cameras.name());
-            let _ = open(before);
+            mind::println!("[CAMERA] {} DID NOT OPEN AT {}X{} {}/S ({:?}); BACK TO {}", name, shape.width, shape.height, shape.rate, other, cameras.name());
+            let _ = open(before, shape);
         }
     }
-    if let Some(surface) = mind::windowed::surface() { surface.set_title(&cameras.title()); }
+    cameras.modes = modes_of(cameras.current);
+    cameras.opened(shape);
+}
+
+// The stream moved to the next mode the gateway offers (the earlier one, with `forward` false), at its own size and
+// rate, with a buffer of that size; the mode before again if it does not open. The new shape and buffer, or None.
+fn step_mode(cameras: &mut Cameras, shape: Shape, forward: bool) -> Option<(Shape, Buffer)> {
+    let Some(list) = cameras.modes.clone() else { mind::println!("[CAMERA] THE GATEWAY LISTS NO MODES (VIDEO.WIT 1.0)"); return None };
+    let Some(next) = modes::step(&cameras.offered(), cameras.mode, forward) else {
+        mind::println!("[CAMERA] ONE MODE ONLY: {} OFFERS {} OF {} MODES", cameras.name(), cameras.offered().iter().filter(|o| **o).count(), list.len());
+        return None;
+    };
+    let m = list[next];
+    let new = Shape { width: m.width as usize, height: m.height as usize, rate: m.rate.max(1) };
+    let what = modes::describe(m.encoding as usize, m.width, m.height, m.rate);
+    let Some(buffer) = Buffer::new(new.bytes()) else { mind::println!("[CAMERA] NO MEMORY FOR A FRAME OF MODE {}, {}", next, what); return None };
+    let _ = idl::close(CAMERA);
+    match open(cameras.current, new) {
+        Ok(Ok(())) => { cameras.opened(new); Some((new, buffer)) }
+        other => {
+            mind::println!("[CAMERA] MODE {} ({}) DID NOT OPEN ({:?}); BACK TO {}X{} AT {}/S", next, what, other, shape.width, shape.height, shape.rate);
+            let _ = open(cameras.current, shape);
+            cameras.opened(shape);
+            None
+        }
+    }
 }
 
 fn fail(message: &str) -> ! { mind::println!("camera: {}", message); mind::process::exit_with(1) }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("camera — what a camera sees, through the video gateway (lent by the shell as it starts): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-c n] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: camera 0, 320x240 at 10 per second)\nn or Tab: the next camera. Esc or q: stop.");
+    mind::about!("camera — what a camera sees, through the video gateway (lent by the shell as it starts): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-c n] [-m mode] [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: camera 0, 320x240 at 10 per second)\n-m: one of the camera's modes, at its own size and rate. n or Tab: the next camera. m, Shift+m: the next and the earlier mode. Esc or q: stop.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let options = match options(mind::process::args_str()) { Ok(o) => o, Err(e) => fail(&e) };
     if mind::dev::cap_info(SLOT_CAMERA).0 != CAP_KIND_ENDPOINT { fail("no camera was granted (start camera from the shell and allow it)") }
     let list = idl::cameras(CAMERA).unwrap_or_default();
     let current = match pick::chosen(options.camera, list.len()) { Ok(index) => index, Err(e) => fail(&e) };
-    let mut cameras = Cameras { list, current };
-    let (width, height) = (options.width, options.height);
-    match idl::open(CAMERA, current as u8, width as u16, height as u16, options.rate) {
+    let mut cameras = Cameras { list, current, modes: modes_of(current), mode: None, mode_text: String::new() };
+    // -m: that mode's own size and rate, in place of -z and -r.
+    let shape = match options.mode {
+        None => Shape { width: options.width, height: options.height, rate: options.rate },
+        Some(asked) => {
+            let Some(list) = cameras.modes.clone() else { fail("-m: the gateway lists no modes (video.wit 1.0)") };
+            let m = match modes::chosen(asked, &cameras.offered(), current) { Ok(index) => list[index], Err(e) => fail(&e) };
+            Shape { width: m.width as usize, height: m.height as usize, rate: m.rate.max(1) }
+        }
+    };
+    match open(current, shape) {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => fail(&format!("cannot open {} at {}x{} {}/s: {:?}", cameras.name(), width, height, options.rate, error)),
+        Ok(Err(error)) => fail(&format!("cannot open {} at {}x{} {}/s: {:?}", cameras.name(), shape.width, shape.height, shape.rate, error)),
         Err(error) => fail(&format!("the gateway does not answer: {:?}", error)),
     }
-    mind::println!("[CAMERA] OPENED {} {}X{} AT {}/S", cameras.name(), width, height, options.rate);
-    let bytes = width * height * 4;
-    let Some(pages) = Pages::new(bytes) else { let _ = idl::close(CAMERA); fail("no memory for a frame") };
-    let Ok(cap) = pages.share() else { let _ = idl::close(CAMERA); fail("cannot share the frame buffer") };
-    let mut buffer = Buffer { pages, cap };
-    let shown = mind::windowed::pixels(info, width, height, &cameras.title());
+    let Some(mut buffer) = Buffer::new(shape.bytes()) else { let _ = idl::close(CAMERA); fail("no memory for a frame") };
+    let shown = mind::windowed::pixels(info, shape.width, shape.height, &cameras.title());
     let windowed = !core::ptr::eq(shown, info);
+    cameras.opened(shape);
     let screen = Screen::new(shown);
     if let Some(screen) = &screen { screen.clear(0); }
-    let result = run(&options, &mut cameras, &mut buffer, screen, windowed);
+    let result = run(&options, shape, &mut cameras, &mut buffer, screen, windowed);
     let _ = idl::close(CAMERA);
     match result { Ok(summary) => mind::println!("[CAMERA] {}", summary), Err(e) => fail(&e) }
 }
 
 // Shows frames until Esc, or takes the still, or records; returns what it did.
-fn run(options: &Options, cameras: &mut Cameras, buffer: &mut Buffer, mut screen: Option<Screen>, windowed: bool) -> Result<String, String> {
-    let (width, height) = (options.width, options.height);
+fn run(options: &Options, mut shape: Shape, cameras: &mut Cameras, buffer: &mut Buffer, mut screen: Option<Screen>, windowed: bool) -> Result<String, String> {
+    let (mut width, mut height) = (shape.width, shape.height);
     let mut at = screen.as_ref().map(|screen| place(screen, width, height, windowed));
-    let bytes = width * height * 4;
+    let mut bytes = shape.bytes();
     let mut recording = match &options.video {
         Some((seconds, path)) => {
             let mut file = File::create(path).map_err(|e| format!("{}: {:?}", path, e))?;
-            file.write_at(0, &avi::header(width as u32, height as u32, options.rate as u32, &Index::default(), false)).map_err(|e| format!("{}: {:?}", path, e))?;
-            Some((file, Index::default(), *seconds * options.rate as u32, path.as_str()))
+            file.write_at(0, &avi::header(width as u32, height as u32, shape.rate as u32, &Index::default(), false)).map_err(|e| format!("{}: {:?}", path, e))?;
+            Some((file, Index::default(), *seconds * shape.rate as u32, path.as_str()))
         }
         None => None,
     };
@@ -186,7 +268,7 @@ fn run(options: &Options, cameras: &mut Cameras, buffer: &mut Buffer, mut screen
     // Frames come numbered at the rate; a reader that fell behind gets the latest one, so their times stay on the rate's
     // grid (start + (n - 1) / rate) whatever the reader's speed. A recording keeps camera time: a number it did not get
     // is the picture before it again (an empty chunk), as `record` keeps screen time.
-    let period_us = 1_000_000 / options.rate as u64;
+    let mut period_us = 1_000_000 / shape.rate.max(1) as u64;
     let (mut first, mut last, mut on_grid, mut frames, mut pictures) = (None::<idl::Frame>, None::<idl::Frame>, true, 0u32, 0u32);
     loop {
         let (frame, pixels) = buffer.read(bytes)?;
@@ -222,9 +304,9 @@ fn run(options: &Options, cameras: &mut Cameras, buffer: &mut Buffer, mut screen
             if index.frames.len() as u32 >= *total {
                 let table = index.index();
                 file.write_at(index.end(), &table).map_err(|e| format!("{}: {:?}", path, e))?;
-                file.write_at(0, &avi::header(width as u32, height as u32, options.rate as u32, index, true)).map_err(|e| format!("{}: {:?}", path, e))?;
+                file.write_at(0, &avi::header(width as u32, height as u32, shape.rate as u32, index, true)).map_err(|e| format!("{}: {:?}", path, e))?;
                 file.flush().map_err(|e| format!("{}: {:?}", path, e))?;
-                return Ok(format!("VIDEO {}: {} FRAMES ({} PICTURES) {}X{} AT {}/S, SEQUENCE {}..{}, TIMESTAMPS {}, {} BYTES", path, total, pictures, width, height, options.rate,
+                return Ok(format!("VIDEO {}: {} FRAMES ({} PICTURES) {}X{} AT {}/S, SEQUENCE {}..{}, TIMESTAMPS {}, {} BYTES", path, total, pictures, width, height, shape.rate,
                                   start.sequence, start.sequence + *total - 1, if on_grid { "ON THE RATE" } else { "OFF THE RATE" }, index.end() + table.len()));
             }
         }
@@ -232,8 +314,18 @@ fn run(options: &Options, cameras: &mut Cameras, buffer: &mut Buffer, mut screen
             Asked::Quit => return Ok(format!("SHOWN {} FRAMES", frames)),
             // Only while it shows: a still or a recording keeps its camera to the end.
             Asked::Next if options.still.is_none() && recording.is_none() => {
-                switch(cameras, options);
+                switch(cameras, shape);
                 (first, last) = (None, None);
+            }
+            // A mode of its own size: the frames' buffer, place and period follow (158-APP-0152).
+            Asked::Mode(forward) if options.still.is_none() && recording.is_none() => {
+                if let Some((new, fresh)) = step_mode(cameras, shape, forward) {
+                    *buffer = fresh;
+                    shape = new;
+                    (width, height, bytes, period_us) = (new.width, new.height, new.bytes(), 1_000_000 / new.rate.max(1) as u64);
+                    if let Some(screen) = &screen { screen.clear(0); at = Some(place(screen, width, height, windowed)); }
+                    (first, last) = (None, None);
+                }
             }
             _ => {}
         }
