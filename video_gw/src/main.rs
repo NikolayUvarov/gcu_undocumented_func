@@ -42,8 +42,8 @@ const BULK_ROUND_NS: u64 = 20_000_000; // a bulk camera's transfers are taken th
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name, what `cameras` says it gives, and its modes as `modes` lists them (158-DRV-0083), each with the probe's indexes.
 // `settle`: a bulk camera's stop after its stream closed, and its settling (158-DRV-0082); `halt_ms`: its last clear-halt's
-// time, for the log.
-struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, settle: choices::Settle, halt_ms: u32 }
+// time, for the log; `attach`: the client's attach count it was claimed under (a later one means usb_host started again).
+struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16, u16, u8), modes: Vec<(uvc::Mode, idl::Mode)>, settle: choices::Settle, halt_ms: u32, attach: u32 }
 
 // A camera's open stream: the camera (its streaming handle), the frame size it sends, the frames assembled from its
 // packets (or bulk transfers), and counts for the log.
@@ -193,6 +193,10 @@ impl Usb {
         let Some(host) = self.host.as_mut() else { return };
         let mut claimed: Vec<(u32, Interface)> = Vec::new();
         while claimed.len() < CLAIMED { match host.claim() { Ok(c) => claimed.push(c), Err(_) => break } }
+        // A camera claimed from an earlier usb_host instance is gone with it: its handle names nothing now, and the same
+        // camera is claimed again below under the new one (the Ryzen's, 2026-11-22: `CAMERAS: 0 V, 1 V, 2 IR, 3 IR`).
+        let now_attach = host.attaches();
+        self.cameras.retain(|c| { let stale = c.attach != now_attach; if stale { mind::println!("[VIDEO] CAMERA \"{}\" GONE: USB_HOST STARTED AGAIN", c.name); } !stale });
         // Two interfaces of one device differ only in a handle's low byte.
         let pairs: Vec<(u32, u32, Interface)> = claimed.iter().filter(|(_, i)| i.subclass == uvc::SUBCLASS_CONTROL).filter_map(|&(control, info)| {
             claimed.iter().find(|(h, i)| i.subclass == uvc::SUBCLASS_STREAMING && h & !0xFF == control & !0xFF).map(|&(streaming, _)| (control, streaming, info))
@@ -210,7 +214,7 @@ impl Usb {
             log_formats(&described);
             let modes = camera_modes(&described, info.speed);
             log_modes(&modes);
-            self.cameras.push(Camera { streaming, info: described, name, offered, modes, settle: Default::default(), halt_ms: 0 });
+            self.cameras.push(Camera { streaming, info: described, name, offered, modes, settle: Default::default(), halt_ms: 0, attach: host.attaches() });
             self.cameras.sort_by_key(|c| c.streaming);
             let order: Vec<String> = self.cameras.iter().enumerate().map(|(n, c)| format!("{} \"{}\"", n, c.name)).collect();
             mind::println!("[VIDEO] CAMERAS: {}", order.join(", "));

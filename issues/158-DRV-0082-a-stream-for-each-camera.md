@@ -171,7 +171,15 @@ This holds for that machine, those cameras and that release (MC-12.1).
   - **The log:** the end of a stream says the spill's most and how often it was full (`ITS SPILL HELD n BYTES AT MOST, FULL m TIMES, k LEFT UNREAD`).
   - **The aim:** a camera's burst then waits on the gateway only when 1 MiB is waiting, not 128 KiB. A 640×480 YUY2 frame is 0.6 MB.
   - **Host cases:** `tests/usb_spill_host.rs`, for the order, the empty and failed transfers, the bound, and a small buffer taking whole transfers only.
-  - **Not run on the Ryzen yet:** the owner session's word comes first, the maintainer having left his windows on the screen. No QEMU device is a bulk camera.
+  - **Run on the Ryzen, 2026-11-22 04:51-04:56 UTC** (release 202611220438, `usb_host` of 5d4087bd6 by `replace`, then put back; camera 1 at 320×240 beside camera 0):
+    - **YUY2 640×480 at 25:** 191 good frames and 87 broken in 12 s, every broken one whole (614 400 bytes, none cut at 133 KB). The spill held 273 KB at most, never full. Before the spill: 0 good of 84, all cut at 133 KB.
+    - **YUY2 1280×720 at 10:** 73 good frames and 45 broken, again whole (1 843 200 bytes); the spill at most 158 KB.
+    - **Camera 1 beside them:** 452 good and 125 broken in 20 s.
+    - **Camera 0 in 640×480 alone:** 294 good and 7 broken in 12 s.
+    - **So the queue limit is mended.** The frames that still break beside a second camera come whole: the camera's own error bit or a frame-ID change, not lost bytes. That is not yet looked at.
+- **A restarted `usb_host` left `video_gw` with stale cameras** (found on that run): the old entries stayed beside the new (`CAMERAS: 0 V, 1 V, 2 IR, 3 IR`), and "camera 1" named a handle of the old instance. Its probe answered not-found.
+  - **The fix:** the client counts its attaches (`Host::attaches`, `libmind/src/usb.rs`), and each camera keeps the count it was claimed under. After its claims, `look` drops a camera of an earlier count (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`); a stream on it fails its next pump and is marked gone.
+  - **Not run on the Ryzen yet.** No QEMU device is a camera.
 
 ## Related
 
