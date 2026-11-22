@@ -357,7 +357,8 @@ pub const SLOT_TTS: usize = 6;
 // Service capability slots: served endpoint, devices, IRQ, DMA/frame, privilege.
 // For display (213-KRN-0271): SLOT_DEV0 the Radeon's display engine registers, SLOT_DEV1 the SMU mailbox's page (both of
 // BAR 5, not its MSI-X table), SLOT_MEM BAR 0 past the GOP's screen, and SLOT_IRQ the VBIOS image, the ACPI VFCT table
-// read-only (the display has no interrupt of its own).
+// read-only (the display has no interrupt of its own), and SLOT_DISPLAY its client of the compositor badged
+// mind::display::BADGE_SCREEN, which offers the compositor the second screen (display.wit 1.3, 213-KRN-0272).
 pub const SLOT_SERVICE: usize = 1;
 pub const SLOT_DEV0: usize = 2;
 pub const SLOT_DEV1: usize = 3;
