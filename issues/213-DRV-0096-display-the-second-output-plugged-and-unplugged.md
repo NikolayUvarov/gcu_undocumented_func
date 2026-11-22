@@ -74,6 +74,38 @@ it until the next boot.
     - a bounce while dark does nothing;
     - eight seconds plugged in run steps 1 to 4 again, with the first start's writes and offer.
 
+**A monitor in standby, or switched off at its button** (the owner session's question, 2026-11-22, for the maintainer):
+- **What `HOTPLUG` does if HPD 1 drops:** the same as an unplug. `display` cannot tell the two apart: it reads only the
+  sense.
+  - **The take-back:** once the sense has read 0 for 500 ms, `screen_gone`, then stages 16 to 1 undone, which turns
+    PHY A off by table 76's DISABLE and its PLL by table 12 at pixel clock 0. The mark is cleared, and the output is
+    dark.
+  - **The run again:** when the sense reads 1 again for 500 ms, steps 1 to 4 run again, about 6 s by boots 84 to 89, and
+    the compositor gets a new offer.
+  - **An EDID not ready:** if the monitor does not answer on DDC yet when HPD rises, step 2 fails and the mode falls
+    back to 1920x1080. The output stays so until the next unplug.
+- **If HPD 1 stays up in standby:** `HOTPLUG` does nothing. Pipe 1 goes on sending, and the monitor shows the picture
+  when it wakes.
+- **What the logs tell:**
+  - Every boot logged so far read HPD 1's sense as 1 in step 1's batch 1 (`B1 HPD SENSE 1:1 2:0 3:0 4:1 5:0`). That is
+    every survey log from 2026-11-21 19:08 to boot 81, among them the night's (night-ring, b8-ring, boot-after-restart
+    at 05:12, watched-run at 04:42).
+  - At each of them HDMI-A-1 had no signal from MIND Core until stage 8. The firmware lights only DP-2, and the reboot
+    from Linux left it dark for many seconds before batch 1's read at about 9 s. So the monitor may well have been in its
+    own no-signal standby at the read with HPD up, but no log says it was asleep.
+  - The production boots from 84 do not log batch 1's values. They passed `assess`, which refuses with
+    `HPD 1 SENSES NO MONITOR`, so the sense was 1 at each.
+  - **No log was made with the monitor switched off at its button.** What this monitor (TRG `KQ34C144C`) does with HPD
+    then is not known.
+- **The undo on the hardware so far:** the take-back's undo of stages 8 to 1, with both off calls run to their end, ran
+  once (boot 70), and that of 14 to 1 once (boot 74). Both were at 1920x1080 in DVI. Nothing of it has run at
+  3440x1440 in HDMI, and nothing after stage 16 (`screen_gone`).
+- **The questions for the maintainer:**
+  1. Does the monitor drop HPD when it goes to standby on its own, or when switched off at its button? A boot with it
+     off, or a release with `HOTPLUG` while he switches it off and on and watches DP-2, would tell.
+  2. Is a full take-back and run again at each standby wanted, or should a monitor that is only asleep keep its pipe?
+     The latter would need a longer settle, or the EDID read again to tell a new monitor from the same one.
+
 **Not shown:**
 - **On the hardware, nothing of it.** It needs the maintainer's hands, and the owner session arranges the run.
 - **The sense on the Ryzen:** what HPD 1 reads while a monitor is unplugged, or switched off by its own button.
