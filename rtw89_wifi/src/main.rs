@@ -312,7 +312,7 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
-        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e, polls: [q, p] } => {
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe, errors: e, polls: [q, p], tx } => {
             if let Some(r) = refused { for (n, (length, head)) in r.frames[..r.count].iter().enumerate() {
                 mind::println!("[RTW89] REFUSED FRAME {} OF THE FIRST {}: {} BYTES, {:02X?}", n + 1, r.count, length, head);
             } }
@@ -324,6 +324,10 @@ fn served(event: receive_service::Event) {
                 channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
             mind::println!("[RTW89] TRAFFIC ON {}: RX POLLS: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {}; OF {} (213-DRV-0091)",
                 channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
+            mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
+                channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
+            mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
+                channel, tx.clock, tx.tsf);
             let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
             mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
                 channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
@@ -361,6 +365,26 @@ fn served(event: receive_service::Event) {
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
+        receive_service::Event::Held { n, held, ms, submitted, at, registers } => {
+            let ms_of = |us: Option<u64>| us.map(|us| us / 1000);
+            let (sc, st, si, ac, at_tsf) = (ms_of(submitted.clock_us), ms_of(submitted.tsf_us), submitted.interval_us / 1000, ms_of(at.clock_us), ms_of(at.tsf_us));
+            if held {
+                mind::println!("[RTW89] HELD FRAME (LATE {}): {} MS SINCE ITS SUBMISSION; SUBMITTED {:?} / {:?} MS INTO THE BEACON INTERVAL OF {} MS (OUR CLOCK / TSF), NOW {:?} / {:?} (213-DRV-0091)",
+                    n, ms, sc, st, si, ac, at_tsf);
+            } else {
+                mind::println!("[RTW89] A FRAME RELEASED IN TIME, BESIDE THE HELD ONES: {} MS AFTER ITS SUBMISSION; SUBMITTED {:?} / {:?} MS INTO THE BEACON INTERVAL OF {} MS, RELEASED {:?} / {:?} (213-DRV-0091)",
+                    ms, sc, st, si, ac, at_tsf);
+            }
+            mind::println!("[RTW89] {} REGISTERS: {:?}(213-DRV-0091)", if held { "HELD FRAME'S" } else { "IN-TIME FRAME'S" }, registers);
+        }
+        receive_service::Event::Calibrated { channel, dpk_gain_scale, paths } => for (path, c) in paths.iter().enumerate() {
+            mind::println!("[RTW89] CALIBRATION ON {} PATH {}: IQK LOK IDAC {:05X} VBUF {:05X}{}, ONE-SHOT FAILS LOK {} TX {} RX {}{}, TX {:08X} RX {:08X}: {} BY LINUX'S CHECKS (213-DRV-0091)",
+                channel, path, c.lok_idac, c.lok_vbuf, if c.lok_range_fail { " OUT OF RANGE" } else { "" }, c.lok_fails, c.tx_fails, c.rx_fails,
+                if c.restore_fail { ", RESTORE FAILED" } else { "" }, c.iqk_tx, c.iqk_rx, if c.iqk_ok() { "PASS" } else { "FAIL" });
+            mind::println!("[RTW89] CALIBRATION ON {} PATH {}: DPK TXAGC {:02X} THERMAL {} CORRELATION {} (LINUX: AT LEAST 170) DC {}/{} (AT MOST 200), GAIN SCALE {}: {}; TSSI ALIGNMENT {:08X?} REPORTS {:?} (213-DRV-0091)",
+                channel, path, c.dpk_txagc, c.dpk_thermal, c.dpk_correlation, c.dpk_dc[0], c.dpk_dc[1], dpk_gain_scale,
+                if c.dpk_ok() { "PASS" } else { "FAIL" }, c.tssi_alignment, c.tssi_reports);
+        },
         receive_service::Event::SerStep { count, from, to, since_us, polls: [q, p] } =>
             mind::println!("[RTW89] SER_DBG_INFO STEP {}: {:08X} -> {:08X}, SEEN {} US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {} (213-DRV-0091)",
                 count, from, to, since_us, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting),

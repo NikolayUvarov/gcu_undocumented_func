@@ -210,7 +210,35 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors,
+    // 213-DRV-0091: when the joined BSS's last beacon was taken from the ring (the bus clock, µs), and its interval.
+    pub beacon_at_us:u64,pub beacon_interval_us:u32}
+/// 213-DRV-0091: what may hold a fetched frame in the MAC, read directly at a late send (no RF, no indirect window, no
+/// H2C): the coexistence control byte and the scoreboard; MACID pause (SS_MACID_PAUSE_0) and sleep (MACID_SLEEP_0);
+/// CTN_TXEN; port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF;
+/// PTCL_COMMON_SETTING_0 and PTCL_TX_CTN_SEL; Linux's coexistence monitor set (0xD200, 0xD220, 0xDA10-0xDA34); the RX
+/// rings' indexes. BB: the monitor set's 0x980, the EDCCA level and its reports, TX collision.
+pub const HELD_MAC:[usize;26]=[0x70,0xac,0x9eb0,0xc2c0,0xc348,0xc400,0xc404,0xc408,0xc40c,0xc414,0xc434,0xc438,0xc43c,0xc600,
+    0xc6ec,0xd200,0xd220,0xda10,0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0x1050,0x1054];
+pub const HELD_BB:[usize;5]=[0x980,0x1738,0x173c,0x4884,0xc70];
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub struct Held{pub mac:[u32;HELD_MAC.len()],pub bb:[u32;HELD_BB.len()]}
+impl core::fmt::Debug for Held{
+    fn fmt(&self,f:&mut core::fmt::Formatter<'_>)->core::fmt::Result{
+        for(at,value)in HELD_MAC.iter().zip(self.mac){write!(f,"{:X}={:X} ",at,value)?;}
+        for(at,value)in HELD_BB.iter().zip(self.bb){write!(f,"B{:X}={:X} ",at,value)?;}Ok(())
+    }
+}
+/// 213-DRV-0091: where in the beacon interval a moment is: by our clock since the last beacon taken from the ring, and by
+/// port 0's TSF; the interval as the last beacon gave it (0: none heard yet).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Phase{pub clock_us:Option<u64>,pub tsf_us:Option<u64>,pub interval_us:u32}
+/// 213-DRV-0091: a minute's sends by how they ended. Releases by the beacon interval's phase in 10 ms bins, by our clock
+/// against the last beacon taken and by the port's TSF; the late frames released, those acknowledged at the first try and
+/// those never, and their median hold; the times the service's frame buffer was full and the longest.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_try:u32,pub not_acked:u32,pub median_hold_ms:u64,
+    pub full_times:u32,pub full_longest_ms:u64}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
@@ -231,7 +259,10 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
                 if r.count<r.frames.len()&&m.len()>=24{r.frames[r.count]=(m.len() as u16,m[..24].try_into().unwrap());r.count+=1;}
                 if beacon{self.counts.other_beacons=self.counts.other_beacons.saturating_add(1);}return Ok(true)
             }
-            if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}
+            if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){
+                self.counts.beacons=self.counts.beacons.saturating_add(1);self.counts.beacon_at_us=now;
+                if m.len()>=34{self.counts.beacon_interval_us=u32::from(u16::from_le_bytes([m[32],m[33]]))*1024;}
+            }
             if full{self.counts.pressure=self.counts.pressure.saturating_add(1);return Ok(true)}
             return Ok(false)
         }
@@ -567,6 +598,17 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
     }
     /// PROBE's registers as they are now (213-DRV-0090).
+    /// 213-DRV-0091: HELD_MAC and HELD_BB, read directly.
+    pub(crate) fn held(&mut self)->Held{
+        let bus=&mut *self.session.bus;
+        Held{mac:HELD_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)),bb:HELD_BB.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))}
+    }
+    /// 213-DRV-0091: port 0's TSF, its high word read before and after the low one.
+    pub(crate) fn tsf(&mut self)->Option<u64>{
+        let bus=&mut *self.session.bus;
+        let high=io::read32(bus,0xc43c).ok()?;let low=io::read32(bus,0xc438).ok()?;
+        (io::read32(bus,0xc43c).ok()?==high).then_some(u64::from(high)<<32|u64::from(low))
+    }
     pub(crate) fn probe(&mut self)->Probe{
         let bus=&mut *self.session.bus;
         let mac=PROBE_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX));

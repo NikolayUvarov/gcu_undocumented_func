@@ -21,6 +21,9 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub halt_h2c_writes:usize,
     // HISR0 bits the hardware raises, one at each read of HISR0 that finds it clear; a posted code raises HALT_C2H too.
     pub hisr_raise:Vec<u32>,
+    // 213-DRV-0091: sends' final reports held back while `hold_reports`, given at the first read after it is cleared:
+    // a frame the MAC holds, then sends once.
+    pub hold_reports:bool,pub held_reports:Vec<[u8;32]>,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -91,7 +94,7 @@ impl Device{
         if self.control.borrow().fault!=7{
             let mut c2h=[0;32];c2h[..4].copy_from_slice(&(1u32|9<<2|1<<8).to_le_bytes());c2h[4]=32;
             c2h[8..12].copy_from_slice(&(u32::from(seq&15)<<8|unacked<<6).to_le_bytes());c2h[20..24].copy_from_slice(&256u32.to_le_bytes());
-            self.raw().inject_c2h(&c2h);
+            if self.control.borrow().hold_reports{self.control.borrow_mut().held_reports.push(c2h);}else{self.raw().inject_c2h(&c2h);}
         }
     }
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
@@ -181,6 +184,8 @@ impl RegisterIo for Device{
                 if n==0{self.raw().put(0xc348,4,0x010f);self.control.borrow_mut().ser_heal=None;}else{self.control.borrow_mut().ser_heal=Some(n-1);}
             }
         }
+        if !self.control.borrow().hold_reports&&!self.control.borrow().held_reports.is_empty(){
+            let held=std::mem::take(&mut self.control.borrow_mut().held_reports);for c2h in held{self.raw().inject_c2h(&c2h);}}
         if at==0x164&&self.raw().get(0x164,4)==0&&!self.control.borrow().halt_codes.is_empty(){
             let code=self.control.borrow_mut().halt_codes.remove(0);self.raw().put(0x16c,4,code);self.raw().put(0x164,4,1);
             let isr=self.raw().get(0x1a4,4)|1<<21;self.raw().put(0x1a4,4,isr);}

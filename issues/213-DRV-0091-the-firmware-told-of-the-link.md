@@ -455,6 +455,67 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The new host case is `the_rings_keep_their_poll_gaps_and_backlog_until_taken` (tests/rtw89_rx_host.rs). The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
+**2026-11-22, boot 82: sends held in the MAC; what holds them, and the calibrations' results** (branch `claude/213-DRV-0091-the-recoveries-placed`; host cases, not run):
+- **What boot 82 showed** (release 202611221215, read from the stick; boot 83 is the same image and sent well):
+  - 22% of sends late: 228 of 1027 over 8 minutes, against at most 2.3% in the 33 other driver starts of boots 55 to 83 with minute lines.
+  - Of its 221 late frames, 155 were in the end acknowledged at the first try. They were released at a median of 222 ms after their submission (90th percentile 832 ms, longest 2.5 s), after the TX DMA had fetched them.
+  - So the MAC held the frames and then sent them once. The access point did not fail to acknowledge them.
+  - Every other boot shows the same kind of late frame at a low rate (boots 65, 76, 79, 81: all at least half acknowledged at the first try, medians 138 to 199 ms).
+  - The starts, line by line, and the register dumps at the port step and in the first minute (their pieces joined) do not tell boot 82 from 80, 81 and 83.
+  - Its first minute had RXQ MOST WAITING 255 of 256, where boots 81 and 83 had 34.
+- **The change:**
+  - **A late frame probed while the MAC holds it.** It reads directly, with no RF read, no indirect window and no H2C: `data_mode::HELD_MAC` and `HELD_BB`. These are the coexistence control byte and scoreboard, MACID pause and sleep, CTN_TXEN, port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF, the PTCL settings, Linux's coexistence monitor set, the RX ring indexes, and BB's 0x980, the EDCCA level and its reports, and TX collision.
+    - The first 8 late frames of a run are probed, then at most one a minute.
+    - The line gives the time since the frame's submission, and where in the beacon interval it was submitted and is now: by our clock since the last beacon taken from the ring, and by the TSF modulo the beacon's own interval.
+    - One frame released in time after the first held one is probed once beside them:
+
+    ```
+    [RTW89] HELD FRAME (LATE n): t MS SINCE ITS SUBMISSION; SUBMITTED a / b MS INTO THE BEACON INTERVAL OF i MS (OUR CLOCK / TSF), NOW c / d (213-DRV-0091)
+    [RTW89] HELD FRAME'S REGISTERS: … (213-DRV-0091)
+    [RTW89] A FRAME RELEASED IN TIME, BESIDE THE HELD ONES: …
+    ```
+
+  - **The minute line:**
+
+    ```
+    [RTW89] TRAFFIC ON c: LATE FRAMES RELEASED n: m ACKNOWLEDGED AT THE FIRST TRY, k NEVER; THEIR MEDIAN HOLD h MS; THE FRAME BUFFER FULL f TIMES, THE LONGEST l MS (213-DRV-0091)
+    [RTW89] TRAFFIC ON c: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK [...]; BY THE TSF [...] (213-DRV-0091)
+    ```
+
+    A hold locked to the TBTT would pile the releases into a few bins. By our clock the phase is good to the ring's poll cadence. By the TSF it holds only while the port's TSF follows the access point's, which is step 2's TSF_UDT.
+  - **The calibrations at admission,** two lines a path, each with PASS or FAIL by Linux's criteria in rtw8852b_rfk.c at 05f7e89:
+    - IQK: LOK's IDAC and VBUF words in range, as `_lok_finetune_check` (line 1147; the ranges at 1163 and 1174: core 0x2 to 0x1D, VBUF 0x2 to 0x3D). The one-shots' failures, NCTL's report flag read by `_iqk_check_cal` (line 253) for each `_iqk_one_shot` (line 815). The restore.
+    - DPK: TXAGC, thermal, and the sync's correlation and DC against `_dpk_sync_check` (line 1974; DPK_SYNC_TH_DC_I/Q 200 and DPK_SYNC_TH_CORR 170 at 1976 to 1978, the test at 2009). This driver's own sync already refuses beyond them (dpk.rs), so a DPK FAIL cannot reach the data mode.
+    - TSSI: the alignment words and the two reports. Linux sets no threshold for them, only that the alignment was done (`_tssi_alimentk_done`, line 3374).
+    - DACK runs once at the initial PHY and its result is not kept, so it is not printed. Linux's criterion is its done-polls timing out (lines 601 to 638).
+  - **A bench switch, `service::PORT_AS_LINUX`:** true, as now, sets port 0 for INFRA once linked (step 2). False leaves the port as before step 2, for a series of starts without it.
+- **Host cases:**
+  - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended`. The model holds sends' final reports back. Ten late frames get eight probes and one more in the minute, an in-time frame gets its probe once, and the minute line counts 10 late, 10 at the first try, a median hold over 90 ms and the frame buffer's full spell.
+  - `calibration_results_are_judged_by_linuxs_criteria`: the DPK and IQK criteria at their edges.
+  - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+- **What a late answer does upstream** (from the code; nothing changed):
+  - **The driver** (service.rs):
+    - It takes one send at a time. Any send while one is pending is answered Busy at once.
+    - A send's deadline is 90 ms (COMMAND_US less FRAME_MARGIN_MS). At it, KEEP_LATE answers `Sent { acked: false, attempts }` with the tries seen so far.
+    - It keeps the frame pending, its release awaited up to LATE_MS (5 s) more, refusing every other send meanwhile.
+  - **`wlan`** (wlan/src/main.rs, `apply`):
+    - The send is a synchronous call, so wlan waits the 90 ms.
+    - A unicast data frame's answer goes to `station.sent(acked, attempts)`, and any error, Busy included, to `station.sent(false, 15)`.
+    - Nothing is sent again: the late frame does go out later, and a Busy one is dropped.
+  - **`dot11`** (dot11/src/station.rs:443, `sent`): a frame not acknowledged steps the rate down at once, and its tries count against that rate's success.
+  - **So a hold has three effects:**
+    - one false loss, with a step down in rate;
+    - every frame behind it refused and lost, each a step down with 15 tries counted;
+    - wlan blocked for the 90 ms.
+
+    TCP sees the lost frames, not the held one, unless its timer runs out before the hold ends. An upload in boot 82 more likely failed on these drops and the falling rate than on duplicates.
+  - **What I would try:**
+    - (1) answer a late send at its release, up to a bound (about 1 s), with its true tries and outcome;
+    - (2) queue sends behind a held one instead of refusing them.
+
+    (2) changes wlanhw's contract and wlan's handling of Busy, so it is NET's as well as ours.
+- **The frame buffer:** until now nothing logged its full spells. The minute line now counts them and gives the longest. With the ring's polls every 20 ms or less, boot 82's 255 waiting needs RXQ left unread for about 0.4 s, which is the buffer full while wlan did not read. A wlan blocked in its synchronous sends is one way that happens.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

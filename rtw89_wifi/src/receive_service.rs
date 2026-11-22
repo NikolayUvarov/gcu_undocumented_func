@@ -20,6 +20,31 @@ const FRAMES: usize = 4;
 const FRAME_BYTES: usize = frames::HEADER_BYTES + frames::FRAME_MAX;
 
 /// What the driver logs while it serves; the native entry prints them in the agreed words.
+/// One path's calibration results at admission (213-DRV-0091). IQK: LOK's IDAC and VBUF words and whether they fall in
+/// Linux's ranges (`_lok_finetune_check`), the one-shots' failure flags (LOK, TX and RX, NCTL's report flag), the restore;
+/// DPK: TXAGC, thermal, the sync's correlation and DC (Linux's `_dpk_sync_check`: DC at most 200, correlation at least
+/// 170); TSSI: the alignment words and the two reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CalibrationPath { pub lok_idac: u32, pub lok_vbuf: u32, pub lok_range_fail: bool, pub lok_fails: u8, pub tx_fails: u8,
+    pub rx_fails: u8, pub restore_fail: bool, pub iqk_tx: u32, pub iqk_rx: u32, pub dpk_txagc: u8, pub dpk_thermal: u8,
+    pub dpk_correlation: u8, pub dpk_dc: [u16; 2], pub tssi_alignment: [u32; 4], pub tssi_reports: [u16; 2] }
+impl CalibrationPath {
+    /// Linux's DPK sync criterion (rtw8852b_rfk.c `_dpk_sync_check`).
+    pub fn dpk_ok(&self) -> bool { self.dpk_dc[0] <= 200 && self.dpk_dc[1] <= 200 && self.dpk_correlation >= 170 }
+    /// Linux's IQK outcome: no one-shot failed and LOK in range.
+    pub fn iqk_ok(&self) -> bool { !self.lok_range_fail && self.lok_fails == 0 && self.tx_fails == 0 && self.rx_fails == 0 && !self.restore_fail }
+}
+fn calibration(calibrated: &channel_rfk::Completed) -> [CalibrationPath; 2] {
+    let count = |flags: [bool; 4]| flags.iter().filter(|f| **f).count() as u8;
+    [0, 1].map(|path| {
+        let (i, d) = (calibrated.iqk.results[path], calibrated.dpk.data.paths[path]);
+        CalibrationPath { lok_idac: i.lok_idac, lok_vbuf: i.lok_vbuf, lok_range_fail: i.lok_range_fail, lok_fails: count(i.lok_fail),
+            tx_fails: count(i.tx_fail), rx_fails: count(i.rx_fail), restore_fail: i.restore_fail, iqk_tx: i.tx_result, iqk_rx: i.rx_result,
+            dpk_txagc: d.txagc, dpk_thermal: d.thermal, dpk_correlation: d.correlation, dpk_dc: d.dc,
+            tssi_alignment: calibrated.tssi.alignment[path], tssi_reports: calibrated.tssi.reports[path] }
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event {
     /// `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`, on this channel.
@@ -74,7 +99,13 @@ pub enum Event {
     Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64,
         bssid: [u8; 6], other_beacons: u64, refused: Option<data_mode::Refused>, sent: u64,
         acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe>, errors: data_mode::Errors,
-        polls: [crate::rx::Polls; 2] },
+        polls: [crate::rx::Polls; 2], tx: data_mode::TxMinute },
+    /// A late frame's probe while the MAC still holds it (`held`, the n-th late), or once a frame released in time beside
+    /// it (213-DRV-0091): the time since its submission, where in the beacon interval it was submitted and is now, and
+    /// what may hold it.
+    Held { n: u32, held: bool, ms: u64, submitted: data_mode::Phase, at: data_mode::Phase, registers: data_mode::Held },
+    /// The channel's calibrations at admission (213-DRV-0091), each path against Linux's criteria in rtw8852b_rfk.c.
+    Calibrated { channel: u8, dpk_gain_scale: u8, paths: [CalibrationPath; 2] },
     /// The `n`-th hole (213-DRV-0090): no beacon of the joined `bssid` for `ms` (`by_beacons`), or, while none of its beacons
     /// reaches the host, no Wi-Fi frame at all; since its last one, the Wi-Fi frames, those kept, the PPDU reports and the
     /// frames dropped with the inbox full, the sends answered and acknowledged, and whether one is pending; the registers,
@@ -515,6 +546,7 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
         platform, service.filter()) {
         Ok(done) => done, Err(failure) => return failed(failure),
     };
+    events(Event::Calibrated { channel: admit, dpk_gain_scale: calibrated.dpk.data.gain_scale, paths: calibration(&calibrated) });
     if let Some(cap) = tuned.cap() { events(Event::Capped { channel: admit, maximum: cap.maximum, limit: cap.limit }); }
     if let Err(error) = phy.bus_between_stages().attach_inbox(inbox) { return Stop::Radio(Cause::Session(error)) }
     let activation = match data_mode::prepare(&mut phy, board, &tuned, &calibrated, &prepared.owner, station, transmit) {
