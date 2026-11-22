@@ -341,8 +341,33 @@ impl Xhci {
     fn begin_wait(&mut self, slot: u32, dci: u8) { self.wait = Some(Wait { slot: slot as u8, dci, since_ns: mind::time::monotonic_ns() }); }
     fn end_wait(&mut self) { self.waited = self.wait.take().map(|w| (w, mind::time::monotonic_ns())).or(self.waited); }
 
-    /// TRBs on `ring` of endpoint `dci`, then its completion: Ok(residue), or Err(completion code; 0: no answer).
-    pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> { self.transfer_for(4_000, slot, dci, ring, trbs) }
+    /// TRBs on `ring` of endpoint `dci` and its doorbell rung, without waiting (000-DRV-0101): `finished` takes its
+    /// completion.
+    pub fn start(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) {
+        self.done.iter_mut().filter(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).for_each(|d| *d = None); // stale ones
+        for &(parameter, status, control) in trbs { Self::enqueue(&mut self.dma, ring, parameter, status, control); }
+        self.doorbell(slot, dci as u32);
+    }
+
+    /// The completion of what `start` put on endpoint `dci` of `slot`, if it came within `spin_ns`: Ok(residue), or
+    /// Err(completion code). The events are taken meanwhile, and the streams' TDs put back every millisecond.
+    pub fn finished(&mut self, slot: u8, dci: u8, spin_ns: u64) -> Option<Result<u32, u32>> {
+        let start = mind::time::monotonic_ns();
+        // Only a spin is a wait that a ring standing empty meanwhile names; a look from the loop is not.
+        if spin_ns > 0 { self.begin_wait(slot as u32, dci); }
+        let found = loop {
+            self.pump();
+            if let Some(d) = self.done.iter_mut().find(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).and_then(Option::take) { break Some(d); }
+            let now = mind::time::monotonic_ns();
+            if self.streaming() && now.saturating_sub(self.spilled_ns) >= SPILL_IN_WAIT_NS { self.spill_streams(); }
+            if now.saturating_sub(start) >= spin_ns { break None; }
+            core::hint::spin_loop();
+        };
+        if spin_ns > 0 { self.end_wait(); }
+        let d = found?;
+        self.last = d.code;
+        Some(if matches!(d.code, SUCCESS | SHORT_PACKET) { Ok(d.residue) } else { Err(d.code) })
+    }
 
     fn transfer_for(&mut self, attempts: usize, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> {
         self.done.iter_mut().filter(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).for_each(|d| *d = None); // stale ones

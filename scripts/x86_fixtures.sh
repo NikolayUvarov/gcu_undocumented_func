@@ -18,6 +18,7 @@ done
 (cd tests/levels_stub && cargo build --release --target-dir "$OUT/mind-levels-target") # the audio levels through a plain client (000-DRV-0057)
 (cd tests/video_stub && cargo build --release --target-dir "$OUT/mind-video-target") # two cameras at once through the video gateway (158-DRV-0082)
 (cd tests/audio_stub && cargo build --release --target-dir "$OUT/mind-audio-target") # capture and playback together through audio_gw (000-DRV-0093)
+(cd usb_host && cargo build --release --features defer-every-bulk --target-dir "$OUT/mind-usbhost-defer-target") # every bulk transfer answered from the loop (000-DRV-0101)
 (cd tests/wlansim && cargo build --release --target-dir "$OUT/mind-wlansim-target") # the stand-in radio (550-NET-0018)
 (cd virtio_net && cargo build --release --features late-attach --target-dir "$OUT/mind-late-attach-target") # 000-NET-0036
 (cd tests/wlansim && cargo build --release --features slow --target-dir "$OUT/mind-wlansim-slow-target") # 550-NET-0030
