@@ -295,7 +295,8 @@ impl RegisterIo for Device {
     fn write16(&mut self, at: usize, value: u16) -> io::Result<()> { self.write(at, 2, value as u32) }
     fn write32(&mut self, at: usize, value: u32) -> io::Result<()> { self.write(at, 4, value) }
     fn now_us(&mut self) -> u64 { self.now }
-    fn delay_us(&mut self, us: u32) -> io::Result<()> { self.now += u64::from(us); Ok(()) }
+    // As the driver's own io::short_delay: more than 1 ms is refused (the Ryzen's boot 65, 213-DRV-0091).
+    fn delay_us(&mut self, us: u32) -> io::Result<()> { if us > 1_000 { return Err(io::Fault::new(io::FaultKind::Clock, 0, us)); } self.now += u64::from(us); Ok(()) }
 }
 impl fwcmd::Bus for Device { fn pci_command(&mut self) -> io::Result<u16> { Ok(self.command) } }
 

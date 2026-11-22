@@ -141,6 +141,161 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The 40 `rtw89_*_host.rs` files pass. Its hardware run comes after step 1's night, measured as step 1 was.
 
+**2026-11-22, boot 62: the data mode stopped twice on an unreadable CMAC register** (98 minutes, the boot image's driver):
+- **The stops:** at 1003.959 s and 3248.465 s. Each was `Station(CheckFailure { cause: Fault { kind: PowerState, register: 0x40018, value: DEADBEEF } })`: the station check read the CMAC window and got DEADBEEF. A fresh driver started each time.
+- **The registers at the stops:**
+  - HALT_H2C_CTRL (0x160), HALT_C2H_CTRL (0x164) and HALT_C2H (0x16C) read 0;
+  - SER_DBG_INFO read F0000001 at the first stop and F0000002 at the second;
+  - CMAC_ERR_ISR read 0.
+- **Between the stops,** the third driver logged `FIRMWARE RECOVERY 1 BETWEEN OPERATIONS (SER_DBG_INFO F0000001, CMAC_ERR_ISR 00000040)`. BB and the scheduler were back after 509 µs and the data mode went on.
+
+  CMAC_ERR_ISR bit 6 is B_AX_WMAC_RX_ERR_IND (reg.h). So the firmware recovers from a receive error, and a station check that happens to fall inside the recovery reads DEADBEEF and stops the data mode.
+
+**2026-11-22, the check mended** (branch `claude/213-DRV-0091-the-check-mended`; host cases, not yet run on the Ryzen):
+- **`data_mode.rs`, `live()`:** a station check whose first failure reads DEADBEEF first takes the path a recovery between operations already takes: if SER_DBG_INFO moved, it waits for BB and the scheduler. Then `read_again()` checks again 2 ms apart, up to 8 reads in all, and outlasts a recovery whenever SER_DBG_INFO moves meanwhile.
+- **When it stops:** only on a mismatch that persists with a readable value, or on a register still DEADBEEF after the 8 reads. The CMAC table check is kept.
+- **The line for each meeting:**
+
+  ```
+  [RTW89] CHECK MET A FIRMWARE RECOVERY n: <reg> READ DEADBEEF, READABLE AGAIN AFTER r READS IN t US; SER_DBG_INFO a -> b (213-DRV-0091)
+  ```
+
+  It says `AN UNREADABLE CMAC` in place of `A FIRMWARE RECOVERY` when no recovery was seen. n counts every meeting.
+- **The probe of a hole or a stop** also reads the error masks: DMAC_ERR_IMR 0x8520, CMAC_ERR_IMR 0xC160 and RX_ERR_FLAG_IMR 0xC804.
+- **Host case:** `service_a_check_that_meets_an_unreadable_cmac_window_reads_again_and_goes_on` (tests/rtw89_service_cases.rs). The model's CMAC window can read DEADBEEF for a set number of reads, with or without a recovery started. The case covers:
+  - the check first, with no recovery: meeting 1, `recovered` false;
+  - the check first, the recovery starting during it: meeting 2, `recovered` true, SER_DBG_INFO changed;
+  - the recovery first, then the check: the recovery is taken, then meeting 3;
+  - traffic going on after each;
+  - a window that stays unreadable for 1000 reads: the service stops with a radio failure.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, why the firmware recovers: the error masks and the host's part in a recovery** (reading only; Linux 05f7e89's mac.c, ser.c, reg.h and rtw8852b.c):
+- **The masks are the same as Linux's for the 8852B.**
+  - `post_mac.rs` writes the DMAC and CMAC tables of Linux's `enable_imr_ax` with the 8852B's `imr_info` values (the `MASKS` table, from `post_mac_regs.rs`).
+  - It writes `err_imr_ctrl`'s DMAC_ERR_IMR and CMAC_ERR_IMR as all ones.
+  - Linux never writes R_AX_RX_ERR_FLAG_IMR (0xC804) for the 8852B; mac.c only prints it in its error dump.
+  - What the masks read in data mode is not yet known: the probe reads them from this branch on.
+- **What a recovery needs from the host** (ser.c):
+  - Linux takes the firmware's error from HALT_C2H. `rtw89_mac_get_err_status` waits for HALT_C2H_CTRL to be nonzero, reads HALT_C2H and clears HALT_C2H_CTRL; ser.c's `rtw89_ser_notify` turns the code into an event.
+  - **L0** (ERR_CMAC0/1, L0_RESET_DONE) becomes SER_EV_L0_RESET, which no state of ser.c acts on: the firmware recovers alone.
+  - **L1** (L1_ERR_DMAC, L0_PROMOTE_TO_L1) is a handshake. The host:
+    1. stops TX, DMA and RX and resets the rings;
+    2. answers M2 through HALT_H2C;
+    3. waits for M3;
+    4. answers M4;
+    5. waits for M5.
+
+    Each wait has a 1 s alarm, and a timeout goes to L2.
+  - **This driver** never reads or clears HALT_C2H and has no L1 handshake. A recovery between operations only waits for BB and the scheduler.
+  - **What boot 62 shows:** both stops read HALT_C2H_CTRL and HALT_C2H as 0, and the recovery between them was over in 509 µs with no host action. That fits an L0 recovery, which Linux would also leave to the firmware. With only two readings, this is not established.
+- **Which to fix first:** the host's part, by its first step only.
+  - The change: read HALT_C2H_CTRL at each data-mode check; when it is nonzero, read HALT_C2H, clear the CTRL as Linux does, and log the code and the level.
+  - The measurement: one night. It says whether L1 requests come and go unanswered, which would need the handshake, or the recoveries are L0 only.
+  - The masks match Linux, so changing them would only move away from the reference without a reason.
+
+**2026-11-22, the firmware's error codes read** (branch `claude/213-DRV-0091-the-firmwares-error-codes`, on the mended check; host cases, not yet run on the Ryzen):
+- **`data_mode.rs`, `firmware_status()`,** runs at the start of each data-mode check (`live()`). It reads HALT_C2H_CTRL (0x164). When that is nonzero and not all ones, it:
+  - reads HALT_C2H (0x16C) and SER_DBG_INFO;
+  - clears HALT_C2H_CTRL, as `rtw89_mac_get_err_status` does (mac.c);
+  - counts the code by its level and keeps up to 4 for the service's lines.
+
+  Nothing is answered to the firmware: no M2 or M4 is sent, and HALT_H2C and its control are not written.
+- **`firmware_error()`** names the code as mac.h's `mac_ax_err_info` does, after mac.c's scenario mapping (bits 31:28 of 1, 2 and 3 become RXI300, CPU_EXCEPTION and ASSERTION). It gives the level and the event ser.c's `rtw89_ser_notify` makes of it:
+  - L0: ERR_CMAC0/1 and L0_RESET_DONE, which become SER_EV_L0_RESET;
+  - L1: L0_PROMOTE_TO_L1, L1_PREERR_DMAC, L1_ERR_DMAC, L1_RESET_DISABLE_DMAC_DONE and L1_RESET_RECOVERY_DONE, the steps pre-M0, M1, M3 and M5;
+  - L2: L1_PROMOTE_TO_L2 and 0x2000 to MAC_AX_GET_ERR_MAX;
+  - L1_RCVY_STOP_DONE is in mac.h's L1 group, but ser.c makes no event of it;
+  - anything else is UNKNOWN.
+- **The lines:**
+
+  ```
+  [RTW89] THE FIRMWARE'S ERROR CODE n: HALT_C2H <raw> (CTRL <ctrl>) = MAC_AX_ERR_<name> <code>, <level> (<ser.c event>); SER_DBG_INFO <v>; NOT ANSWERED (213-DRV-0091)
+  ```
+
+  Each minute also has `[RTW89] TRAFFIC ON c: THE FIRMWARE'S ERROR CODES a L0, b L1, c L2, d UNKNOWN (213-DRV-0091)`, counted since the data mode began.
+- **What this cannot see:**
+  - Linux takes each code on the halt C2H interrupt (pci.c), and this driver only at its checks. If the firmware writes a new code over an unread one, only the last is seen.
+  - Codes posted outside the data mode are not read.
+- **Host case:** `service_reads_the_firmwares_error_codes_names_their_level_and_answers_nothing` (tests/rtw89_service_cases.rs). The model posts each code in HALT_C2H with the CTRL set once the CTRL reads clear. It posts:
+  - an L0 recovery's two codes;
+  - an L1_ERR_DMAC;
+  - an assertion by its scenario bits;
+  - an unknown code.
+
+  Each is read once, in order, with its name and level. Nothing is written to HALT_H2C or its control. The minute's line counts 2 L0, 1 L1, 1 L2 and 1 unknown, and traffic goes on.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, two questions on the recoveries** (reading only: Linux 05f7e89's ser.c, mac.c, mac.h and pci.c, and the boot logs already fetched):
+- **When the firmware raises L1 and the host never answers, what does Linux's code say happens?**
+  - **The host's side only.** Each step of the handshake sets a 1000 ms alarm:
+    - after pre-M0, `ser_l1_reset_pre_st_hdl` answers with L1_RESET_START_DMAC and waits for M1;
+    - after M1, `ser_reset_trx_st_hdl` stops TX, DMA and RX, resets the rings, answers M2 (L1_DISABLE_EN) and waits for M3;
+    - after M3, `ser_do_hci_st_hdl` answers M4 (L1_RCVY_EN) and waits for M5.
+  - **Any alarm that runs out goes to SER_L2_RESET_ST.** Linux dumps the firmware's memory and backtrace, stops the core and calls `ieee80211_restart_hw`, a full restart of the device by the host. L2_RECFG_TIMEOUT (1000 ms) only logs.
+  - **What the firmware does by itself when the host stays silent, Linux's code does not say:** Linux always answers. mac.h has codes by which the firmware reports giving up:
+    - L1_PROMOTE_TO_L2 (0x1010), which ser.c turns into L2;
+    - L1_RCVY_STOP_DONE (0x1011), of which ser.c makes no event.
+
+    Whether the firmware posts them after a timeout of its own, and how long that is, is not in the code read.
+  - **So the night's codes decide.** If an L1 code (0x0999, 0x1000 or 0x0010) is followed by traffic coming back with no further code, the firmware resumed by itself, and the 3–6 s silences would be that. If it is followed by L1_PROMOTE_TO_L2, or by nothing until the stall detector restarts the driver after 10 s, the firmware stays halted. That restart is this driver's L2, about 9 s later than Linux's.
+- **What SER_DBG_INFO shows already:**
+  - Before any recovery it reads 0. After the n-th it reads F000000n: bits 31:28 are 15 and the low bits count.
+  - Bits 31:28 are B_AX_L0_TO_L1_EVENT_MASK (reg.h). mac.c's `rtw89_mac_dump_l0_to_l1` reads them as the cause of an L0 promoted to L1. 15 is mac.h's MAC_AX_L0_TO_L1_EVENT_MAX, not one of the six named causes (0 to 6).
+  - What 15 means to the firmware is not in Linux's code.
+- **Do the join info and the CAM change what the firmware does on a receive error, or is boot 62's count only its length?**
+  - The logs fetched so far: boots 55 to 62, with boot 59 only to 186 s and boot 60 to 902 s.
+  - A data mode's time runs from its first minute line less 60 s to its last line. A recovery is a step of SER_DBG_INFO's count, from the probe and stop lines, or a `FIRMWARE RECOVERY` line.
+
+  | Driver | Runs (boot: pid) | Data-mode time | Recoveries | Per hour |
+  |---|---|---|---|---|
+  | Before step 1 (no join info) | 55: 21, 56: 46, 58: 21, 59: 21, 60: 21 and 51, 61: 52 | 0.66 h | 1 (boot 59, at 157 s) | 1.5 |
+  | Step 1 (join info, CAM) | 60: 49, 61: 21 and 57, 62: 21, 49 and 50 | 1.87 h | 4 (all in boot 62) | 2.1 |
+
+  - **A recovery needs no association:** the old driver's boot 59 has one, with the firmware never told of a link.
+  - **The rates do not differ by more than the counts can show.** Five recoveries in 2.5 hours are too few to tell apart anything but a large difference. If both drivers had the same rate, the old driver's share of the time would give it about 1.3 of the 5; it has 1.
+  - **The traffic also differed.** Boot 62 carried the night's Effector traffic, and most of the old driver's time was in short daytime runs.
+  - **Still to read:** the rest of boot 59, boots 63 and 64, and the night's boots. They add old-driver time only from boot 59, so a fair comparison needs a night with the old driver too. No such night is planned.
+
+**2026-11-22, the night on the Ryzen: boots 63 to 65** (read from the log volume through the server, without a lease; channel 8, UZ, A0:36:BC:11:F8:88):
+- **The builds:**
+  - boot 63: 202611212213, step 1 as b3db40619, 22:18 to 22:37;
+  - boot 64: 202611212235, with c6202f1c8, 22:39 to 22:47;
+  - boot 65: 202611212244, with 4ae48ce88, from 22:48, 5.3 hours read.
+- **What the night did not have:** no hole, no RECEIVE STALLED, no `MEDIUM ERROR`, and no firmware error code. HALT_C2H_CTRL read 0 at every data-mode check, and all 315 minute lines of boot 65 read 0 L0, 0 L1, 0 L2 and 0 unknown.
+- **The data mode stopped once in boot 64 and four times in boot 65,** each time with `Register(Fault { kind: Clock, register: 0, value: 2000 })`.
+  - **The cause is this branch's own.** `read_again()` waited 2000 µs between reads, but the platform's `io::short_delay` refuses more than 1000 µs, and the value in the fault is that delay.
+  - **So the mending did nothing.** Every check that met DEADBEEF, unmended by the recovery path, stopped on its first wait. No `CHECK MET` line was reached.
+  - **Why the host cases passed:** the host model's delay had no limit.
+  - **Each stop cost the link 5.0 to 7.1 s.** netstack kept its address and connection, and TCP bytes came again after about 8.5 s. One restart, pid 51 at 11497.8 s, failed in the PCIe PHY stage (a Timeout at 0x10A0, value 29); the next started 0.35 s later.
+  - **The registers at the five stops:** HALT_C2H_CTRL and HALT_C2H read 0. SER_DBG_INFO read F0000002, F0000001, F0000008, 0, and 0 in boot 64.
+- **The firmware still recovers, without a code.**
+  - SER_DBG_INFO's count rose in three of boot 65's five runs: to 2, to 1, and from 1 to 8. That is about 10 recoveries in 5.3 hours.
+  - None left HALT_C2H_CTRL set at a check, and none was met as a recovery between operations.
+  - Each driver finds the halt C2H interrupt enabled by the firmware (HIMR0 0x00200000, B_AX_HALT_C2H_INT_EN) and masks it, unlike Linux, which keeps it.
+  - Whether the firmware posts its codes only while that bit is on is not known.
+- **The minutes, by run:**
+
+  | Run | Minutes | Beacons a minute, median (min to max) | Late sends a minute, median (max) | Sent / acked |
+  |---|---|---|---|---|
+  | Boot 63 | 19 | 583 (577–586) | 1 (6) | 7598 / 7570 |
+  | Boot 64, pid 49 | 6 | 582.5 (581–585) | 0.5 (2) | 4711 / 4702 |
+  | Boot 65, pid 21 | 66 | 583 (544–586) | 1 (26) | 9575 / 9435 |
+  | Boot 65, pid 49 | 35 | 583 (571–586) | 0 (6) | 5055 / 5024 |
+  | Boot 65, pid 50 | 89 | 583 (578–586) | 0 (3) | 12898 / 12838 |
+  | Boot 65, pid 52 | 74 | 584 (579–586) | 0 (4) | 10692 / 10637 |
+  | Boot 65, pid 57 | 51, running | 584 (552–586) | 0 (4) | 7944 / 7908 |
+
+  The inbox was never full.
+
+**2026-11-22, the wait mended** (host cases; not yet run on the Ryzen):
+- **The wait:** `read_again()` waits 1000 µs between reads, up to 16 reads in all, about the same 15 ms as before.
+- **The host model** (`tests/rtw89_pipeline_device.rs`) now refuses a delay over 1000 µs as `io::short_delay` does.
+  - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
+  - After the change, all 40 pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
