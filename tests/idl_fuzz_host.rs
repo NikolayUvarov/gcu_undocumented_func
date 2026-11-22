@@ -448,7 +448,7 @@ types! {
     tpm: Error Info;
     update: Error Offer State Metadata KeptRelease;
     vfs: Error Entry Volume Report;
-    video: Error Camera Frame;
+    video: Error Camera Frame Encoding Mode Opened;
     voice: Action Order;
     wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus Origin CountryOrigin;
     window: Error Kind Placement Info;
