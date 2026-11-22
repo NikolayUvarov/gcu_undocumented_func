@@ -232,6 +232,12 @@ fn step_2_reads_both_blocks_in_display_cores_order_and_gives_the_engine_back_as_
     as_found(&i2c);
     assert!(log.iter().any(|x| x == "D THE ENGINE GIVEN BACK: 18 WRITES PUT BACK; 6 OF 6 REGISTERS AS BATCH 11 READ THEM"), "{:#?}", &log[log.len() - 8..]);
     assert!(log.iter().any(|x| x == "D BLOCK 1: 128 BYTES READ, CHECKSUM GOOD"));
+    // The time from GO, with no log line between it and the poll: the model's 12 ms on the wire, to a poll's 0.1 ms.
+    let line = log.iter().find(|x| x.starts_with("D BLOCK 0: FROM GO TO THE TRANSFER'S END ")).unwrap();
+    let us: u64 = line.split("END ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    assert!((12_000..12_200).contains(&us), "{}", line);
+    let go = log.iter().position(|x| x.starts_with("D WROTE DC_I2C_CONTROL AT 14D60 = ") && x.ends_with(", LOGGED AFTER THE TRANSFER")).unwrap();
+    assert!(log[go + 1].starts_with("D BLOCK 0: FROM GO"));
     assert!(log.iter().any(|x| x == "D THE ENGINE NOW HELD BY NOBODY; BATCH 11 FOUND IT HELD BY NOBODY"));
     assert!(log.last().unwrap() == "D STEP 2 DONE: 2 BLOCKS READ (256 BYTES)");
     // A base block that announces no extension: one block read.

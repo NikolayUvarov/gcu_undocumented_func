@@ -203,6 +203,39 @@ made, as in the stages:
 
 The stage-by-stage runs and stage 15's watch are its safeguard, as for stage 15.
 
+## Progress (2026-11-22)
+
+**Boot 77 (release 202611220908, 3b67f7528, switches 11/16/false): batch 11 ran clean.**
+- **The engine:** `B11 I2C ENGINE: HELD BY NOBODY (SW REQ 0, DMCU REQ 0); LAST TRANSFER STATUS 0, DONE 0`.
+- **DDC1:** enabled 1, time limit 48, prescale 480, threshold 2.
+- **The time base:** 48, with an XTAL reference divider of 2 (`MICROSECOND_TIME_BASE_DIV` 0x00120230).
+- **The pads:** not in AUX mode, the masks 0 (already hardware), both lines high.
+- **Step 1:** `STEP 1 DONE: 11 OF 11 BATCHES READ, 305 REGISTERS`. The mirror came up at 134.9 s, as before.
+
+**Boot 78 (release 202611220916, f13c247a8 with `EDID_ALLOWED`, switches 11/16/false): step 2 read the EDID.**
+- **Both blocks** came back with their checksums good.
+- **The speed:** step 2 wrote a prescale of 240 (`DC_I2C_DDC1_SPEED` 0x00F00202): 48 MHz / 2 / 100 kHz by
+  `set_speed`'s formula. The firmware's 480 is its 50 kHz.
+- **Given back:** `THE ENGINE GIVEN BACK: 18 WRITES PUT BACK; 6 OF 6 REGISTERS AS BATCH 11 READ THEM`, then `STEP 2
+  DONE: 2 BLOCKS READ (256 BYTES)`. The mirror came up at 136.6 s, as before.
+- **"THE TRANSFER ENDED IN 7 US"** was not the transfer's length.
+  - The poll's clock started after the GO write's own log line, about 21 ms of pacing (60.799 to 60.820 s).
+  - The transfer, about 13 ms on the wire at 100 kHz, was over by then, and the first read of the status found it
+    done: the 7 us was that read.
+  - The status being DONE right at the GO write is not shown by this log, nor ruled out.
+  - Since the third commit, the clock is taken right after the GO write, and its line is logged after the transfer.
+    The line reads `FROM GO TO THE TRANSFER'S END n US, OVER m READS OF THE STATUS 100 US APART`.
+- **What the EDID says:**
+  - `EDID 1.3, FNV-1A 1AC83DA3B8F9235D: TRG PRODUCT 3418, 2023, "KQ34C144C"`, with one extension.
+  - `PREFERRED: 3440x1440 AT 60.000 HZ, 324000 KHZ, IN 3600x1500`; `AN HDMI SINK: TMDS AT MOST 680 MHZ`.
+  - The timings in full: 3440x1440 at 60 Hz (324 MHz), 2560x1440 at 59.951 Hz (241.5 MHz), 3440x1440 at 100 Hz
+    (540 MHz) and 2560x1440 at 119.817 Hz (497 MHz). None is within DVI's 165 MHz.
+  - The standard timings run from 1152x864 to 1920x1200, at 60 Hz.
+  - The CTA VICs are 1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 31, 63, 93, 94, 95, 96 and 97.
+  - `WITHIN DVI'S 165 MHZ, NO TIMING IT GIVES IN FULL IS NEARER ITS SHAPE THAN 1920x1080`.
+- **So there is no smaller step.** The monitor's own mode needs HDMI signalling. The owner session asked for HDMI
+  signalling first at today's 1920x1080 (VIC 16, 148.5 MHz), then the mode.
+
 ## Plan
 
 1. **Batch 11, read-only** (first commit), then its run on the Ryzen on the owner session's word, with
@@ -222,11 +255,11 @@ The stage-by-stage runs and stage 15's watch are its safeguard, as for stage 15.
 
 - [x] Batch 11 reads HDMI-A-1's DDC line and the I2C engine, read-only and never `DC_I2C_DATA`, with host cases; steps 3
   and 4 still need only batches 1 to 10.
-- [ ] Batch 11's run on the Ryzen, with its values recorded here.
+- [x] Batch 11's run on the Ryzen, with its values recorded here (boot 77).
 - [x] Step 2 reads the EDID over DDC1 in Display Core's order and gives the engine back as found after a read and after
   every failure; host cases on a model of the engine (`display_ddc_host.rs`).
-- [ ] Step 2 on the Ryzen: its checksums good, its preferred timing 3440x1440 at 324 MHz as Linux's mode says, the
-  engine as found after; what it says of a mode within DVI recorded here.
+- [x] Step 2 on the Ryzen: its checksums good, its preferred timing 3440x1440 at 324 MHz as Linux's mode says, the
+  engine as found after; what it says of a mode within DVI recorded here (boot 78: none).
 - [ ] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
   (MC-12.1).
 
