@@ -31,7 +31,12 @@ pub fn command(shell: &mut Shell, args: &[u8]) {
     let fit = match asked { Asked::Show => { let _ = writeln!(shell.term, "{}", second()); return } Asked::Fit(fit) => fit };
     match idl::mirror_fit(DISPLAY, ours(fit)) {
         Ok(Ok(())) => {
-            let kept = mind::fs::File::create(screens::FILE).and_then(|mut f| f.write_at(0, screens::text(fit).as_bytes())).map(drop).map_err(crate::files::text);
+            // Its own line replaced, every other line of the file kept (the layout's, 213-DRV-0099's).
+            let kept = match read() {
+                Ok(old) => Ok(screens::updated(&old, fit)),
+                Err("NOT FOUND") => Ok(screens::text(fit)),
+                Err(why) => Err(why),
+            }.and_then(|text| mind::fs::File::create(screens::FILE).and_then(|mut f| f.write_at(0, text.as_bytes())).map(drop).map_err(crate::files::text));
             let line = screens::chosen(fit, kept);
             let _ = writeln!(shell.term, "{}", line);
             mind::println!("[SHELL] {}", line);
@@ -60,9 +65,11 @@ pub fn load(last: bool) -> Load {
     Load::Done
 }
 
+// The whole file, refused past MAX so that a rewrite never drops its end.
 fn read() -> Result<alloc::string::String, &'static str> {
     let mut file = mind::fs::File::open(screens::FILE).map_err(crate::files::text)?;
-    let mut bytes = alloc::vec![0u8; file.size().min(1024)];
+    if file.size() > screens::MAX { return Err("LONGER THAN 8 KIB") }
+    let mut bytes = alloc::vec![0u8; file.size()];
     let mut at = 0;
     while at < bytes.len() { match file.read(&mut bytes[at..]) { Ok(0) => break, Ok(n) => at += n, Err(e) => return Err(crate::files::text(e)) } }
     bytes.truncate(at);
