@@ -425,7 +425,7 @@ types! {
     battery: Error Status;
     clipboard: Error Part;
     blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed Domain Scrubbed CopyStats Standing CopyName Walked Rebuilt TermMode Term;
-    display: Error Mode RemoteState;
+    display: Error Mode RemoteState PixelFormat;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport Delivered PolicySummary Load Space Sample UpdateState;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState Planned Configuration StopReason AgentStep FaultKind Fault Unfinished;
@@ -448,7 +448,7 @@ types! {
     tpm: Error Info;
     update: Error Offer State Metadata KeptRelease;
     vfs: Error Entry Volume Report;
-    video: Error Camera Frame;
+    video: Error Camera Frame Encoding Mode Opened;
     voice: Action Order;
     wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus Origin CountryOrigin;
     window: Error Kind Placement Info;

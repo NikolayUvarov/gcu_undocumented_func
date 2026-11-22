@@ -1,0 +1,84 @@
+# 213-KRN-0271 — `display`'s grant for first light: two windows of BAR 5, the VBIOS image, BAR 0 for a second screen, and the firmware's command register kept — done
+
+**Type:** kernel (PCI grants, `MEM_MAP`), `init` · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0086 · **Priority:** P1 · **Status:** done (2026-11-22) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-1.5, MC-3.12, MC-6.1, MC-12.1, MC-12.3
+
+## Problem
+
+DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeons-display`, in `hwdocs/cezanne-display.md` ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)). DRV asked on 2026-11-21 for what `display` needs of its grant (`KRN/2026-11-21T1525Z-DRV-request-what-display-needs-of-the-grant-and-the-firmwares-command-register.md` on `internal-dev-messages`). [213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done)'s grant falls short of it in four ways:
+
+- **It turns I/O decoding on.** A memory BAR's grant enabled every space the device implements. The Radeon has an I/O BAR, so the grant would write `0007` over the firmware's `0006`. DRV asks for the firmware's value. 0270's profile row said the grant keeps it, which was not true.
+- **It gives all of BAR 5**, with the MSI-X table and pending bits at 0x42000 and 0x43000, the graphics engine and the PSP. `display` uses two windows of it: the display engine's registers (bytes 0x48 to 0x1B000) and the SMU mailbox the display clocks go through (0x58A0C, 0x58A4C, 0x58A6C).
+- **The VBIOS image is missing.** First light runs three of its command tables (setpixelclock, digxencodercontrol, dig1transmittercontrol), and reads the display paths from its data tables. Linux takes the image from the ACPI VFCT table, 55,296 bytes on this machine.
+- **No memory for a second screen.** The survey proposes BAR 0 past the GOP's framebuffer: from 16 MiB, 20 MiB long, for 3440x1440 at 4 bytes. The display engine scans the carve-out through its own aperture, so no DMA grant is needed. The CPU should write it write-combined, as it writes the GOP's buffer.
+
+## Plan
+
+1. **The kernel's memory BAR grant** (`PLATFORM_DEVICE_BAR`): memory decoding and bus mastering on, and I/O decoding left as it is found (`pci_control::Mode::Memory`). An I/O BAR's grant is unchanged. No driver uses ports of a device whose only grant is a memory BAR: init's port users are legacy ranges (`ata`, the keyboard, the battery), and the VirtIO probes take BAR 0, an I/O BAR on a legacy device, first.
+2. **`MEM_MAP`**: an MMIO range inside the memory BAR that holds the boot framebuffer maps write-combining on x86, as the framebuffer's memory capability already does (000-KRN-0081). Other MMIO stays uncached. aarch64 is unchanged, since its write-combining is the normal memory type.
+3. **`init`'s grant**, as windows that CAP_MINT cuts from the BARs init holds:
+   - slot 2: BAR 5 [0, 0x1B000), the engine's registers;
+   - slot 3: BAR 5 [0x58000, 0x59000), the SMU mailbox's page;
+   - slot 5: BAR 0 [0x1000000, 0x2400000), the second screen's memory;
+   - slot 4: a read-only copy of the VFCT table (`PLATFORM_ACPI_TABLE`), since the display has no interrupt of its own.
+
+   Without BAR 0's range or a VFCT table, `display` starts without that slot, and init logs which. The device is still not recorded, so init never stops it.
+4. **The stub** logs each slot, and the VBIOS image's PCI identity, length and ROM signature from the RAM copy. It reads no register.
+5. **Not in this task:**
+   - the compositor told of a second screen (point 4 of DRV's request): a versioned interface, after `display` shows a picture from its own framebuffer;
+   - the DMUB, which DRV does not need.
+
+## Acceptance criteria
+
+- [x] `tests/pci_control_host.rs`: a memory grant keeps `0006`, sets mastering where it was off, and keeps an I/O bit that was on.
+- [x] Builds for x86 and aarch64. Every QEMU group passes in the gate: every PCI grant goes through the changed transition.
+- [x] **On the Ryzen** (DRV; see Resolution):
+  - init's line shows `COMMAND 0006 BEFORE THE GRANT, 0006 AFTER`;
+  - the stub shows 108 KiB of registers, a 4096-byte mailbox, 20480 KiB of BAR 0, and a VFCT image for `1002:1638` with `55AA`;
+  - DP-2 keeps its picture.
+- [x] docs/api and docs/profile (bootstrap.md, README.md MC-1.5, tcb.md) say what changed.
+
+**Not covered:** whether BAR 0 from 16 MiB is scanned out by the engine. That waits on the survey's batch 6 under MIND Core (`DCN_VM_FB_LOCATION_*`). The kernel takes only the firmware's conventional memory into its frame pool (`kernel/src/frames.rs`), so the carve-out is never handed out if the firmware's memory map marks it as reserved. The Ryzen's map is not checked here.
+
+## Progress (2026-11-21)
+
+**Made** on `claude/213-KRN-0271-displays-grant-for-first-light`, on 0270's branch.
+
+**Runs in this session's container** (QEMU 8.2.2, OVMF):
+- `tests/pci_control_host.rs`: 9 of 9;
+- the x86 build, and the aarch64 build of `kernel`, `init` and `display`;
+- x86's `boot`, `services`, `ahci`, `usb` and `display` suites on 4 CPUs: 34 PASS, no failure. One SKIP: no updater stand-in was built for the update zone's check. Every PCI grant of those boots goes through the changed transition; `display` is `NOT STARTED: NO DEVICE`.
+
+**Left:**
+- the gate's groups;
+- DRV's run on the Ryzen, with the lines the acceptance criteria name.
+
+## Landed (2026-11-21)
+
+In main since round 168 (ee391287b7, `LANDING/2026-11-21T2340Z-KRN-landed-ee391287.md` on `internal-dev-messages`), with DRV's 213-DRV-0085, 0086 (`display` replaces the stub and keeps its lines) and 0087. The gate passed every group on both architectures: every PCI grant of every QEMU boot went through the changed transition. Round 167 was not landed, because APP's request failed the network group and was returned.
+
+**Left:** the Ryzen's run (DRV), with the lines the acceptance criteria name. A stick written from main carries it.
+
+## Resolution
+
+Made in `kernel/src/pci_control.rs` (`Mode::Memory`), `kernel/src/pci.rs`, `kernel/src/scheduler.rs` (`MEM_MAP` write-combining in the boot framebuffer's BAR) and `init` (the windows, `PLATFORM_ACPI_TABLE`'s VFCT copy). Landed in round 168.
+
+**On the Ryzen:** DRV's run 0 (2026-11-21 18:26 UTC, release 202611211819; recorded in [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), section "Run 0 on the Ryzen"). Its tree was DRV's bench build on round 167's candidate (5667eb9655), which carried this grant at 809d741c74. `kernel/src/pci.rs`, `kernel/src/pci_control.rs`, `kernel/src/scheduler.rs`, `init/src/main.rs` and `init/src/hardware.rs` are the same there as on `main` since round 168. Its lines:
+- `init`: `COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND 0x58000+0x1000` and `VBIOS: THE VFCT TABLE, 55428 BYTES, READ-ONLY`;
+- `display`: `BAR 5 AT FCB00000: 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT 55428 BYTES, AN IMAGE FOR 1002:1638 OF 55296 BYTES, ROM SIGNATURE 55AA` (the image is the 55,296 bytes Linux read);
+- `COMMAND 0006 AFTER STEP 1`.
+
+**First light** on HDMI-A-1 went through this grant on 2026-11-22 at 04:43 UTC (release 202611220438, DRV's report `KRN/2026-11-22T0448Z-DRV-first-light-on-the-ryzens-second-output-through-your-grant.md` on `internal-dev-messages`):
+- the engine's window [0, 0x1B000) held the eight batches, the eight stages and tables 12, 4 and 76 as the hardware ran them;
+- the command register stayed 0006;
+- `display` asked for nothing beyond the mailbox page and the VBIOS copy;
+- the maintainer saw HDMI-A-1 show the engine's colour squares and DP-2 show MIND Core's screen. Nobody watched DP-2 while the stages ran, so whether it flickered is not known.
+
+The carve-out question in "Not covered" is answered by DRV's run 7 in 213-DRV-0086. The firmware's map marks 0x8_0E30_0000 to 0x8_2FFF_FFFF as reserved, and the frame pool takes only conventional memory, so the frame pool never hands out the carve-out.
+
+The compositor's part is [213-KRN-0272](../issues/213-KRN-0272-a-second-screen-for-the-compositor.md).
+
+This is evidence for that machine with those builds (MC-12.1).
+
+## Related
+
+[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).

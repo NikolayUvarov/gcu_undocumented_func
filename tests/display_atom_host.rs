@@ -30,7 +30,7 @@ enum Answer {
 #[derive(Default)]
 struct Model { regs: HashMap<u32, u32>, log: Vec<Access>, answers: Vec<Answer> }
 impl Machine for Model {
-    fn read(&mut self, reg: Reg) -> u32 {
+    fn read(&mut self, reg: Reg) -> Option<u32> {
         let mut v = *self.regs.get(&reg.offset()).unwrap_or(&0);
         for a in &self.answers {
             match *a {
@@ -40,11 +40,12 @@ impl Machine for Model {
             }
         }
         self.log.push(Access::Read(reg.offset(), v));
-        v
+        Some(v)
     }
-    fn write(&mut self, reg: Reg, value: u32) {
+    fn write(&mut self, reg: Reg, value: u32) -> bool {
         let old = self.regs.insert(reg.offset(), value).unwrap_or(0);
         self.log.push(Access::Write(reg.offset(), value, old));
+        true
     }
     fn delay_us(&mut self, us: u32) { self.log.push(Access::Delay(us)); }
     fn enter(&mut self, table: u8, depth: usize) { self.log.push(Access::Enter(table, depth)); }

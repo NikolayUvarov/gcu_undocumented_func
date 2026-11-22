@@ -1,12 +1,15 @@
 /// The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
 /// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
-/// mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2).
-package mind:display@1.2.0;
+/// mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2);
+/// a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272).
+package mind:display@1.3.0;
 
 interface display {
     /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy; `denied`: a
-    /// `remote` from a client with no mark of its own (1.2).
-    enum error { no-screen, no-memory, denied }
+    /// `remote` from a client with no mark of its own (1.2), or a second screen from a client not badged
+    /// `BADGE_SCREEN` (1.3); `bad-screen`: a second screen whose shape the lent pixels do not hold, or whose format or
+    /// size the compositor does not draw (1.3).
+    enum error { no-screen, no-memory, denied, bad-screen }
     /// The screen's size in pixels and its stride (pixels per row, at least the width).
     record mode { width: u32, height: u32, stride: u32 }
 
@@ -23,4 +26,22 @@ interface display {
     /// state: a ring with a dot for a client badged `BADGE_REMOTE_LINK` (link's), a filled circle for one badged
     /// `BADGE_REMOTE_EFFECTOR` (the Effector gateway's), both in `mind::display`. Other clients get `denied`.
     remote: func(state: remote-state) -> result<_, error>;
+
+    /// 1.3 (213-KRN-0272): a second screen's pixels as they lie in memory: `bgr`, each pixel a 32-bit word
+    /// `0x00RRGGBB` (blue first in memory, as UEFI's `PixelBlueGreenRedReserved8BitPerColor` and the shadow's own);
+    /// `rgb`, red first.
+    enum pixel-format { bgr, rgb }
+    /// A display driver, badged `BADGE_SCREEN` by init (`mind::display`), offers a second screen it drives: its width and
+    /// height in pixels, its pitch in bytes from one row to the next (at least `width * 4`, a multiple of 4), its pixel
+    /// format, and its pixels, a register range it lends (MMIO: the card's frame memory, mapped write-combining on x86 when it
+    /// lies in the boot framebuffer's BAR) that holds at least `pitch * height` bytes. A lease: the driver keeps its range,
+    /// and calls `screen-gone` before it revokes the copy or lets the range go. From the next frame the
+    /// compositor mirrors the first screen into it, scaled to fit, centred, the rest black, with the marks the first
+    /// screen shows (capture, camera, remote) drawn on it too. Offering again replaces the screen before: a monitor
+    /// plugged in anew, or another mode. Nothing is drawn there before the call returns; the driver shows the pixels
+    /// (unblanks its pipe) when it wants.
+    offer-screen: func(width: u16, height: u16, pitch: u32, format: pixel-format, pixels: borrow<mmio>) -> result<_, error>;
+    /// The second screen is gone (its monitor unplugged, its pipe off): the compositor stops drawing into it and lets
+    /// its mapping go before it answers.
+    screen-gone: func() -> result<_, error>;
 }

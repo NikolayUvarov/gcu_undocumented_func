@@ -90,7 +90,7 @@ fn hub_waiting() -> Vec<u64> {
     let Ok(file) = mind::fs::File::open(wm::waiting::FILE) else { return Vec::new() };
     let mut buffer = [0u8; wm::waiting::BYTES];
     let n = file.read_at(0, &mut buffer).unwrap_or(0);
-    core::str::from_utf8(&buffer[..n]).ok().and_then(wm::waiting::read).unwrap_or_default()
+    core::str::from_utf8(&buffer[..n]).ok().and_then(wm::waiting::read).map(|w| w.ids).unwrap_or_default()
 }
 
 // The lease of window `id`'s surface and its wake endpoint.

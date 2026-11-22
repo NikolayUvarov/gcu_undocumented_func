@@ -1,7 +1,8 @@
 //! The requests that wait for the user on MIND Hub, as `improve` last saw them (100003-APP-0153): `data/improve/waiting`,
-//! which `improve` writes and the shell and `wm` read (both include this file). A line of request numbers apart by
-//! spaces; `#` starts a comment. A request waits for its user while a question or a proposal of the agents is open, or
-//! while its check waits.
+//! which `improve` writes and the shell and `wm` read (both include this file). A comment line; `change N`, improve's
+//! count of its writes, so that a reader that missed one, a set that went and came back between two of its looks, sees
+//! that it changed; then the request numbers apart by spaces. A request waits for its user while a question or a
+//! proposal of the agents is open, or while its check waits.
 
 use alloc::format;
 use alloc::string::String;
@@ -15,22 +16,29 @@ pub const DIR: &str = "data/improve";
 pub const MAX: usize = 32;
 pub const BYTES: usize = 512;
 
-/// The numbers in `text`, ascending, each once; None when a word is not a request's number.
-pub fn read(text: &str) -> Option<Vec<u64>> {
-    let mut ids = Vec::new();
+/// What the file says: how many times improve wrote it, and the requests that wait.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Waiting { pub change: u64, pub ids: Vec<u64> }
+
+/// The file read: its `change` (0 when it names none) and its numbers, ascending, each once; None when a word is not a
+/// request's number or `change` is not one count.
+pub fn read(text: &str) -> Option<Waiting> {
+    let mut w = Waiting::default();
     for line in text.lines() {
-        for word in line.split('#').next().unwrap_or("").split_whitespace() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        if let ["change", n] = words.as_slice() { w.change = n.parse().ok()?; continue; }
+        for word in words {
             let id = word.parse::<u64>().ok().filter(|&n| n > 0)?;
-            if ids.len() < MAX && !ids.contains(&id) { ids.push(id); }
+            if w.ids.len() < MAX && !w.ids.contains(&id) { w.ids.push(id); }
         }
     }
-    ids.sort_unstable();
-    Some(ids)
+    w.ids.sort_unstable();
+    Some(w)
 }
 
-/// The file's text for `ids`, which `read` gives back.
-pub fn text(ids: &[u64]) -> String {
-    let mut out = String::from("# The requests that wait for you on MIND Hub, as improve last saw them: improve list\n");
+/// The file's text for `ids` at `change`, which `read` gives back.
+pub fn text(change: u64, ids: &[u64]) -> String {
+    let mut out = format!("# The requests that wait for you on MIND Hub, as improve last saw them: improve list\nchange {change}\n");
     let words: Vec<String> = ids.iter().take(MAX).map(|id| format!("{id}")).collect();
     out.push_str(&words.join(" "));
     out.push('\n');

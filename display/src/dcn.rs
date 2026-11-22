@@ -84,10 +84,14 @@ pub enum R {
     OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
     HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
+    // Read by step 1's batch 8 only: whether the display microcontroller (DMCUB) runs, as Linux's dmub code tells it.
+    CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
+    DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
+    DmcubGpintDataout, DmcubTimerCurrent,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 56] = {
+pub const ALL: [R; 71] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -99,7 +103,10 @@ pub const ALL: [R; 56] = {
      OtgVTotalControl, OtgVerticalInterrupt1Position, OtgVerticalInterrupt1Control, OtgVerticalInterrupt2Position,
      OtgVerticalInterrupt2Control, OptcInputGlobalControl, DomainPgStatus,
      HubpSurfaceConfig, HubpCntl, HubpreqSurfacePitch, HubpreqPrimarySurfaceAddress, HubpreqPrimarySurfaceAddressHigh,
-     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase]
+     DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
+     CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
+     DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
+     DmcubGpintDataout, DmcubTimerCurrent]
 };
 
 impl R {
@@ -111,6 +118,10 @@ impl R {
             DomainPgStatus => 2 * PIPES, // HUBP n is domain 2n, DPP n is 2n + 1 (dcn20_hubp_pg_control)
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => 1,
+            DmcubScratch => 16,
+            CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress | DmcubInbox1Size
+                | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1 | DmcubGpintDataout
+                | DmcubTimerCurrent => 1,
             _ => PIPES,
         }
     }
@@ -147,6 +158,11 @@ impl R {
             DigBeEnCntl => (2, 0x20B0 + 0x100 * i),
             DcnVmFbLocationBase => (2, 0x493), DcnVmFbLocationTop => (2, 0x494), DcnVmFbOffset => (2, 0x495),
             DcnVmAgpBot => (2, 0x496), DcnVmAgpTop => (2, 0x497), DcnVmAgpBase => (2, 0x498),
+            CcDcPipeDis => (2, 0xCA), DmcubSecCntl => (2, 0x3278), DmcubInbox0Wptr => (2, 0x327C), DmcubInbox0Rptr => (2, 0x327D),
+            DmcubInbox1BaseAddress => (2, 0x327E), DmcubInbox1Size => (2, 0x327F), DmcubInbox1Wptr => (2, 0x3280),
+            DmcubInbox1Rptr => (2, 0x3281), DmcubOutbox1Wptr => (2, 0x3288), DmcubOutbox1Rptr => (2, 0x3289),
+            DmcubScratch => (2, 0x328D + i), DmcubCntl => (2, 0x32A0), DmcubGpintDatain1 => (2, 0x32A2),
+            DmcubGpintDataout => (2, 0x32A3), DmcubTimerCurrent => (2, 0x32A7),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -181,7 +197,13 @@ impl R {
             HubpreqPrimarySurfaceAddressHigh => "DCSURF_PRIMARY_SURFACE_ADDRESS_HIGH", DigBeEnCntl => "DIG_BE_EN_CNTL",
             DcnVmFbLocationBase => "DCN_VM_FB_LOCATION_BASE", DcnVmFbLocationTop => "DCN_VM_FB_LOCATION_TOP",
             DcnVmFbOffset => "DCN_VM_FB_OFFSET", DcnVmAgpBot => "DCN_VM_AGP_BOT", DcnVmAgpTop => "DCN_VM_AGP_TOP",
-            DcnVmAgpBase => "DCN_VM_AGP_BASE",
+            DcnVmAgpBase => "DCN_VM_AGP_BASE", CcDcPipeDis => "CC_DC_PIPE_DIS", DmcubCntl => "DMCUB_CNTL",
+            DmcubSecCntl => "DMCUB_SEC_CNTL", DmcubScratch => "DMCUB_SCRATCH", DmcubInbox0Wptr => "DMCUB_INBOX0_WPTR",
+            DmcubInbox0Rptr => "DMCUB_INBOX0_RPTR", DmcubInbox1BaseAddress => "DMCUB_INBOX1_BASE_ADDRESS",
+            DmcubInbox1Size => "DMCUB_INBOX1_SIZE", DmcubInbox1Wptr => "DMCUB_INBOX1_WPTR", DmcubInbox1Rptr => "DMCUB_INBOX1_RPTR",
+            DmcubOutbox1Wptr => "DMCUB_OUTBOX1_WPTR", DmcubOutbox1Rptr => "DMCUB_OUTBOX1_RPTR",
+            DmcubGpintDatain1 => "DMCUB_GPINT_DATAIN1", DmcubGpintDataout => "DMCUB_GPINT_DATAOUT",
+            DmcubTimerCurrent => "DMCUB_TIMER_CURRENT",
         }
     }
 
@@ -197,6 +219,9 @@ impl R {
             HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => "",
+            CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
+                | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
+                | DmcubGpintDataout | DmcubTimerCurrent => "",
             _ => "OTG",
         }
     }
@@ -270,6 +295,7 @@ pub mod field {
     pub const DIG_SYMCLK_BE_ON: Field = f(8, 1);
     pub const HUBP_BLANK_EN: Field = f(0, 1);
     pub const HUBP_TTU_DISABLE: Field = f(12, 1);
+    pub const HUBP_VTG_SEL: Field = f(4, 4); // the timing generator the HUBP follows
     pub const SURFACE_PIXEL_FORMAT: Field = f(0, 7);
     pub const ROTATION_ANGLE: Field = f(8, 2);
     pub const PITCH: Field = f(0, 14);
@@ -281,6 +307,13 @@ pub mod field {
     pub const OTG_PIXEL_RATE_PLL_SOURCE: Field = f(4, 1);
     pub const PHYPLL_PIXCLK_ENABLE: Field = f(8, 1);
     pub const DENTIST_DISPCLK_RDIVIDER: Field = f(8, 7);
+    // The DMCUB (dcn_2_1_0_sh_mask.h): whether the board has it, whether it is enabled or held in reset.
+    pub const DC_DMCUB_ENABLE: Field = f(16, 1); // CC_DC_PIPE_DIS
+    pub const DMCUB_ENABLE: Field = f(16, 1); // DMCUB_CNTL
+    pub const DMCUB_SOFT_RESET: Field = f(17, 1);
+    pub const DMCUB_PWAIT_MODE_STATUS: Field = f(20, 1);
+    pub const DMCUB_SEC_RESET: Field = f(16, 1); // DMCUB_SEC_CNTL
+    pub const DMCUB_SEC_RESET_STATUS: Field = f(21, 1);
     pub const PGFSM_POWER_ON: u32 = 0;
 }
 
@@ -288,7 +321,8 @@ pub mod field {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Table {
     /// `setpixelclock` 1.7: the PHY's PLL for a TMDS pixel clock, for one timing generator.
-    SetPixelClock { pixclk_100hz: u32, pll_id: u8, encoder_id: u8, encoder_mode: u8, crtc_id: u8, deep_color: u8 },
+    /// `misc` is `set_pixel_clock_parameter_v1_7`'s miscinfo (0x01 forces the PLL to be programmed, as its power-down does).
+    SetPixelClock { pixclk_100hz: u32, pll_id: u8, encoder_id: u8, encoder_mode: u8, crtc_id: u8, deep_color: u8, misc: u8 },
     /// `digxencodercontrol` 1.5, stream setup: the DIG front end for the signal.
     DigEncoderStreamSetup { dig: u8, mode: u8, lanes: u8, pclk_10khz: u32, bpc: u8 },
     /// `dig1transmittercontrol` 1.6: a PHY (UNIPHY A-E) on or off.
@@ -323,9 +357,9 @@ impl Table {
     pub fn parameters(&self) -> ([u8; 32], usize) {
         let mut p = [0u8; 32];
         match *self {
-            Table::SetPixelClock { pixclk_100hz, pll_id, encoder_id, encoder_mode, crtc_id, deep_color } => {
+            Table::SetPixelClock { pixclk_100hz, pll_id, encoder_id, encoder_mode, crtc_id, deep_color, misc } => {
                 p[0..4].copy_from_slice(&pixclk_100hz.to_le_bytes());
-                p[4] = pll_id; p[5] = encoder_id; p[6] = encoder_mode; p[7] = 0; p[8] = crtc_id; p[9] = deep_color;
+                p[4] = pll_id; p[5] = encoder_id; p[6] = encoder_mode; p[7] = misc; p[8] = crtc_id; p[9] = deep_color;
                 (p, 16)
             }
             Table::DigEncoderStreamSetup { dig, mode, lanes, pclk_10khz, bpc } => {
@@ -355,7 +389,14 @@ pub enum Step {
     Call(Table),
     /// Wait for OTG `otg`'s frame counter to move `frames` times, for at most `timeout_us`: the generator runs.
     Frames { otg: u8, frames: u32, timeout_us: u32 },
+    /// Stage `n` (1 to `STAGES`) of first light begins here: the steps up to the next marker are one stage.
+    Begin(u8),
 }
+
+/// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
+pub const STAGES: u8 = 8;
+pub const STAGE_NAMES: [&str; STAGES as usize] =
+    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY"];
 
 /// The pipe a plan drives: its timing generator, OPP and DIG front end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,6 +451,8 @@ impl Default for Plan { fn default() -> Self { Plan { steps: [None; MAX_STEPS], 
 
 impl Plan {
     pub fn steps(&self) -> impl Iterator<Item = Step> + '_ { self.steps[..self.len].iter().flatten().copied() }
+    /// The `i`-th step.
+    pub fn get(&self, i: usize) -> Option<Step> { self.steps[..self.len].get(i).copied().flatten() }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
     fn push(&mut self, step: Step) -> Result<(), PlanError> {
@@ -474,22 +517,26 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     let mut plan = Plan::default();
 
     // The timing generator's clocks (optc1_enable_optc_clock).
+    plan.push(Step::Begin(1))?;
     plan.update(reg(OptcInputClockControl, t)?, &[(OPTC_INPUT_CLK_EN, 1), (OPTC_INPUT_CLK_GATE_DIS, 1)])?;
     plan.wait(reg(OptcInputClockControl, t)?, OPTC_INPUT_CLK_ON, 1, 1000)?;
     plan.update(reg(OtgClockControl, t)?, &[(OTG_CLOCK_EN, 1), (OTG_CLOCK_GATE_DIS, 1)])?;
     plan.wait(reg(OtgClockControl, t)?, OTG_CLOCK_ON, 1, 1000)?;
 
     // The pixel clock: the PHY's PLL through the VBIOS, then 8-bit colour on its resync (dce112_program_pix_clk).
+    plan.push(Step::Begin(2))?;
     plan.push(Step::Call(Table::SetPixelClock {
         pixclk_100hz: timing.pixel_khz * 10, pll_id: COMBOPHY_PLL0 + output.phy, encoder_id: output.encoder_id,
-        encoder_mode: mode, crtc_id: t, deep_color: 0,
+        encoder_mode: mode, crtc_id: t, deep_color: 0, misc: 0,
     }))?;
     plan.update(reg(PhypllPixclkResyncCntl, output.phy)?, &[(PHYPLL_DEEP_COLOR_CNTL, 0)])?;
 
     // The timing (optc1_program_timing), the generator stopped.
+    plan.push(Step::Begin(3))?;
     write_timing(&mut plan, t, &otg)?;
 
     // The OPP's clock and its pattern generator, before the generator starts (opp2_set_disp_pattern_generator).
+    plan.push(Step::Begin(4))?;
     plan.update(reg(OppPipeControl, o)?, &[(OPP_PIPE_CLOCK_EN, 1)])?;
     plan.update(reg(DpgDimensions, o)?, &[(DPG_ACTIVE_WIDTH, timing.h_active as u32), (DPG_ACTIVE_HEIGHT, timing.v_active as u32)])?;
     plan.update(reg(DpgOffsetSegment, o)?, &[(WHOLE, 0)])?;
@@ -497,6 +544,7 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     plan.update(reg(DpgControl, o)?, &[(DPG_EN, 1), (DPG_MODE, dpg_mode), (DPG_DYNAMIC_RANGE, 0), (DPG_BIT_DEPTH, 1), (DPG_VRES, res), (DPG_HRES, res)])?;
 
     // The generator started on its OPP (optc2_enable_crtc) and seen counting frames.
+    plan.push(Step::Begin(5))?;
     plan.update(reg(OptcDataSourceSelect, t)?, &[(OPTC_SEG0_SRC_SEL, o as u32)])?;
     plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 1)])?;
     plan.update(reg(OtgControl, t)?, &[(OTG_DISABLE_POINT_CNTL, 3), (OTG_MASTER_EN, 1)])?;
@@ -504,11 +552,14 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     plan.push(Step::Frames { otg: t, frames: 2, timeout_us: 200_000 })?;
 
     // The DIG front end on that generator, RGB 8 bits (enc1_stream_encoder_dvi_set_stream_attribute).
+    plan.push(Step::Begin(6))?;
     plan.push(Step::Call(Table::DigEncoderStreamSetup { dig: d, mode, lanes: 4, pclk_10khz: timing.pixel_khz / 10, bpc: PANEL_8BIT_PER_COLOR }))?;
     plan.update(reg(DigFeCntl, d)?, &[(DIG_SOURCE_SELECT, t as u32), (TMDS_PIXEL_ENCODING, 0), (TMDS_COLOR_FORMAT, 0)])?;
 
     // The back end's mode and front end (dcn10_link_encoder_setup, connect_dig_be_to_fe), then the PHY.
+    plan.push(Step::Begin(7))?;
     plan.update(reg(DigBeCntl, output.phy)?, &[(DIG_MODE, mode as u32), (DIG_FE_SOURCE_SELECT, 1 << d)])?;
+    plan.push(Step::Begin(8))?;
     plan.push(Step::Call(Table::DigTransmitter {
         phy: output.phy, action: TRANSMITTER_ENABLE, mode, lanes: 4, symclk_10khz: timing.pixel_khz / 10,
         hpd_sel: output.hpd + 1, dig_fe_sel: 1 << d, connector_id: output.connector_id,

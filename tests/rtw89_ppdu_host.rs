@@ -1,27 +1,19 @@
 // 213-DRV-0087: the signal of a received PPDU from its status report, against reports captured on the Ryzen.
 #![allow(dead_code)]
 #[path = "../rtw89_wifi/src/ppdu.rs"] mod ppdu;
+#[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 use ppdu::{parse, weakness, Report};
 
-// A whole RX buffer as the bench print showed it (2026-11-21 16:29-16:33 UTC): the PCIe word, the descriptor, the report.
+#[path = "rtw89_ppdu_captures.rs"] mod captures;
+use captures::*;
+
 fn split(hex: &str) -> ([u32; 3], Vec<u8>) {
-    let b: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+    let b = bytes(hex);
     let w = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
     let (w0, w1, w3) = (w(4), w(8), w(16));
     let start = 4 + if w0 >> 31 != 0 { 32 } else { 16 };
     (([w0, w1, w3]), b[start..start + (w0 & 0x3fff) as usize].to_vec())
 }
-// CoolNet2's 5 GHz beacon on channel 100 (A0:36:BC:11:F8:8C, OFDM 6 Mb/s): an OFDM_BRK report, paths A 91 and B 95.
-const FIVE: &str = "54c0cb0440008001120004000000000001002000010060111f0001001800000000000000020000000b2c00008305005d5b5f00000158303000bacffb18c05e080000000000000000007fc05f0000000000000000";
-// Its 2.4 GHz beacon on channel 8 heard from 7 (CCK 1 Mb/s): a CCK report, RPL 90 above the average 88.
-const CCK: &str = "6cc0b400580080014000000000000000010020000100001000000200180000000000000000000000a0f30a04b00bacc7000000008b07005858580000805a210000df6ffe5a5db00b20410030011e0730000d800400c01f0800000000000000000017c05f0000000000000000";
-// The same beacon earlier, an OFDM_BRK report at CCK: paths 92 and 89.
-const BREAK: &str = "5cc06100480080013000000000000000010020000100001000000200180000000000000000000000a0f30a04b00bacc7000000008305005a5c5900000100073000fb144e00c00b080000000000000000001bc05f0000000000000000";
-// A data frame from the access point to this radio (OFDM, rate 9): a legacy OFDM report with the frequency-domain RPL 97.
-const DATA: &str = "54c0c71240008001320009000000000001002000010066111f000100030000000000000002000000cd2c00008c05006a686c00000161083000e0bffd16c05d0872feffff0000000000ff284c0000000000000000";
-// Another station's CCK frame: RPL 69 above the average 63.
-const OTHER: &str = "6cc0c812580080010000000000000000000020000100000000000200180000000000000000000000a0f30a04e006becf000000008b07003f413c000080459f020031f0035445e006206300300124083000ea8eec0000000872feffff00000000007fc05f0000000000000000";
-
 fn signal(hex: &str) -> Option<Report> { let (d, p) = split(hex); parse(d, &p) }
 
 #[test]
@@ -51,4 +43,32 @@ fn untrusted_report_bytes_are_bounded_and_refused_whole() {
     // An IE of no length (type 23) ends the IE walk unparsed: the header's paths stand, as Linux's failed parse leaves them.
     let (d, mut p) = split(CCK); p[32 + 8] = (p[32 + 8] & 0xe0) | 23;
     assert_eq!(parse(d, &p).unwrap().signal_dbm, -66);
+}
+
+// A report goes on the frame kept just before it, by its count and rate, and on no other (Matcher).
+#[test]
+fn a_report_marks_the_kept_frame_just_before_it_and_no_other() {
+    use ppdu::{Matcher, Signals};
+    let beacon = frame(&[0x80; 40], 1, 4);
+    let report = bytes(FIVE);
+    let packet = |b: &[u8]| rxdesc::parse(b).unwrap();
+    let mut m = Matcher::default();
+    m.kept(7, 2, &beacon); assert!(m.waits(2) && !m.waits(1));
+    assert_eq!(m.report(Some(7), packet(&report), &report), Some((2, 63)), "-63 dBm on slot 2");
+    assert!(!m.waits(2));
+    assert_eq!(m.report(Some(7), packet(&report), &report), None, "a second report finds no frame");
+    // Handed on before its report: late, the frame keeps its 0.
+    m.kept(8, 3, &beacon); m.handed(1); assert!(m.waits(3)); m.handed(3); assert!(!m.waits(3));
+    assert_eq!(m.report(Some(8), packet(&report), &report), None);
+    // Another Wi-Fi frame came between, another report came between, another count, another rate, a broken report,
+    // the kept frames dropped: none is guessed.
+    for (number, after, count, rate) in [(9, Some(10), 1, 4), (9, None, 1, 4), (9, Some(9), 2, 4), (9, Some(9), 1, 5)] {
+        m.kept(number, 0, &frame(&[0x80; 40], count, rate)); assert_eq!(m.report(after, packet(&report), &report), None);
+    }
+    // Eight bytes short of what its PHY status says, the ring's lengths agreeing.
+    let mut broken = report.clone(); broken.truncate(report.len() - 8);
+    broken[..4].copy_from_slice(&(report.len() as u32 - 8 | 0xc000).to_le_bytes()); broken[4] -= 8;
+    m.kept(11, 0, &beacon); assert_eq!(m.report(Some(11), packet(&broken), &broken), None);
+    m.kept(12, 0, &beacon); m.forget(); assert!(!m.waits(0)); assert_eq!(m.report(Some(12), packet(&report), &report), None);
+    assert_eq!(m.signals, Signals { measured: 1, late: 1, unmatched: 7 });
 }

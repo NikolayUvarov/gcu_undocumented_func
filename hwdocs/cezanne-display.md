@@ -163,6 +163,17 @@ Not known, and needed by the route: which OTG, OPP, HUBP and DIG front end the G
 says nothing of the firmware's), its HUBP surface address, `DCN_VM_FB_LOCATION_*`, the pixel clock source it chose
 (PHY E's PLL), DISPCLK, which pipes are powered, the HDMI connector's HPD sense under MIND Core, and whether the GOP
 left the DMCUB running. **Two ways to close it:**
+
+Closed by way 1 except for the DMCUB, which step 1 does not read (213-DRV-0086 step 1, runs 1 to 7, 2026-11-21).
+- **The pipe:** OTG0 from OPP0, DIG front end E into PHY E's back end (DP, `DIG_MODE` 0, HPD 4), HUBP0 at
+  0xF4_0000_0000.
+- **Clocks:** the pixel clock from OTG0's DP DTO, not a PHY PLL; DISPCLK and DPPCLK at divider id 0x14, settled.
+- **Power:** all four pipes' HUBP and DPP powered, HUBP1 to HUBP3 blanked on their own idle OTGs.
+- **Aperture:** `DCN_VM_FB_LOCATION` 0xF4_0000_0000 to 0xF4_1FFF_FFFF, `DCN_VM_FB_OFFSET` 0x8_1000_0000.
+- **HPD:** sensed on HPD 1 (HDMI-A-1) and HPD 4 (DP-2).
+
+The issue has each value.
+
 1. **A read under MIND Core**, by `display` with KRN's grant of BAR 5 (213-DRV-0086 step 1), in the batches proposed
    below, each sent to the log before the next. Preferred: it is the very state MIND Core inherits.
 2. **Linux started once without `amdgpu`** (for example `modprobe.blacklist=amdgpu`), so that the GOP's state stays,
@@ -296,7 +307,12 @@ needs from those (the PHY's state, the PLLs' lock) come from the VBIOS tables' o
 - System RAM instead would need the GART (VM context 0's page table, which `amdgpu` keeps in the carve-out) or the AGP
   window set up in the memory hub that the graphics engine shares: the reason to prefer the carve-out.
 - Confidence: medium. The facts are from Linux's source and boot lines and the GOP's own framebuffer at BAR 0's base;
-  the firmware's `DCN_VM_FB_LOCATION_*` and its HUBP address are not read yet (batch 6, batch 4).
+  the firmware's `DCN_VM_FB_LOCATION_*` (0xF4_0000_0000, 512 MiB) and its HUBP address (0xF4_0000_0000, BAR 0's offset 0)
+  were read under MIND Core since (213-DRV-0086 step 1, batches 6 and 4) and agree.
+- **The frame pool keeps out of it:** MIND Core's hardware report (hw0054, release 202611211819) lists the firmware's
+  memory map ending with a reserved region 0x8_0E30_0000 to 0x8_2FFF_FFFF (541 MiB) below `TOP_MEM2` 0x8_3000_0000,
+  room for the 512 MiB carve-out from 0x8_1000_0000; the frame pool (31,982 MiB) takes only conventional memory.
+  Its exact start, batch 6's `DCN_VM_FB_OFFSET`, reads 0x810: system address 0x8_1000_0000 (213-DRV-0086, run 7).
 
 ## What first light's VBIOS tables write (213-DRV-0086, on LEG9 against a model)
 
@@ -351,3 +367,50 @@ What follows for the route (plans, not guarantees):
   would hold the CPU there. The interpreter's step limit bounds it (a run stops with `StepLimit` naming the offset).
 - Table 4 leaves `DIG0_DIG_FE_CNTL` at 0, so the plan's own write of the front end's source afterwards is needed; table
   76 writes `DIG0_DIG_BE_CNTL` itself (the plan's earlier write of it is redundant, not wrong).
+
+## Step 3 as code: first light in eight stages (213-DRV-0086)
+
+`display/src/light.rs`, switched off (`STAGES_ALLOWED = 0` in `main.rs`): the route above as eight stages that a build
+lets go one at a time: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
+squares, 5 the OTG started and its frame count seen to move, 6 the DIG front end (table 4), 7 the back end in DVI
+mode, 8 the PHY (table 76) and the `DIG_START` pulse.
+
+- **The pipe** is chosen from step 1's values (all seven batches read on the same boot, so that step 3 touches no
+  register step 1 has not read): the one timing generator running and its OPP,
+  the one enabled back end among PHYs A, B, D, E and its front end, the HUBPs following that generator, HPD 1's sense;
+  then the lowest free OTG with its own OPP, and the lowest free front end that is not the firmware's back end's.
+- **The guard** lets a write through only to the chosen pipe's blocks (OTG, ODM, VTG, OPP_PIPE, DPG, the two DIG
+  blocks, UNIPHY, the PHY's DPCS/RDPCS, its PLL resync, the OTG's pixel rate, SYMCLK in DCCG) and refuses first the
+  firmware's (the same blocks of its pipe and PHY, and the HUBP, DPP and MPCC of each HUBP that follows its OTG). The
+  write path is its own trait, taking only a `Writable` the guard made; the interpreter's writes go through it too.
+- **The firmware's pipe** (30 registers on the expected state, all read by step 1) is read before step 3 and after each
+  stage; any change but of known status bits fails the stage. The status bits are whole fields by the DCN 2.1 header's
+  masks: `OTG_BUSY`, `OPTC_DOUBLE_BUFFER_PENDING`, the DIG front end's metadata-missed flag, and `DCHUBP_CNTL`'s
+  outstanding-request, in-blank, XRQ (0xF0000), timeout (0xF00000) and underflow (0x70000000) statuses. On the Ryzen,
+  HUBP0's XRQ field reads F (step 1's run 5).
+- **The HUBP that follows step 3's OTG** (on the Ryzen HUBP1: powered, blanked, `HUBP_VTG_SEL` 1) is never written; it
+  must be blanked for step 3 to run, and its `DCHUBP_CNTL` is read after stages 5 to 8 under the same masks.
+- **Undo** (of a failed stage and every one before it, last first):
+  - first the off call: stage 2 calls table 12 with pixel clock 0 (as Display Core powers a PLL down), stage 8 table
+    76's DISABLE;
+  - then every register the stage wrote is put back;
+  - then every register only the off call wrote, so all are as before the stage;
+  - PHY A's control register bus is left as it is.
+
+  The guard knows the two registers table 76's DISABLE writes outside the DIG blocks: `DPn_DP_LINK_CNTL` and
+  `DPn_DP_DPHY_TRAINING_PATTERN_SEL` of the output's own DIG, both zeroed. So stage 8's off call runs to its end (on
+  the model: 160 steps, 6 calls, 18 writes).
+
+What the model showed about the undo, with the Ryzen's tables:
+- Each of tables 12, 4 and 76 failing at any of its reads (231, 42 and 86 places on the model) is undone whole: every
+  register as before (the bus aside), the firmware's pipe unchanged, the off calls run to their end. Table 76's one
+  wait is the lanes' `TX_ACK` (0x2943 + 0xD8p). If it never comes, stage 8 fails at its time limit; its DISABLE waits
+  for the same and stops too, and the restore still returns every register.
+- Table 12's power-down call writes **nothing** when the stage stopped early (at the SRAM wait: 41 instructions, 0
+  writes), and **14 writes** after a table 12 that ran to its end. So the restore of the stage's own writes, not the
+  call, is what returns the registers to their state before step 3.
+- A completed table 12 makes 37 of its writes through PHY A's control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`: 20
+  address and 17 data writes). The two registers are bare 16-bit fields (`dpcs_2_1_0_sh_mask.h`), and a write to the
+  data register is itself the write into the PHY. So a restore cannot undo them: putting the data register back would
+  write a stale value into the PHY. The undo leaves the bus as it is and says so in the log. What table 12 set inside
+  PHY A stays until something rewrites it.

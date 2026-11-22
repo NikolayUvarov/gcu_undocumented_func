@@ -99,8 +99,8 @@ improve reply 1 --answer 4 --accept
 - **`export FILE`:** all the hub keeps of the user, written as the hub sent it into a user's file such as `ram:hub.json`. Nothing of it is parsed on the machine, so its length is the answer's bound, 64 KiB.
 - **A proposal's answer:** `reply N --answer P --accept`, or with a text `--correct` and `--decline`, as on a host.
 - **What waits for the user** (100003-APP-0153): a request with an open question or proposal of the agents, or whose check waits.
-  - `list`, `watch` and each change of the user's (`reply`, `check`, `version`, `delete`) keep their numbers in the user's files, `data/improve/waiting`, when they changed: a comment line, then the numbers.
-  - The shell says them above its first prompt, as `improve` last saw them: `IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)`. It reads the file every 5 s and says a change above its prompt on the console shown, once no program is in front there.
+  - `list`, `watch` and each change of the user's (`reply`, `check`, `version`, `delete`) keep their numbers in the user's files, `data/improve/waiting`, when they changed: a comment line, `change N` (the count of its writes), then the numbers.
+  - The shell says them above its first prompt, as `improve` last saw them: `IMPROVE: 2 REQUESTS WAIT FOR YOU: #1 #4 (improve list)`. It reads the file every 5 s, a program running or not, and says a change above its prompt on the console shown once no program is in front there. `change` tells it of a write it missed: the same requests gone and back between two looks.
   - `wm` marks them at its top bar's right end, ` HUB 2 `, and a click names them.
   - The file is as fresh as `improve`'s last look: `improve watch &` keeps it so while it runs.
 - **The version:** `improve version RELEASE` tells the hub the release this machine runs, as `update status` names it, so that a request a release carries awaits the user's check.

@@ -1227,6 +1227,8 @@ impl Init {
                     Some((slot, bytes)) => { minted.keep(slot); grants.add(SLOT_IRQ, slot, 0); mind::println!("[INIT] display: VBIOS: THE VFCT TABLE, {} BYTES, READ-ONLY", bytes); }
                     None => mind::println!("[INIT] display: NO VFCT TABLE: NO VBIOS IMAGE GRANTED"),
                 }
+                // Its client of the compositor, to offer it the second screen (display.wit 1.3, 213-KRN-0272).
+                if self.running(service_index("compositor")) { grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_SCREEN)?, CLIENT); }
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.

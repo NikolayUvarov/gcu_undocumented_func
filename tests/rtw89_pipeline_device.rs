@@ -166,21 +166,26 @@ impl Device {
 
     fn inject_c2h_channel(&mut self, channel: usize, event: &[u8]) {self.inject_packet(channel,10,event);}
     pub fn inject_packet(&mut self,channel:usize,kind:u8,event:&[u8]) {
-        assert!(channel<2);
-        assert!(matches!(self.command & 7, 6 | 7));
-        assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f00, self.receive_stop());
         assert!(event.len() + 20 <= rx::BUFFER_BYTES);
-        let index_at=[0x1050,0x1054][channel];let index = self.get(index_at, 4);
-        let hardware = ((index >> 16) & 0xfff) as usize;
-        let next = (hardware + 1) % rx::DESCRIPTORS;
-        assert_ne!(next, (index & 0xfff) as usize);
-        let buffer = self.receive_buffer(channel, hardware);
         let length = 20 + event.len();
         let mut packet = vec![0; length];
         packet[..4].copy_from_slice(&(length as u32 | 0xc000).to_le_bytes());
         packet[4..8].copy_from_slice(&(event.len() as u32 | u32::from(kind) << 24).to_le_bytes());
         packet[20..].copy_from_slice(event);
+        self.inject_buffer(channel,&packet);
+    }
+    /// A whole receive buffer as the hardware writes it, its PCIe word and descriptor included (213-DRV-0087's captures).
+    pub fn inject_buffer(&mut self,channel:usize,packet:&[u8]) {
+        assert!(channel<2);
+        assert!(matches!(self.command & 7, 6 | 7));
+        assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f00, self.receive_stop());
+        assert!(packet.len() <= rx::BUFFER_BYTES);
+        let index_at=[0x1050,0x1054][channel];let index = self.get(index_at, 4);
+        let hardware = ((index >> 16) & 0xfff) as usize;
+        let next = (hardware + 1) % rx::DESCRIPTORS;
+        assert_ne!(next, (index & 0xfff) as usize);
+        let buffer = self.receive_buffer(channel, hardware);
         unsafe { std::ptr::copy_nonoverlapping(packet.as_ptr(), self.dma.add(buffer), packet.len()); }
         self.put(index_at, 4, (index & 0xffff) | (next as u32) << 16);
     }
