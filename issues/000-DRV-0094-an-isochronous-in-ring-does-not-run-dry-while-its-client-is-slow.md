@@ -1,6 +1,6 @@
 # 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written, not yet run on the Ryzen) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written and run on the Ryzen; steps 2 and 3 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -29,9 +29,33 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
 
 ## Acceptance criteria
 
-- [ ] Step 1 on the Ryzen: a duplex run as run A (`audiostub duplex 900 0`, the board behind the Genesys hub), in which every dry ring is said with its time, its length and the wait it fell in. The STM-Speaker agent holds each pause against its own counters, so the run's start and end go to it.
-- [ ] Steps 2 and 3, in QEMU's `iso` and `usbaudio` suites.
+- [x] Step 1 on the Ryzen: a duplex run as run A (`audiostub duplex 900 0`, the board behind the Genesys hub), in which every dry ring is said with its time, its length and the wait it fell in. The STM-Speaker agent holds each pause against its own counters, so the run's start and end go to it.
+- [ ] Steps 2 and 3, in QEMU's `usbaudio` suite (its `iso` suite is the hybrid ISO's boot, not isochronous streams).
 - [ ] The same 15-minute run with 0 TIMES DRY on both IN endpoints (DCI 3 and 5), with nobody else on the cable. That holds for that machine, that board and that release (MC-12.1).
+
+## Progress (2026-11-22)
+
+- **Step 1:** 3eb13b74c. QEMU's `usbaudio` suite and the full host tests passed on LEG9, though no ring ran dry there, so the lines were first seen on the Ryzen.
+- **Its run on the Ryzen, 2026-11-22 08:49:13–09:04:17 UTC** by LEG9's clock:
+  - release 202611220741, with `usb_host` and `video_gw` of 3eb13b74c by `replace`, then put back;
+  - the board behind the Genesys hub, `audiostub duplex 900 0` by the cable's `run`;
+  - nobody on the cable during it: no log read and no command;
+  - the raw lines are in `S/handoff/cam/0094-step1-run.txt`.
+- **During the 900 s no ring ran dry:**
+  - capture (DCI 3) 0 times dry over 86 387 594 bytes;
+  - feedback (DCI 5) and playback (DCI 2) had none before the close;
+  - 0 missed and 0 errors on all three;
+  - the stub read 47 991 frames a second with 0 overflows.
+- **Two dry rings came at the close,** both at uptime 4741.675, 8 ms after capture's stream ended:
+  - feedback (DCI 5): no TD for 38.2 ms;
+  - playback (DCI 2): no TD for 38.7 ms;
+  - both said `WAITING ON A COMMAND FOR 8.0 MS` (8.3 MS for playback): `usb_host` was in a command of capture's close;
+  - `audio_gw`'s calls were about 32 ms before and 30 ms after, while it closed capture;
+  - so they belong to one close, the order 000-DRV-0081 is about, not to the running streams.
+- **Against run A** (6 and 6 in 15 minutes, the first at a log read over the cable), none came while the streams ran with nobody on the cable.
+  - That fits the guess that the cable's transfers starved the rings, but does not show it: no dry ring fell in a transfer's wait.
+  - A run with a log read in its middle would name the transfer.
+- **Criterion 3 is not met:** DCI 5 ran dry once at the close, and steps 2 and 3 are not written. All of this holds for that machine, that board and that release (MC-12.1).
 
 ## Related
 
