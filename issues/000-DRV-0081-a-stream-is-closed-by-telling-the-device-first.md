@@ -60,7 +60,22 @@ That is the order `usb_host` had. Whether the board counts lacking frames at a c
 
 **Tests:**
 - **Host:** `tests/usb_close_host.rs`: the order for each case, when a select reads the descriptor, and what each completion code counts as, closing or not.
-- **QEMU:** the `usbaudio` suite checks that beep's close told the device first, and that the stream's last line has 0 `WITH ERRORS`. Its first run is to come.
+- **QEMU:** the `usbaudio` suite checks that beep's close told the device first, and that the stream's last line has 0 `WITH ERRORS`.
+- **Results** (2026-11-22, LEG9, on eab997a0d, outputs in `/home/un/.local/share/mind-bench/cam/runs/s14/`):
+  - `tests/usb_close_host.rs` passed, 3 cases, built alone;
+  - the build and the fixtures passed;
+  - QEMU's `usbaudio` passed with its audiostub check. The close said `SET_INTERFACE DONE IN 0.0 MS`, endpoints dropped 0.5 ms after, and 0 errors on the stream's last line.
+  - QEMU did not reach the close's error path: no TD ended in that half millisecond. So the counting apart is shown by the host cases alone.
+- **Not run yet,** stopped at the maintainer's word on 2026-11-22 (nothing new on LEG9):
+  - the full `host_tests.sh`;
+  - QEMU's other suites on `usb_host`'s path: `usb`, `ehci`, `iso`, `cameras` (a bulk camera's stop step now selects setting 0 without the descriptor read), `link`, `vfs`, `block` and `usbload`.
+  - `tests/s14-run.sh full` runs them all.
+- **The hardware run it needs,** once the speakerphone is back on the Ryzen or the DEXP:
+  - the board's counters read from zero;
+  - five minutes of playback, then the duplex `audiostub duplex 300 0` with nobody on the cable;
+  - after each close: the board's `USB P нед/пер` read, which criterion 2 wants at 0/0;
+  - in `usb_host`'s log: the close lines' two times, each stream's last line with 0 `WITH ERRORS`, any `TDS ENDED IN ITS CLOSE` line, and no `DRY` line at capture's close.
+  - The cameras' stop steps can be read in the same boot: on boot 100 their `SETTING 0` took 87 and 32 ms with the descriptor read.
 
 ## Related
 
