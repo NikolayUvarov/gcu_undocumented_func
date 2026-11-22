@@ -82,7 +82,13 @@ pub struct Edid {
     pub vic_count: usize,
     /// The HDMI vendor-specific data block, if the sink has one: without it the sink takes DVI signalling only.
     pub hdmi: Option<Hdmi>,
+    /// The base block's standard timings (bytes 38 to 53): width, height and refresh only, their clocks not stated.
+    pub standard: [Option<Standard>; 8],
 }
+
+/// A standard timing: a size and a refresh the sink takes, its timing that of VESA's DMT or CVT, not given here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Standard { pub width: u16, pub height: u16, pub hz: u8 }
 
 /// One 18-byte detailed timing descriptor; None for a display descriptor (a zero pixel clock) or a short slice.
 pub fn detailed_timing(d: &[u8]) -> Option<Timing> {
@@ -150,7 +156,15 @@ impl Edid {
             vics: [0; MAX_VICS],
             vic_count: 0,
             hdmi: None,
+            standard: [None; 8],
         };
+        // Standard timings: (width / 8 - 31, aspect and refresh - 60); 01 01 is an unused slot.
+        for (i, s) in base[38..54].chunks(2).enumerate() {
+            if s[0] <= 1 { continue; }
+            let width = (s[0] as u16 + 31) * 8;
+            let height = match s[1] >> 6 { 0 if base[19] < 3 => width, 0 => width * 10 / 16, 1 => width * 3 / 4, 2 => width * 4 / 5, _ => width * 9 / 16 };
+            edid.standard[i] = Some(Standard { width, height, hz: (s[1] & 0x3F) + 60 });
+        }
         for d in base[54..126].chunks(18) {
             if let Some(t) = detailed_timing(d) { edid.push(t); continue; }
             match d[3] {
@@ -245,6 +259,26 @@ impl Edid {
         let hdmi = self.hdmi.unwrap_or_default();
         let mhz = [hdmi.forum_max_tmds_mhz, hdmi.max_tmds_mhz, self.range.map_or(0, |r| r.max_pixel_mhz)].into_iter().find(|&m| m != 0);
         mhz.map_or(crate::timing::DVI_SINGLE_LINK_KHZ, |m| m as u32 * 1000)
+    }
+
+    /// The standard timings it lists.
+    pub fn standards(&self) -> impl Iterator<Item = Standard> + '_ { self.standard.iter().flatten().copied() }
+
+    /// The largest timing the sink gives in full (a detailed one, or a CTA VIC it lists) within both `limit_khz` and
+    /// its own limit, whose shape is nearer its preferred timing's than `than`'s: for a first mode at the monitor's
+    /// shape within a signal's limit (213-DRV-0095). None without a preferred timing or such a timing.
+    pub fn nearer_shape_within(&self, limit_khz: u32, than: (u16, u16)) -> Option<Timing> {
+        let preferred = self.preferred()?;
+        let limit = limit_khz.min(self.max_tmds_khz());
+        // Aspects compared as width/height x 1000.
+        let shape = |w: u16, h: u16| (w as u64 * 1000 / h.max(1) as u64) as i64;
+        let target = shape(preferred.h_active, preferred.v_active);
+        let off = |w: u16, h: u16| (shape(w, h) - target).abs();
+        let worst = off(than.0, than.1);
+        let vics = self.vics[..self.vic_count].iter().filter_map(|&v| crate::timing::cta(v));
+        self.timings().chain(vics)
+            .filter(|t| !t.interlaced && t.pixel_khz <= limit && t.check().is_ok() && off(t.h_active, t.v_active) < worst)
+            .max_by_key(|t| (t.h_active as u32 * t.v_active as u32, t.refresh_millihertz()))
     }
 
     /// The largest detailed timing, by area then refresh, whose 8-bit TMDS clock is within both `limit_khz` and the

@@ -32,7 +32,7 @@ The maintainer (2026-11-21): switching must be possible from inside the applicat
 ## Acceptance criteria
 
 - [x] `video.wit` is 1.1; a program built against 1.0 runs against the new gateway (a host case of the old wire: `tests/idl_host.rs`, `a_video_1_0_program_works_with_a_1_1_gateway`).
-- [ ] `modes` lists each of the Ryzen's cameras' YUY2 modes as Linux lists them; the differences, if any, are named.
+- [x] `modes` lists each of the Ryzen's cameras' YUY2 modes as Linux lists them; the differences, if any, are named. (2026-11-22: the same sizes in the same order at the same intervals for both cameras; `rate` alone differs, whole frames a second rounded down, 3 where Linux shows 3.750 fps. Host case `the_ryzens_cameras_list_their_yuy2_modes_as_linux_does`.)
 - [ ] Each offered mode opens and delivers frames of its size at its rate, within a stated tolerance; the figures recorded for that machine and those cameras (MC-12.1).
 - [ ] The `cameras` suite checks `modes` and a change of mode, in the gate.
 - [ ] With APP's part: in `camera`, a key steps through the camera's modes and another through the cameras, and the picture follows.
@@ -135,6 +135,14 @@ This holds for that machine, those cameras and that release (MC-12.1).
 **What it meets of the criteria:** none newly.
 - He changed mode by `camera`'s `-z` and `-r`, since APP's mode key (158-APP-0152) is not in `main` yet, so the fourth criterion waits for it.
 - Linux's lists are still to be read (the second), and each offered mode with a stated tolerance is still to be shown (the third).
+
+**Linux's lists, 2026-11-22** (`v4l2-ctl --list-formats-ext` and `lsusb -v` on the Ryzen under Linux 7.0, read by the owner session; `S/handoff/cam/linux-v4l2-formats.txt`, `linux-lsusb-v.txt`):
+- **Camera 0** (`/dev/video0`, `0471:A6CA`): 13 MJPG and 13 YUYV sizes, each at one interval. They are the same in the same order as `modes` gives from the camera's descriptors.
+- **Camera 1** (`/dev/video2`, `0471:A6CD`): 12 and 12, the same.
+- **The intervals agree,** e.g. 0.040 s = 400 000 and 0.267 s = 2 666 666 in 100 ns units.
+- **The one difference:** `rate`, whole frames a second rounded down, says 3 for camera 0's 1920×1080 and 2048×1536 YUY2, where Linux shows 3.750 fps. The `interval` field carries the exact value.
+- `/dev/video1` and `/dev/video3` are the cameras' metadata nodes and list no format.
+- **Host case:** `tests/uvc_host.rs`, `the_ryzens_cameras_list_their_yuy2_modes_as_linux_does`.
 
 ## Related
 

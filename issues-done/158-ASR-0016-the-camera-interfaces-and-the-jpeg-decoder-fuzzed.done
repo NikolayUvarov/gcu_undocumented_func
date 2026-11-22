@@ -1,0 +1,45 @@
+# 158-ASR-0016 — The camera interfaces and the JPEG decoder in the fuzzing record — done
+
+**Type:** assurance · **Owner:** `ASR` (done by DRV's CAM agent under the ASR owner's word, 2026-11-22) · **Priority:** P2 · **Status:** done (2026-11-22) · **Blocked by:** — · **Roadmap:** 158 · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+158-DRV-0082, 0083 and 0084 changed what a device's bytes reach:
+- `video.wit` went to 1.1 (the types `Encoding`, `Mode` and `Opened`) and 1.2 (doc only);
+- `usb.wit` went to 1.6 (`bulk-stream`);
+- a JPEG decoder now reads a camera's Motion JPEG frames.
+
+`docs/assurance/README.md` recorded none of them: its IDL section still counted 25 interfaces and 82 types, and it had no word on the decoder. DRV asked for that record in its request to ASR, and the ASR owner had DRV make the change on its own branch.
+
+## Plan
+
+1. Check that `tests/idl_fuzz_host.rs` lists the new types and receivers, and run it.
+2. Record the run, the camera interfaces among it, and the JPEG decoder's fuzz test in `docs/assurance/README.md`, as version 1.3.
+
+## Acceptance criteria
+
+- [x] The IDL suite lists `video.wit` 1.2's types and the `video` and `usb` receivers, and passes at its fixed seed.
+- [x] `docs/assurance/README.md` 1.3 records it, and the JPEG decoder's fuzzing with its inputs, checks, results and what is not covered.
+
+## Resolution
+
+- **The IDL list needed no change.**
+  - `video.wit` 1.1's types are in it since 164518a43 (158-DRV-0083); 1.2 adds nothing on the wire.
+  - `usb.wit` 1.6 adds a function with plain arguments and no `Wire` type. Its `bulk-stream` is decoded by the `usb` receiver, which is fuzzed.
+  - The test fails when a generated type is not listed, and it passed.
+- **The run** (2026-11-22, LEG9, the fixed seed `0x5000A5A00001`, 50 000 inputs a target; 15 s):
+  - no finding among the 35 receivers and 211 types;
+  - `video`: 7 methods, 14 792 messages accepted;
+  - `usb`: 11 methods, 15 407 accepted.
+- **`tests/image_host.rs`** with `mutated_frames_never_panic` passed the same day.
+- **`docs/assurance/README.md` 1.3:**
+  - the IDL section's counts and the camera interfaces;
+  - a section on fuzzing the JPEG decoder.
+
+This is evidence of those inputs, not a proof (MC-12.2).
+
+## Related
+
+- [500-ASR-0001](../issues/500-ASR-0001-idl-decoder-fuzzing.md): the IDL fuzzer.
+- [158-DRV-0083](../issues/158-DRV-0083-a-cameras-modes-listed-and-chosen.md): `video.wit` 1.1.
+- [158-DRV-0084](../issues/158-DRV-0084-mjpeg-frames-decoded.md): the decoder.

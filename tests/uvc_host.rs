@@ -392,3 +392,52 @@ fn frame_buffers_of_varying_frames_grow_as_their_frames_do() {
     assert_eq!(exact.capacity(), 640 * 480 * 2);
     assert!(Assembler::try_new(usize::MAX / 2, true).is_none(), "memory that is not there refuses, without a panic");
 }
+
+// 158-DRV-0082: why a frame of the right size is counted broken, a cause each, and how frames end (EOF or a new FID).
+#[test]
+fn broken_frames_say_why_and_frames_how_they_ended() {
+    let payload = |fid: u8, eof: bool, err: bool, data: &[u8]| { let mut p = vec![2u8, fid | if eof { EOF } else { 0 } | if err { ERR } else { 0 }]; p.extend_from_slice(data); p };
+    let mut a = Assembler::new(8, true);
+    // A good frame by EOF; then one with the camera's error bit; then one that overflows (its end never came, the next
+    // frame's bytes ran into it) and ends by a new FID; then one cut short by EOF; then one whose header does not parse.
+    assert_eq!(a.feed(&payload(0, true, false, &[1; 8]), false), Some(true));
+    assert_eq!(a.feed(&payload(1, true, true, &[2; 8]), false), Some(false));
+    assert_eq!(a.feed(&payload(0, false, false, &[3; 8]), false), None);
+    assert_eq!(a.feed(&payload(0, false, false, &[4; 4]), false), None, "the same FID: more bytes than a frame holds");
+    assert_eq!(a.feed(&payload(1, true, false, &[5; 8]), false), Some(true), "a new FID ends the overflowed one (broken), and its own EOF a good frame");
+    assert_eq!(a.feed(&payload(0, true, false, &[6; 3]), false), Some(false), "3 bytes of 8");
+    assert_eq!(a.feed(&[9, 0, 1], false), None);
+    assert_eq!(a.feed(&payload(1, true, false, &[7; 8]), true), Some(false), "a bad header earlier, a damaged packet now");
+    let c = a.causes;
+    assert_eq!((c.error_bit, c.overflow, c.size, c.header, c.damaged), (1, 1, 1, 1, 1));
+    assert_eq!((c.by_eof, c.by_fid), (5, 2), "a new FID ended the overflowed frame and the one with the bad header; an empty change counts nothing");
+    assert_eq!((a.good, a.broken), (2, 5));
+    // A bulk payload that starts without a valid header: the frame it is in breaks for it.
+    let mut b = Assembler::new(8, true);
+    let mut bulk = Bulk::new(64);
+    assert_eq!(bulk.transfer(&mut b, &[2, 0, 1, 1, 1, 1], 4096), None);
+    assert_eq!(bulk.transfer(&mut b, &[200, 0, 1], 4096), None, "a header longer than the transfer");
+    assert_eq!(bulk.transfer(&mut b, &[2, 1 | EOF, 1, 1, 1, 1, 1, 1, 1, 1], 4096), Some(true), "a new FID ends the spoiled frame; this payload's EOF a good one");
+    assert_eq!((b.causes.bulk_start, b.broken, b.good), (1, 1, 1));
+}
+
+// 158-DRV-0083: the Ryzen's two cameras' YUY2 modes as Linux lists them (`v4l2-ctl --list-formats-ext` on the Ryzen,
+// 2026-11-22, uvcvideo of Linux 7.0): the same sizes in the same order at the same intervals (100 ns units; Linux
+// shows 0.267 s, 3.750 fps, for 2666666). `rate` alone differs: it is whole frames a second, rounded down (3).
+#[test]
+fn the_ryzens_cameras_list_their_yuy2_modes_as_linux_does() {
+    let linux: [(&str, &[(u16, u16, u32)]); 2] = [
+        ("0471-a6ca", &[(640, 480, 400_000), (1920, 1080, 2_666_666), (1600, 1200, 2_000_000), (1280, 1024, 2_000_000), (1280, 960, 1_111_111), (1280, 720, 1_000_000),
+            (1024, 768, 666_666), (800, 600, 500_000), (2048, 1536, 2_666_666), (640, 360, 333_333), (352, 288, 333_333), (320, 240, 333_333), (160, 120, 333_333)]),
+        ("0471-a6cd", &[(640, 480, 333_333), (1920, 1080, 2_000_000), (1280, 1024, 2_000_000), (1280, 960, 2_000_000), (1280, 720, 1_000_000), (1024, 768, 1_000_000),
+            (960, 720, 666_666), (800, 600, 500_000), (640, 360, 333_333), (432, 240, 333_333), (352, 288, 333_333), (320, 240, 333_333)]),
+    ];
+    for (name, want) in linux {
+        let camera = ryzen_camera(name);
+        let got: Vec<(u16, u16, u32)> = camera.modes().iter().filter(|m| m.encoding == Encoding::Yuy2).map(|m| (m.width, m.height, m.interval)).collect();
+        assert_eq!(got, want.to_vec(), "{name}");
+        let mjpeg = camera.modes().iter().filter(|m| m.encoding == Encoding::Mjpeg).count();
+        assert_eq!(mjpeg, if name == "0471-a6ca" { 13 } else { 12 }, "{name}: as many MJPG sizes as Linux lists");
+    }
+    assert_eq!(ryzen_camera("0471-a6ca").modes().iter().find(|m| m.encoding == Encoding::Yuy2 && m.width == 1920).map(|m| m.rate()), Some(3), "3.75 a second rounds down");
+}

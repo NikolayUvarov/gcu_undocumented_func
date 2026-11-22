@@ -1,6 +1,8 @@
-//! Step 1 of 213-DRV-0086: the firmware's display state read in eight batches, the registers Display Core itself reads
-//! (hwdocs/cezanne-display.md, "a read proposed as safe"), and in batch 8 those Linux's dmub code reads to tell whether
-//! the display microcontroller (DMCUB) runs. Each batch is named in the log before its first read and
+//! Step 1 of 213-DRV-0086: the firmware's display state read in ten batches, the registers Display Core itself reads
+//! (hwdocs/cezanne-display.md, "a read proposed as safe"); in batch 8 those Linux's dmub code reads to tell whether the
+//! display microcontroller (DMCUB) runs; in batches 9 and 10 the firmware's pipe as step 4's reference (213-DRV-0092):
+//! its HUBP's request, DLG and TTU registers, its DPP, the MPC tree, DCHUBBUB's watermarks and DCCG's DPP clocks. Each
+//! batch is named in the log before its first read and
 //! paused after, each value logged as it is read, so that a hang names its register; batch 4 reads only the HUBPs batch
 //! 3 shows powered. `Bus` has no write: nothing here can change the device. `tests/display_batches_host.rs` checks it.
 
@@ -8,7 +10,9 @@ use crate::dcn::{field::*, Field, Reg, R};
 use crate::timing::Otg;
 use core::fmt;
 
-pub const BATCHES: u8 = 8;
+pub const BATCHES: u8 = 11;
+/// The batches steps 3 and 4 need read: batch 11 (the DDC line, 213-DRV-0095) is for the EDID's read, not for them.
+pub const STEP3_BATCHES: u8 = 10;
 /// The most registers one batch reads (batch 2: 19 for each of the four timing generators).
 pub const MAX_REGISTERS: usize = 80;
 /// After a batch's name is logged and before its first read: long enough for the line to be kept.
@@ -64,6 +68,10 @@ impl List {
 pub struct Known {
     /// Batch 3: whether HUBP n's power domain (2n) is on; None until batch 3 has read all four.
     pub hubp_powered: Option<[bool; 4]>,
+    /// Batch 2: the one timing generator that runs.
+    pub running_otg: Option<u8>,
+    /// Batch 4: the one powered HUBP that follows it, the firmware's pipe (batches 9 and 10 read its blocks).
+    pub firmware_pipe: Option<u8>,
 }
 
 /// What `optc1_read_otg_state` reads, and the clock and source of each timing generator.
@@ -84,17 +92,54 @@ const APERTURE: [R; 6] = {
 };
 /// Batch 8 around the scratch registers: whether the board has a DMCUB and its control; its mailboxes.
 const DMCUB_HEAD: [R; 3] = [R::CcDcPipeDis, R::DmcubCntl, R::DmcubSecCntl];
+/// Batch 11 (213-DRV-0095): HDMI-A-1's DDC line, DC_GPIO_DDC1 (the VBIOS's I2C line 0), and the I2C engine, as
+/// dce_i2c_hw and hw_ddc read them before a transfer: who holds the engine, its last transfer, the line's speed and
+/// set-up, the four transactions, the microsecond time base its speed is set from, and the pads' mode and levels.
+/// DC_I2C_DATA is not read: a read of it moves its index.
+const DDC1: [(R, u8); 15] = {
+    use R::*;
+    [(DcI2cArbitration, 0), (DcI2cControl, 0), (DcI2cSwStatus, 0), (DcI2cDdc1HwStatus, 0), (DcI2cDdc1Speed, 0), (DcI2cDdc1Setup, 0),
+     (DcI2cTransaction, 0), (DcI2cTransaction, 1), (DcI2cTransaction, 2), (DcI2cTransaction, 3), (MicrosecondTimeBaseDiv, 0),
+     (DcGpioDdc1Mask, 0), (DcGpioDdc1A, 0), (DcGpioDdc1En, 0), (DcGpioDdc1Y, 0)]
+};
 const DMCUB_TAIL: [R; 10] = {
     use R::*;
     [DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress, DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr,
      DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1, DmcubGpintDataout]
+};
+/// Batch 9: the firmware's HUBP as step 4's reference (`hubp2_setup`'s request, DLG and TTU registers, and its viewport).
+const HUBP_REFERENCE: [R; 40] = {
+    use R::*;
+    [HubpAddrConfig, HubpTilingConfig, HubpPriViewportStart, HubpPriViewportDimension, HubpReqSizeConfig, HubpReqSizeConfigC,
+     HubpClkCntl, HubpreqSurfaceControl, HubpreqExpansionMode, HubpreqTtuQosWm, HubpreqGlobalTtuCntl, HubpreqSurf0TtuCntl0,
+     HubpreqSurf0TtuCntl1, HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqVmMxL1TlbCntl, HubpreqBlankOffset0,
+     HubpreqBlankOffset1, HubpreqDstDimensions, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0,
+     HubpreqVblankParameters1, HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4,
+     HubpreqNomParameters0, HubpreqNomParameters1, HubpreqNomParameters4, HubpreqNomParameters5, HubpreqPerLineDeliveryPre,
+     HubpreqPerLineDelivery, HubpreqCursorSettings, HubpreqRefFreqToPixFreq, HubpreqDstYDeltaDrqLimit, HubpretControl,
+     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh]
+};
+/// Batch 10: the firmware's DPP (its clock, format, scaler and colour stages).
+const DPP_REFERENCE: [R; 17] = {
+    use R::*;
+    [DppControl, CnvcSurfacePixelFormat, CnvcFormatControl, DsclSclMode, DsclControl, DsclRecoutStart, DsclRecoutSize,
+     DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl, CmDgamControl, CmBlndgamControl,
+     DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio]
+};
+/// Batch 10: the MPC tree, DCHUBBUB's arbitration and DCCG's DPP clocks, shared by every pipe.
+const MPCC_STATE: [R; 4] = [R::MpccTopSel, R::MpccBotSel, R::MpccOppId, R::MpccControl];
+const SHARED: [R; 6] = {
+    use R::*;
+    [DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
+     DchubbubGlobalTimerCntl, DppclkDtoCtrl]
 };
 /// The DIG back ends of the board's outputs: PHYs A, B, D and E (the VBIOS's paths; C has no connector).
 pub const BOARD_PHYS: [u8; 4] = [0, 1, 3, 4];
 
 pub fn title(batch: u8) -> &'static str {
     match batch {
-        1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", 8 => "DMCUB", _ => "?",
+        1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", 8 => "DMCUB",
+        9 => "PIPE REFERENCE", 10 => "PATH AND SHARED", 11 => "DDC1", _ => "?",
     }
 }
 
@@ -126,9 +171,28 @@ pub fn plan(batch: u8, known: &Known) -> List {
             for r in DMCUB_TAIL { list.push(r, 0); }
             list.push(R::DmcubTimerCurrent, 0);
         }
+        9 => if let (Some(p), Some(t)) = (known.firmware_pipe, known.running_otg) { reference_hubp(&mut list, p, t) },
+        10 => if let Some(p) = known.firmware_pipe { path_and_shared(&mut list, p) },
+        11 => for (r, n) in DDC1 { list.push(r, n); },
         _ => {}
     }
     list
+}
+
+fn reference_hubp(list: &mut List, p: u8, t: u8) {
+    for r in HUBP_REFERENCE { list.push(r, p); }
+    for r in [R::OtgVstartupParam, R::OtgVupdateParam, R::OtgVreadyParam] { list.push(r, t); }
+    list.push(R::HubpreqDebugDb, p);
+}
+
+fn path_and_shared(list: &mut List, p: u8) {
+    for r in DPP_REFERENCE { list.push(r, p); }
+    for n in 0..4 { for r in MPCC_STATE { list.push(r, n); } }
+    for n in 0..4 { list.push(R::MpcOutMux, n); }
+    for n in 0..20 { list.push(R::DchubbubArbWatermark, n); }
+    for r in SHARED { list.push(r, 0); }
+    for n in 0..4 { list.push(R::DppclkDtoParam, n); }
+    list.push(R::RefclkCntl, 0);
 }
 
 /// Batch 4's registers for every HUBP, for naming before batch 3 has been read.
@@ -170,8 +234,8 @@ impl fmt::Display for Opt {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Report { pub batches_read: u8, pub registers_read: usize }
 
-/// Every value a run read, for step 3 to choose its pipe from (all eight batches: 178 registers).
-pub const STORE: usize = 192;
+/// Every value a run read, for step 3 to choose its pipe from (all ten batches: 289 registers).
+pub const STORE: usize = 320;
 #[derive(Clone, Copy, Debug)]
 pub struct Store { items: [Option<(R, u8, u32)>; STORE], len: usize, batches: u8 }
 
@@ -208,7 +272,8 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
             continue;
         }
         if list.is_empty() {
-            out.line(format_args!("B{} {}: NOTHING TO READ: BATCH 3 SHOWED NO HUBP POWERED, OR WAS NOT READ IN FULL", batch, title(batch)));
+            let why = if batch >= 9 { "NOT ONE RUNNING OTG WITH ONE POWERED HUBP ON IT (BATCHES 2 AND 4)" } else { "BATCH 3 SHOWED NO HUBP POWERED, OR WAS NOT READ IN FULL" };
+            out.line(format_args!("B{} {}: NOTHING TO READ: {}", batch, title(batch), why));
             continue;
         }
         out.line(format_args!("B{} {}: READING {} REGISTERS NEXT", batch, title(batch), list.len()));
@@ -223,8 +288,10 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
             values.push(n, v);
         }
         summarize(batch, &values, &mut known, out);
-        report.batches_read = batch;
-        store.batches = batch;
+        report.batches_read += 1;
+        // The store counts the batches read one after another from the first: steps 3 and 4 need 1 to 10 all read,
+        // and batch 11 after an empty 9 or 10 does not stand for them.
+        if store.batches + 1 == batch { store.batches = batch; }
         out.pause(PAUSE_BETWEEN_BATCHES_MS);
     }
     out.line(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN", report.batches_read, BATCHES, report.registers_read));
@@ -236,6 +303,13 @@ fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut impl 
         let all = every_hubp();
         out.line(format_args!("B4 HUBP: NOT READ (THIS BUILD MAY READ {}); WOULD READ, ONLY FOR EACH HUBP n THAT B3 SHOWS POWERED (DOMAIN 2n):", allowed));
         for n in all.iter() { out.line(format_args!("B4 WOULD READ {}", n)); }
+        return;
+    }
+    if (batch == 9 || batch == 10) && known.firmware_pipe.is_none() {
+        let mut example = List::new();
+        if batch == 9 { reference_hubp(&mut example, 0, 0) } else { path_and_shared(&mut example, 0) }
+        out.line(format_args!("B{} {}: NOT READ (THIS BUILD MAY READ {}); WOULD READ, FOR THE PIPE B4 SHOWS ON THE RUNNING OTG (HERE PIPE 0):", batch, title(batch), allowed));
+        for n in example.iter() { out.line(format_args!("B{} WOULD READ {}", batch, n)); }
         return;
     }
     out.line(format_args!("B{} {}: NOT READ (THIS BUILD MAY READ {}); WOULD READ {} REGISTERS:", batch, title(batch), allowed, list.len()));
@@ -253,7 +327,11 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
             out.line(format_args!("B1 HPD SENSE 1:{} 2:{} 3:{} 4:{} 5:{}; ENABLED 1:{} 2:{} 3:{} 4:{} 5:{}",
                 s(0), s(1), s(2), s(3), s(4), e(0), e(1), e(2), e(3), e(4)));
         }
-        2 => for n in 0..4 { summarize_otg(v, n, out); },
+        2 => {
+            for n in 0..4 { summarize_otg(v, n, out); }
+            let running: [bool; 4] = [0u8, 1, 2, 3].map(|n| v.field(OtgControl, n, OTG_CURRENT_MASTER_EN_STATE) == Some(1));
+            if running.iter().filter(|&&r| r).count() == 1 { known.running_otg = running.iter().position(|&r| r).map(|t| t as u8); }
+        }
         3 => {
             let on = |d: u8| v.field(DomainPgStatus, d, DOMAIN_PGFSM_PWR_STATUS).map(|s| s == PGFSM_POWER_ON);
             let word = |d: u8| match on(d) { Some(true) => "ON", Some(false) => "OFF", None => "-" };
@@ -262,14 +340,24 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
             }
             if let (Some(a), Some(b), Some(c), Some(d)) = (on(0), on(2), on(4), on(6)) { known.hubp_powered = Some([a, b, c, d]); }
         }
-        4 => for n in 0..4 {
-            let Some(low) = v.get(HubpreqPrimarySurfaceAddress, n) else { continue };
-            out.line(format_args!("B4 HUBP{}: SURFACE {:04X}_{:08X}, FORMAT {}, PITCH {}, ROTATION {}, BLANK {}, TTU_DISABLE {}",
-                n, v.field(HubpreqPrimarySurfaceAddressHigh, n, PRIMARY_SURFACE_ADDRESS_HIGH).unwrap_or(0), low,
-                Opt(v.field(HubpSurfaceConfig, n, SURFACE_PIXEL_FORMAT)), Opt(v.field(HubpreqSurfacePitch, n, PITCH).map(|p| p + 1)),
-                Opt(v.field(HubpSurfaceConfig, n, ROTATION_ANGLE)), Opt(v.field(HubpCntl, n, HUBP_BLANK_EN)),
-                Opt(v.field(HubpCntl, n, HUBP_TTU_DISABLE))));
-        },
+        4 => {
+            for n in 0..4 {
+                let Some(low) = v.get(HubpreqPrimarySurfaceAddress, n) else { continue };
+                out.line(format_args!("B4 HUBP{}: SURFACE {:04X}_{:08X}, FORMAT {}, PITCH FIELD {}, ROTATION {}, BLANK {}, TTU_DISABLE {}",
+                    n, v.field(HubpreqPrimarySurfaceAddressHigh, n, PRIMARY_SURFACE_ADDRESS_HIGH).unwrap_or(0), low,
+                    Opt(v.field(HubpSurfaceConfig, n, SURFACE_PIXEL_FORMAT)), Opt(v.field(HubpreqSurfacePitch, n, PITCH)),
+                    Opt(v.field(HubpSurfaceConfig, n, ROTATION_ANGLE)), Opt(v.field(HubpCntl, n, HUBP_BLANK_EN)),
+                    Opt(v.field(HubpCntl, n, HUBP_TTU_DISABLE))));
+            }
+            // The firmware's pipe: the one powered HUBP that follows the one running timing generator.
+            if let (Some(t), Some(powered)) = (known.running_otg, known.hubp_powered) {
+                let on_it: [bool; 4] = [0u8, 1, 2, 3].map(|n| powered[n as usize] && v.field(HubpCntl, n, HUBP_VTG_SEL) == Some(t as u32));
+                if on_it.iter().filter(|&&x| x).count() == 1 { known.firmware_pipe = on_it.iter().position(|&x| x).map(|n| n as u8); }
+            }
+        }
+        9 => if let (Some(p), Some(t)) = (known.firmware_pipe, known.running_otg) { summarize_reference(v, p, t, out) },
+        10 => if let Some(p) = known.firmware_pipe { summarize_path(v, p, out) },
+        11 => summarize_ddc1(v, out),
         5 => {
             for n in 0..5u8 {
                 out.line(format_args!("B5 DIG{} FE: FROM OTG {}, SYMCLK_FE_ON {}", LETTERS[n as usize],
@@ -345,6 +433,85 @@ pub fn otg_state(v: &[(R, u32)]) -> Option<Otg> {
         v_sync_negative: SYNC_POL.get(get(OtgVSyncACntl)?) == 1,
         vcount_init: low.get(get(OtgVBlankStartEnd)?),
     })
+}
+
+/// REF_FREQ_TO_PIX_FREQ (the reference clock over the pixel clock, 19 bits of fraction) with four decimals.
+pub struct Ratio19(pub Option<u32>);
+impl fmt::Display for Ratio19 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 { Some(v) => { let r = v as u64 * 10_000 >> 19; write!(f, "{}.{:04}", r / 10_000, r % 10_000) } None => f.write_str("-") }
+    }
+}
+
+fn summarize_ddc1(v: &Values, out: &mut impl Out) {
+    use R::*;
+    let owner = |s: Option<u32>| match s { Some(0) => "NOBODY", Some(1) => "SOFTWARE", Some(2) => "THE DMCU", Some(_) => "BOTH", None => "-" };
+    out.line(format_args!("B11 I2C ENGINE: HELD BY {} (SW REQ {}, DMCU REQ {}); LAST TRANSFER STATUS {}, DONE {}; DDC SELECT {}; DDC1 HW STATUS {}",
+        owner(v.field(DcI2cArbitration, 0, DC_I2C_REG_RW_CNTL_STATUS)), Opt(v.field(DcI2cArbitration, 0, DC_I2C_SW_USE_I2C_REG_REQ)),
+        Opt(v.field(DcI2cArbitration, 0, DC_I2C_DMCU_USE_I2C_REG_REQ)), Opt(v.field(DcI2cSwStatus, 0, DC_I2C_SW_STATUS_BITS)),
+        Opt(v.field(DcI2cSwStatus, 0, DC_I2C_SW_DONE)), Opt(v.field(DcI2cControl, 0, DC_I2C_DDC_SELECT)), Opt(v.field(DcI2cDdc1HwStatus, 0, DC_I2C_DDC1_HW_STATUS_BITS))));
+    out.line(format_args!("B11 DDC1: ENABLED {}, TIME LIMIT {}, PRESCALE {}, THRESHOLD {}; MICROSECOND TIME BASE {}, XTAL REF DIV {}",
+        Opt(v.field(DcI2cDdc1Setup, 0, DC_I2C_DDC1_ENABLE)), Opt(v.field(DcI2cDdc1Setup, 0, DC_I2C_DDC1_TIME_LIMIT)),
+        Opt(v.field(DcI2cDdc1Speed, 0, DC_I2C_DDC1_PRESCALE)), Opt(v.field(DcI2cDdc1Speed, 0, DC_I2C_DDC1_THRESHOLD)),
+        Opt(v.field(MicrosecondTimeBaseDiv, 0, MICROSECOND_TIME_BASE)), Opt(v.field(MicrosecondTimeBaseDiv, 0, XTAL_REF_DIV))));
+    let pad = |r: R, f: Field| Opt(v.field(r, 0, f));
+    out.line(format_args!("B11 DDC1 PADS: AUX MODE {}; CLOCK MASK {} EN {} A {} Y {}; DATA MASK {} EN {} A {} Y {}",
+        pad(DcGpioDdc1Mask, AUX_PAD1_MODE), pad(DcGpioDdc1Mask, DC_GPIO_DDC1CLK_MASK), pad(DcGpioDdc1En, DC_GPIO_DDC1CLK_BIT),
+        pad(DcGpioDdc1A, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Mask, DC_GPIO_DDC1DATA_MASK),
+        pad(DcGpioDdc1En, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1A, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1DATA_BIT)));
+}
+
+fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut impl Out) {
+    use R::*;
+    let g = |r: R, f: Field| Opt(v.field(r, p, f));
+    out.line(format_args!("B9 HUBP{}: VIEWPORT {}x{} AT {},{}, SW_MODE {}, SWATH {} PTE_ROW {} CHUNK {} MIN_CHUNK {}, CLK_CNTL {}", p,
+        g(HubpPriViewportDimension, PRI_VIEWPORT_WIDTH), g(HubpPriViewportDimension, PRI_VIEWPORT_HEIGHT),
+        g(HubpPriViewportStart, PRI_VIEWPORT_X_START), g(HubpPriViewportStart, PRI_VIEWPORT_Y_START), g(HubpTilingConfig, SW_MODE),
+        g(HubpReqSizeConfig, SWATH_HEIGHT), g(HubpReqSizeConfig, PTE_ROW_HEIGHT_LINEAR), g(HubpReqSizeConfig, CHUNK_SIZE),
+        g(HubpReqSizeConfig, MIN_CHUNK_SIZE), Hex32(v.get(HubpClkCntl, p))));
+    out.line(format_args!("B9 HUBP{} DLG: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, NEXT START {}, AFTER SCALER X {} Y {}, PREFETCH {} VRATIO {}", p,
+        Ratio19(v.field(HubpreqRefFreqToPixFreq, p, REF_FREQ_TO_PIX_FREQ)), g(HubpreqDstDimensions, REFCYC_PER_HTOTAL),
+        g(HubpreqBlankOffset0, REFCYC_H_BLANK_END), g(HubpreqBlankOffset0, DLG_V_BLANK_END), g(HubpreqBlankOffset1, MIN_DST_Y_NEXT_START),
+        g(HubpreqDstAfterScaler, REFCYC_X_AFTER_SCALER), g(HubpreqDstAfterScaler, DST_Y_AFTER_SCALER),
+        g(HubpreqPrefetchSettings, DST_Y_PREFETCH), g(HubpreqPrefetchSettings, VRATIO_PREFETCH)));
+    out.line(format_args!("B9 HUBP{} DELIVERY: LINE {} PRE {}, REQ {} PRE {}, QOS {}, MIN_TTU_VBLANK {}, DRQ LIMIT {}", p,
+        g(HubpreqPerLineDelivery, REFCYC_PER_LINE_DELIVERY_L), g(HubpreqPerLineDeliveryPre, REFCYC_PER_LINE_DELIVERY_L),
+        g(HubpreqSurf0TtuCntl0, REFCYC_PER_REQ_DELIVERY), g(HubpreqSurf0TtuCntl1, REFCYC_PER_REQ_DELIVERY),
+        Hex32(v.get(HubpreqTtuQosWm, p)), g(HubpreqGlobalTtuCntl, MIN_TTU_VBLANK), g(HubpreqDstYDeltaDrqLimit, DST_Y_DELTA_DRQ_LIMIT)));
+    out.line(format_args!("B9 OTG{}: VSTARTUP {}, VUPDATE {}, VREADY {}", t, Opt(v.field(OtgVstartupParam, t, VSTARTUP_START)),
+        Hex32(v.get(OtgVupdateParam, t)), Hex32(v.get(OtgVreadyParam, t))));
+}
+
+fn summarize_path(v: &Values, p: u8, out: &mut impl Out) {
+    use R::*;
+    let g = |r: R, f: Field| Opt(v.field(r, p, f));
+    out.line(format_args!("B10 DPP{}: CLOCK {}, FORMAT {}, CNVC {}, DSCL_MODE {}, RECOUT {}x{} AT {},{}, MPC {}x{}, CM BYPASS {}, ICSC {} GAMUT {} DGAM {} BLNDGAM {}", p,
+        g(DppControl, DPP_CLOCK_ENABLE), g(CnvcSurfacePixelFormat, CNVC_SURFACE_PIXEL_FORMAT), Hex32(v.get(CnvcFormatControl, p)),
+        g(DsclSclMode, DSCL_MODE), g(DsclRecoutSize, LOW14), g(DsclRecoutSize, HIGH14), g(DsclRecoutStart, RECOUT_START_X),
+        g(DsclRecoutStart, RECOUT_START_Y), g(DsclMpcSize, LOW14), g(DsclMpcSize, HIGH14), g(CmControl, CM_BYPASS),
+        Opt(v.get(CmIcscControl, p)), Opt(v.get(CmGamutRemapControl, p)), Opt(v.get(CmDgamControl, p)), Opt(v.get(CmBlndgamControl, p))));
+    let m = |r: R, n: u8| Opt(v.field(r, n, MPCC_SEL));
+    for pair in [0u8, 2] {
+        out.line(format_args!("B10 MPC: MPCC{} TOP {} BOT {} OPP {} MODE {} ALPHA {}; MPCC{} TOP {} BOT {} OPP {} MODE {} ALPHA {}",
+            pair, m(MpccTopSel, pair), m(MpccBotSel, pair), m(MpccOppId, pair), Opt(v.field(MpccControl, pair, MPCC_MODE)),
+            Opt(v.field(MpccControl, pair, MPCC_GLOBAL_ALPHA)), pair + 1, m(MpccTopSel, pair + 1), m(MpccBotSel, pair + 1),
+            m(MpccOppId, pair + 1), Opt(v.field(MpccControl, pair + 1, MPCC_MODE)), Opt(v.field(MpccControl, pair + 1, MPCC_GLOBAL_ALPHA))));
+    }
+    out.line(format_args!("B10 MPC_OUT MUX: 0:{} 1:{} 2:{} 3:{} (15: NONE)", m(MpcOutMux, 0), m(MpcOutMux, 1), m(MpcOutMux, 2), m(MpcOutMux, 3)));
+    let w = |i: u8| Opt(v.field(DchubbubArbWatermark, i, WATERMARK_14));
+    for set in [0u8, 2] {
+        let (a, b) = (5 * set, 5 * (set + 1));
+        out.line(format_args!("B10 WATERMARKS {}: URGENT {} TRIP {} SR_ENTER {} SR_EXIT {} DRAM {}; {}: URGENT {} TRIP {} SR_ENTER {} SR_EXIT {} DRAM {}",
+            ['A', 'B', 'C', 'D'][set as usize], w(a), w(a + 1), w(a + 2), w(a + 3), w(a + 4),
+            ['A', 'B', 'C', 'D'][set as usize + 1], w(b), w(b + 1), w(b + 2), w(b + 3), w(b + 4)));
+    }
+    out.line(format_args!("B10 DCHUBBUB: SAT {}, DF_REQ {}, DRAM_STATE {}, CHANGE {}, TIMER {}", Hex32(v.get(DchubbubArbSatLevel, 0)),
+        Hex32(v.get(DchubbubArbDfReqOutstand, 0)), Hex32(v.get(DchubbubArbDramStateCntl, 0)),
+        Hex32(v.get(DchubbubArbWatermarkChangeCntl, 0)), Hex32(v.get(DchubbubGlobalTimerCntl, 0))));
+    let d = |n: u8| (Opt(v.field(DppclkDtoParam, n, DTO_PHASE)), Opt(v.field(DppclkDtoParam, n, DTO_MODULO)));
+    let (d0, d1, d2, d3) = (d(0), d(1), d(2), d(3));
+    out.line(format_args!("B10 DCCG: DPPCLK DTO CTRL {}; DTO0 {}/{} DTO1 {}/{} DTO2 {}/{} DTO3 {}/{}; REFCLK_CNTL {}",
+        Hex32(v.get(DppclkDtoCtrl, 0)), d0.0, d0.1, d1.0, d1.1, d2.0, d2.1, d3.0, d3.1, Hex32(v.get(RefclkCntl, 0))));
 }
 
 fn summarize_otg(v: &Values, n: u8, out: &mut impl Out) {

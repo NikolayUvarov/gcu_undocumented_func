@@ -44,6 +44,11 @@ pub fn fit(source: (usize, usize), target: (usize, usize)) -> (usize, usize, usi
     ((tw - w) / 2, (th - h) / 2, w, h)
 }
 
+/// Where the mirror goes for a fit (213-KRN-0273): `fit`'s picture when the shape is kept, the whole target stretched.
+pub fn placed(stretch: bool, source: (usize, usize), target: (usize, usize)) -> (usize, usize, usize, usize) {
+    if stretch { (0, 0, target.0.max(1), target.1.max(1)) } else { fit(source, target) }
+}
+
 /// The source column or row a picture's column or row `at` shows: the nearest, `at * source / picture`.
 pub fn source_of(at: usize, picture: usize, source: usize) -> usize {
     ((at as u64 * source as u64 / picture.max(1) as u64) as usize).min(source.saturating_sub(1))

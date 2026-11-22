@@ -4,7 +4,9 @@
 //! 12-bit pictures are refused. A picture without Huffman tables takes the standard ones (JPEG Annex K.3), as a UVC
 //! camera's frames may (USB Video Class, Motion-JPEG payload). The input may be a device's: every length and value is
 //! bounded, and a picture whose coded data runs out is refused (`CUT_SHORT`), never padded out. No system calls:
-//! host-tested and fuzzed in tests/image_host.rs.
+//! host-tested and fuzzed in tests/image_host.rs. The inverse DCT is rewritten after the Independent JPEG Group's
+//! libjpeg 6b (`jidctint.c`): this software is based in part on the work of the Independent JPEG Group (THIRD_PARTY.md,
+//! LICENSES/IJG.txt).
 use crate::jpeg::{AC_CHROMA, AC_LUMA, DC_CHROMA, DC_LUMA, ZIGZAG};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -14,8 +16,8 @@ pub type Error = &'static str;
 /// A picture whose coded data ran out before its last block: a frame cut short.
 pub const CUT_SHORT: Error = "a JPEG cut short";
 
-// The inverse DCT as libjpeg's jidctint computes it (Loeffler, Ligtenberg and Moschytz's 8-point transform, the inverse
-// of jpeg.rs's): columns, then rows, in 64-bit integers so that no bounded coefficient overflows.
+// The inverse DCT of IJG libjpeg 6b's jidctint.c (jpeg_idct_islow) rewritten: Loeffler, Ligtenberg and Moschytz's 8-point
+// transform, the inverse of jpeg.rs's; columns, then rows, in 64-bit integers so that no bounded coefficient overflows.
 const CONST_BITS: u32 = 13;
 const PASS1_BITS: u32 = 2;
 const F0_298: i64 = 2446; // 0.298631336 × 2^13, and so on

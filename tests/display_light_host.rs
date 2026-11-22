@@ -10,10 +10,13 @@
 #[path = "../display/src/batches.rs"] mod batches;
 #[path = "../display/src/atom.rs"] mod atom;
 #[path = "../display/src/light.rs"] mod light;
+#[path = "../display/src/picture.rs"] mod picture;
 
 use batches::{Bus, Out, Store};
-use dcn::{Reg, Step, R, STAGES};
-use light::{assess, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, Writable, EXPECTED, HDMI_A_1};
+use dcn::{Reg, Step, R};
+// Step 3's stages (first light); step 4's come after them (213-DRV-0092).
+const STAGES: u8 = dcn::FIRST_LIGHT;
+use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, ScreenRefused, Screens, Writable, EXPECTED, HDMI_A_1};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -41,7 +44,7 @@ fn found() -> Store {
         s.set(R::DigBeEnCntl, p, if p == 4 { 0x101 } else { 0 });
     }
     s.set(R::DmcubCntl, 0, 1 << 17); // the DMCUB held in reset
-    s.set_batches(8);
+    s.set_batches(10);
     s
 }
 
@@ -68,6 +71,7 @@ fn the_pipe_is_chosen_from_what_step_1_found() {
 #[test]
 fn step_3_refuses_what_it_cannot_tell() {
     let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found(); change(&mut s); assess(&s).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(9)), Refusal::NotRead { batch: 10 });
     assert_eq!(refuse(&|s| s.set_batches(7)), Refusal::NotRead { batch: 8 });
     assert_eq!(refuse(&|s| s.set_batches(6)), Refusal::NotRead { batch: 7 });
     assert_eq!(refuse(&|s| s.set_batches(4)), Refusal::NotRead { batch: 5 });
@@ -125,13 +129,21 @@ fn the_guard_refuses_every_block_of_the_firmwares_pipe_and_all_off_the_route() {
 // --- the model ---
 
 #[derive(Clone, Debug, PartialEq)]
-enum Ev { Line(String), Write(u32, u32), Read(u32) }
+enum Ev { Line(String), Write(u32, u32), Read(u32), Offer(u16, u16, u32), Gone }
 
 #[derive(Default)]
 struct Engine {
     regs: HashMap<u32, u32>, clock: u64, ev: Vec<Ev>, frames: u32, frames_move: bool,
     // After a write to the first offset, the model sets the second to the third: the firmware's pipe changed by the hardware.
     hook: Option<(u32, u32, u32)>,
+    // After a write to the first offset that clears the bits of the second, the model sets the third to the fourth.
+    clear_hook: Option<(u32, u32, u32, u32)>,
+    // After a write to the first offset that clears the bits of the second: at the third, the fourth's bits read as set
+    // from the fifth microseconds on, until a write there sets a clear bit (31, 26 or 12) (a one-off event, cleared).
+    arm: Vec<(u32, u32, u32, u32, u64)>, timed: Vec<(u32, u32, u64)>,
+    // After a write to the first offset that clears the bits of the second, the fifth read after it finds the clock this
+    // many microseconds on (the task kept from running).
+    stall: Option<(u32, u32, u64)>, stalled: Option<(u32, u64)>,
     // Statuses the hardware sets: bits that read as set, and acknowledge bits that read as their request bit (one lower).
     set: Vec<(u32, u32)>, follow: Vec<(u32, u32)>,
     // Status bits that read as set while bits of a register (the same or another) are set: (at, bits, source, mask).
@@ -140,16 +152,49 @@ struct Engine {
     cut: Vec<(u32, u32)>,
     // After the first write to the offset, the n-th read cannot be read, once (a table or a stage failing midway).
     fail: Option<(u32, usize)>, armed: Option<usize>,
+    // The timing generators' frame counts follow the clock at this period (0: one more at each read).
+    frame_us: u64,
+    // Step 4's surface, made at its first row; none when `no_surface`.
+    surface: Vec<u32>, no_surface: bool, pitch: usize,
+    // The compositor's answers to stage 16's offer and to screen_gone (display.wit 1.3); none: it takes them.
+    refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
+}
+impl Screens for Engine {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> {
+        self.ev.push(Ev::Offer(width, height, pitch));
+        self.refuse_offer.map_or(Ok(()), Err)
+    }
+    fn gone(&mut self) -> Result<(), ScreenRefused> {
+        self.ev.push(Ev::Gone);
+        self.refuse_gone.map_or(Ok(()), Err)
+    }
+}
+impl Canvas for Engine {
+    // Slot 5's 20 MiB, made at the first row.
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+        if self.no_surface || pixels.len() > pitch || (y + 1) * pitch * 4 > light::SURFACE_BYTES { return false; }
+        if self.surface.is_empty() { self.surface = vec![0; light::SURFACE_BYTES / 4]; }
+        self.surface[y * pitch..][..pixels.len()].copy_from_slice(pixels);
+        self.pitch = pitch;
+        true
+    }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { self.surface.get(y * pitch + x).copied() }
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
         self.clock += 10;
+        if let Some((left, len)) = self.stalled { if left == 0 { self.clock += len; self.stalled = None; } else { self.stalled = Some((left - 1, len)); } }
         if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
         let o = r.offset();
-        if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move { self.frames += 1; return Some(self.frames); }
+        if (0..4).any(|t| reg(R::OtgStatusFrameCount, t) == o) && self.frames_move {
+            if self.frame_us > 0 { return Some((self.clock / self.frame_us) as u32); }
+            self.frames += 1;
+            return Some(self.frames);
+        }
         let mut v = *self.regs.get(&o).unwrap_or(&0);
         for &(at, bits) in &self.set { if at == o { v |= bits; } }
         for &(at, ack) in &self.follow { if at == o { v = (v & !ack) | ((v & (ack >> 1)) << 1); } }
+        for &(at, bits, from) in &self.timed { if at == o && self.clock >= from { v |= bits; } }
         for &(at, bits, src, mask) in &self.derived {
             if at == o { let s = if src == o { *self.regs.get(&o).unwrap_or(&0) } else { *self.regs.get(&src).unwrap_or(&0) }; v = if s & mask != 0 { v | bits } else { v & !bits }; }
         }
@@ -166,6 +211,11 @@ impl Poke for Engine {
             else if (0..4).any(|t| reg(R::OtgControl, t) == o) { (v & !0x1_0000) | (v & 1) << 16 } else { v };
         self.regs.insert(o, v);
         if let Some((at, target, value)) = self.hook { if at == o { self.regs.insert(target, value); } }
+        if let Some((at, mask, target, value)) = self.clear_hook { if at == o && v & mask == 0 { self.regs.insert(target, value); } }
+        for (at, mask, target, bits, delay) in self.arm.clone() { if at == o && v & mask == 0 { self.timed.push((target, bits, self.clock + delay)); } }
+        let clock = self.clock;
+        if v & (1 << 31 | 1 << 26 | 1 << 12) != 0 { self.timed.retain(|&(at, _, from)| at != o || from > clock); }
+        if let Some((at, mask, len)) = self.stall { if at == o && v & mask == 0 { self.stalled = Some((4, len)); self.stall = None; } }
         for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); self.derived.retain(|s| s.0 != status); } }
         if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
     }
@@ -286,7 +336,7 @@ fn all_eight_stages_write_in_the_routes_order_and_never_the_firmwares_pipe() {
         assert!(log.iter().any(|x| x.starts_with(&format!("S{} ", n)) && x.contains("DONE; THE FIRMWARE'S PIPE UNCHANGED")));
     }
     assert!(log.iter().any(|x| x.starts_with("S8 T76 WROTE DIG0_DIG_BE_EN_CNTL AT 155C0 = 00000001 (WAS 00000000)")));
-    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 8 OF 8"));
+    assert!(log.last().unwrap().starts_with(&format!("STEP 3 STOPPED AFTER STAGE 8 OF {}", dcn::STAGES)));
     for x in &log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
 }
 
@@ -307,7 +357,7 @@ fn a_build_stops_after_its_allowed_stage_and_leaves_the_rest_unwritten() {
 // Every register written is back to its value before step 3, but for the status bits the model itself sets.
 fn restored_but(e: &Engine, before: &HashMap<u32, u32>, except: &[u32]) {
     for (o, _) in writes(e) {
-        if except.contains(&o) { continue; }
+        if except.contains(&o) || o == reg(R::OtgVerticalInterrupt2Position, 1) { continue; } // the once-a-boot mark stays
         let status = e.set.iter().chain(e.follow.iter()).filter(|(at, _)| *at == o).fold(0, |m, (_, bits)| m | bits);
         let value = |m: &HashMap<u32, u32>| m.get(&o).copied().unwrap_or(0) & !status;
         assert_eq!(value(&e.regs), value(before), "{:05X} not restored", o);
@@ -403,6 +453,535 @@ fn a_change_of_the_firmwares_pipe_fails_the_stage() {
     assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 3") && x.ends_with("CHANGED")));
 }
 
+// The firmware's pipe as runs 3 to 7 read OTG0 (2560x1600 in 2720x1646) and HUBP0, with DLG values for a 100 MHz
+// reference clock by Display Core's formulas (the hardware's own are batch 9's).
+fn ryzen_reference() -> light::Reference {
+    // Pipe 0's registers pipe 1 copies: each its index plus a mark, so that a copy shows where it came from; MPCC_CONTROL
+    // as a single layer's (top layer only, alpha 255).
+    let mut copies = [0u32; light::COPIED.len()];
+    for (i, c) in copies.iter_mut().enumerate() { *c = 0x00C0_0000 | i as u32; }
+    copies[light::COPIED.len() - 1] = 0x00FF_0002;
+    light::Reference { pipe: 0, otg: 0, h_total: 2719, v_total: 1645, h_blank_end: 112, v_blank_end: 43, width: 2560,
+        ref_to_pix: 195_264, per_htotal: 259_335, refcyc_h_blank_end: 41, dlg_v_blank_end: 43, line_delivery: 953,
+        req_delivery: 24_396, pitch_field: 0xA00, line_delivery_pre: 953, req_delivery_pre: 24_396, fb_base: 0xF4_0000_0000,
+        mpcc_top: 1, mpcc_opp: 1, mux: 1, firmware_mux: 0, firmware_bot: 0, refclk_cntl: 0, timer_cntl: 0x1001, vready: 1, copies,
+        // OTG0's global sync and HUBP0's QoS as boot 70 read them.
+        sync: [0xD, 0x0140_02A8, 0x12C], debug_db: 0, qos_level: 8 }
+}
+// Pipe 0 as boot 70 read it on the Ryzen (2026-11-22, release 202611220537): the GOP's own DLG, not Display Core's
+// (REF_FREQ_TO_PIX_FREQ 0x14E5E, line and request delivery 0); PER_HTOTAL by Display Core's formula at 48 MHz; every
+// MPCC n wired from DPP n to OPP n, mode 1.
+fn boot70_reference() -> light::Reference {
+    light::Reference { ref_to_pix: 0x14E5E, per_htotal: 0x1E641, refcyc_h_blank_end: 0x35, dlg_v_blank_end: 0x13, line_delivery: 0,
+        req_delivery: 0, line_delivery_pre: 0, req_delivery_pre: 0, pitch_field: 2560, vready: 0, ..ryzen_reference() }
+}
+fn step4(reference: Option<light::Reference>) -> Light {
+    let (f, c) = EXPECTED;
+    Light::new(f, c, timing::CEA_1080P60).unwrap().with_reference(reference).with_build("TESTBUILD")
+}
+fn run_light(l: &Light, img: &[u8], e: &mut Engine, allowed: u8, undo: bool) -> (Outcome, Vec<String>) {
+    let mut interp = atom::Interpreter::new(atom::Image::new(img).unwrap());
+    let mut journal = light::Journal::default();
+    let mut log = Log(vec![]);
+    let outcome = if undo { light::run_then_undo(l, e, &mut interp, &mut journal, allowed, &mut log) } else { light::run(l, e, &mut interp, &mut journal, allowed, &mut log) };
+    (outcome, log.0)
+}
+fn number_after(log: &[String], start: &str, key: &str) -> u64 {
+    let l = log.iter().find(|x| x.starts_with(start)).unwrap_or_else(|| panic!("no {:?}", start));
+    let rest = &l[l.find(key).unwrap_or_else(|| panic!("no {:?} in {:?}", key, l)) + key.len()..];
+    rest.split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn stages_9_and_10_measure_the_firmwares_clock_derive_pipe_1_and_draw_the_picture() {
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675; // DP-2 at 59.97 Hz
+    let (outcome, log) = run_light(&l, &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 10 }, "{:#?}", &log[log.len().saturating_sub(16)..]);
+    // Stage 9: the firmware's pixel clock from 30 of its frames, the reference clock from REF_FREQ_TO_PIX_FREQ.
+    let pixel = number_after(&log, "S9 OTG0 COUNTED 30 FRAMES", "ITS PIXEL CLOCK ");
+    let reference = number_after(&log, "S9 OTG0 COUNTED 30 FRAMES", "THE REFERENCE CLOCK ");
+    assert!((268_000..=269_000).contains(&pixel) && (99_500..=100_500).contains(&reference), "{} {}", pixel, reference);
+    assert!(log.iter().any(|x| x.starts_with("S9 PIPE 0 BY FORMULA: REF/PIX 0.37") && x.ends_with("V_BLANK_END 43 (DLG 43)")), "{:#?}", log.iter().filter(|x| x.starts_with("S9")).collect::<Vec<_>>());
+    // Pipe 1's values for 1080p60 at the reference clock found.
+    let otg = timing::CEA_1080P60.otg().unwrap();
+    let ratio1 = (reference << 19) / 148_500;
+    let line = format!("S9 PIPE 1 FOR 1920x1080 AT 148500 KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} (30 REQUESTS A LINE)",
+        batches::Ratio19(Some(ratio1 as u32)), reference * (otg.h_total as u64 + 1) * 256 / 148_500, reference * otg.h_blank_end as u64 / 148_500,
+        otg.v_blank_end, reference * 1920 / 148_500, reference * (1920 * 1024 / 30) / 148_500);
+    assert!(log.iter().any(|x| x.starts_with(&line)), "{}\n{:#?}", line, log.iter().filter(|x| x.starts_with("S9")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x.ends_with("(30 REQUESTS A LINE)")));
+    // Stages 9 and 10 write no register: the writes are first light's.
+    let mut first_light = engine();
+    first_light.frame_us = 16_675;
+    run_light(&l, &good(), &mut first_light, 8, false);
+    assert_eq!(writes(&e), writes(&first_light));
+    for n in [9u8, 10] {
+        assert!(log.iter().any(|x| x.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED", n, dcn::STAGE_NAMES[n as usize - 1]))));
+        assert!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED", n))));
+    }
+    // Stage 10: the picture in the surface, read back where stage 10 reads it and elsewhere.
+    let lines = picture::Lines::new("TESTBUILD", picture::Size::FIRST);
+    for y in (0..picture::HEIGHT).step_by(7) {
+        for x in (0..picture::WIDTH).step_by(5) { assert_eq!(e.sample(x, y, picture::PITCH), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
+    }
+    assert!(log.iter().any(|x| x == "S10 DRAWN: 1920x1080 AT SLOT 5'S START, PITCH 1920 PIXELS (7680 BYTES); 9 SAMPLES READ BACK AS DRAWN"));
+    assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD TESTBUILD"));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 10 OF"));
+    // With the undo: step 4's stages first, then step 3's, every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 10, true);
+    assert_eq!(outcome, Outcome::Undone { done: 10 });
+    assert!(log.iter().any(|x| x == "U10 THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET"));
+    restored_but(&e, &before, &[]);
+}
+
+#[test]
+fn stage_9_on_what_boot_70_read_takes_its_reference_clock_from_per_htotal() {
+    // Boot 70's pipe 0: its REF_FREQ_TO_PIX_FREQ gives 43.8 MHz, its PER_HTOTAL Display Core's formula at 48 MHz, the
+    // crystal through REFCLK_CNTL 0 and the timer's divider 1. Pipe 1 then gets what Display Core would program.
+    // Boot 71 (release 202611220554) read the same values and ran stages 9 and 10 on them.
+    let l = step4(Some(boot70_reference()));
+    let mut e = engine();
+    e.frame_us = 16_674; // DP-2 at 59.973 Hz, as boot 70 counted
+    e.regs.insert(reg(R::HubpCntl, 1), 0x000F_001B); // HUBP1 blanked, as step 1 read it
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 }, "{:#?}", log.iter().filter(|x| x.starts_with("S9") || x.starts_with("STEP")).collect::<Vec<_>>());
+    let s9: Vec<&String> = log.iter().filter(|x| x.starts_with("S9 ")).collect();
+    let has = |p: &str| assert!(s9.iter().any(|x| x.contains(p)), "no {:?} in {:#?}", p, s9);
+    has("ITS PIXEL CLOCK 268");
+    has("THE REFERENCE CLOCK 48000 KHZ");
+    has("KHZ BY PER_HTOTAL, 438");
+    has("REFCLK_CNTL 00000000 (THE CRYSTAL), GLOBAL TIMER 00001001 (REFDIV 1)");
+    has("S9 PIPE 0 BY FORMULA: REF/PIX 0.1787 (SET 0.1632), PER HTOTAL 124");
+    has("S9 PIPE 1 FOR 1920x1080 AT 148500 KHZ: REF/PIX 0.3232, PER HTOTAL 182044, H_BLANK_END 62, V_BLANK_END 41, LINE 620, REQ 21183 (30 REQUESTS A LINE)");
+    has("S9 PIPE 1: NEXT START 4484 (V_BLANK_START 1121 x 4), PREFETCH LINE 620 REQ 21183");
+    // Those values in HUBP1, and the MPC tree as the firmware wired it but MPCC1's bottom (15, none).
+    let g = |r: R, i: u8| e.regs.get(&reg(r, i)).copied().unwrap_or(0);
+    assert_eq!((g(R::HubpreqRefFreqToPixFreq, 1), g(R::HubpreqDstDimensions, 1), g(R::HubpreqPerLineDelivery, 1)), (169_466, 182_044, 620));
+    assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1) & 0x7F_FFFF, 21_183);
+    assert_eq!((g(R::MpccTopSel, 1), g(R::MpccBotSel, 1), g(R::MpccOppId, 1), g(R::MpcOutMux, 1)), (1, 0xF, 1, 1));
+    // Pipe 1's sync for its plane: the firmware's VUPDATE width and VREADY times at 148.5 MHz, a quarter line's offset,
+    // VREADY after the sync by hubp2_vready_at_or_After_vsync's rule; its QoS as Display Core's.
+    has("S9 PIPE 1'S SYNC FOR ITS PLANE: VSTARTUP 36 (STAGE 3'S), VUPDATE OFFSET 550 WIDTH 177, VREADY 166 (THE FIRMWARE'S OTG0: VSTARTUP 13, VUPDATE 680 WIDTH 320, VREADY 300); VREADY AT OR AFTER VSYNC 1 (THE FIRMWARE'S HUBP 0)");
+    has("S9 PIPE 1'S QOS: LEVEL 8 (THE FIRMWARE'S 8), HIGH WATERMARK 2844 (4 LINES;");
+    assert!(log.iter().any(|x| x == "S13 WROTE OTG1_OTG_VUPDATE_PARAM AT 14320 = 00B10226 (WAS 00010000)"), "{:#?}", log.iter().filter(|x| x.starts_with("S13 WROTE OTG1")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == "S13 WROTE OTG1_OTG_VREADY_PARAM AT 14324 = 000000A6 (WAS 00000001)"));
+    assert!(log.iter().any(|x| x.starts_with("S13 WROTE HUBP1_HUBPREQ_DEBUG_DB AT 0EE48 = 00000100")));
+    assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1), 8 << 24 | 21_183);
+    assert_eq!(g(R::HubpreqTtuQosWm, 1), 2844 << 16);
+    // HUBP1's CNTL: stage 13 keeps it blanked with VREADY after the sync, stage 15 unblanks it; the pattern then off.
+    let cntl: Vec<u32> = writes(&e).into_iter().filter(|x| x.0 == reg(R::HubpCntl, 1)).map(|x| x.1).collect();
+    assert_eq!(cntl, [0x000F_011B, 0x000F_011A]);
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    assert!(log.iter().any(|x| x == "S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)"));
+    assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919"));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 16 AS THIS BUILD ALLOWS"));
+}
+
+#[test]
+fn stages_11_to_15_put_the_surface_on_pipe_1_and_nothing_else_on_the_firmwares() {
+    let r = ryzen_reference();
+    let l = step4(Some(r));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 }, "{:#?}", &log[log.len().saturating_sub(16)..]);
+    let g = |reg: R, i: u8| e.regs.get(&self::reg(reg, i)).copied().unwrap_or(0);
+    // Pipe 1's HUBP on the surface: GPU 0xF4_0100_0000, pitch field 1919, 1920x1080 from 0,0, unblanked.
+    assert_eq!((g(R::HubpreqPrimarySurfaceAddressHigh, 1), g(R::HubpreqPrimarySurfaceAddress, 1)), (0xF4, 0x0100_0000));
+    assert_eq!(g(R::HubpreqSurfacePitch, 1), 1919);
+    assert_eq!((g(R::HubpPriViewportStart, 1), g(R::HubpPriViewportDimension, 1)), (0, 1080 << 16 | 1920));
+    assert_eq!(g(R::HubpCntl, 1) & 0x1101, 0x100, "unblanked, TTU on, VREADY after the sync");
+    // Its DLG and TTU as stage 9 derived them; the rest copied from pipe 0.
+    assert_eq!(g(R::HubpreqRefFreqToPixFreq, 1), ((number_after(&log, "S9 OTG0 COUNTED", "THE REFERENCE CLOCK ") << 19) / 148_500) as u32);
+    let own = [R::MpccControl, R::HubpreqTtuQosWm, R::HubpreqCur0TtuCntl0];
+    for (i, reg) in light::COPIED.iter().enumerate().filter(|(_, r)| !own.contains(r)) {
+        assert_eq!(g(*reg, 1), r.copies[i], "{}", reg.name());
+    }
+    // The QoS Display Core gives every plane: level 8 for the surface and the cursor, the high watermark four lines.
+    let reference = number_after(&log, "S9 OTG0 COUNTED", "THE REFERENCE CLOCK ");
+    assert_eq!(g(R::HubpreqTtuQosWm, 1), ((reference * 4 * 2200 / 148_500) as u32) << 16);
+    assert_eq!(g(R::HubpreqSurf0TtuCntl0, 1) >> 24, 8);
+    let cur = light::COPIED.iter().position(|&c| c == R::HubpreqCur0TtuCntl0).unwrap();
+    assert_eq!(g(R::HubpreqCur0TtuCntl0, 1), r.copies[cur] & 0x7F_FFFF | 8 << 24);
+    // The sync for the plane, and the DLG's test mode off.
+    let pix0 = number_after(&log, "S9 OTG0 COUNTED", "ITS PIXEL CLOCK ");
+    let at1 = |x: u64| (x * 148_500).div_ceil(pix0) as u32;
+    assert_eq!((g(R::OtgVupdateParam, 1), g(R::OtgVreadyParam, 1)), (at1(320) << 16 | 550, at1(300)));
+    assert_eq!(g(R::HubpreqDebugDb, 1), 0x100);
+    // DPP1 clocked with a 1920x1080 recout, HUBP1 clocked; MPCC1 from DPP1 to OPP1, its output mux on MPCC1; the
+    // pattern off.
+    assert_eq!((g(R::DppControl, 1) & 0x10, g(R::HubpClkCntl, 1) & 1), (0x10, 1));
+    assert_eq!((g(R::DsclRecoutSize, 1), g(R::DsclMpcSize, 1)), (1080 << 16 | 1920, 1080 << 16 | 1920));
+    assert_eq!((g(R::MpccTopSel, 1), g(R::MpccBotSel, 1), g(R::MpccOppId, 1), g(R::MpccControl, 1), g(R::MpcOutMux, 1)), (1, 0xF, 1, 0x00FF_0002, 1));
+    assert_eq!(g(R::DpgControl, 1) & 1, 0);
+    // Every write of stages 11 to 15 to pipe 1's blocks or OPP1's pattern generator; nothing of pipe 0's.
+    let first_late = log.iter().position(|x| x.starts_with("S11 WROTE ")).unwrap();
+    for x in log[first_late..].iter().filter(|x| x.contains(" WROTE ")) {
+        let at = u32::from_str_radix(x.split(" AT ").nth(1).unwrap().split(' ').next().unwrap(), 16).unwrap();
+        assert!(l.guard().check(Reg::new(at).unwrap()) != Err(Refused::Firmware(at)), "{}", x);
+        assert!(l.guard().check_at(Reg::new(at).unwrap(), 11).is_ok(), "{}", x);
+    }
+    for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    // The log: the pitch, and no new underflow twice.
+    assert!(log.iter().any(|x| x == "S13 PITCH FIELD 1919 (1920 PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP0 HOLDS 2560 FOR ITS 2560 PIXELS"));
+    // The pitch read back just after it is written, and logged with its field.
+    let pitch = log.iter().position(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919").expect("the read-back");
+    assert!(log[pitch - 1].starts_with("S13 WROTE HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F"));
+    assert!(log.iter().any(|x| x == "S13 WILL READ HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C BACK"));
+    assert_eq!(log.iter().filter(|x| x.starts_with("S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1")).count(), 1);
+    // The watch with the pattern off: 300 frames read one by one, all clean, five lines of them.
+    assert!(log.iter().any(|x| x.starts_with("S15 WATCHED 300 FRAMES OF OTG1 IN ") && x.contains(" WITH THE PATTERN OFF: 0 PASSED BETWEEN TWO READS")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    let frames: Vec<&String> = log.iter().filter(|x| x.starts_with("S15 FRAMES ")).collect();
+    assert_eq!(frames.len(), 5);
+    assert_eq!(frames[4].as_str(), &format!("S15 FRAMES 241 TO 300: {}", ".".repeat(60)));
+    // The attached HUBP is watched until stage 10, then is step 4's own.
+    for n in 5..=15u8 { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED", n))), n <= 10, "stage {}", n); }
+    // The guard keeps pipe 1's blocks shut to first light's stages, and pipe 0's to all.
+    for (reg, i) in [(R::HubpCntl, 1u8), (R::DppControl, 1), (R::MpccTopSel, 1), (R::MpcOutMux, 1)] {
+        let x = Reg::new(self::reg(reg, i)).unwrap();
+        assert_eq!(l.guard().check_at(x, 8), Err(Refused::OffRoute(x.offset())), "{}", reg.name());
+        assert!(l.guard().check_at(x, 11).is_ok(), "{}", reg.name());
+    }
+    for (reg, i) in [(R::HubpCntl, 0u8), (R::DppControl, 0), (R::MpccTopSel, 0)] {
+        let x = Reg::new(self::reg(reg, i)).unwrap();
+        assert_eq!(l.guard().check_at(x, 15), Err(Refused::Firmware(x.offset())), "{}", reg.name());
+    }
+    // With the undo, everything back as before, pipe 1 included.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    assert_eq!(run_light(&l, &good(), &mut e, 15, true).0, Outcome::Undone { done: 15 });
+    restored_but(&e, &before, &[]);
+    // A register that does not keep what was written (as if it rounded the pitch): said, with both fields; not a failure.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let at = reg(R::HubpreqSurfacePitch, 1);
+    e.hook = Some((at, at, 0x780));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    assert!(log.iter().any(|x| x == "S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 00000780, NOT 0000077F AS WRITTEN: FIELD 1920, NOT 1919"));
+}
+
+#[test]
+fn an_underflow_at_stage_15_fails_and_is_undone_whole_and_a_busy_mpcc_stops_step_4() {
+    // HUBP1's underflow status set once it is set up: stage 15 sees it new, fails, and undoes 15 to 1.
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.hook = Some((reg(R::HubpCntl, 1), reg(R::HubpCntl, 1), 1 << 28));
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    match outcome { Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == reg(R::HubpCntl, 1) => {}, o => panic!("{:?} {:#?}", o, &log[log.len().saturating_sub(12)..]) }
+    assert!(log.iter().any(|x| x == "STEP 3 FAILED AT STAGE 15 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    // At once: stage 15's writes put back, last first, before any line, then named; then stages 14 to 1.
+    let failed = log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).unwrap();
+    assert!(log[failed].ends_with("; ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING STAGES 14 TO 1"), "{}", log[failed]);
+    let found = log[..failed].iter().rposition(|x| x.starts_with("S15 ")).unwrap();
+    assert!(log[found + 1..failed].iter().all(|x| x.starts_with("U15 ")), "{:#?}", &log[found..failed]);
+    assert!(log[found + 1].starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL AT 0EE3C = ") && log[found + 1].ends_with(" AT ONCE"), "{:#?}", &log[found..failed]);
+    assert_eq!(log.iter().filter(|x| x.starts_with("U15 RESTORED")).count(), 1, "the pattern was still on: one write to put back");
+    assert!(log[failed + 1..].iter().any(|x| x.starts_with("U14 RESTORED")));
+    // The writes in order, with HUBP1's status read as underflowing once its surface is set (stage 13), its CNTL kept:
+    // the unblank, then at once HUBP1's CNTL as stage 13 left it.
+    let cntl = reg(R::HubpCntl, 1);
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.derived.push((cntl, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0));
+    assert!(matches!(run_light(&l, &good(), &mut e, 15, false).0, Outcome::Failed { stage: 15, why: Failure::Underflow { .. } }));
+    let pipe_1 = |e: &Engine| -> Vec<(u32, u32)> {
+        let w: Vec<(u32, u32)> = writes(e).into_iter().filter(|x| x.0 == cntl || x.0 == reg(R::DpgControl, 1)).collect();
+        w[w.iter().position(|x| x.0 == cntl).unwrap()..].to_vec() // from stage 13's
+    };
+    let w = pipe_1(&e);
+    assert_eq!((w[1].0, w[1].1, w[2]), (cntl, w[0].1 & !0x1001, (cntl, w[0].1)), "unblanked, then put back at once: {:X?}", w);
+    // The underflow after the pattern is off: both writes put back at once, the pattern first, then HUBP1's CNTL.
+    let flag = 0xF_FFF0;
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.clear_hook = Some((reg(R::DpgControl, 1), 1, flag, 1));
+    e.derived.push((cntl, 1 << 28, flag, 1));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { .. } }), "{:?}", outcome);
+    let failed = log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED")).unwrap();
+    let names: Vec<&String> = log[..failed].iter().filter(|x| x.starts_with("U15 RESTORED")).collect();
+    assert_eq!(names.len(), 2, "{:#?}", names);
+    assert!(names[0].starts_with("U15 RESTORED DPG1_DPG_CONTROL") && names[1].starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL"), "{:#?}", names);
+    // The watch ran its 300 frames, clearing HUBP1's status at each (this underflow comes back every frame), then the
+    // stage failed: the pattern on, then HUBP1's CNTL as stage 13 left it.
+    assert!(log.iter().any(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 300 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME 1 ")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x == &format!("S15 FRAMES 241 TO 300: {}", "U".repeat(60))));
+    let w = pipe_1(&e);
+    let off = w.iter().position(|x| x.0 == reg(R::DpgControl, 1) && x.1 & 1 == 0).unwrap();
+    let on = off + w[off..].iter().position(|x| x.0 == reg(R::DpgControl, 1) && x.1 & 1 == 1).unwrap();
+    assert!(w[off + 1..on].iter().all(|x| x.0 == cntl), "only the clears between: {:X?}", &w[off..on]);
+    assert_eq!(w[off + 1..on].iter().filter(|x| x.1 & 1 << 31 != 0).count(), 300);
+    let stage_13 = w.iter().find(|x| x.0 == cntl).unwrap().1;
+    assert_eq!(w[on + 1], (cntl, stage_13), "the pattern on, then HUBP1's CNTL: {:X?}", &w[on..]);
+    restored_but(&e, &before, &[flag]);
+    restored_but(&e, &before, &[reg(R::HubpCntl, 1)]);
+    assert_eq!(e.regs[&reg(R::DpgControl, 1)] & 1, before.get(&reg(R::DpgControl, 1)).copied().unwrap_or(0) & 1);
+    // Pipe 1's MPCC or its OPP's mux in use: stage 9 is not ready, says which and with what values, and stops with first
+    // light left in place, nothing of pipe 1 written.
+    for (r, why) in [
+        (light::Reference { mpcc_opp: 0, ..ryzen_reference() }, Failure::MpccInUse { mpcc: 1, opp_id: 0, firmware_mux: 0, firmware_bot: 0 }),
+        (light::Reference { firmware_mux: 1, ..ryzen_reference() }, Failure::MpccInUse { mpcc: 1, opp_id: 1, firmware_mux: 1, firmware_bot: 0 }),
+        (light::Reference { firmware_bot: 1, ..ryzen_reference() }, Failure::MpccInUse { mpcc: 1, opp_id: 1, firmware_mux: 0, firmware_bot: 1 }),
+        (light::Reference { mux: 0, ..ryzen_reference() }, Failure::OutputMuxInUse { opp: 1, mux: 0 }),
+    ] {
+        let l = step4(Some(r));
+        let mut e = engine();
+        e.frame_us = 16_675;
+        let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+        assert_eq!(outcome, Outcome::NotReady { done: 8, stage: 9, why });
+        assert!(!writes(&e).iter().any(|w| w.0 == reg(R::HubpCntl, 1) || w.0 == reg(R::MpccTopSel, 1)));
+        assert!(log.iter().any(|x| x.starts_with(&format!("S9 REFERENCE NOT READY: {}; STAGES 1 TO 8 STAY AS THEY ARE, STEP 4 STOPS HERE", why))), "{:#?}", &log[log.len() - 4..]);
+        assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 8 OF 16: STAGE 9 NOT READY;") && log.last().unwrap().ends_with("ARE LEFT IN PLACE"));
+        assert_eq!(e.regs[&reg(R::DigBeEnCntl, 0)] & 1, 1, "first light's back end left enabled");
+    }
+    // A build of 0 names stages 11 to 15 with what they will do.
+    let mut log = Log(vec![]);
+    light::describe(&l, false, &mut log);
+    assert!(log.0.iter().any(|x| x.starts_with("S13 WOULD SET HUBP1, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH 1919")));
+}
+
+#[test]
+fn stage_9_without_a_reference_and_stage_10_without_a_surface_stop_with_first_light_in_place() {
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (outcome, log) = run_light(&step4(None), &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::NotReady { done: 8, stage: 9, why: Failure::NoReference });
+    assert!(log.iter().any(|x| x.starts_with("S9 REFERENCE NOT READY: NO REFERENCE")));
+    assert_eq!(e.regs[&reg(R::DigBeEnCntl, 0)] & 1, 1);
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.no_surface = true;
+    let (outcome, log) = run_light(&step4(Some(ryzen_reference())), &good(), &mut e, 10, false);
+    assert_eq!(outcome, Outcome::NotReady { done: 9, stage: 10, why: Failure::NoSurface });
+    assert!(log.iter().any(|x| x.starts_with("S10 DRAW NOT READY: SLOT 5'S SURFACE IS NOT MAPPED; STAGES 1 TO 9 STAY AS THEY ARE")));
+    // With the undo the build asks for, first light is undone all the same, every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&step4(None), &good(), &mut e, 10, true);
+    assert_eq!(outcome, Outcome::NotReady { done: 8, stage: 9, why: Failure::NoReference });
+    assert!(log.last().unwrap().ends_with("ARE UNDONE"));
+    restored_but(&e, &before, &[]);
+    // A firmware's pipe changed in stage 9 (its own reads only) still undoes everything.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    e.hook = Some((reg(R::DigBeCntl, 0), reg(R::OtgHTotal, 0), 0x777)); // set once stage 7 writes; seen after stage 7
+    let (outcome, _) = run_light(&step4(Some(ryzen_reference())), &good(), &mut e, 10, false);
+    assert!(matches!(outcome, Outcome::Failed { why: Failure::FirmwareChanged { .. }, .. }), "{:?}", outcome);
+    restored_but(&e, &before, &[reg(R::OtgHTotal, 0)]);
+    // Step 1's values give the reference only when all its batches were read and they name the firmware's pipe.
+    let (f, c) = EXPECTED;
+    let mut s = found();
+    assert_eq!(light::reference(&s, &f, &c), None, "found() holds no batch 9 values");
+    let want = ryzen_reference();
+    for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
+        (R::HubpPriViewportDimension, 1600 << 16 | 2560), (R::HubpreqRefFreqToPixFreq, 195_264), (R::HubpreqDstDimensions, 259_335),
+        (R::HubpreqBlankOffset0, 43 << 16 | 41), (R::HubpreqPerLineDelivery, 953), (R::HubpreqSurf0TtuCntl0, 8 << 24 | 24_396), (R::HubpreqSurfacePitch, 0xA00),
+        (R::HubpreqPerLineDeliveryPre, 953), (R::HubpreqSurf0TtuCntl1, 24_396), (R::DcnVmFbLocationBase, 0xF400),
+        (R::OtgVstartupParam, 0xD), (R::OtgVupdateParam, 0x0140_02A8), (R::OtgVreadyParam, 0x12C), (R::HubpreqDebugDb, 0)] {
+        s.set(r, 0, v);
+    }
+    for (r, v) in light::COPIED.iter().zip(want.copies) { s.set(*r, 0, v); }
+    s.set(R::HubpCntl, 0, 0x000F_0102); // HUBP_VREADY_AT_OR_AFTER_VSYNC 1
+    // The MPC tree and the clocks' route as boot 70 read them.
+    for n in 0..4u8 { s.set(R::MpccTopSel, n, n as u32); s.set(R::MpccBotSel, n, n as u32); s.set(R::MpccOppId, n, n as u32); s.set(R::MpcOutMux, n, n as u32); }
+    s.set(R::RefclkCntl, 0, 0); s.set(R::DchubbubGlobalTimerCntl, 0, 0x1001);
+    assert_eq!(light::reference(&s, &f, &c), Some(want));
+    s.set_batches(9);
+    assert_eq!(light::reference(&s, &f, &c), None, "batch 10 not read");
+}
+
+#[test]
+fn stage_15s_watch_keeps_the_picture_up_and_names_the_frame_of_pipe_1s_first_underflow_but_not_the_firmwares() {
+    let l = step4(Some(boot70_reference()));
+    let (cntl1, cntl0, dpg) = (reg(R::HubpCntl, 1), reg(R::HubpCntl, 0), reg(R::DpgControl, 1));
+    // A one-off underflow on HUBP1 some 17 frames after the pattern goes off, cleared by the watch: kept, the watch
+    // goes on to its end with the picture up, then the stage fails and is put back at once.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl1, 1 << 28, 17 * 16_674 + 8_000));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == cntl1), "{:?}", outcome);
+    let s15: Vec<&String> = log.iter().filter(|x| x.starts_with("S15 ")).collect();
+    let first = s15.iter().find(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 1 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME ")).unwrap_or_else(|| panic!("{:#?}", s15));
+    let frame: u32 = first.split("AT FRAME ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    assert!((17..=19).contains(&frame), "{}", first);
+    assert!(first.ends_with("; CLEARED 1 TIMES"));
+    let marks: String = s15.iter().filter(|x| x.starts_with("S15 FRAMES ")).map(|x| x.split(": ").nth(1).unwrap()).collect();
+    assert_eq!((marks.len(), marks.matches('U').count(), marks.find('U')), (300, 1, Some(frame as usize - 1)));
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C") && x.ends_with("ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING STAGES 14 TO 1")));
+    // The firmware's HUBP underflowing during the watch: at once, the watch cut short.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl0, 1 << 28, 5 * 16_674));
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == cntl0), "{:?}", outcome);
+    assert!(!log.iter().any(|x| x.starts_with("S15 WATCHED ")));
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EB1C") || x.starts_with(&format!("S15 UNBLANK FAILED: AN UNDERFLOW AT {:05X}", cntl0))), "{:#?}", &log[log.len().saturating_sub(4)..]);
+    restored_but(&e, &before, &[]);
+    // A request timing out at HUBP1: kept as T, the stage failed after the watch.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.arm.push((dpg, 1, cntl1, 2 << 20, 40 * 16_674));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::RequestTimeout { offset, .. } } if offset == cntl1), "{:?}", outcome);
+    assert!(log.iter().any(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 0 FRAMES, REQUEST TIMEOUT IN 1;")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK FAILED: A REQUEST TIMEOUT AT 0EE3C")));
+    // Display kept from running for 676 ms just after the pattern goes off, as in boot 74: the frames it missed are
+    // marked, and the gap named.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    e.stall = Some((dpg, 1, 676_000));
+    let (outcome, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    let watched = log.iter().find(|x| x.starts_with("S15 WATCHED 300 FRAMES")).unwrap();
+    let passed: u32 = watched.split("WITH THE PATTERN OFF: ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    let gap = number_after(&log, "S15 WATCHED 300 FRAMES", "THE LONGEST GAP BETWEEN READS ");
+    assert!((39..=41).contains(&passed) && (676_000..677_000).contains(&gap), "{}", watched);
+    assert!(log.iter().any(|x| x.starts_with("S15 FRAMES   1 TO  60: ---------")), "{:#?}", log.iter().filter(|x| x.starts_with("S15 FRAMES")).collect::<Vec<_>>());
+}
+
+#[test]
+fn stage_16_offers_the_surface_as_display_wit_1_3_has_it_and_its_undo_lets_it_go_before_stage_15_blanks() {
+    let l = step4(Some(ryzen_reference()));
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    // One offer, after stage 15's last write: 1920x1080, a row 7680 bytes apart, pixels slot 5's; nothing let go.
+    let offers: Vec<usize> = e.ev.iter().enumerate().filter(|(_, x)| matches!(x, Ev::Offer(..))).map(|(i, _)| i).collect();
+    assert_eq!(offers.len(), 1);
+    assert_eq!(e.ev[offers[0]], Ev::Offer(1920, 1080, 7680));
+    assert!(!e.ev[offers[0]..].iter().any(|x| matches!(x, Ev::Write(..) | Ev::Gone)), "no write after the offer");
+    assert!(log.iter().any(|x| x == "S16 OFFERED THE SECOND SCREEN: 1920x1080, PITCH 7680 BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT"));
+    assert!(log.iter().any(|x| x.starts_with("S16 OFFER DONE; THE FIRMWARE'S PIPE UNCHANGED")));
+    assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS"));
+    // Stage 16 writes no register: the writes are stage 15's.
+    let mut fifteen = engine();
+    fifteen.frame_us = 16_675;
+    run_light(&l, &good(), &mut fifteen, 15, false);
+    assert_eq!(writes(&e), writes(&fifteen));
+    // The undo: screen_gone first, then stage 15's writes restored; every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::Undone { done: 16 });
+    let gone = e.ev.iter().position(|x| *x == Ev::Gone).expect("screen_gone");
+    assert_eq!(e.ev.iter().filter(|x| **x == Ev::Gone).count(), 1);
+    let offer = e.ev.iter().position(|x| matches!(x, Ev::Offer(..))).unwrap();
+    let last_15 = writes(&fifteen).len();
+    let writes_before_gone = e.ev[..gone].iter().filter(|x| matches!(x, Ev::Write(..))).count();
+    assert!(offer < gone && writes_before_gone == last_15, "screen_gone before any undo write: {} writes before it, {} by stage 15", writes_before_gone, last_15);
+    let u16 = log.iter().position(|x| x == "U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO").unwrap();
+    let u15 = log.iter().position(|x| x.starts_with("U15 ")).unwrap();
+    assert!(u16 < u15);
+    restored_but(&e, &before, &[]);
+    // screen_gone refused: said so, and the undo goes on.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.refuse_gone = Some(ScreenRefused::NoScreen);
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::Undone { done: 16 });
+    assert!(log.iter().any(|x| x == "U16 SCREEN_GONE NOT TAKEN: NO SCREEN; THE UNDO GOES ON"), "{:#?}", log.iter().filter(|x| x.starts_with("U16")).collect::<Vec<_>>());
+    restored_but(&e, &before, &[]);
+}
+
+#[test]
+fn stage_16_refused_or_without_a_client_stops_with_the_picture_on_the_second_output() {
+    let l = step4(Some(ryzen_reference()));
+    for refused in [ScreenRefused::Unavailable, ScreenRefused::NoScreen, ScreenRefused::NoMemory, ScreenRefused::Denied, ScreenRefused::BadScreen, ScreenRefused::Call] {
+        let mut e = engine();
+        e.frame_us = 16_675;
+        e.refuse_offer = Some(refused);
+        let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+        assert_eq!(outcome, Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(refused) }, "{:#?}", &log[log.len().saturating_sub(6)..]);
+        assert!(log.iter().any(|x| x == &format!("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: {}; STAGES 1 TO 15 STAY AS THEY ARE, STEP 4 STOPS HERE", refused)),
+            "{:#?}", &log[log.len().saturating_sub(4)..]);
+        assert!(log.last().unwrap().starts_with("STEP 3 STOPPED AFTER STAGE 15 OF 16: STAGE 16 NOT READY;") && log.last().unwrap().ends_with("ARE LEFT IN PLACE"));
+        // Pipe 1 left unblanked on the surface, screen_gone not called.
+        assert_eq!(e.regs[&reg(R::HubpCntl, 1)] & 1, 0);
+        assert!(!e.ev.contains(&Ev::Gone));
+    }
+    // Refused with the undo the build asks for: stages 15 to 1 undone, screen_gone not called, every register as before.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    e.refuse_offer = Some(ScreenRefused::Unavailable);
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, true);
+    assert_eq!(outcome, Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(ScreenRefused::Unavailable) });
+    assert!(log.iter().any(|x| x.starts_with("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: NO CLIENT OF IT (SLOT_DISPLAY) WAS GRANTED")));
+    assert!(log.last().unwrap().ends_with("ARE UNDONE"));
+    assert!(!e.ev.contains(&Ev::Gone));
+    restored_but(&e, &before, &[]);
+    // A build of 15 names stage 16 with what it would do; a build of 0 too.
+    let mut e = engine();
+    e.frame_us = 16_675;
+    let (_, log) = run_light(&l, &good(), &mut e, 15, false);
+    assert!(log.iter().any(|x| x == "S16 OFFER: NOT RUN (THIS BUILD MAY RUN 15); WOULD:"));
+    assert!(log.iter().any(|x| x == "S16 WOULD OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: 1920x1080, PITCH 7680 BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST"));
+    assert!(!e.ev.iter().any(|x| matches!(x, Ev::Offer(..))));
+    let mut log = Log(vec![]);
+    light::describe(&l, false, &mut log);
+    assert!(log.0.iter().any(|x| x.starts_with("S16 WOULD OFFER THE SURFACE TO THE COMPOSITOR")), "{:#?}", log.0.iter().filter(|x| x.starts_with("S16")).collect::<Vec<_>>());
+}
+
+#[test]
+fn step_3_runs_once_a_boot_by_the_mark_it_leaves_in_its_otg() {
+    let mark = reg(R::OtgVerticalInterrupt2Position, 1);
+    // The first start leaves the mark before stage 1 and keeps it through the undo.
+    let mut e = engine();
+    let (outcome, log) = run(&good(), &mut e, 1);
+    assert_eq!(outcome, Outcome::Stopped { done: 1 });
+    assert_eq!(writes(&e)[0], (mark, light::RESTART_MARK));
+    assert!(log.iter().any(|x| x == "S0 MARKED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 = 5A5A (WAS 00000000): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT"), "{:#?}", log);
+    let mut undone = engine();
+    let img = good();
+    let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    light::run_then_undo(&l, &mut undone, &mut interp, &mut light::Journal::default(), 2, &mut Log(vec![]));
+    assert_eq!(undone.regs[&mark], light::RESTART_MARK);
+    // A start again in the same boot finds it and writes nothing.
+    let mut again = engine();
+    again.regs.insert(mark, light::RESTART_MARK);
+    let (outcome, log) = run(&good(), &mut again, STAGES);
+    assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+    assert!(writes(&again).is_empty());
+    assert!(log.iter().any(|x| x == "STEP 3 NOT RUN: DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT (OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 HOLDS 5A5A)"), "{:#?}", log);
+    // A build that may run no stage leaves no mark.
+    let mut none = engine();
+    run(&good(), &mut none, 0);
+    assert!(writes(&none).is_empty());
+}
+
+#[test]
+fn display_asks_for_the_stack_steps_3_and_4_need() {
+    // linker.ld's PT_GNU_STACK size is the stack display runs on (262-KRN-0164); without it a task has 64 KiB.
+    let ld = include_str!("../display/linker.ld");
+    assert!(ld.contains("stack PT_GNU_STACK FLAGS(6);"));
+    let at = ld.find(".stack (NOLOAD) : { . = . + 0x").expect("no .stack section") + ".stack (NOLOAD) : { . = . + 0x".len();
+    let size = usize::from_str_radix(ld[at..].split(';').next().unwrap(), 16).unwrap();
+    assert_eq!(size, light::STACK_BYTES);
+    assert!(2 * light::STEP3_STACK_BYTES <= size, "{} needed of {}", light::STEP3_STACK_BYTES, size);
+    // The 64 KiB that faulted on 2026-11-22 would not have passed this bound.
+    assert!(2 * light::STEP3_STACK_BYTES > 64 * 1024, "{}", light::STEP3_STACK_BYTES);
+}
+
 #[test]
 fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
     let run_undo = |e: &mut Engine, allowed: u8| {
@@ -425,7 +1004,7 @@ fn a_build_that_undoes_what_it_ran_leaves_every_register_as_before() {
         let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
         assert_eq!(undone, (1..=allowed).rev().collect::<Vec<u8>>());
         assert!(log[..6].iter().any(|x| x.starts_with("S0 THIS BUILD UNDOES THE STAGES IT RAN")));
-        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF 8 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed)));
+        assert!(log.last().unwrap().starts_with(&format!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED", allowed, dcn::STAGES)));
         assert!(!log.iter().any(|x| x.contains("LEFT IN PLACE")));
     }
     // A build of 0 writes nothing and has nothing to undo; a stage that fails is undone as in `run`.
@@ -445,7 +1024,7 @@ fn the_hubp_that_follows_step_3s_otg_is_read_after_stages_5_to_8() {
     let mut e = engine1();
     let (outcome, log) = run(&good(), &mut e, STAGES);
     assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", log);
-    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER STAGES 5 TO 8")));
+    assert!(log.iter().any(|x| x.starts_with("S0 HUBP1 FOLLOWS OTG1, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM 5 ON")));
     for n in 1..=STAGES { assert_eq!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED (1 REGISTERS)", n))), n >= 5, "stage {}", n); }
     assert!(!writes(&e).iter().any(|w| w.0 == hubp1), "HUBP1 was written");
     // Its statuses moving when OTG 1 starts (in blank, the XRQ's requests) fail no stage.
@@ -507,7 +1086,7 @@ fn a_build_that_may_run_nothing_only_describes_and_has_no_device() {
     assert!(lines.iter().any(|x| x.starts_with("S2 UNDO: TABLE 12 WITH 16 BYTES 00 00 00 00 14 00 00 01 FF") && x.ends_with("THEN EVERY WRITE RESTORED")));
     assert!(lines.iter().any(|x| x.starts_with("S8 UNDO: TABLE 76 WITH 32 BYTES 00 00 02 00")));
     assert!(!lines.iter().any(|x| x.contains("WROTE") || x.contains("RUNNING")));
-    assert_eq!(lines.last().unwrap(), "STEP 3 DONE: 0 OF 8 STAGES RUN, NOTHING WRITTEN");
+    assert_eq!(lines.last().unwrap(), &format!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", dcn::STAGES));
     for x in &lines { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
 }
 
@@ -661,6 +1240,112 @@ fn stage_8_failing_at_each_of_its_waits_is_undone_whole() {
 const WATCHED_RUN: [(u8, u8, u32, u32); 95] = [(1, 0, 0x13E7C, 0x00000003), (1, 0, 0x14318, 0x00000003), (2, 12, 0x1783C, 0xB008003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x17844, 0x3F00003E), (2, 12, 0x17840, 0x1E14003E), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x17830, 0x00000021), (2, 12, 0x17834, 0x00000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x1781C, 0xE0000001), (2, 12, 0x17820, 0x00000000), (2, 12, 0x17824, 0x00000000), (2, 12, 0x17828, 0x00000000), (2, 12, 0x17818, 0x001D3337), (2, 12, 0x17818, 0x001D3377), (2, 12, 0x17818, 0x001D3777), (2, 12, 0x17818, 0x001D7777), (2, 12, 0x1780C, 0x12121212), (2, 12, 0x1780C, 0x22222222), (2, 12, 0x00580, 0x00000001), (2, 12, 0x177A0, 0x00000007), (2, 12, 0x177C4, 0x001173F0), (2, 12, 0x177C0, 0x00D01000), (2, 12, 0x177C0, 0x00D03000), (2, 12, 0x177C0, 0x00D07000), (2, 12, 0x177C0, 0x00D0F000), (2, 12, 0x177DC, 0x00000300), (2, 12, 0x00400, 0x00000000), (2, 12, 0x0051C, 0x00000000), (2, 12, 0x00510, 0x0000C000), (2, 12, 0x00400, 0x00000101), (2, 0, 0x00400, 0x00000101), (3, 0, 0x14204, 0x80000300), (3, 0, 0x141A8, 0x00000897), (3, 0, 0x141B0, 0x002C0000), (3, 0, 0x141AC, 0x00C00840), (3, 0, 0x141B4, 0x00000000), (3, 0, 0x141BC, 0x00000464), (3, 0, 0x141C0, 0x00000464), (3, 0, 0x141C4, 0x00000464), (3, 0, 0x141DC, 0x00050000), (3, 0, 0x141D8, 0x00290461), (3, 0, 0x141E0, 0x00000000), (3, 0, 0x14210, 0x00000000), (3, 0, 0x0E7A4, 0x00000000), (3, 0, 0x14204, 0x80000300), (3, 0, 0x1431C, 0x00000024), (3, 0, 0x14320, 0x00010000), (3, 0, 0x14324, 0x00000001), (3, 0, 0x0E7A4, 0x04610000), (3, 0, 0x13E70, 0x00000000), (3, 0, 0x141B8, 0x00000000), (4, 0, 0x13698, 0x00000001), (4, 0, 0x135C0, 0x07800438), (4, 0, 0x135D0, 0x00000000), (4, 0, 0x135B8, 0x00661001), (5, 0, 0x13E6C, 0x0000F100), (5, 0, 0x0E7A4, 0x84610000), (5, 0, 0x14204, 0x80000301), (6, 4, 0x15668, 0x00000000), (6, 4, 0x154AC, 0x0000001F), (6, 4, 0x154A0, 0x00000000), (6, 4, 0x154A0, 0x00000400), (6, 4, 0x154A0, 0x00000000), (6, 0, 0x154A0, 0x00000001), (7, 0, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x174B8, 0x01000302), (8, 76, 0x174B4, 0x00000100), (8, 76, 0x1780C, 0x03030303), (8, 76, 0x1780C, 0x22222222), (8, 76, 0x1783C, 0xB038A034), (8, 76, 0x17840, 0x1E14A034), (8, 76, 0x17844, 0x3F00A034), (8, 76, 0x17848, 0x7434A034), (8, 76, 0x155C0, 0x00000101), (8, 76, 0x15684, 0x0000010F), (8, 76, 0x174B8, 0x11000302), (8, 76, 0x177C0, 0x00D0F000), (8, 76, 0x177C0, 0x00D1F000), (8, 76, 0x177A4, 0x0001C000), (8, 76, 0x1780C, 0x00000000), (8, 76, 0x1780C, 0x04040404), (8, 76, 0x17818, 0x001D4444), (8, 76, 0x1780C, 0x14141414), (8, 76, 0x1780C, 0x24242424), (8, 76, 0x1780C, 0x0C0C0C0C), (8, 0, 0x154A0, 0x01000401), (8, 0, 0x154A0, 0x00000001)];
 
 #[test]
+fn hdmi_signalling_at_1080p_lights_hdmi_a_1_with_the_same_clock_and_is_undone_whole() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, timing::CEA_1080P60, dcn::Signal::Hdmi).unwrap();
+    let mut e = engine();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(10)..]);
+    assert!(log.iter().any(|x| x.ends_with("MODE 1920x1080 AT 148.5 MHZ IN HDMI SIGNALLING (CTA VIC 16)")), "{:#?}", &log[..6]);
+    let g = |r: R| e.regs.get(&reg(r, 0)).copied().unwrap_or(0);
+    assert_eq!((g(R::HdmiControl) & 0x3100_001F, g(R::HdmiVbiPacketControl) & 0x1031, g(R::HdmiGc) & 1), (0x19, 0x31, 0));
+    assert_eq!((g(R::AfmtGenericHdr), g(R::AfmtGeneric0), g(R::AfmtGeneric1)), (0x000D_0282, 0x0828_101F, 16));
+    assert_eq!((g(R::HdmiGenericPacketControl0) & 3, g(R::HdmiGenericPacketControl1) & 0xFFFF), (3, 2));
+    // Every HDMI write logged in stage 6, after table 4 and before stage 7.
+    let s6 = log.iter().position(|x| x.starts_with("S6 WROTE DIG0_HDMI_CONTROL")).unwrap();
+    let s7 = log.iter().position(|x| x.starts_with("S7 BACK END: STAGE 7")).unwrap();
+    assert!(log[..s6].iter().any(|x| x.starts_with("S6 TABLE 4 DONE")) && s6 < s7);
+    assert_eq!(log[s6..s7].iter().filter(|x| x.starts_with("S6 WROTE ")).count(), 18);
+    // The same writes as DVI's but for stage 6's and the tables' mode.
+    let mut dvi = engine();
+    run_light(&Light::new(f, c, timing::CEA_1080P60).unwrap(), &good(), &mut dvi, 8, false);
+    let hdmi_only: Vec<(u32, u32)> = writes(&e).into_iter().filter(|w| !writes(&dvi).iter().any(|d| d.0 == w.0)).collect();
+    assert_eq!(hdmi_only.len(), 18, "{:X?}", hdmi_only);
+    // Undone whole.
+    let mut e = engine();
+    assert_eq!(run_light(&l, &good(), &mut e, 8, true).0, Outcome::Undone { done: 8 });
+    restored_but(&e, &before, &[]);
+    // The Ryzen's own tables on its warm state: tables 4 and 76 in HDMI mode, the PHY's short path, nothing through its bus.
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("hdmi_signalling_at_1080p... (the Ryzen's tables) SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut e = warm();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &bytes, &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(10)..]);
+    // In HDMI mode at the same clock: table 12 two steps more (310, DVI's 308), tables 4 and 76 their HDMI paths, the same
+    // writes in number.
+    for x in ["S2 TABLE 12 DONE: 310 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+              "S8 TABLE 76 DONE: 289 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES", "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"] {
+        assert!(log.iter().any(|l| l == x), "no {:?} in {:#?}", x, log.iter().filter(|l| l.contains("TABLE") && l.contains("DONE") || l.starts_with("S2 THE")).collect::<Vec<_>>());
+    }
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA));
+    let mut e = warm();
+    assert_eq!(run_light(&l, &bytes, &mut e, 8, true).0, Outcome::Undone { done: 8 });
+    restored_but(&e, &before, &[]);
+}
+
+// The Ryzen's monitor's own mode (213-DRV-0095, boot 78's EDID): 3440x1440 at 60 Hz, 324 MHz in 3600x1500.
+const WIDE: timing::Timing = timing::Timing { pixel_khz: 324_000, h_active: 3440, h_front: 48, h_sync: 32, h_back: 80, v_active: 1440, v_front: 3,
+    v_sync: 5, v_back: 52, h_sync_positive: true, v_sync_positive: false, interlaced: false };
+
+#[test]
+fn the_monitors_own_mode_in_hdmi_runs_all_sixteen_stages_at_3440x1440_and_is_undone_whole() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    assert_eq!(l.surface, picture::Size { width: 3440, height: 1440, pitch: 3456 });
+    let mut e = engine();
+    e.frame_us = 16_674;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    let has = |p: &str| assert!(log.iter().any(|x| x.contains(p)), "no {:?} in {:#?}", p, log.iter().filter(|x| x.starts_with("S9 ") || x.starts_with("S0 ")).collect::<Vec<_>>());
+    has("MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)");
+    // Stage 9 for 324 MHz at the 48 MHz reference, 54 requests a line; stage 13 at pitch 3456.
+    has("S9 PIPE 1 FOR 3440x1440 AT 324000 KHZ: REF/PIX 0.1481, PER HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57, LINE 509, REQ 9664 (54 REQUESTS A LINE)");
+    has("S9 PIPE 1'S SYNC FOR ITS PLANE: VSTARTUP 52 (STAGE 3'S), VUPDATE OFFSET 900 WIDTH ");
+    has("HIGH WATERMARK 2133 (4 LINES;");
+    let g = |r: R, i: u8| e.regs.get(&reg(r, i)).copied().unwrap_or(0);
+    assert_eq!((g(R::HubpreqSurfacePitch, 1), g(R::HubpPriViewportDimension, 1), g(R::DsclRecoutSize, 1), g(R::DsclMpcSize, 1)),
+               (3455, 1440 << 16 | 3440, 1440 << 16 | 3440, 1440 << 16 | 3440));
+    assert_eq!(g(R::DpgDimensions, 1), 3440 << 16 | 1440);
+    // Stage 10 at that size, read back; stage 16 offers its shape.
+    assert!(log.iter().any(|x| x == "S10 DRAWN: 3440x1440 AT SLOT 5'S START, PITCH 3456 PIXELS (13824 BYTES); 9 SAMPLES READ BACK AS DRAWN"));
+    assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 3440X1440 / BUILD TESTBUILD"));
+    let lines = picture::Lines::new("TESTBUILD", l.surface);
+    for (x, y) in [(0, 0), (3439, 1439), (1720, 100), (1000, 700)] { assert_eq!(e.surface.get(y * 3456 + x).copied(), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
+    assert!(e.ev.contains(&Ev::Offer(3440, 1440, 13_824)));
+    // HDMI signalling: no VIC, no aspect code in the AVI infoframe; the watch clean.
+    assert_eq!((g(R::AfmtGeneric0, 0), g(R::AfmtGeneric1, 0)), (0x0808_104F, 0));
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    // Undone whole.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    assert_eq!(run_light(&l, &good(), &mut e, 16, true).0, Outcome::Undone { done: 16 });
+    restored_but(&e, &before, &[]);
+    // A mode whose surface does not fit slot 5 is refused before any stage.
+    let big = timing::Timing { pixel_khz: 297_000, h_active: 3840, h_front: 176, h_sync: 88, h_back: 296, v_active: 2160, v_front: 8, v_sync: 10, v_back: 72,
+        h_sync_positive: true, v_sync_positive: true, interlaced: false };
+    assert_eq!(Light::new_with(f, c, big, dcn::Signal::Hdmi).err(), Some(light::Refusal::Surface { bytes: 3840 * 2160 * 4 }));
+    // The Ryzen's tables at 324 MHz in HDMI, on its warm state: the PHY's short path, tables 4 and 76 in HDMI mode.
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_monitors_own_mode... (the Ryzen's tables) SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut e = warm();
+    let (outcome, log) = run_light(&l, &bytes, &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 });
+    for x in ["S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+              "S8 TABLE 76 DONE: 300 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES", "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"] {
+        assert!(log.iter().any(|l| l == x), "no {:?} in {:#?}", x, log.iter().filter(|l| l.contains("TABLE") && l.contains("DONE")).collect::<Vec<_>>());
+    }
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA));
+    // Its four clock-dependent RDPCS values for 324 MHz, as the probe of 2026-11-22 found them.
+    let w = writes(&e);
+    for (o, v) in [(0x1783C, 0xB028_003E), (0x1782C, 0x0001_0660), (0x17830, 0x0000_0011), (0x1781C, 0x8000_0001)] {
+        assert!(w.contains(&(o, v)), "{:05X} = {:08X}", o, v);
+    }
+}
+
+#[test]
 fn the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path() {
     let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path SKIPPED: MIND_AMD_VBIOS is not set"); return };
     let bytes = std::fs::read(&path).unwrap();
@@ -689,6 +1374,7 @@ fn the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path() {
         assert_eq!((a.0, a.1, a.2, a.3 & !status), (b.0, b.1, b.2, b.3 & !status), "write {}", i + 1);
     }
     assert!(!ours.iter().any(|w| w.2 == PHY_A_CR_ADDR || w.2 == PHY_A_CR_DATA), "a write through PHY A's control register bus");
+    assert!(log.iter().any(|l| l == "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"));
     let (f, c) = EXPECTED;
     let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
     for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
@@ -697,6 +1383,7 @@ fn the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path() {
     let (_, log) = run(&bytes, &mut e, 2);
     assert!(log.iter().any(|l| l == "S2 TABLE 12 DONE: 530 STEPS, 4 CALLS, 10 US OF DELAYS, 111 WRITES"), "{:#?}", log.iter().filter(|l| l.contains("TABLE 12")).collect::<Vec<_>>());
     assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA).count(), 37);
+    assert!(log.iter().any(|l| l == "S2 THE PHY WAS NOT SET UP (SCRATCH 0x0): THE LONG PATH: 37 WRITES THROUGH ITS BUS (17 INTO THE PHY)"), "{:#?}", log.iter().filter(|l| l.starts_with("S2 THE")).collect::<Vec<_>>());
 }
 
 #[test]

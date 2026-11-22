@@ -13,6 +13,8 @@ pub const SET_CUR: u8 = 0x01;
 pub const GET_CUR: u8 = 0x81;
 pub const PROBE: u8 = 1;
 pub const COMMIT: u8 = 2;
+/// VS_STREAM_ERROR_CODE_CONTROL: why the camera last marked a payload in error (158-DRV-0082).
+pub const STREAM_ERROR: u8 = 6;
 
 const CS_INTERFACE: u8 = 0x24;
 const VC_HEADER: u8 = 1;
@@ -274,15 +276,25 @@ pub const ERR: u8 = 0x40;
 /// A frame ends at EOF or when the frame ID changes. It is good when no payload of it was in error and it has the bytes
 /// its encoding fixes (any, but some, for one that does not).
 pub struct Assembler {
-    filling: Vec<u8>, ready: Vec<u8>, capacity: usize, exact: bool, fid: Option<u8>, bad: bool,
+    filling: Vec<u8>, ready: Vec<u8>, capacity: usize, exact: bool, fid: Option<u8>, bad: bool, why: u8,
     /// Frames ended good and broken, and the bytes of the last that ended.
     pub good: u32, pub broken: u32, pub last_bytes: usize,
+    /// Why frames broke, and how every frame ended (158-DRV-0082).
+    pub causes: Causes,
 }
+
+/// Why frames broke (a frame counts once for each cause it had: its payloads' error bit, a host controller's error, a
+/// payload header that does not parse, more bytes than a frame holds, a bulk payload that started without a valid header
+/// or whose transfer failed, or the wrong size alone), and how frames ended (a changed frame ID, or EOF).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Causes { pub error_bit: u32, pub damaged: u32, pub header: u32, pub overflow: u32, pub bulk_start: u32, pub bulk_failed: u32, pub size: u32, pub by_fid: u32, pub by_eof: u32 }
+
+const WHY_ERROR: u8 = 1; const WHY_DAMAGED: u8 = 2; const WHY_HEADER: u8 = 4; const WHY_OVERFLOW: u8 = 8; const WHY_START: u8 = 16; const WHY_FAILED: u8 = 32;
 
 impl Assembler {
     /// Frames of `bytes` bytes (`exact`) or of up to `bytes`.
     pub fn new(bytes: usize, exact: bool) -> Self {
-        Self { filling: Vec::with_capacity(bytes), ready: Vec::with_capacity(bytes), capacity: bytes, exact, fid: None, bad: false, good: 0, broken: 0, last_bytes: 0 }
+        Self { filling: Vec::with_capacity(bytes), ready: Vec::with_capacity(bytes), capacity: bytes, exact, fid: None, bad: false, why: 0, good: 0, broken: 0, last_bytes: 0, causes: Causes::default() }
     }
     /// The same, None when the memory is not there (158-DRV-0084): frames of a fixed size get their two buffers whole;
     /// frames of up to `bytes` (Motion JPEG) start at GROWING bytes and grow as their frames do, since a camera's
@@ -292,7 +304,7 @@ impl Assembler {
         let (mut filling, mut ready) = (Vec::new(), Vec::new());
         filling.try_reserve_exact(first).ok()?;
         ready.try_reserve_exact(first).ok()?;
-        Some(Self { filling, ready, capacity: bytes, exact, fid: None, bad: false, good: 0, broken: 0, last_bytes: 0 })
+        Some(Self { filling, ready, capacity: bytes, exact, fid: None, bad: false, why: 0, good: 0, broken: 0, last_bytes: 0, causes: Causes::default() })
     }
 
     /// One payload; `damaged` when the host controller reported an error for it. Some(good) when a frame ended with it;
@@ -300,7 +312,7 @@ impl Assembler {
     pub fn feed(&mut self, payload: &[u8], damaged: bool) -> Option<bool> {
         if payload.len() < 2 { return None; } // an empty packet carries nothing
         let header = payload[0] as usize;
-        if header < 2 || header > payload.len() { self.bad = true; return None; }
+        if header < 2 || header > payload.len() { self.mark(WHY_HEADER); return None; }
         let info = payload[1];
         let ended = self.begin(info, damaged);
         self.data(&payload[header..]);
@@ -309,32 +321,40 @@ impl Assembler {
 
     // A payload's header: a changed frame ID ends the frame before it; an error or damage spoils the frame.
     fn begin(&mut self, info: u8, damaged: bool) -> Option<bool> {
-        let ended = if self.fid.is_some_and(|f| f != info & FID) { self.end() } else { None };
+        let ended = if self.fid.is_some_and(|f| f != info & FID) { let e = self.end(); if e.is_some() { self.causes.by_fid += 1; } e } else { None };
         self.fid = Some(info & FID);
-        if damaged || info & ERR != 0 { self.bad = true; }
+        if damaged { self.mark(WHY_DAMAGED); }
+        if info & ERR != 0 { self.mark(WHY_ERROR); }
         ended
     }
 
     // A payload's bytes after its header; a frame past its capacity, or that finds no memory to grow, is spoiled.
     fn data(&mut self, data: &[u8]) {
-        if self.filling.len() + data.len() > self.capacity || self.filling.try_reserve(data.len()).is_err() { self.bad = true; } else { self.filling.extend_from_slice(data); }
+        if self.filling.len() + data.len() > self.capacity || self.filling.try_reserve(data.len()).is_err() { self.mark(WHY_OVERFLOW); } else { self.filling.extend_from_slice(data); }
     }
 
     // A payload's end: EOF in its header ends the frame.
-    fn finish(&mut self, info: u8) -> Option<bool> { if info & EOF != 0 { self.end() } else { None } }
+    fn finish(&mut self, info: u8) -> Option<bool> { if info & EOF == 0 { return None; } let e = self.end(); if e.is_some() { self.causes.by_eof += 1; } e }
 
-    // A payload broken off: its frame is spoiled.
-    fn spoil(&mut self) { self.bad = true; }
+    // The frame so far is spoiled, for `why`.
+    fn mark(&mut self, why: u8) { self.bad = true; self.why |= why; }
 
     // The frame so far ends; None if it had nothing (no bytes, no error).
     fn end(&mut self) -> Option<bool> {
         let bytes = self.filling.len();
         if bytes == 0 && !self.bad { return None; }
         let good = !self.bad && if self.exact { bytes == self.capacity } else { bytes > 0 };
-        if good { core::mem::swap(&mut self.filling, &mut self.ready); self.good += 1; } else { self.broken += 1; }
+        if good { core::mem::swap(&mut self.filling, &mut self.ready); self.good += 1; } else {
+            self.broken += 1;
+            let (w, c) = (self.why, &mut self.causes);
+            for (bit, count) in [(WHY_ERROR, &mut c.error_bit), (WHY_DAMAGED, &mut c.damaged), (WHY_HEADER, &mut c.header), (WHY_OVERFLOW, &mut c.overflow), (WHY_START, &mut c.bulk_start), (WHY_FAILED, &mut c.bulk_failed)] {
+                if w & bit != 0 { *count += 1; }
+            }
+            if w == 0 { c.size += 1; }
+        }
         self.last_bytes = bytes;
         self.filling.clear();
-        self.bad = false;
+        (self.bad, self.why) = (false, 0);
         Some(good)
     }
 
@@ -362,7 +382,7 @@ impl Bulk {
         if self.at == 0 {
             if data.is_empty() { return None; } // a zero-length transfer between payloads
             let header = data[0] as usize;
-            if data.len() < 2 || header < 2 || header > data.len() { assembler.spoil(); return None; }
+            if data.len() < 2 || header < 2 || header > data.len() { assembler.mark(WHY_START); return None; }
             self.info = data[1];
             ended = assembler.begin(self.info, false);
             body = &data[header..];
@@ -377,5 +397,5 @@ impl Bulk {
     }
 
     /// A transfer that failed: the payload in progress is dropped, its frame spoiled, and the next transfer starts anew.
-    pub fn failed(&mut self, assembler: &mut Assembler) { if self.at != 0 { assembler.spoil(); } self.at = 0; }
+    pub fn failed(&mut self, assembler: &mut Assembler) { if self.at != 0 { assembler.mark(WHY_FAILED); } self.at = 0; }
 }

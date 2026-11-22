@@ -1727,6 +1727,7 @@ def shell_suite(vm):
     print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
           "error line kept on the screen, a script writes one only with requires: files", flush=True)
     hostname_check(vm)
+    screen_check(vm)
     secret_line_check(vm)
     storefs_check(vm)
     vfs_restart_check(vm)
@@ -2917,6 +2918,28 @@ def hostname_check(vm):
     require(vm.command("rm data/machine"), "OK")
     print("PASS: hostname (000-APP-0123): mindcore with none set; DEXP kept as dexp in data/machine/name and logged once; "
           "the same name again changes nothing; my_pc and -dexp refused with the rule, the file as it was", flush=True)
+
+
+def screen_check(vm):
+    """213-APP-0158: `screen second` with no second screen (QEMU's display is one) says so; `screen second stretch` is
+    taken for the screens offered later and kept in data/displays.txt; a restarted shell sets it again from the file."""
+    require(vm.command("screen second"), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE")
+    require(vm.command("screen second wide"), "SCREEN: SCREEN SECOND SHOWS THE SECOND SCREEN; SCREEN SECOND KEEP|STRETCH")
+    out = vm.command("screen second stretch")
+    require_all(out, "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt", "SCREEN: NO SECOND SCREEN")
+    require(vm.command("cat data/displays.txt"), "second stretch")
+    shell = vm.services()["shell"]
+    vm.collect()
+    vm.send(f"kill {shell}\n", raw=True)
+    vm.expect("MIND> ", timeout=60, after=f"kill {shell}")
+    deadline = time.monotonic() + 30
+    while "THE SECOND SCREEN'S FIT FROM data/displays.txt: STRETCH" not in (log := vm.command("dmesg -s shell", raw=True)):
+        assert time.monotonic() < deadline, log[-1500:]
+        time.sleep(1)
+    require(vm.command("screen second keep"), "(SECOND KEEP), KEPT IN data/displays.txt")
+    require(vm.command("rm data/displays.txt"), "OK")
+    print("PASS: screen (213-APP-0158): no second screen said; stretch taken and kept in data/displays.txt, set again by a "
+          "restarted shell; keep back; a fit it does not know refused", flush=True)
 
 
 def secret_line_check(vm):
@@ -7699,11 +7722,11 @@ def gateway_stub_check(args):
                          r"REBOOT REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART THE MACHINE: NOT IN THE OWNER'S POLICY \(MC-3\.4\)"):
                 assert re.search(line, refusals), (line, refusals[-2000:])
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
-            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
-            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
-            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, then stops calling, and
-            # the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
-            seen, deadline = [], time.monotonic() + 60
+            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, 6 s each, then stops
+            # calling, and the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
+            # Sampled from the restart on, by screendumps alone between dmesg reads at most every 3 s: on a loaded machine a
+            # dmesg read took longer than the red's 6 s, and waiting for the stub's lines first missed it (000-KRN-0275).
+            seen, deadline, read = [], time.monotonic() + 150, 0.0
             while time.monotonic() < deadline:
                 _, size, _, screen = vm.screenshot().split(b"\n", 3)
                 width = int(size.split()[0])
@@ -7711,9 +7734,14 @@ def gateway_stub_check(args):
                 pixel = screen[at:at + 3]
                 if not seen or seen[-1] != pixel:
                     seen.append(pixel)
-                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True, timeout=60).rpartition("SCOPE START 2")[2]:
-                    break
+                if time.monotonic() - read >= 3:
+                    read = time.monotonic()
+                    out = vm.command("dmesg -s effector_gw", raw=True, timeout=60)
+                    if "SCOPE START 2" in out and "[GATEWAY-STUB] REMOTE MARK STOPPED" in out.rpartition("SCOPE START 2")[2]:
+                        break
                 time.sleep(.3)
+            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
             time.sleep(4)
             _, size, _, screen = vm.screenshot().split(b"\n", 3)
             after = screen[at:at + 3]
@@ -8202,6 +8230,14 @@ def camera_check(vm):
     vm.hmp("sendkey n")
     vm.serial(enter=False)
     vm.logged("[CAMERA] ONE CAMERA ONLY: test pattern", since)
+    # 158-APP-0152: the pattern's three modes (video.wit 1.1): 640x480 at 30, 320x240 at 10, 160x120 at 5. Opened at
+    # 320x240 at 10 it is mode 1; m steps on to mode 2, round to 0, and Shift+m back, each at its own size.
+    for keys, line in (("m", "160X120 AT 5/S: MODE 2 (OF 0 TO 2), 160x120 at 5/s SYNTHETIC"), ("m", "640X480 AT 30/S: MODE 0 (OF 0 TO 2), 640x480 at 30/s SYNTHETIC"),
+                       ("shift-m", "160X120 AT 5/S: MODE 2 (OF 0 TO 2), 160x120 at 5/s SYNTHETIC")):
+        since = len(vm.log)
+        vm.hmp(f"sendkey {keys}")
+        vm.serial(enter=False)
+        vm.logged(f"[CAMERA] OPENED test pattern {line}", since)
     # Read from the log: camera may end, and the shell resume, within the 100 ms serial() drops (round 162's gate).
     since = len(vm.log)
     vm.hmp("sendkey esc")
@@ -8209,8 +8245,13 @@ def camera_check(vm):
     vm.logged("[CAMERA] SHOWN ", since)
     vm.logged("SHELL RESUMED.", since)
     time.sleep(.2); vm.collect(); vm.output = ""
+    # -m: a mode at its own size, and one past the list refused with the count.
+    require(vm.command("camera -m 7 -s ram:none.bmp", timeout=30), "camera: mode 7: the gateway lists 3 modes for camera 0, numbers 0 to 2")
+    require(vm.command("camera -m 0 -s ram:cam640.bmp", timeout=60), "[CAMERA] STILL ram:cam640.bmp: 640X480, FRAME ")
+    time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
-          "-c beyond the list refused, n with one camera named (158-APP-0147)", flush=True)
+          "-c beyond the list refused, n with one camera named (158-APP-0147); the pattern's three modes stepped by m and Shift+m, "
+          "a still at -m 0's 640x480 and -m 7 refused (158-APP-0152)", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 
@@ -11274,6 +11315,39 @@ def usbaudio_suite(args):
           f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
           f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
           f"unplugged, the codec again", flush=True)
+    audiostub_check(args)
+
+
+def audiostub_check(args):
+    """000-DRV-0093: tests/audio_stub opens capture and playback together through audio_gw on QEMU's usb-audio, which has
+    no capture: it says so, plays its tone for 3 s, counts the frames it played and ends with the hardware tests'
+    marker line. The capture side of a duplex run is evidence on a real device only (the Ryzen's speakerphone)."""
+    if not args.audio_elf:
+        print("SKIP: audiostub: tests/audio_stub is not built (scripts/x86_fixtures.sh)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: audiostub needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-audiostub-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"audiostub.elf": Path(args.audio_elf).read_bytes()})
+        wav = Path(temp) / "stub.wav"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, audio="none", audio_card="HDA",
+                extra=["-audiodev", f"wav,id=ssnd,path={wav}", "-device", "qemu-xhci,id=axhci", "-device", "usb-audio,bus=axhci.0,audiodev=ssnd,id=uac"])
+        try:
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "ATTACHED")
+                if "ATTACHED" in log:
+                    break
+            require(log, "[AUDIO] USB")
+            out = vm.command("audiostub duplex 3 440", timeout=40)
+            require(out, "AUDIO STUB: NO CAPTURE")
+            ended = re.search(r"AUDIO STUB: ENDED AT \d+ MS OF UPTIME \((\d+) MS\): CAPTURE NONE: 0 BUFFERS, 0 FRAMES, 0 OVERFLOWS; PLAYBACK (\d+) FRAMES AT 440 HZ", out)
+            assert ended and int(ended[1]) >= 3000 and int(ended[2]) >= 3 * 48_000 * 8 // 10, out
+            require(out, "*** AUDIO DUPLEX Complete. Data collected ***")
+        finally:
+            vm.close()
+    print(f"PASS: audiostub duplex: no capture on QEMU's usb-audio, said; {ended[2]} frames of a 440 Hz tone played in {ended[1]} ms, and the marker line (000-DRV-0093)", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -20100,6 +20174,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
+    parser.add_argument("--audio-elf", help="test-only ELF built from tests/audio_stub (capture and playback together in the usbaudio suite, 000-DRV-0093); found where the fixture scripts put it")
     parser.add_argument("--video-elf", help="test-only ELF built from tests/video_stub (two cameras at once in the cameras suite, 158-DRV-0082); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
     parser.add_argument("--secret-elf", help="test-only ELF built from tests/secret_stub (a console program's secret line in the shell suite, 000-APP-0126); found where the fixture scripts put it")
@@ -20151,6 +20226,9 @@ def main():
     # The cameras suite's stub (158-DRV-0082): x86, where the suite runs.
     stub = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-video-target/x86_64-unknown-none/release/video_stub"
     args.video_elf = args.video_elf or (str(stub) if args.arch == "x86_64" and stub.exists() else None)
+    # The usbaudio suite's duplex stub (000-DRV-0093): x86, where the suite runs.
+    duplex = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-audio-target/x86_64-unknown-none/release/audio_stub"
+    args.audio_elf = args.audio_elf or (str(duplex) if args.arch == "x86_64" and duplex.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"

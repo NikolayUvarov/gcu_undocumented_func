@@ -104,6 +104,19 @@ On USB 2 a camera sends its larger sizes and higher rates as MJPEG alone: uncomp
 
 This holds for that machine, those cameras and that release (MC-12.1).
 
+**What the decoder takes from elsewhere** (recorded 2026-11-22, the owner session's decision):
+- **Its inverse DCT** (`idct8`, `idct`) is the Independent JPEG Group's libjpeg 6b `jidctint.c` (`jpeg_idct_islow`), rewritten in Rust. Its author wrote it from what it knew of that file, not from Loeffler, Ligtenberg and Moschytz's paper.
+  - No line of the C was copied.
+  - Its twelve fixed-point constants at 13 bits, the two passes with PASS1_BITS 2, the even and odd parts, the shortcut for a column without AC terms and the final descaling are the IJG's.
+  - So it is code derived from the IJG's. THIRD_PARTY.md has the entry, LICENSES/IJG.txt has the terms with the acknowledgement sentence, and the file's header names it.
+  - `jpeg.rs`'s forward DCT (`jfdctint.c`) and quality scaling (`jcparam.c`) of issue 093 are recorded with it.
+- **Its standard Huffman tables** for frames without their own are ITU-T T.81 Annex K.3, Tables K.3 to K.6, taken from `jpeg.rs`, which transcribes the standard.
+  - The decoder dequantizes with each picture's own tables; it has no standard quantization table.
+  - The zigzag order is Figure A.6.
+- **Not recorded before:** 502d9a4f2 landed in round 169 without this record.
+- **The careful reading** (the owner session, 2026-11-22): a rewrite that keeps the IJG's constants, passes and shortcuts counts as "part of the source code" under the IJG's condition (1). So `LICENSES/IJG-README-6b.txt` holds the README of libjpeg 6b, unaltered. It came from `https://www.ijg.org/files/jpegsrc.v6b.tar.gz`, SHA-256 `75c3ec24…e35d`, which is in THIRD_PARTY.md whole.
+- **The maintainer is asked** to confirm that this meets the IJG's terms, or to say what else he wants (`issues-human/README.md`, section 17). It is a legal question.
+
 ## Related
 
 [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md), [158-DRV-0072](158-DRV-0072-every-usb-camera-and-bulk-streaming.md).
