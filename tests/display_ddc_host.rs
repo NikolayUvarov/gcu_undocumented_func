@@ -159,7 +159,8 @@ fn dtd(t: &Timing) -> [u8; 18] {
 fn descriptor(tag: u8, payload: &[u8]) -> [u8; 18] { let mut d = [0u8; 18]; d[3] = tag; d[5..5 + payload.len()].copy_from_slice(payload); d }
 fn seal(block: &mut [u8]) { let sum = block[..127].iter().fold(0u8, |s, b| s.wrapping_add(*b)); block[127] = 0u8.wrapping_sub(sum); }
 
-fn monitor(wide_30: bool, extension: bool) -> Vec<u8> {
+fn monitor(wide_30: bool, extension: bool) -> Vec<u8> { monitor_with(WIDE_60, wide_30, extension, true) }
+fn monitor_with(preferred: Timing, wide_30: bool, extension: bool, hdmi: bool) -> Vec<u8> {
     let mut b = vec![0u8; 256];
     b[..8].copy_from_slice(&[0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0]);
     let id: u16 = (((b'W' - b'A' + 1) as u16) << 10) | (((b'I' - b'A' + 1) as u16) << 5) | (b'D' - b'A' + 1) as u16;
@@ -169,7 +170,7 @@ fn monitor(wide_30: bool, extension: bool) -> Vec<u8> {
     for s in b[38..54].chunks_mut(2) { s.copy_from_slice(&[1, 1]); }
     b[38] = (1920 / 8 - 31) as u8; b[39] = 3 << 6; // 1920x1080 at 60 Hz
     b[40] = (1680 / 8 - 31) as u8; b[41] = 0; // 1680x1050 (16:10) at 60 Hz
-    b[54..72].copy_from_slice(&dtd(&WIDE_60));
+    b[54..72].copy_from_slice(&dtd(&preferred));
     b[72..90].copy_from_slice(&if wide_30 { dtd(&WIDE_30) } else { descriptor(0x10, &[]) });
     b[90..108].copy_from_slice(&descriptor(0xFD, &[24, 85, 30, 160, 60]));
     b[108..126].copy_from_slice(&descriptor(0xFC, b"WIDE MONITOR\n"));
@@ -178,8 +179,10 @@ fn monitor(wide_30: bool, extension: bool) -> Vec<u8> {
     let e = &mut b[128..];
     e[0] = 0x02; e[1] = 3;
     let mut blocks: Vec<u8> = vec![0x40 | 3, 16 | 0x80, 4, 31];
-    blocks.extend_from_slice(&[0x60 | 7, 0x03, 0x0C, 0x00, 0x10, 0x00, 0x38, 68]); // HDMI 1.4: 1.0.0.0, 340 MHz
-    blocks.extend_from_slice(&[0x60 | 6, 0xD8, 0x5D, 0xC4, 1, 120, 0x80]); // HDMI Forum: 600 MHz
+    if hdmi {
+        blocks.extend_from_slice(&[0x60 | 7, 0x03, 0x0C, 0x00, 0x10, 0x00, 0x38, 68]); // HDMI 1.4: 1.0.0.0, 340 MHz
+        blocks.extend_from_slice(&[0x60 | 6, 0xD8, 0x5D, 0xC4, 1, 120, 0x80]); // HDMI Forum: 600 MHz
+    }
     e[4..4 + blocks.len()].copy_from_slice(&blocks);
     e[2] = (4 + blocks.len()) as u8;
     seal(e);
@@ -312,4 +315,22 @@ fn what_the_edid_says_for_the_mode_and_a_dvi_mode_nearer_its_shape() {
     let read = ddc::Read { bytes: monitor(false, true).try_into().unwrap(), blocks: 2 };
     ddc::describe(&read, &mut log);
     assert!(log.0.iter().any(|x| x == "D WITHIN DVI'S 165 MHZ, NO TIMING IT GIVES IN FULL IS NEARER ITS SHAPE THAN 1920x1080"), "{:#?}", log.0);
+}
+
+#[test]
+fn the_mode_is_the_edids_preferred_in_hdmi_when_it_fits_else_todays() {
+    use dcn::Signal;
+    use light::{mode_from_edid, ModeFrom};
+    let today = timing::CEA_1080P60;
+    let edid = |b: Vec<u8>| edid::Edid::parse(&b).unwrap();
+    // The Ryzen's monitor: 3440x1440 at 60 Hz, 324 MHz, an HDMI sink.
+    assert_eq!(mode_from_edid(Some(&edid(monitor(true, true))), today, Signal::Dvi), (WIDE_60, Signal::Hdmi, ModeFrom::Edid));
+    // Today's mode, in the signalling asked for, otherwise.
+    assert_eq!(mode_from_edid(None, today, Signal::Dvi), (today, Signal::Dvi, ModeFrom::NotRead));
+    assert_eq!(mode_from_edid(Some(&edid(monitor_with(WIDE_60, false, true, false))), today, Signal::Hdmi), (today, Signal::Hdmi, ModeFrom::NotHdmi));
+    let wide_100 = Timing { pixel_khz: 540_000, ..WIDE_60 };
+    assert_eq!(mode_from_edid(Some(&edid(monitor_with(wide_100, false, true, true))), today, Signal::Dvi).2, ModeFrom::OverClock { khz: 540_000, limit: 340_000 });
+    let uhd_30 = Timing { pixel_khz: 297_000, h_active: 3840, h_front: 176, h_sync: 88, h_back: 296, v_active: 2160, v_front: 8, v_sync: 10, v_back: 72,
+        h_sync_positive: true, v_sync_positive: true, interlaced: false };
+    assert_eq!(mode_from_edid(Some(&edid(monitor_with(uhd_30, false, true, true))), today, Signal::Dvi).2, ModeFrom::Surface { bytes: 3840 * 2160 * 4 });
 }

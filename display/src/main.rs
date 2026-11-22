@@ -36,6 +36,10 @@ const EDID_ALLOWED: bool = false;
 /// engine, its general control packet and an AVI infoframe; the mode stays 1920x1080 (VIC 16). Set on the DRV owner
 /// session's word.
 const HDMI_SIGNALLING: bool = false;
+/// When true, with EDID_ALLOWED, steps 3 and 4 take the EDID's preferred timing in HDMI signalling when it fits
+/// (`light::mode_from_edid`): the Ryzen's monitor's 3440x1440 at 60 Hz, 324 MHz; else today's mode. Set on the DRV owner
+/// session's word.
+const MODE_FROM_EDID: bool = false;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
 const UNDO_AFTER_STAGES: bool = false;
@@ -74,8 +78,8 @@ fn main(_info: &'static BootInfo) {
     }
     let mut store = batches::Store::default();
     let (read, mmio) = step1(id, engine, &mut store);
-    step2(&store, mmio.as_ref());
-    let written = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()));
+    let edid = step2(&store, mmio.as_ref());
+    let written = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()), edid.as_ref());
     match (read, written) {
         (0, 0) => mind::println!("[DISPLAY] NO REGISTER READ OR WRITTEN"),
         (r, 0) => mind::println!("[DISPLAY] {} REGISTERS READ, NONE WRITTEN", r),
@@ -98,11 +102,12 @@ fn step1(id: u32, engine: usize, store: &mut batches::Store) -> (usize, Option<M
     (read, Some(registers.0))
 }
 
-/// Step 2 (213-DRV-0095): the EDID over DDC1, on step 1's mapping; logged only.
-fn step2(store: &batches::Store, mmio: Option<&Mmio>) {
-    if !EDID_ALLOWED { mind::println!("[DISPLAY] STEP 2 (THE EDID OVER DDC1) NOT RUN: THIS BUILD DOES NOT ASK FOR IT"); return; }
-    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 2 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return };
-    if let Ok(read) = ddc::read(store, &mut Ddc(mmio), &mut Log) { ddc::describe(&read, &mut Log); }
+/// Step 2 (213-DRV-0095): the EDID over DDC1, on step 1's mapping, and what it says.
+fn step2(store: &batches::Store, mmio: Option<&Mmio>) -> Option<edid::Edid> {
+    if !EDID_ALLOWED { mind::println!("[DISPLAY] STEP 2 (THE EDID OVER DDC1) NOT RUN: THIS BUILD DOES NOT ASK FOR IT"); return None; }
+    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 2 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return None };
+    let read = ddc::read(store, &mut Ddc(mmio), &mut Log).ok()?;
+    ddc::describe(&read, &mut Log)
 }
 
 // Step 2's access to the engine: reads, the writes ddc.rs's guard lets through, and time.
@@ -129,14 +134,19 @@ impl light::Clock for Ddc<'_> {
 
 /// Step 3: the writes it made. At STAGES_ALLOWED 0 it only describes the stages, for the pipe step 1 found or, with
 /// step 1 not read, for the survey's expectation.
-fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usize {
-    let timing = timing::first_light_mode(&HDMI_A_1_VICS);
+fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>, edid: Option<&edid::Edid>) -> usize {
+    let today = timing::first_light_mode(&HDMI_A_1_VICS);
     let (found, expected) = match light::assess(store) {
         Ok(found) => (found, false),
         Err(why) if STAGES_ALLOWED == 0 => { mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why); (light::EXPECTED, true) }
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
     let signal = if HDMI_SIGNALLING { dcn::Signal::Hdmi } else { dcn::Signal::Dvi };
+    let (timing, signal) = if MODE_FROM_EDID {
+        let (timing, signal, why) = light::mode_from_edid(edid, today, signal);
+        mind::println!("[DISPLAY] STEP 3'S MODE: {}x{} AT {} KHZ IN {:?} SIGNALLING, {}", timing.h_active, timing.v_active, timing.pixel_khz, signal, why);
+        (timing, signal)
+    } else { (today, signal) };
     let plan = match light::Light::new_with(found.0, found.1, timing, signal) {
         Ok(plan) => plan.with_reference(light::reference(store, &found.0, &found.1)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
@@ -209,16 +219,16 @@ impl light::Screens for Writer {
     fn gone(&mut self) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.gone() }
 }
 impl light::Canvas for Writer {
-    fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
-        let (Some(surface), start) = (&self.1, y * picture::PITCH * 4) else { return false };
-        if y >= picture::HEIGHT || start + pixels.len() * 4 > surface.len() { return false; }
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+        let (Some(surface), start) = (&self.1, y * pitch * 4) else { return false };
+        if pixels.len() > pitch || start + pixels.len() * 4 > surface.len() { return false; }
         for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
         true
     }
-    fn sample(&mut self, x: usize, y: usize) -> Option<u32> {
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> {
         let surface = self.1.as_ref()?;
-        let at = (y * picture::PITCH + x) * 4;
-        (x < picture::WIDTH && y < picture::HEIGHT && at + 4 <= surface.len()).then(|| surface.read32(at))
+        let at = (y * pitch + x) * 4;
+        (x < pitch && at + 4 <= surface.len()).then(|| surface.read32(at))
     }
 }
 impl light::Clock for Writer {
