@@ -17,8 +17,10 @@ use dcn::{Reg, Step, R};
 // Step 3's stages (first light); step 4's come after them (213-DRV-0092).
 const STAGES: u8 = dcn::FIRST_LIGHT;
 use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, ScreenRefused, Screens, Writable, EXPECTED, HDMI_A_1};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 fn seg(s: usize, dword: u32) -> u32 { (dcn::SEGMENT[s] + dword) * 4 }
 fn reg(r: R, i: u8) -> u32 { r.at(i).unwrap().offset() }
@@ -158,7 +160,10 @@ struct Engine {
     surface: Vec<u32>, no_surface: bool, pitch: usize,
     // The compositor's answers to stage 16's offer and to screen_gone (display.wit 1.3); none: it takes them.
     refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
+    // Time the log spent (the survey's pacing, `Paced`), added to the clock at the next access (213-DRV-0098).
+    pace: Option<Rc<Cell<u64>>>,
 }
+impl Engine { fn catch_up(&mut self) { if let Some(p) = &self.pace { self.clock += p.replace(0); } } }
 impl Screens for Engine {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> {
         self.ev.push(Ev::Offer(width, height, pitch));
@@ -182,6 +187,7 @@ impl Canvas for Engine {
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
+        self.catch_up();
         self.clock += 10;
         if let Some((left, len)) = self.stalled { if left == 0 { self.clock += len; self.stalled = None; } else { self.stalled = Some((left - 1, len)); } }
         if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
@@ -203,6 +209,7 @@ impl Bus for Engine {
 }
 impl Poke for Engine {
     fn write(&mut self, w: Writable, v: u32) {
+        self.catch_up();
         let o = w.reg().offset();
         self.ev.push(Ev::Write(o, v));
         // The status bits that follow their requests: clocks on, the generator running.
@@ -221,8 +228,8 @@ impl Poke for Engine {
     }
 }
 impl Clock for Engine {
-    fn now_us(&mut self) -> u64 { self.clock }
-    fn delay_us(&mut self, us: u32) { self.clock += us as u64; }
+    fn now_us(&mut self) -> u64 { self.catch_up(); self.clock }
+    fn delay_us(&mut self, us: u32) { self.catch_up(); self.clock += us as u64; }
 }
 
 struct Log(Vec<String>);
@@ -1430,4 +1437,235 @@ fn the_ryzens_own_tables_through_step_3() {
     let table_data = log.iter().filter(|x| x.starts_with("S2 T12 WROTE AT 177D4")).count();
     assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA).count(), table_data, "the undo wrote into PHY A");
     for x in log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ") && !x.contains(" WROTE ")) { eprintln!("{}", x); }
+}
+
+// --- the production order (213-DRV-0098) ---
+
+// The survey's log as display paces it on the hardware: 20 ms after each line (LINE_PACE_MS) and each pause its length,
+// on the model's clock.
+struct Paced { lines: Vec<String>, clock: Rc<Cell<u64>> }
+impl Out for Paced {
+    fn line(&mut self, a: fmt::Arguments) { self.lines.push(a.to_string()); self.clock.set(self.clock.get() + 20_000); }
+    fn pause(&mut self, ms: u32) { self.clock.set(self.clock.get() + ms as u64 * 1000); }
+}
+
+// What the device saw, in order: every write, the offer and screen_gone.
+fn device(e: &Engine) -> Vec<Ev> { e.ev.iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect() }
+
+struct Ran { outcome: Outcome, times: light::Times, device: Vec<Ev>, log: Vec<String>, engine: Engine }
+
+// Steps 3 and 4 on a fresh model in each order: the survey's through `Paced` (its lines and pauses on the clock), the
+// production one through `batches::Held` over `Paced` (only what it logs is paced), as main.rs makes them.
+fn both_orders(l: &Light, img: &[u8], make: &dyn Fn() -> Engine, allowed: u8, undo: bool) -> (Ran, Ran) {
+    let go = |production: bool| {
+        let mut e = make();
+        let pace = Rc::new(Cell::new(0));
+        e.pace = Some(pace.clone());
+        let mut interp = atom::Interpreter::new(atom::Image::new(img).unwrap());
+        let mut journal = light::Journal::default();
+        let paced = Paced { lines: vec![], clock: pace };
+        let (outcome, times, log) = if production {
+            let mut buf = vec![0u8; batches::HELD_BYTES];
+            let mut held = batches::Held::new(paced, &mut buf);
+            let (o, t) = light::run_timed(l, &mut e, &mut interp, &mut journal, allowed, undo, &mut held);
+            (o, t, held.inner.lines)
+        } else {
+            let mut paced = paced;
+            let (o, t) = light::run_timed(l, &mut e, &mut interp, &mut journal, allowed, undo, &mut paced);
+            (o, t, paced.lines)
+        };
+        Ran { outcome, times, device: device(&e), log, engine: e }
+    };
+    (go(false), go(true))
+}
+
+fn same_device(survey: &Ran, production: &Ran, case: &str) {
+    assert_eq!(survey.outcome, production.outcome, "{}", case);
+    assert_eq!(survey.device.len(), production.device.len(), "{}: {} and {} writes", case, survey.device.len(), production.device.len());
+    for (i, (a, b)) in survey.device.iter().zip(&production.device).enumerate() { assert_eq!(a, b, "{}: event {}", case, i); }
+}
+
+// Both outputs' frames on the model, 60.2 Hz: a whole number of stage 9's polls (100 us and a 10 us read), so that its
+// count of 30 frames, and with it pipe 1's DLG and sync, comes out the same whatever phase of a frame it starts in. On
+// the hardware that count is a measure each run (268,495 kHz at boot 71, 268,522 at boot 81), so the values stages 13
+// and 14 write from it can differ in their last digit between two boots in either order.
+const DP2: u64 = 16_610;
+
+// A line with its numbers masked: the times in a line differ between the orders, the words do not.
+fn words(x: &str) -> String {
+    let mut out = String::new();
+    for ch in x.chars() { if ch.is_ascii_digit() { if !out.ends_with('#') { out.push('#'); } } else { out.push(ch); } }
+    out
+}
+
+#[test]
+fn the_production_order_makes_the_surveys_writes_in_the_same_order_at_1080p_and_in_the_edids_mode() {
+    let (f, c) = EXPECTED;
+    let modes = [("1920x1080 DVI", timing::CEA_1080P60, dcn::Signal::Dvi), ("1920x1080 HDMI", timing::CEA_1080P60, dcn::Signal::Hdmi),
+                 ("the EDID's 3440x1440 HDMI", WIDE, dcn::Signal::Hdmi)];
+    let paced = || { let mut e = engine(); e.frame_us = DP2; e };
+    for (name, mode, signal) in modes {
+        let l = Light::new_with(f, c, mode, signal).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+        // All sixteen stages, left in place and undone.
+        for undo in [false, true] {
+            let (s, p) = both_orders(&l, &good(), &paced, 16, undo);
+            assert_eq!(s.outcome, if undo { Outcome::Undone { done: 16 } } else { Outcome::Stopped { done: 16 } }, "{} {:#?}", name, &s.log[s.log.len().saturating_sub(8)..]);
+            same_device(&s, &p, &format!("{}, undo {}", name, undo));
+            assert!(s.device.iter().filter(|x| matches!(x, Ev::Write(..))).count() > 100, "{}", s.device.len());
+        }
+        // Each build of fewer stages.
+        for allowed in [1, 2, 5, 8, 9, 10, 13, 15] {
+            let (s, p) = both_orders(&l, &good(), &paced, allowed, false);
+            assert_eq!(s.outcome, Outcome::Stopped { done: allowed });
+            same_device(&s, &p, &format!("{}, {} stages", name, allowed));
+        }
+    }
+    // The survey's pauses and lines took the clock on by tens of seconds; the production order by under a second besides
+    // stage 9's count and stage 15's watch.
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let (s, p) = both_orders(&l, &good(), &paced, 16, false);
+    assert!(s.times.total_us > 60_000_000, "{:?}", s.times);
+    assert!(p.times.total_us < p.times.count_us + p.times.watch_us + 1_000_000, "{:?}", p.times);
+}
+
+#[test]
+fn the_production_order_fails_and_undoes_as_the_survey_does() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let cntl1 = reg(R::HubpCntl, 1);
+    let cases: Vec<(&str, Box<dyn Fn() -> Engine>, Outcome)> = vec![
+        ("stage 5's frames never move", Box::new(|| { let mut e = engine(); e.frames_move = false; e }), Outcome::Failed { stage: 5, why: Failure::NoFrames(0) }),
+        ("a status that never clears: stage 6's generic packet conflict", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.set.push((reg(R::AfmtVbiPacketControl, 0), 1 << 16)); e }),
+            Outcome::Failed { stage: 6, why: Failure::Timeout(0) }),
+        ("HUBP1 underflowing once its surface is set", Box::new(move || { let mut e = engine(); e.frame_us = DP2; e.derived.push((cntl1, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0)); e }),
+            Outcome::Failed { stage: 15, why: Failure::Underflow { offset: cntl1, value: 0 } }),
+        ("a one-off underflow 17 frames into the watch", Box::new(move || { let mut e = engine(); e.frame_us = DP2; e.arm.push((reg(R::DpgControl, 1), 1, cntl1, 1 << 28, 17 * DP2 + 8_000)); e }),
+            Outcome::Failed { stage: 15, why: Failure::Underflow { offset: cntl1, value: 0 } }),
+        ("the compositor refusing the offer", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.refuse_offer = Some(ScreenRefused::Denied); e }),
+            Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(ScreenRefused::Denied) }),
+        ("the firmware's pipe changed after stage 7", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.hook = Some((reg(R::DigBeCntl, 0), reg(R::OtgHTotal, 0), 0x777)); e }),
+            Outcome::Failed { stage: 7, why: Failure::FirmwareChanged { offset: reg(R::OtgHTotal, 0), before: 0, after: 0 } }),
+    ];
+    for (name, make, want) in &cases {
+        for undo in [false, true] {
+            let (s, p) = both_orders(&l, &good(), &**make, 16, undo);
+            let kind = |o: &Outcome| match o { Outcome::Failed { stage, why } => (0, *stage, core::mem::discriminant(why)), Outcome::NotReady { stage, why, .. } => (1, *stage, core::mem::discriminant(why)),
+                                                Outcome::Stopped { done } | Outcome::Undone { done } => (2, *done, core::mem::discriminant(&Failure::JournalFull)) };
+            if !matches!(want, Outcome::Stopped { .. }) { assert_eq!(kind(&s.outcome), kind(want), "{}: {:?}", name, s.outcome); }
+            same_device(&s, &p, &format!("{}, undo {}", name, undo));
+        }
+    }
+    // A stage without its reference: stage 9 not ready, first light in place, in either order.
+    let l9 = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+    let (s, p) = both_orders(&l9, &good(), &|| { let mut e = engine(); e.frame_us = DP2; e }, 16, false);
+    assert_eq!(s.outcome, Outcome::NotReady { done: 8, stage: 9, why: Failure::NoReference });
+    same_device(&s, &p, "no reference");
+}
+
+#[test]
+fn the_production_orders_log_is_a_line_a_stage_with_its_time_and_the_detail_only_of_a_part_that_fails() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let paced = || { let mut e = engine(); e.frame_us = DP2; e };
+    let (s, p) = both_orders(&l, &good(), &paced, 16, false);
+    // The pipes and the mode, a line a stage, step 3's times and its end: 21 lines, none of a write or a plan.
+    for x in &p.log { eprintln!("production, 3440x1440 on the model: {}", x); }
+    assert_eq!(p.log.len(), 3 + 16 + 2, "{:#?}", p.log);
+    assert!(p.log[0].starts_with("STEP 3: FIRST LIGHT ON HDMI-A-1 IN 8 STAGES") && p.log[2].ends_with("MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)"), "{:#?}", &p.log[..3]);
+    for n in 1..=16u8 {
+        let line = &p.log[2 + n as usize];
+        assert!(line.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS); ", n, dcn::STAGE_NAMES[n as usize - 1])) && line.contains(" MS"), "{}", line);
+        assert!(line.len() <= 180, "{} bytes: {}", line.len(), line);
+        // The same line ends the stage in the survey's log, its time the survey's own.
+        let head = line.split("); ").next().unwrap();
+        assert!(s.log.iter().any(|x| x.starts_with(head)), "{}", head);
+    }
+    assert!(!p.log.iter().any(|x| x.contains(" WROTE ") || x.contains(" WILL ") || x.contains("RUNNING TABLE")));
+    let line = |n: u8| p.log[2 + n as usize].as_str();
+    assert!(line(2).contains(", 1 WRITES, TABLE 12 ") && line(2).contains("(3 STEPS, 2 WRITES), THE PHY SET UP ALREADY: THE SHORT PATH"), "{}", line(2));
+    assert!(line(5).contains(", 3 WRITES, 2 WAITS "), "{}", line(5));
+    assert!(line(9).contains(", OTG0 AT 26") && line(9).ends_with("KHZ, THE REFERENCE 48000 KHZ"), "{}", line(9));
+    assert!(line(10).ends_with(", 3440x1440 DRAWN AND READ BACK"), "{}", line(10));
+    assert!(line(13).ends_with(", THE PITCH READ BACK AS WRITTEN"), "{}", line(13));
+    assert!(line(15).contains(", WATCHED 300 FRAMES IN ") && line(15).contains(" MS CLEAN, THE LONGEST GAP "), "{}", line(15));
+    assert!(line(16).ends_with(", OFFERED 3440x1440 PITCH 13824"), "{}", line(16));
+    assert!(p.log[19].starts_with("STEP 3'S TIMES (MS): IN ALL ") && p.log[20].starts_with("STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS"), "{:#?}", &p.log[19..]);
+    // The times: the watch 300 of HDMI-A-1's frames (from a read inside the first), stage 9's count 30 of DP-2's from
+    // an edge, the offer after both.
+    let t = p.times;
+    assert!((299 * DP2..301 * DP2).contains(&t.watch_us), "{:?}", t);
+    assert!((30 * DP2..32 * DP2).contains(&t.count_us), "{:?}", t);
+    assert!(t.stages_us[14] >= t.watch_us && t.stages_us[8] >= t.count_us && t.stages_us.iter().sum::<u64>() <= t.total_us);
+    assert!(t.offered_us.is_some_and(|o| o >= t.stages_us[..15].iter().sum::<u64>() && o <= t.total_us), "{:?}", t);
+    // A stage that fails: its detail as the survey logs it, before its failure; none of the stages before it.
+    let cntl1 = reg(R::HubpCntl, 1);
+    let underflow = || { let mut e = engine(); e.frame_us = DP2; e.derived.push((cntl1, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0)); e };
+    let (s, p) = both_orders(&l, &good(), &underflow, 16, false);
+    let failed = p.log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).expect("the failure");
+    let begin = p.log.iter().position(|x| x == "S15 UNBLANK: STAGE 15 OF 16 NEXT; ITS WRITES:").expect("stage 15's detail");
+    let survey_begin = s.log.iter().position(|x| x == "S15 UNBLANK: STAGE 15 OF 16 NEXT; ITS WRITES:").unwrap();
+    let survey_failed = s.log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).unwrap();
+    let masked = |l: &[String]| l.iter().map(|x| words(x)).collect::<Vec<_>>();
+    assert!(begin < failed);
+    assert_eq!(masked(&p.log[begin..failed]), masked(&s.log[survey_begin..survey_failed]), "stage 15's detail, as the survey's but for its times");
+    assert!(p.log[begin..failed].iter().any(|x| x.starts_with("S15 WROTE HUBP1_DCHUBP_CNTL AT 0EE3C = ")));
+    assert!(p.log[begin..failed].iter().any(|x| x.starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL AT 0EE3C = ") && x.ends_with(" AT ONCE")));
+    assert!(!p.log[..begin].iter().any(|x| x.contains(" WROTE ")), "{:#?}", &p.log[..begin]);
+    // The undo after it in full, as the survey's.
+    assert_eq!(masked(&p.log[failed..]), masked(&s.log[survey_failed..]));
+    assert!(p.log.last().unwrap().starts_with("STEP 3 FAILED AT STAGE 15 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    // A stage not ready: its detail, then the stop.
+    let refused = || { let mut e = engine(); e.frame_us = DP2; e.refuse_offer = Some(ScreenRefused::Unavailable); e };
+    let (_, p) = both_orders(&l, &good(), &refused, 16, false);
+    let not_ready = p.log.iter().position(|x| x.starts_with("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN")).unwrap();
+    assert!(p.log[not_ready - 1].starts_with("S16 UNDO: "), "{:#?}", &p.log[not_ready - 3..]);
+    // Every line fits a log record.
+    for x in &p.log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+}
+
+#[test]
+fn the_production_orders_held_detail_keeps_the_latest_lines_of_a_part() {
+    // A buffer for a few lines: the oldest let go and counted, the rest logged in order when the part fails.
+    let mut buf = [0u8; 64];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    held.note(format_args!("A NOTE"));
+    for i in 0..10 { held.line(format_args!("DETAIL {:02}", i)); }
+    assert_eq!(held.inner.0, ["A NOTE"]);
+    held.failed();
+    held.line(format_args!("AFTER"));
+    let kept: Vec<&str> = held.inner.0.iter().map(|x| x.as_str()).collect();
+    assert_eq!(kept, ["A NOTE", "4 EARLIER LINES OF THIS PART'S DETAIL WERE NOT KEPT", "DETAIL 04", "DETAIL 05", "DETAIL 06", "DETAIL 07", "DETAIL 08", "DETAIL 09", "AFTER"]);
+    // A new part: held again, nothing logged; its pauses are none.
+    held.part();
+    held.line(format_args!("NEXT"));
+    held.pause(1000);
+    assert_eq!(held.inner.0.len(), 9);
+    // A line longer than a record is cut at 255 bytes.
+    let mut big = vec![0u8; 4096];
+    let mut held = batches::Held::new(Log(vec![]), &mut big);
+    held.line(format_args!("{}", "X".repeat(300)));
+    held.failed();
+    assert_eq!(held.inner.0[0].len(), 255);
+}
+
+#[test]
+fn the_ryzens_tables_make_the_same_writes_in_either_order() {
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_ryzens_tables_make_the_same_writes_in_either_order SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let (f, c) = EXPECTED;
+    // On the warm state the Ryzen showed (the short path) and from a cold PHY A (the long one), in each mode.
+    let warm16 = || { let mut e = warm(); e.frame_us = DP2; e };
+    let cold16 = || { let mut e = answered(); e.frame_us = DP2; e };
+    for (name, mode, signal) in [("1080p DVI", timing::CEA_1080P60, dcn::Signal::Dvi), ("1080p HDMI", timing::CEA_1080P60, dcn::Signal::Hdmi), ("3440x1440 HDMI", WIDE, dcn::Signal::Hdmi)] {
+        let l = Light::new_with(f, c, mode, signal).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+        for (state, make) in [("warm", &warm16 as &dyn Fn() -> Engine), ("cold", &cold16)] {
+            for undo in [false, true] {
+                let (s, p) = both_orders(&l, &bytes, make, 16, undo);
+                assert_eq!(s.outcome, if undo { Outcome::Undone { done: 16 } } else { Outcome::Stopped { done: 16 } }, "{} {} {:#?}", name, state, &s.log[s.log.len().saturating_sub(8)..]);
+                same_device(&s, &p, &format!("{} {}, undo {}", name, state, undo));
+                let path = if state == "warm" { "THE PHY SET UP ALREADY: THE SHORT PATH" } else { "THE LONG PATH: 37 WRITES THROUGH THE PHY'S BUS" };
+                assert!(p.log.iter().any(|x| x.starts_with("S2 PIXEL CLOCK DONE") && x.ends_with(path)), "{} {}: {:#?}", name, state, p.log.iter().find(|x| x.starts_with("S2 ")));
+            }
+        }
+    }
 }

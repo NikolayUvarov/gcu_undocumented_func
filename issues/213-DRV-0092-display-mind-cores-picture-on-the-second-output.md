@@ -1,6 +1,6 @@
 # 213-DRV-0092 — `display`: MIND Core's picture on the Ryzen's second output
 
-**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — (the compositor's second screen: KRN's display.wit 1.3, [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), landed in `main` 8e7687635) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — (the compositor's second screen: KRN's display.wit 1.3, [213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done), landed in `main` 8e7687635) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -65,7 +65,7 @@ the request.
   frame may be shown (OTG1's vertical blank).
 - **The mirror first:** the compositor copies the same changed pixels into both screens. An extended screen comes
   later, and needs APP's `wm` too.
-- **KRN's answer** ([213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), display.wit 1.3):
+- **KRN's answer** ([213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done), display.wit 1.3):
   - `offer-screen(width, height, pitch, format, pixels: borrow<mmio>)` and `screen-gone()`, from a client badged
     `BADGE_SCREEN`, which init gives `display` in `SLOT_DISPLAY`;
   - the compositor mirrors the first screen into the second, scaled to fit and centred, and only what changed;

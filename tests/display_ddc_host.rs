@@ -14,8 +14,10 @@
 use batches::{Bus, Out, Store};
 use dcn::{Reg, R};
 use light::{Clock, Poke, Writable};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 use timing::Timing;
 
 const CONTROL: u32 = 0x14D60;
@@ -38,12 +40,14 @@ struct I2c {
     buf: [u8; 538], index: usize, reading: bool,
     monitor: Vec<u8>, present: bool, pointer: usize,
     granted: bool, dmcu: bool, hang: bool, busy_until: u64, done: u32,
+    // Time the log spent (the survey's pacing), added to the clock at the next access (213-DRV-0098).
+    pace: Rc<Cell<u64>>,
 }
 
 impl I2c {
     fn new(monitor: Vec<u8>) -> I2c {
         let mut i = I2c { regs: HashMap::new(), clock: 0, ev: vec![], buf: [0; 538], index: 0, reading: false, monitor, present: true, pointer: 0,
-                          granted: false, dmcu: false, hang: false, busy_until: 0, done: 0 };
+                          granted: false, dmcu: false, hang: false, busy_until: 0, done: 0, pace: Rc::new(Cell::new(0)) };
         for (o, v) in FOUND { i.regs.insert(o, v); }
         i
     }
@@ -74,7 +78,7 @@ impl I2c {
 
 impl Bus for I2c {
     fn read(&mut self, r: Reg) -> Option<u32> {
-        self.clock += 2;
+        self.clock += self.pace.replace(0) + 2;
         let o = r.offset();
         self.ev.push(Ev::Read(o));
         Some(match o {
@@ -87,6 +91,7 @@ impl Bus for I2c {
 }
 impl Poke for I2c {
     fn write(&mut self, w: Writable, v: u32) {
+        self.clock += self.pace.replace(0);
         let o = w.reg().offset();
         self.ev.push(Ev::Write(o, v));
         match o {
@@ -110,8 +115,8 @@ impl Poke for I2c {
     }
 }
 impl Clock for I2c {
-    fn now_us(&mut self) -> u64 { self.clock }
-    fn delay_us(&mut self, us: u32) { self.clock += us as u64; }
+    fn now_us(&mut self) -> u64 { self.clock += self.pace.replace(0); self.clock }
+    fn delay_us(&mut self, us: u32) { self.clock += self.pace.replace(0) + us as u64; }
 }
 
 struct Log(Vec<String>);
@@ -242,7 +247,11 @@ fn step_2_reads_both_blocks_in_display_cores_order_and_gives_the_engine_back_as_
     let go = log.iter().position(|x| x.starts_with("D WROTE DC_I2C_CONTROL AT 14D60 = ") && x.ends_with(", LOGGED AFTER THE TRANSFER")).unwrap();
     assert!(log[go + 1].starts_with("D BLOCK 0: FROM GO"));
     assert!(log.iter().any(|x| x == "D THE ENGINE NOW HELD BY NOBODY; BATCH 11 FOUND IT HELD BY NOBODY"));
-    assert!(log.last().unwrap() == "D STEP 2 DONE: 2 BLOCKS READ (256 BYTES)");
+    // Its last line: the blocks, the time it took, each transfer from GO, the give-back (213-DRV-0098).
+    let done = log.last().unwrap();
+    assert!(done.starts_with("D STEP 2 DONE: 2 BLOCKS READ (256 BYTES) IN ") && done.ends_with("; 18 WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCH 11 READ THEM"), "{}", done);
+    let go: Vec<u64> = done.split("THE TRANSFERS ").nth(1).unwrap().split(" US FROM GO").next().unwrap().split(" AND ").map(|x| x.parse().unwrap()).collect();
+    assert!(go.len() == 2 && go.iter().all(|us| (12_000..12_200).contains(us)), "{}", done);
     // A base block that announces no extension: one block read.
     let mut i2c = I2c::new(monitor(true, false));
     let (r, _) = run(&mut i2c, &store(&FOUND, true));
@@ -333,4 +342,109 @@ fn the_mode_is_the_edids_preferred_in_hdmi_when_it_fits_else_todays() {
     let uhd_30 = Timing { pixel_khz: 297_000, h_active: 3840, h_front: 176, h_sync: 88, h_back: 296, v_active: 2160, v_front: 8, v_sync: 10, v_back: 72,
         h_sync_positive: true, v_sync_positive: true, interlaced: false };
     assert_eq!(mode_from_edid(Some(&edid(monitor_with(uhd_30, false, true, true))), today, Signal::Dvi).2, ModeFrom::Surface { bytes: 3840 * 2160 * 4 });
+}
+
+// --- the production order (213-DRV-0098) ---
+
+// The survey's log as display paces it on the hardware: 20 ms after each line, on the model's clock.
+struct Paced { lines: Vec<String>, clock: Rc<Cell<u64>> }
+impl Out for Paced {
+    fn line(&mut self, a: fmt::Arguments) { self.lines.push(a.to_string()); self.clock.set(self.clock.get() + 20_000); }
+    fn pause(&mut self, ms: u32) { self.clock.set(self.clock.get() + ms as u64 * 1000); }
+}
+fn words(x: &str) -> String {
+    let mut out = String::new();
+    for ch in x.chars() { if ch.is_ascii_digit() { if !out.ends_with('#') { out.push('#'); } } else { out.push(ch); } }
+    out
+}
+
+// Step 2 on a fresh model in each order: the survey's paced, the production one through `batches::Held` over it.
+fn both_orders(make: &dyn Fn() -> I2c, s: &Store) -> [(Result<ddc::Read, ddc::Failure>, Vec<(u32, u32)>, Vec<String>, u64); 2] {
+    let go = |production: bool| {
+        let mut i2c = make();
+        let paced = Paced { lines: vec![], clock: i2c.pace.clone() };
+        let (r, log) = if production {
+            let mut buf = vec![0u8; batches::HELD_BYTES];
+            let mut held = batches::Held::new(paced, &mut buf);
+            let r = ddc::read(s, &mut i2c, &mut held);
+            (r, held.inner.lines)
+        } else {
+            let mut paced = paced;
+            let r = ddc::read(s, &mut i2c, &mut paced);
+            (r, paced.lines)
+        };
+        (r, writes(&i2c), log, i2c.now_us())
+    };
+    [go(false), go(true)]
+}
+
+#[test]
+fn step_2_makes_the_same_writes_in_either_order_and_logs_a_line_or_the_detail_of_its_failure() {
+    let plugged = store(&FOUND, true);
+    let cases: Vec<(&str, Box<dyn Fn() -> I2c>, Store)> = vec![
+        ("both blocks", Box::new(|| I2c::new(monitor(true, true))), plugged.clone()),
+        ("one block", Box::new(|| I2c::new(monitor(true, false))), plugged.clone()),
+        ("a NACK", Box::new(|| { let mut i = I2c::new(monitor(true, true)); i.present = false; i }), plugged.clone()),
+        ("no end of the transfer", Box::new(|| { let mut i = I2c::new(monitor(true, true)); i.hang = true; i }), plugged.clone()),
+        ("a bad checksum", Box::new(|| { let mut b = monitor(true, true); b[200] ^= 0xFF; I2c::new(b) }), plugged.clone()),
+        ("held by the DMCU", Box::new(|| { let mut i = I2c::new(monitor(true, true)); i.dmcu = true; i }), plugged.clone()),
+        ("batch 11 not read", Box::new(|| I2c::new(monitor(true, true))), store(&[], true)),
+        ("no monitor", Box::new(|| I2c::new(monitor(true, true))), store(&FOUND, false)),
+    ];
+    for (name, make, s) in &cases {
+        let [(rs, ws, ls, ts), (rp, wp, lp, tp)] = both_orders(&**make, s);
+        assert_eq!(rs, rp, "{}", name);
+        assert_eq!(ws, wp, "{}: the writes", name);
+        let last = lp.last().unwrap();
+        match &rp {
+            // A read: one line, its time and the give-back; on the model's clock its transfers and that line's pace, where
+            // the survey's took its lines' pace besides.
+            Ok(r) => {
+                assert_eq!(lp.len(), 1, "{}: {:#?}", name, lp);
+                assert!(last.starts_with(&format!("D STEP 2 DONE: {} BLOCK", r.blocks)) && last.ends_with("WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCH 11 READ THEM"), "{}", last);
+                assert!(tp < 21_000 + 13_000 * r.blocks as u64 && ts > 20 * 20_000, "{}: {} and {} us", name, tp, ts);
+            }
+            // A transfer that failed, or the engine found held: all its detail, as the survey logs it but for the times.
+            Err(why) if !matches!(why, ddc::Failure::NotRead | ddc::Failure::NoMonitor) => {
+                assert_eq!(lp.iter().map(|x| words(x)).collect::<Vec<_>>(), ls.iter().map(|x| words(x)).collect::<Vec<_>>(), "{}", name);
+                assert!(lp.iter().any(|x| x.starts_with("D STOPPED: ")) && lp.iter().any(|x| x.starts_with("D WROTE ")) == !ws.is_empty(), "{}", name);
+                assert!(last.starts_with(&format!("D STEP 2 NOT DONE: {}", why)), "{}", last);
+            }
+            // Not tried (batch 11 not read, no monitor), nothing written: the reason alone.
+            Err(why) => assert_eq!(lp, [format!("D STEP 2 NOT DONE: {}; STEPS 3 AND 4 GO ON WITHOUT IT", why)], "{}", name),
+        }
+        for x in &lp { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+    }
+}
+
+// Batch 11's registers as a store: all of them, or only the kinds the production order reads (`batches::USED`).
+fn store_of(found: &[(u32, u32)], keep: &dyn Fn(R) -> bool) -> Store {
+    let kept: Vec<(u32, u32)> = found.iter().copied().filter(|&(o, _)| keep(kind_at(o).0)).collect();
+    store(&kept, true)
+}
+fn kind_at(o: u32) -> (R, u8) { dcn::ALL.iter().flat_map(|&r| (0..r.instances()).map(move |i| (r, i))).find(|&(r, i)| r.at(i).map(|x| x.offset()) == Some(o)).unwrap() }
+
+#[test]
+fn step_2_takes_from_step_1_only_the_registers_the_production_order_reads() {
+    let run_with = |s: &Store| { let mut i2c = I2c::new(monitor(true, true)); let (r, log) = run(&mut i2c, s); (r, writes(&i2c), log) };
+    let full = run_with(&store(&FOUND, true));
+    assert!(full.0.is_ok());
+    // Batch 11 as the production order reads it: the same read, writes and lines.
+    let used = run_with(&store_of(&FOUND, &|r| batches::USED.contains(&r)));
+    assert_eq!(used, full);
+    // Each register batch 11 reads that the production order does not (it reads all four transactions, step 2 takes
+    // two): whatever step 1 found in it, step 2 does the same.
+    let unused: Vec<(u32, u32)> = FOUND.iter().copied().filter(|&(o, _)| !batches::USED.contains(&kind_at(o).0)).collect();
+    assert_eq!(unused.iter().map(|&(o, _)| o).collect::<Vec<_>>(), [SW_STATUS, HW_STATUS, TIME_BASE]);
+    for &(o, v) in &unused {
+        for other in [0, !0, 0x5A5A_5A5A, v ^ 1] {
+            let changed: Vec<(u32, u32)> = FOUND.iter().map(|&(x, w)| if x == o { (x, other) } else { (x, w) }).collect();
+            assert_eq!(run_with(&store(&changed, true)), full, "{:05X} = {:08X}", o, other);
+        }
+    }
+    // And each kind it reads is taken: without it, step 2 does or says something else.
+    for kind in [R::DcI2cArbitration, R::DcI2cControl, R::DcI2cDdc1Speed, R::DcI2cDdc1Setup, R::DcI2cTransaction, R::DcGpioDdc1Mask] {
+        assert!(batches::USED.contains(&kind));
+        assert_ne!(run_with(&store_of(&FOUND, &|r| r != kind)), full, "{}", kind.name());
+    }
 }
