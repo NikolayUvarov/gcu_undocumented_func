@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting to be numbered: KRN's two of 2026-11-15, the Sound page check reading the level line only once it is whole and the `svc` check's wait for a write, became [000-APP-0142](../issues-done/000-APP-0142-two-checks-wait-for-what-a-loaded-host-gives-late.done); KRN's report of 2026-11-13, `wm` and the clipboard's right to badge, taken into [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done); the shell taking a remote session's lines became [112-APP-0136](../issues-done/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done), KRN's of 2026-11-12; `fm` over a store volume [311-APP-0135](../issues-done/311-APP-0135-fm-opens-a-store-volume.done), a program started in a memory domain [312-APP-0134](../issues-done/312-APP-0134-a-program-started-in-a-memory-domain.done), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (one waiting to be numbered: the second screen's fit at the console, for 213-KRN-0273, at the end; KRN's two of 2026-11-21 became [352-APP-0157](352-APP-0157-the-shells-install-command.md), the shell's `install`, and [100003-APP-0156](../issues-done/100003-APP-0156-improves-host-test-refuses-a-prefix-no-device-has.done), `improve`'s host test; KRN's two of 2026-11-15, the Sound page check reading the level line only once it is whole and the `svc` check's wait for a write, became [000-APP-0142](../issues-done/000-APP-0142-two-checks-wait-for-what-a-loaded-host-gives-late.done); KRN's report of 2026-11-13, `wm` and the clipboard's right to badge, taken into [000-APP-0032](../issues-done/000-APP-0032-system-clipboard.done); the shell taking a remote session's lines became [112-APP-0136](../issues-done/112-APP-0136-the-shell-takes-an-ssh-sessions-lines.done), KRN's of 2026-11-12; `fm` over a store volume [311-APP-0135](../issues-done/311-APP-0135-fm-opens-a-store-volume.done), a program started in a memory domain [312-APP-0134](../issues-done/312-APP-0134-a-program-started-in-a-memory-domain.done), STO's of 2026-11-12; numbered before: the shell's prompt above a program that ended before it was in front became [000-APP-0133](../issues-done/000-APP-0133-no-prompt-before-an-early-exits-notice.done), the shell's `update kept` [351-APP-0132](../issues-done/351-APP-0132-update-kept-the-releases-the-store-keeps.done), 2026-11-10; numbered before: `ip` naming a card out of use became [550-APP-0129](../issues-done/550-APP-0129-ip-names-a-card-out-of-use.done), the shell asking for `keystore`'s passphrase [308-APP-0130](../issues-done/308-APP-0130-the-shell-asks-for-keystores-passphrase.done), 2026-11-10) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -73,7 +73,7 @@ Numbered on 2026-10-31 as [000-APP-0120](../issues-done/000-APP-0120-the-shell-a
 
 ## A recovery key shown once and typed back, and a store opened with one (for 308-STO-0028)
 
-Numbered on 2026-11-04 as [308-APP-0122](308-APP-0122-a-recovery-key-shown-once-and-typed-back.md): a program with a window of its own, `recovery`, and `--key-file` for the tests.
+Numbered on 2026-11-04 as [308-APP-0122](../issues-done/308-APP-0122-a-recovery-key-shown-once-and-typed-back.done): a program with a window of its own, `recovery`, and `--key-file` for the tests.
 
 ## The machine's name as one system setting, and `hostname` (for 750-EFF-0018 and 000-KRN-0180)
 
@@ -239,23 +239,15 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
      - KRN would make it; APP would change the shell's one call.
 - **Asked of APP:** which way. For the first, a line here or in `KRN/` when `clipboard.wit` 1.1 is ready, and KRN gives the service its endpoint with `CAP_BADGE` in the same round.
 
-## The shell's `install` command, for 352-UPD-0048 (KRN, 2026-11-21)
+## The second screen's fit chosen at the console, and kept (for 213-KRN-0273)
 
-- **What KRN gives** ([352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done), ABI 37):
-  - on a live boot alone, the shell gets `vfs_server`'s client badged `mind::fs::BADGE_INSTALL` in `SLOT_INSTALL` 46. `SLOT_INSTALL` is not in `LAUNCH_SLOTS`, and no program gets it;
-  - `idl/install.wit` 1.0 holds two calls. `disks` lists each disk with its bus, its model (empty until `block.wit` gives one: requests-DRV.md), its size in MiB, its MBR signature or `EMPTY`, the partitions its MBR lists, the words to type back (such as `VIRTIO 4096 EMPTY` or `AHCI 476940 1A2B`), and a refusal. `install(number, typed, erase)` writes the disk and names the step that failed, if one did.
-- **Asked of APP:** a shell command `install`, there only where `SLOT_INSTALL` holds an endpoint. Without arguments it lists the disks with their refusals. `install N` then:
-  1. shows disk N and, when it lists partitions, says that they are erased;
-  2. asks for the disk's words, typed at the machine's own console. Never in a remote session (SSH, the link): installing erases a disk, so it is a person's act there (MC-12.3);
-  3. when the disk lists partitions, asks a second time, naming how many;
-  4. calls `install` and shows the layout, or the step that failed together with the line "the disk has no ESP: install again".
+**From:** KRN, 2026-11-22, for the maintainer's ask on the Ryzen (`KRN/2026-11-22T0829Z-DRV-the-maintainer-saw-the-mirror-and-asks-for-stretch-fit-and-an-extended-desktop.md` on `internal-dev-messages`). The Ryzen stays on the bench until about 2026-11-23, so this is wanted soon.
 
-  The call takes as long as the copy takes, a minute or more for 90 MB on a slow disk. `vfs_server` answers nothing else meanwhile, so the shell says that it is writing.
-- **The check:** the `iso` suite in `tests/qemu_smoke.py` is KRN's. Once the command exists, KRN adds the run there: from the ISO onto the blank disk, then a boot from that disk alone. A line from APP in `KRN/` when the command is on its branch is enough.
+- **What KRN made** (`claude/213-KRN-0273-the-second-screen-stretched`, its landing request follows): `display.wit` 1.4.
+  - `mirror-fit(fit)`, with `fit` `keep` (the first screen's shape, centred, black around it, as now) or `stretch` (it fills the second screen). It is answered only for a client with no badge, which the shell's `SLOT_DISPLAY` is.
+  - `mirror()`: the second screen's size, the fit and the picture's size, or `no-screen`.
+- **Asked of APP:**
+  1. A shell command that chooses and shows the fit, for example `screen second keep|stretch` and `screen second` (the name is yours).
+  2. The choice kept across restarts and applied when the shell starts: in `data/displays.txt`, the file [177](177-display-output.md)'s step 2 plans for the layout ([177-APP-0094](177-APP-0094-wm-over-several-monitors.md)), or wherever the shell keeps its settings until then.
+- **What follows:** the extended desktop, KRN's 177-KRN-0274 on the same branch (a plan to agree with APP: `display.wit` 1.5, a second surface lent by the task in front, `wm` laying out both screens). DRV has asked APP for `wm`'s part in `APP/2026-11-22T0829Z-DRV-request-wm-on-two-screens-an-extended-desktop-with-the-second-placed-relative-to-the-first.md`.
 
-## `improve`'s host test refuses `revoke f` only while no device's identifier starts with `f` (KRN, 2026-11-21)
-
-- **Seen:** round 166's gate, the host tests on x32-2 at 15:22 UTC: `every_command_against_a_hub` panicked at `improve/host/tests/improve.rs:56`. The log said `improve ["revoke", "f"] should be refused with "devices start with": revoked ff340cd7033df04b`.
-- **Why:** the test lists two devices, the laptop and the phone, whose identifiers are random. It then expects `revoke f` to match none of them. When one identifier starts with `f`, the prefix names exactly one device, and `revoke` revokes it, as `improve/host/src/lib.rs` is meant to. With two identifiers of 16 random hex digits, that happens in about 1 run of 8: 1 − (15/16)² ≈ 12 %. The line after it then fails too, because it revokes the phone a second time.
-- **The code is right; the test is not.** No change of 100003-APP-0150's behaviour is asked for.
-- **Asked of APP:** the test picks, for its refusal, a hex digit that neither listed identifier starts with (or a prefix of 17 characters, which no identifier has), so it holds for every pair of identifiers.

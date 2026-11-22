@@ -161,6 +161,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn take_unreadable(&mut self)->Option<data_mode::Unreadable>{self.data().take_unreadable()}
     #[cfg(test)]
     pub(crate) fn take_firmware_error(&mut self)->Option<data_mode::FirmwareError>{self.data().take_firmware_error()}
+    #[cfg(test)]
+    pub(crate) fn take_halt_status(&mut self)->Option<data_mode::HaltStatus>{self.data().take_halt_status()}
     /// Whether a country that refuses the channel stops sending (wlanhw 1.2), or is only logged (KEEP_SENDING).
     #[cfg(test)]
     pub(crate) fn strict(mut self,on:bool)->Self{self.strict=on;self}
@@ -520,6 +522,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
                 events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,
                     ser_before:u.ser_before,ser_after:u.ser_after,recovered:u.recovered})}
+            if let Some(h)=self.owner.as_deref_mut().and_then(|data|data.take_halt_status()){
+                events(Event::HaltStatus{count:h.count,hisr:h.hisr,ctrl:h.ctrl,ser:h.ser,intx:h.intx})}
             while let Some(e)=self.owner.as_deref_mut().and_then(|data|data.take_firmware_error()){
                 events(Event::FirmwareError{count:e.count,ctrl:e.ctrl,raw:e.raw,ser:e.ser,code:e.code,name:e.name,level:e.level,event:e.event})}
             if !more{break}

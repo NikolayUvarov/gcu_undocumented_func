@@ -1,0 +1,26 @@
+# 100003-APP-0156 — `improve`'s host test refuses a prefix no device has, whatever the identifiers — done
+
+**Type:** test (`improve/host`) · **Owner:** tools track (`APP`) · **Priority:** P1 (it fails a gate in about 1 run of 8) · **Status:** done (2026-11-21) · **Blocked by:** — · **Main task:** [100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md), stage 5 · **Roadmap:** track G · **Constitution:** MC-12.2
+
+**Recorded by:** the tools track, 2026-11-21, from KRN's request in `issues/requests-APP.md` ("`improve`'s host test refuses `revoke f` only while no device's identifier starts with `f`").
+
+## Problem
+
+- **Seen** in round 166's gate, the host tests on x32-2 at 15:22 UTC: `every_command_against_a_hub` panicked at `improve/host/tests/improve.rs`. `improve revoke f` was expected to be refused, but it revoked `ff340cd7033df04b`.
+- **Why:** the laptop's and the phone's identifiers are random. The test took `f` for a prefix no device has. When one identifier starts with `f`, the prefix names that device, and `revoke` revokes it, as it should. With two identifiers that is about 1 run in 8 (1 − (15/16)² ≈ 12 %).
+- **The code is right:** 100003-APP-0150's behaviour stays.
+
+## Plan
+
+The test refuses a hex digit that neither listed identifier starts with, found from `improve devices`'s output, and expects `0 devices start with`.
+
+## Acceptance criteria
+
+- The test holds for every pair of identifiers.
+- `improve/host`'s tests pass.
+
+## Resolution
+
+- **Done** in `improve/host/tests/improve.rs`: the digit is the first of `0`–`f` that neither line of `improve devices` starts with. Two identifiers leave at least 14 of the 16.
+- **Tested** in this container: `improve/host`'s 3 tests pass, and `every_command_against_a_hub` 6 times in a row with fresh identifiers.
+- **The request** is taken from `issues/requests-APP.md`.

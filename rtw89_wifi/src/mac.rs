@@ -80,6 +80,56 @@ pub fn mask_host(bus: &mut impl Bus) -> io::Result<[u32; 3]> {
     Ok(found)
 }
 
+/// 213-DRV-0091: false, the strict path, keeps HIMR0 masked after the download; true leaves B_AX_HALT_C2H_INT_EN on, as
+/// rtw89_pci_enable_intr does, where `halt_interrupt_refusal` finds no way for the device's interrupt to reach anyone.
+pub const HALT_INTERRUPT_AS_LINUX: bool = false;
+pub const B_AX_HALT_C2H_INT_EN: u32 = 1 << 21;
+
+/// The device's interrupt state in its PCI configuration (213-DRV-0091): Command and Status, the interrupt line and pin
+/// (0x3C), and the MSI and MSI-X message controls where it has those capabilities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PciInterrupt { pub command: u16, pub status: u16, pub line: u8, pub pin: u8, pub msi: Option<u16>, pub msix: Option<u16> }
+
+/// Reads it through `config` (a dword at an offset below 256); None when a read fails or the device does not answer.
+pub fn pci_interrupt(mut config: impl FnMut(usize) -> Option<u32>) -> Option<PciInterrupt> {
+    let head = config(4)?;
+    if head == u32::MAX { return None; }
+    let pins = config(0x3c)?;
+    let (mut msi, mut msix) = (None, None);
+    if head >> 16 & 0x10 != 0 {
+        let mut at = (config(0x34)? & 0xfc) as usize;
+        for _ in 0..48 {
+            if !(0x40..=0xfc).contains(&at) { break; }
+            let cap = config(at)?;
+            match cap & 0xff { 0x05 => msi = Some((cap >> 16) as u16), 0x11 => msix = Some((cap >> 16) as u16), _ => {} }
+            at = (cap >> 8 & 0xfc) as usize;
+        }
+    }
+    Some(PciInterrupt { command: head as u16, status: (head >> 16) as u16, line: pins as u8, pin: (pins >> 8) as u8, msi, msix })
+}
+
+/// Why the halt interrupt must stay masked, if it must. An enabled MSI or MSI-X would write a message to whatever address
+/// it holds, and no one here set one. INTx not disabled and routed to line 0, 1 or 2 reaches the PIC lines the kernel
+/// never masks (timer, keyboard, cascade). Any other line stays masked at the 8259 unless a task holds it, the kernel
+/// programs no IOAPIC, and a line of 255 or no pin has no route.
+pub fn halt_interrupt_refusal(state: &PciInterrupt) -> Option<&'static str> {
+    if state.msi.is_some_and(|control| control & 1 != 0) { return Some("MSI ENABLED"); }
+    if state.msix.is_some_and(|control| control & 0x8000 != 0) { return Some("MSI-X ENABLED"); }
+    if state.command & 1 << 10 == 0 && state.pin != 0 && state.line <= 2 { return Some("INTX ROUTED TO A LINE THE PIC NEVER MASKS"); }
+    None
+}
+
+/// The bits of a host mask the guards require clear: all on the strict path, all but HIMR0's halt bit when it is left on.
+pub fn host_mask_required(at: usize, as_linux: bool) -> u32 {
+    if at == HOST_MASKS[0] && as_linux { !B_AX_HALT_C2H_INT_EN } else { u32::MAX }
+}
+
+/// Leaves HIMR0's halt interrupt on (HALT_INTERRUPT_AS_LINUX), checked; nothing handles it, the driver polls.
+pub fn halt_interrupt_on(bus: &mut impl RegisterIo) -> io::Result<()> {
+    bus.write32(HOST_MASKS[0], B_AX_HALT_C2H_INT_EN)?;
+    require(bus, HOST_MASKS[0], u32::MAX, B_AX_HALT_C2H_INT_EN)
+}
+
 pub(crate) fn guard(bus: &mut impl Bus) -> io::Result<()> {
     let command = bus.pci_command()?;
     if command & 7 != 2 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }

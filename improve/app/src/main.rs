@@ -3,18 +3,23 @@
 // improve (100003-APP-0151; docs/hub/README.md, 2 and 9): MIND Hub's client on MIND Core, a console program with the
 // design's commands. Its authority is what the design gives it: a flow grant to the hub (a host it does not name is
 // asked of the user, socket.wit 2.8), TLS to the hub's pinned key with no device certificate, its own Ed25519 key as
-// its own secret in keystore (SLOT_SECRETS), its own directory for the hub's address and pins (SLOT_OWN). It holds a
+// its own secret in keystore (SLOT_SECRETS), its own directory for the hub's address and pins (SLOT_OWN), and the
+// user's files its launcher lends, read for an attachment and written by an export (REQUEST_FILES). It holds a
 // long-term key and the network, so the hub's answers are parsed by `parse` (MC-11.11), and their tree is checked with
-// improve/proto's forms. Each call is signed over a challenge the hub gave in the body of `GET challenge`.
+// improve/proto's forms. Each call is signed over a challenge the hub gave in the body of `GET challenge`. The requests
+// that wait for the user go into the user's files, data/improve/waiting, for the shell's notice and wm's mark.
 extern crate alloc;
 
+// improve writes the file; the shell's line and wm's mark are theirs.
+#[allow(dead_code)]
+mod waiting;
 mod words;
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ed25519_dalek::SigningKey;
-use improve_proto::form::{DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
+use improve_proto::form::{Attachment, AttachmentKind, Consent, DeviceKind, Joining, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
 use improve_proto::json::{self, Flat, FlatKind, Value};
 use improve_proto::{sign, wire, work};
 use mind::abi::{BootInfo, SLOT_NETWORK, SLOT_PARSE, SLOT_SECRETS, SLOT_TLS};
@@ -24,7 +29,7 @@ use mind::idl::{keystore, parse, socket, tls};
 use mind::ipc::Endpoint;
 use words::Config;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS | REQUEST_OWN);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS | REQUEST_SECRETS | REQUEST_OWN | REQUEST_FILES);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -42,10 +47,14 @@ const USAGE: &str = "usage: improve COMMAND
   setup NAME ADDRESS|dns PORT PIN [PIN]   the hub, known by its TLS key's SPKI SHA-256; this device's key
   register \"DISPLAY NAME\" [--name DEVICE] | register --pair CODE [--name DEVICE]
   status | answer \"TEXT\"
-  new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--yes]
-  list | show N | reply N \"TEXT\" [--answer Q] | check N works|partly|does-not-work RELEASE \"TEXT\"
-  version RELEASE                         the release this machine runs, told to the hub
-  devices | pair | revoke DEVICE | delete N";
+  new fault|improvement|capability \"TITLE\" \"TEXT\" [--private] [--security] [--named] [--attach KIND:FILE]... [--yes]
+  list | show N | watch [--once]
+  reply N \"TEXT\" [--answer Q [--attach KIND:FILE]...]
+  reply N [\"TEXT\"] --answer P --accept | reply N \"TEXT\" --answer P --correct|--decline   a proposal's answer
+  check N works|partly|does-not-work \"TEXT\" [--release RELEASE] [--attach KIND:FILE]...   on the release this machine runs
+  version RELEASE                         the release this machine runs (update status), told to the hub
+  devices | pair | revoke DEVICE | delete N | export FILE
+  (an attachment's KIND: log, hardware, screenshot or text)";
 
 fn now() -> usize { mind::time::uptime_ms() }
 
@@ -232,6 +241,19 @@ impl Hub {
         Ok((c, v.get("work_bits").and_then(Value::as_int).unwrap_or(0).clamp(0, work::BITS_MAX as i64) as u8))
     }
 
+    /// A call signed over a fresh challenge, its answer's bytes as they came; a challenge gone stale is taken again once.
+    #[inline(never)]
+    fn call_raw(&mut self, method: Method, path: &str, body: &[u8], kind: &str) -> Result<(u16, Vec<u8>), String> {
+        for attempt in 0..2 {
+            let (challenge, _) = self.challenge()?;
+            let header = sign::header(&self.key, method.name(), path, body, &challenge).map_err(|e| format!("{e:?}"))?;
+            let (status, bytes) = self.exchange(method, path, &[("Content-Type", kind), (sign::HEADER, &header)], body)?;
+            if status == 401 && attempt == 0 && self.tree(&bytes).ok().as_ref().and_then(error) == Some("challenge") { continue; }
+            return Ok((status, bytes));
+        }
+        unreachable!()
+    }
+
     /// A call signed over a fresh challenge; a challenge gone stale is taken again once.
     #[inline(never)]
     fn call(&mut self, method: Method, path: &str, body: &[u8]) -> Result<Answer, String> {
@@ -301,6 +323,42 @@ fn hex(bytes: &[u8]) -> String { improve_proto::hex(bytes) }
 
 fn number(text: &str) -> Result<u64, String> { text.parse().map_err(|_| format!("{text:?} is not a request's number")) }
 
+/// The largest file an attachment is read from: the largest band's bound (the hub narrows it to the user's).
+const ATTACHMENT_MAX: usize = 8 << 20;
+
+/// The attachments `--attach KIND:FILE` names, read from the files the launcher lends, with their entries.
+fn attachments(args: &[String]) -> Result<Vec<(Attachment, Vec<u8>, String)>, String> {
+    let mut out = Vec::new();
+    for spec in args.windows(2).filter(|w| w[0] == "--attach").map(|w| w[1].as_str()) {
+        let (kind, path) = spec.split_once(':').ok_or("--attach takes KIND:FILE")?;
+        let kind = AttachmentKind::from_name(kind).ok_or("an attachment's kind is log, hardware, screenshot or text")?;
+        let file = mind::fs::File::open(path).map_err(|e| format!("{path}: {e:?}"))?;
+        if file.size() > ATTACHMENT_MAX { return Err(format!("{path}: over {ATTACHMENT_MAX} bytes")); }
+        let mut bytes = alloc::vec![0u8; file.size()];
+        let n = file.read_at(0, &mut bytes).map_err(|e| format!("{path}: {e:?}"))?;
+        bytes.truncate(n);
+        let name: String = path.rsplit('/').next().unwrap_or(path).trim_start_matches('.').chars().take(64).collect();
+        let name = if name.is_empty() { String::from("attachment") } else { name };
+        out.push((Attachment { kind, name, size: bytes.len() as u64, sha256: mind::sha256::digest(&bytes) }, bytes, String::from(path)));
+    }
+    Ok(out)
+}
+
+/// What leaves the machine, each attachment with its kind, name, size and SHA-256, then the person's yes.
+fn shown(files: &[(Attachment, Vec<u8>, String)], yes: bool) -> bool {
+    for (a, _, path) in files { mind::println!("  attachment: {} {} ({} bytes, sha256 {}) from {path}", a.kind.name(), a.name, a.size, hex(&a.sha256)); }
+    confirm(yes)
+}
+
+/// The attachments' bytes after the request or the message that names them.
+fn put_files(hub: &mut Hub, base: &str, files: &[(Attachment, Vec<u8>, String)]) -> Result<(), String> {
+    for (i, (a, bytes, _)) in files.iter().enumerate() {
+        let (status, body) = hub.call_raw(Method::Put, &format!("{base}/attachments/{i}"), bytes, "application/octet-stream")?;
+        if status != 200 { return Err(format!("{}: {}", a.name, refusal(&Answer { status, body: hub.tree(&body).unwrap_or(Value::Null) }))); }
+    }
+    Ok(())
+}
+
 /// The person's yes before anything leaves the machine (design 9): `--yes` for a script.
 fn confirm(yes: bool) -> bool {
     if yes { return true; }
@@ -366,21 +424,27 @@ fn run(args: &[String]) -> Result<(), String> {
                 visibility: if has("--private") || security { Visibility::Private } else { Visibility::Public },
                 security, named: has("--named"), attachments: Vec::new(),
             };
+            let files = attachments(args)?;
+            let form = Request { attachments: files.iter().map(|(a, _, _)| a.clone()).collect(), ..form };
             mind::println!("a {} request, {}{}{}: {}\n{}", kind.name(), form.visibility.name(), if security { ", about security" } else { "" },
                            if form.named { ", your name on the board" } else { "" }, form.title, form.text);
-            if !confirm(has("--yes")) { mind::println!("not sent"); return Ok(()); }
+            if !shown(&files, has("--yes")) { mind::println!("not sent"); return Ok(()); }
             let mut hub = Hub::open()?;
             let v = hub.expect(Method::Post, "/hub/v1/requests", wire::encode_request(&form).as_bytes(), &[200, 201])?;
-            mind::println!("request {}: {}", n(&v, "id"), s(&v, "state"));
+            let id = n(&v, "id");
+            put_files(&mut hub, &format!("/hub/v1/requests/{id}"), &files)?;
+            mind::println!("request {id}: {}{}", s(&v, "state"), if files.is_empty() { String::new() } else { format!(", {} attachments sent", files.len()) });
             Ok(())
         }
         Some("list") => {
             let mut hub = Hub::open()?;
             let v = hub.expect(Method::Get, "/hub/v1/requests", b"", &[200])?;
             let all = list(&v, "requests");
+            keep_waiting(all);
             if all.is_empty() { mind::println!("no requests"); }
             for r in all {
-                let mark = if flag(r, "open_question") { "  [a question for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" } else { "" };
+                let mark = if flag(r, "open_question") { "  [a question for you]" } else if flag(r, "open_proposal") { "  [a proposal for you]" } else if !list(r, "flagged").is_empty() && !flag(r, "cleared") { "  [waits for the admin]" }
+                           else if s(r, "state") == "awaiting-check" { "  [waits for your check]" } else { "" };
                 mind::println!("{:>5}  {:<16} {}{mark}", n(r, "id"), s(r, "state"), s(r, "title"));
             }
             Ok(())
@@ -392,11 +456,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let r = v.get("request").unwrap_or(&Value::Null);
             let task = match (r.get("track").and_then(Value::as_str), r.get("task").and_then(Value::as_str)) { (Some(t), Some(k)) => format!(", {t} {k}"), _ => String::new() };
             mind::println!("#{} {}\n{} {}, {}{task}\n\n{}\n", n(r, "id"), s(r, "title"), s(r, "kind"), s(r, "visibility"), s(r, "state"), s(r, "text"));
+            if let Some(note) = check_note(&mut hub, r)? { mind::println!("{note}\n"); }
             for p in list(r, "thread") {
                 let extra = match s(p, "kind") {
-                    "answer" => format!(" to #{}", n(p, "answers")),
+                    "answer" => format!(" to #{}{}", n(p, "answers"), match s(p, "consent") { "accept" => ", accepting it", "correct" => ", correcting it", "decline" => ", declining it", _ => "" }),
                     "verdict" => format!(": {} on {}", s(p, "verdict"), s(p, "release")),
                     "question" if p.get("answered").and_then(Value::as_bool) == Some(false) => String::from(" (waits for your answer: improve reply N \"TEXT\" --answer #)"),
+                    "proposal" if p.get("answered").and_then(Value::as_bool) == Some(false) =>
+                        format!(" (waits for your answer: improve reply {id} --answer {n} --accept, or improve reply {id} \"TEXT\" --answer {n} --correct|--decline)", id = n(r, "id"), n = n(p, "n")),
                     _ => String::new(),
                 };
                 mind::println!("#{} {}{extra}, {}\n  {}", n(p, "n"), s(p, "kind"), s(p, "author"), s(p, "text"));
@@ -405,23 +472,50 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("reply") => {
             let id = number(word(1, "the request's number")?)?;
-            let text = String::from(word(2, "the text")?);
+            // A proposal's answer accepts, corrects or declines it (hub-api 3, 100003-APP-0155); an acceptance may say nothing.
+            let given: Vec<Consent> = [("--accept", Consent::Accept), ("--correct", Consent::Correct), ("--decline", Consent::Decline)].iter().filter(|(f, _)| has(f)).map(|(_, c)| *c).collect();
+            if given.len() > 1 { return Err("one of --accept, --correct and --decline".into()); }
+            let consent = given.first().copied();
+            if consent.is_some() && value("--answer").is_none() { return Err("--accept, --correct and --decline answer a proposal: name it with --answer".into()); }
+            let text = match word(2, "the text") { Ok(t) => String::from(t), Err(_) if consent == Some(Consent::Accept) => String::new(), Err(e) => return Err(e) };
             let message = match value("--answer") {
-                Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's number")?), verdict: None, release: None, attachments: Vec::new() },
-                None => Message { kind: MessageKind::Comment, text, answers: None, verdict: None, release: None, attachments: Vec::new() },
+                Some(q) => Message { kind: MessageKind::Answer, text, answers: Some(q.trim_start_matches('#').parse().map_err(|_| "--answer takes the question's or the proposal's number")?), consent, verdict: None, release: None, attachments: Vec::new() },
+                None => Message { kind: MessageKind::Comment, text, answers: None, consent: None, verdict: None, release: None, attachments: Vec::new() },
             };
-            post(id, message)
+            post(id, message, args)
         }
         Some("check") => {
             let id = number(word(1, "the request's number")?)?;
             let verdict = Verdict::from_name(word(2, "the verdict")?).ok_or("a verdict is works, partly or does-not-work")?;
-            post(id, Message { kind: MessageKind::Verdict, text: String::from(word(4, "what you saw")?), answers: None, verdict: Some(verdict),
-                               release: Some(String::from(word(3, "the release you checked on")?)), attachments: Vec::new() })
+            let text = String::from(word(3, "what you saw")?);
+            // The release checked on: the one this machine runs, as the hub knows it, unless named.
+            let release = match value("--release") {
+                Some(release) => String::from(release),
+                None => {
+                    let version = String::from(s(&Hub::open()?.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?, "version"));
+                    if version.is_empty() || version == "unknown" { return Err("the hub does not know the release this machine runs: improve version RELEASE, or --release RELEASE".into()); }
+                    version
+                }
+            };
+            post(id, Message { kind: MessageKind::Verdict, text, answers: None, consent: None, verdict: Some(verdict), release: Some(release), attachments: Vec::new() }, args)
+        }
+        Some("watch") => watch(has("--once")),
+        Some("export") => {
+            // The hub's answer as it came, into the user's file: nothing of it is parsed here.
+            let path = word(1, "the file")?;
+            let mut hub = Hub::open()?;
+            let (status, bytes) = hub.call_raw(Method::Get, "/hub/v1/me/export", b"", "application/json")?;
+            if status != 200 { return Err(refusal(&Answer { status, body: hub.tree(&bytes).unwrap_or(Value::Null) })); }
+            let mut file = mind::fs::File::create(path).map_err(|e| format!("{path}: {e:?}"))?;
+            file.write_at(0, &bytes).map_err(|e| format!("{path}: {e:?}"))?;
+            mind::println!("exported to {path} ({} bytes): all the hub keeps of you", bytes.len());
+            Ok(())
         }
         Some("version") => {
             let mut hub = Hub::open()?;
             hub.expect(Method::Post, "/hub/v1/devices/me/version", &body(&[("version", word(1, "the release")?)]), &[200])?;
             mind::println!("the hub knows this machine runs {}", word(1, "the release")?);
+            refresh_waiting(&mut hub);
             Ok(())
         }
         Some("devices") => {
@@ -454,18 +548,92 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut hub = Hub::open()?;
             hub.expect(Method::Delete, &format!("/hub/v1/requests/{id}"), b"", &[200])?;
             mind::println!("request {id} deleted, with its thread");
+            refresh_waiting(&mut hub);
             Ok(())
         }
         _ => Err(String::from(USAGE)),
     }
 }
 
-fn post(id: u64, message: Message) -> Result<(), String> {
+fn post(id: u64, message: Message, args: &[String]) -> Result<(), String> {
+    let files = attachments(args)?;
+    let message = Message { attachments: files.iter().map(|(a, _, _)| a.clone()).collect(), ..message };
     message.check().map_err(|e| format!("the message is out of its bounds: {e:?}"))?;
+    if !files.is_empty() {
+        mind::println!("a {} on request {id}: {}", message.kind.name(), message.text);
+        if !shown(&files, args.iter().any(|a| a == "--yes")) { mind::println!("not sent"); return Ok(()); }
+    }
     let mut hub = Hub::open()?;
     let v = hub.expect(Method::Post, &format!("/hub/v1/requests/{id}/messages"), wire::encode_message(&message).as_bytes(), &[201])?;
-    mind::println!("message #{} on request {id}; the request is {}", n(&v, "n"), s(&v, "state"));
+    let m = n(&v, "n");
+    put_files(&mut hub, &format!("/hub/v1/requests/{id}/messages/{m}"), &files)?;
+    mind::println!("message #{m} on request {id}; the request is {}", s(&v, "state"));
+    refresh_waiting(&mut hub);
     Ok(())
+}
+
+/// The requests that wait for the user (an open question or proposal, a check), kept for the shell and wm in the user's files when
+/// they changed (100003-APP-0153). Without the user's files lent, nothing is kept.
+fn keep_waiting(all: &[Value]) {
+    let mut ids: Vec<u64> = all.iter().filter(|r| flag(r, "open_question") || flag(r, "open_proposal") || s(r, "state") == "awaiting-check").filter_map(|r| u64::try_from(n(r, "id")).ok()).collect();
+    ids.sort_unstable();
+    let mut old = [0u8; waiting::BYTES];
+    let before = mind::fs::File::open(waiting::FILE).ok().and_then(|f| f.read_at(0, &mut old).ok()).and_then(|n| core::str::from_utf8(&old[..n]).ok()).and_then(waiting::read);
+    if before.as_ref().is_some_and(|b| b.ids == ids) { return; }
+    // Each write counts one more change, so that a reader that missed one still sees it.
+    let change = before.map_or(1, |b| b.change.wrapping_add(1));
+    let _ = mind::fs::mkdir(waiting::DIR);
+    if let Ok(mut file) = mind::fs::File::create(waiting::FILE) { let _ = file.write_at(0, waiting::text(change, &ids).as_bytes()); }
+}
+
+/// The user's requests read again after a change of the user's, for `keep_waiting`; a refusal keeps what was there.
+fn refresh_waiting(hub: &mut Hub) {
+    if let Ok(v) = hub.expect(Method::Get, "/hub/v1/requests", b"", &[200]) { keep_waiting(list(&v, "requests")); }
+}
+
+/// What a delivered request asks of the user (6.3): the release that carries it is not on this machine yet, or it is,
+/// and the user's check waits.
+fn check_note(hub: &mut Hub, r: &Value) -> Result<Option<String>, String> {
+    let (id, release) = (n(r, "id"), s(r, "release"));
+    Ok(match s(r, "state") {
+        "delivered" => {
+            let version = String::from(s(&hub.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?, "version"));
+            if version.is_empty() || version == "unknown" {
+                Some(format!("release {release} carries it; the hub does not know the release this machine runs: improve version RELEASE (update status names it)"))
+            } else if improve_proto::runs_release(&version, release) { None } else {
+                Some(format!("your machine does not have release {release} yet (it runs {version}): update apply, or wait for the update"))
+            }
+        }
+        "awaiting-check" => Some(format!("release {release} is on this machine: check it, improve check {id} works|partly|does-not-work \"WHAT YOU SAW\"")),
+        _ => None,
+    })
+}
+
+/// News since the last look, kept in its own directory as `seen`: a request that changed, a question that waits.
+/// `--once` looks once; otherwise it looks at the hub's interval until Esc.
+fn watch(once: bool) -> Result<(), String> {
+    let mut since: i64 = { let mut b = [0u8; 24]; mind::fs::own::read("seen", &mut b).ok().and_then(|n| core::str::from_utf8(&b[..n]).ok()?.trim().parse().ok()).unwrap_or(0) };
+    let mut hub = Hub::open()?;
+    loop {
+        let me = hub.expect(Method::Get, "/hub/v1/devices/me", b"", &[200])?;
+        let v = hub.expect(Method::Get, &format!("/hub/v1/requests?since={}", since + 1), b"", &[200])?;
+        let changed = list(&v, "requests");
+        for r in changed {
+            let question = if flag(r, "open_question") { String::from(", a question waits for you") } else if flag(r, "open_proposal") { String::from(", a proposal waits for you") } else {
+                match s(r, "state") { "delivered" => format!(" in release {}", s(r, "release")), "awaiting-check" => String::from(", it waits for your check"), _ => String::new() }
+            };
+            mind::println!("request {}: {}{question} (improve show {})", n(r, "id"), s(r, "state"), n(r, "id"));
+            since = since.max(n(r, "since_ms"));
+        }
+        if changed.is_empty() && once { mind::println!("no news"); }
+        refresh_waiting(&mut hub);
+        let _ = mind::fs::own::write("seen", format!("{since}").as_bytes());
+        if once { return Ok(()); }
+        // The hub's interval, with Esc ending the wait.
+        let poll_ms = (n(&me, "poll_s").clamp(10, 3600) as usize) * 1000;
+        let until = now() + poll_ms;
+        while now() < until { mind::input::wait_or_exit(250); }
+    }
 }
 
 /// The hub's address and pins into the program's own directory, and its key, made once, into keystore.
@@ -494,7 +662,9 @@ fn setup(args: &[String]) -> Result<(), String> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("improve — MIND Hub's client: requests to the agents who build MIND Core, their questions and your check.\nUsage: improve setup | register | status | answer | new | list | show N | reply N | check N | version | devices | pair | revoke | delete N\n(improve with no command names each one's words)");
+    mind::about!("improve — MIND Hub's client: requests to the agents who build MIND Core, their questions and your check.\nUsage: improve setup | register | status | answer | new | list | show N | watch | reply N | check N | version | devices | pair | revoke | delete N | export FILE\n(improve with no command names each one's words)");
+    // The user's files through the client the launcher lent (REQUEST_FILES), which may write where improve's own may not.
+    if mind::dev::cap_info(mind::abi::SLOT_FILE).0 == mind::abi::CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(mind::abi::SLOT_FILE)); }
     let args = match words::split(mind::process::args_str()) {
         Ok(a) => a,
         Err(why) => { mind::println!("improve: {why}"); mind::process::exit_with(1) }

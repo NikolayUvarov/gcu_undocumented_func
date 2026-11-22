@@ -1,6 +1,6 @@
-# The protocol's test vectors (100003-APP-0145, 0148)
+# The protocol's test vectors (100003-APP-0145, 0148, 0155)
 
-What a hub or a client of `hub-api 2` must give, in any language. `tests/proto.rs` makes each file and compares it; `IMPROVE_PROTO_WRITE_VECTORS=1 cargo test` writes them anew after a change the design allows.
+What a hub or a client of `hub-api 3` must give, in any language. `tests/proto.rs` makes each file and compares it; `IMPROVE_PROTO_WRITE_VECTORS=1 cargo test` writes them anew after a change the design allows.
 
 - **`signature.txt`:**
   - the key is Ed25519 from a seed of 32 bytes `0x2a`;
@@ -16,4 +16,7 @@ What a hub or a client of `hub-api 2` must give, in any language. `tests/proto.r
 - **`work.txt`:** the proof of work's first counter for a challenge of 32 bytes `0x03` at 12 bits.
 - **`request.json`:** a request in the API's one encoding.
 - **`message.json`:** a verdict with an attachment's entry, in the same encoding.
-- **`hub-api 1`** is refused by its name: its request had no `named` and its message no attachments (100003-APP-0148).
+- **`answer.json`:** an answer to proposal #4 that corrects it, `consent` beside `answers` (100003-APP-0155).
+- **Retired versions** are refused by their names:
+  - `hub-api 1`: its request had no `named` and its message no attachments (100003-APP-0148);
+  - `hub-api 2`: its answer named a question alone, with no `consent` for a proposal (100003-APP-0155).

@@ -7,7 +7,7 @@ use crate::event::{Decision, Owner};
 use crate::http::{Request, Response};
 use crate::hub::{self, refuse, Actor, DeviceState, Extra, Item, Refusal};
 use crate::util::{self, field, hex, html, sha256};
-use improve_proto::form::{Kind, Message, MessageKind, Request as Form, Verdict, Visibility};
+use improve_proto::form::{Consent, Kind, Message, MessageKind, Request as Form, Verdict, Visibility};
 use improve_proto::state::{State, STATES};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -164,7 +164,7 @@ fn home(s: &Shared, token: &[u8; 32], device: &[u8; 32], now: u64) -> Response {
     let band = u.trust.band().map(|b| format!("band {b}")).unwrap_or_else(|| "read-only".into());
     let mut list = String::new();
     for r in s.hub.requests().iter().filter(|r| r.user == u.id && !r.deleted).rev() {
-        let q = if r.thread.iter().any(|p| p.message.kind == MessageKind::Question && !p.answered) { " <strong>· a question for you</strong>" }
+        let q = if r.waits_for_user().0 { " <strong>· a question for you</strong>" } else if r.waits_for_user().1 { " <strong>· a proposal for you</strong>" }
             else if r.waits_for_admin() { " · waits for the admin" } else { "" };
         list += &format!("<div class=card><a href=\"/hub/requests/{id}\">#{id} {t}</a>{q}<div class=meta>{st} since {since}</div></div>",
                          id = r.id, t = html(&r.form.title), st = r.state.name(), since = when(r.since));
@@ -209,7 +209,8 @@ fn file_form(s: &mut Shared, now: u64, device: &[u8; 32], f: &[(String, String)]
     }
 }
 
-/// A message from a form: a comment, an answer to a question, a verdict; or, for the admin, a comment or a question.
+/// A message from a form: a comment, an answer to a question or a proposal, a verdict; or, for the admin, a comment or a
+/// question.
 fn message_form(f: &[(String, String)], admin: bool) -> Result<Message, Refusal> {
     let get = |k: &str| field(f, k).unwrap_or("");
     let kind = MessageKind::from_name(get("kind")).ok_or_else(|| refuse(400, "kind", "no such kind of message"))?;
@@ -218,10 +219,14 @@ fn message_form(f: &[(String, String)], admin: bool) -> Result<Message, Refusal>
     let answers = (kind == MessageKind::Answer).then(|| number(get("answers")).and_then(|n| u32::try_from(n).ok())).flatten();
     let verdict = (kind == MessageKind::Verdict).then(|| Verdict::from_name(get("verdict"))).flatten();
     let release = (kind == MessageKind::Verdict).then(|| get("release").trim().to_string()).filter(|r| !r.is_empty());
-    let m = Message { kind, text: util::lines(get("text")), answers, verdict, release, attachments: Vec::new() };
+    let consent = (kind == MessageKind::Answer).then(|| Consent::from_name(get("consent"))).flatten();
+    let m = Message { kind, text: util::lines(get("text")), answers, consent, verdict, release, attachments: Vec::new() };
     m.check().map_err(|e| refuse(400, "message", format!("the message is not complete: {e:?}")))?;
     Ok(m)
 }
+
+// A proposal's answer in words.
+fn consent_word(c: Consent) -> &'static str { match c { Consent::Accept => "accepted", Consent::Correct => "corrected", Consent::Decline => "declined" } }
 
 fn thread_html(r: &Item, admin: bool) -> String {
     let mut out = String::new();
@@ -236,9 +241,10 @@ fn thread_html(r: &Item, admin: bool) -> String {
             files += &format!("<div class=meta>{} · {} · {} bytes{link}</div>", a.kind.name(), html(&a.name), a.size);
         }
         let extra = match p.message.kind {
-            MessageKind::Answer => format!(" to #{}", p.message.answers.unwrap_or(0)),
+            MessageKind::Answer => format!(" to #{}{}", p.message.answers.unwrap_or(0), p.message.consent.map(|c| format!(": {}", consent_word(c))).unwrap_or_default()),
             MessageKind::Verdict => format!(": {} on {}", p.message.verdict.map(Verdict::name).unwrap_or(""), html(p.message.release.as_deref().unwrap_or(""))),
-            MessageKind::Question if !p.answered => " · not answered yet".into(),
+            MessageKind::Question | MessageKind::Proposal if !p.answered => " · not answered yet".into(),
+            MessageKind::Proposal => format!(" · {} by its user", r.consent_to(p.n).map(consent_word).unwrap_or("answered")),
             _ => String::new(),
         };
         out += &format!("<div class=card id=m{n}><div class=meta>#{n} · {k}{extra} · {a} · {t}</div><pre>{x}</pre>{files}</div>",
@@ -282,6 +288,13 @@ fn thread_page(token: &[u8; 32], r: &Item, admin: bool) -> Response {
         for q in &open {
             forms += &format!("<h2>Answer question #{q}</h2><form method=post action=\"{base}/requests/{id}/messages\">{h}<input type=hidden name=kind value=answer>\
 <input type=hidden name=answers value={q}><textarea name=text maxlength=8192 required></textarea><button>Answer</button></form>", id = r.id);
+        }
+        // A proposal: accepted, corrected with the text, or declined (hub-api 3, 100003-APP-0155).
+        for p in r.thread.iter().filter(|p| p.message.kind == MessageKind::Proposal && !p.answered) {
+            forms += &format!("<h2>Proposal #{q}</h2><p class=meta>What the agent understood and will do: accept it, correct it, or decline it.</p>\
+<form method=post action=\"{base}/requests/{id}/messages\">{h}<input type=hidden name=kind value=answer><input type=hidden name=answers value={q}>\
+<label>Your words (for a correction or a refusal; an acceptance may have none) <textarea name=text maxlength=8192></textarea></label>\
+<button name=consent value=accept>Accept</button> <button name=consent value=correct>Correct</button> <button name=consent value=decline>Decline</button></form>", q = p.n, id = r.id);
         }
         if matches!(r.state, State::AwaitingCheck | State::ClosedUnchecked) {
             let works = if r.state == State::AwaitingCheck { "<option value=works>works</option>" } else { "" };
