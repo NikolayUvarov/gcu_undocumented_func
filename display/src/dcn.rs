@@ -88,10 +88,26 @@ pub enum R {
     CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
     DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
     DmcubGpintDataout, DmcubTimerCurrent,
+    // Read by step 1's batches 9 and 10 (213-DRV-0092): the firmware's pipe as step 4's reference; written for pipe 1 by
+    // stages 11 to 15.
+    HubpAddrConfig, HubpTilingConfig, HubpPriViewportStart, HubpPriViewportDimension, HubpReqSizeConfig, HubpReqSizeConfigC,
+    HubpClkCntl, HubpreqSurfaceControl, HubpreqExpansionMode, HubpreqTtuQosWm, HubpreqGlobalTtuCntl, HubpreqSurf0TtuCntl0,
+    HubpreqSurf0TtuCntl1, HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqVmMxL1TlbCntl, HubpreqBlankOffset0, HubpreqBlankOffset1,
+    HubpreqDstDimensions, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0, HubpreqVblankParameters1, HubpreqVblankParameters2,
+    HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqNomParameters0, HubpreqNomParameters1, HubpreqNomParameters4, HubpreqNomParameters5,
+    HubpreqPerLineDeliveryPre, HubpreqPerLineDelivery, HubpreqCursorSettings, HubpreqRefFreqToPixFreq, HubpreqDstYDeltaDrqLimit, HubpretControl,
+    DppControl, CnvcSurfacePixelFormat, CnvcFormatControl, DsclSclMode, DsclControl, DsclRecoutStart,
+    DsclRecoutSize, DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl,
+    CmDgamControl, CmBlndgamControl, MpccTopSel, MpccBotSel, MpccOppId, MpccControl,
+    MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
+    DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
+    HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
+    // Read by batch 9 for the firmware's HUBP, written for pipe 1 by stage 13 as hubp2_vready_at_or_After_vsync does.
+    HubpreqDebugDb,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 71] = {
+pub const ALL: [R; 143] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -106,7 +122,20 @@ pub const ALL: [R; 71] = {
      DigBeEnCntl, DcnVmFbLocationBase, DcnVmFbLocationTop, DcnVmFbOffset, DcnVmAgpBot, DcnVmAgpTop, DcnVmAgpBase,
      CcDcPipeDis, DmcubCntl, DmcubSecCntl, DmcubScratch, DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress,
      DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr, DmcubOutbox1Wptr, DmcubOutbox1Rptr, DmcubGpintDatain1,
-     DmcubGpintDataout, DmcubTimerCurrent]
+     DmcubGpintDataout, DmcubTimerCurrent,
+     HubpAddrConfig, HubpTilingConfig, HubpPriViewportStart, HubpPriViewportDimension, HubpReqSizeConfig, HubpReqSizeConfigC,
+     HubpClkCntl, HubpreqSurfaceControl, HubpreqExpansionMode, HubpreqTtuQosWm, HubpreqGlobalTtuCntl, HubpreqSurf0TtuCntl0,
+     HubpreqSurf0TtuCntl1, HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqVmMxL1TlbCntl, HubpreqBlankOffset0, HubpreqBlankOffset1,
+     HubpreqDstDimensions, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0, HubpreqVblankParameters1, HubpreqVblankParameters2,
+     HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqNomParameters0, HubpreqNomParameters1, HubpreqNomParameters4, HubpreqNomParameters5,
+     HubpreqPerLineDeliveryPre, HubpreqPerLineDelivery, HubpreqCursorSettings, HubpreqRefFreqToPixFreq, HubpreqDstYDeltaDrqLimit, HubpretControl,
+     DppControl, CnvcSurfacePixelFormat, CnvcFormatControl, DsclSclMode, DsclControl, DsclRecoutStart,
+     DsclRecoutSize, DsclMpcSize, DsclLbDataFormat, CmControl, CmIcscControl, CmGamutRemapControl,
+     CmDgamControl, CmBlndgamControl, MpccTopSel, MpccBotSel, MpccOppId, MpccControl,
+     MpcOutMux, DchubbubArbWatermark, DchubbubArbDfReqOutstand, DchubbubArbSatLevel, DchubbubArbDramStateCntl, DchubbubArbWatermarkChangeCntl,
+     DchubbubGlobalTimerCntl, DppclkDtoCtrl, DppclkDtoParam, RefclkCntl,
+     HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
+     HubpreqDebugDb]
 };
 
 impl R {
@@ -119,6 +148,14 @@ impl R {
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => 1,
             DmcubScratch => 16,
+            DchubbubArbWatermark => 20,
+            DchubbubArbDfReqOutstand => 1,
+            DchubbubArbSatLevel => 1,
+            DchubbubArbDramStateCntl => 1,
+            DchubbubArbWatermarkChangeCntl => 1,
+            DchubbubGlobalTimerCntl => 1,
+            DppclkDtoCtrl => 1,
+            RefclkCntl => 1,
             CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress | DmcubInbox1Size
                 | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1 | DmcubGpintDataout
                 | DmcubTimerCurrent => 1,
@@ -163,6 +200,78 @@ impl R {
             DmcubInbox1Rptr => (2, 0x3281), DmcubOutbox1Wptr => (2, 0x3288), DmcubOutbox1Rptr => (2, 0x3289),
             DmcubScratch => (2, 0x328D + i), DmcubCntl => (2, 0x32A0), DmcubGpintDatain1 => (2, 0x32A2),
             DmcubGpintDataout => (2, 0x32A3), DmcubTimerCurrent => (2, 0x32A7),
+            HubpAddrConfig => (2, 0x5E6 + 0xDC * i),
+            HubpTilingConfig => (2, 0x5E7 + 0xDC * i),
+            HubpPriViewportStart => (2, 0x5E9 + 0xDC * i),
+            HubpPriViewportDimension => (2, 0x5EA + 0xDC * i),
+            HubpReqSizeConfig => (2, 0x5F1 + 0xDC * i),
+            HubpReqSizeConfigC => (2, 0x5F2 + 0xDC * i),
+            HubpClkCntl => (2, 0x5F4 + 0xDC * i),
+            HubpreqSurfaceControl => (2, 0x61A + 0xDC * i),
+            HubpreqExpansionMode => (2, 0x62C + 0xDC * i),
+            HubpreqTtuQosWm => (2, 0x62D + 0xDC * i),
+            HubpreqGlobalTtuCntl => (2, 0x62E + 0xDC * i),
+            HubpreqSurf0TtuCntl0 => (2, 0x62F + 0xDC * i),
+            HubpreqSurf0TtuCntl1 => (2, 0x630 + 0xDC * i),
+            HubpreqCur0TtuCntl0 => (2, 0x633 + 0xDC * i),
+            HubpreqCur0TtuCntl1 => (2, 0x634 + 0xDC * i),
+            HubpreqVmMxL1TlbCntl => (2, 0x645 + 0xDC * i),
+            HubpreqBlankOffset0 => (2, 0x646 + 0xDC * i),
+            HubpreqBlankOffset1 => (2, 0x647 + 0xDC * i),
+            HubpreqDstDimensions => (2, 0x648 + 0xDC * i),
+            HubpreqDstAfterScaler => (2, 0x649 + 0xDC * i),
+            HubpreqPrefetchSettings => (2, 0x64A + 0xDC * i),
+            HubpreqVblankParameters0 => (2, 0x64C + 0xDC * i),
+            HubpreqVblankParameters1 => (2, 0x64D + 0xDC * i),
+            HubpreqVblankParameters2 => (2, 0x64E + 0xDC * i),
+            HubpreqVblankParameters3 => (2, 0x64F + 0xDC * i),
+            HubpreqVblankParameters4 => (2, 0x650 + 0xDC * i),
+            HubpreqNomParameters0 => (2, 0x654 + 0xDC * i),
+            HubpreqNomParameters1 => (2, 0x655 + 0xDC * i),
+            HubpreqNomParameters4 => (2, 0x658 + 0xDC * i),
+            HubpreqNomParameters5 => (2, 0x659 + 0xDC * i),
+            HubpreqPerLineDeliveryPre => (2, 0x65C + 0xDC * i),
+            HubpreqPerLineDelivery => (2, 0x65D + 0xDC * i),
+            HubpreqCursorSettings => (2, 0x65E + 0xDC * i),
+            HubpreqRefFreqToPixFreq => (2, 0x65F + 0xDC * i),
+            HubpreqDstYDeltaDrqLimit => (2, 0x660 + 0xDC * i),
+            HubpretControl => (2, 0x66C + 0xDC * i),
+            DppControl => (2, 0xCC5 + 0x16B * i),
+            CnvcSurfacePixelFormat => (2, 0xCCF + 0x16B * i),
+            CnvcFormatControl => (2, 0xCD0 + 0x16B * i),
+            DsclSclMode => (2, 0xCEC + 0x16B * i),
+            DsclControl => (2, 0xCEE + 0x16B * i),
+            DsclRecoutStart => (2, 0xD02 + 0x16B * i),
+            DsclRecoutSize => (2, 0xD03 + 0x16B * i),
+            DsclMpcSize => (2, 0xD04 + 0x16B * i),
+            DsclLbDataFormat => (2, 0xD05 + 0x16B * i),
+            CmControl => (2, 0xD1A + 0x16B * i),
+            CmIcscControl => (2, 0xD1B + 0x16B * i),
+            CmGamutRemapControl => (2, 0xD28 + 0x16B * i),
+            CmDgamControl => (2, 0xD37 + 0x16B * i),
+            CmBlndgamControl => (2, 0xD63 + 0x16B * i),
+            MpccTopSel => (2, 0x1271 + 0x1B * i),
+            MpccBotSel => (2, 0x1272 + 0x1B * i),
+            MpccOppId => (2, 0x1273 + 0x1B * i),
+            MpccControl => (2, 0x1274 + 0x1B * i),
+            MpcOutMux => (2, 0x1385 + 0x4 * i),
+            DchubbubArbWatermark => (2, 0x509 + i),
+            DchubbubArbDfReqOutstand => (2, 0x505),
+            DchubbubArbSatLevel => (2, 0x506),
+            DchubbubArbDramStateCntl => (2, 0x508),
+            DchubbubArbWatermarkChangeCntl => (2, 0x51D),
+            DchubbubGlobalTimerCntl => (2, 0x51F),
+            DppclkDtoCtrl => (1, 0xB6),
+            DppclkDtoParam => (1, 0x99 + i),
+            RefclkCntl => (1, 0x49),
+            HubpreqVmidSettings0 => (2, 0x609 + 0xDC * i),
+            HubpreqFlipControl => (2, 0x61B + 0xDC * i),
+            HubpreqVmSystemApertureLow => (2, 0x637 + 0xDC * i),
+            HubpreqVmSystemApertureHigh => (2, 0x638 + 0xDC * i),
+            DsclTapControl => (2, 0xCED + 0x16B * i),
+            DsclHorzScaleRatio => (2, 0xCF1 + 0x16B * i),
+            DsclVertScaleRatio => (2, 0xCF5 + 0x16B * i),
+            HubpreqDebugDb => (2, 0x5F6 + 0xDC * i),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -204,6 +313,78 @@ impl R {
             DmcubOutbox1Wptr => "DMCUB_OUTBOX1_WPTR", DmcubOutbox1Rptr => "DMCUB_OUTBOX1_RPTR",
             DmcubGpintDatain1 => "DMCUB_GPINT_DATAIN1", DmcubGpintDataout => "DMCUB_GPINT_DATAOUT",
             DmcubTimerCurrent => "DMCUB_TIMER_CURRENT",
+            HubpAddrConfig => "DCSURF_ADDR_CONFIG",
+            HubpTilingConfig => "DCSURF_TILING_CONFIG",
+            HubpPriViewportStart => "DCSURF_PRI_VIEWPORT_START",
+            HubpPriViewportDimension => "DCSURF_PRI_VIEWPORT_DIMENSION",
+            HubpReqSizeConfig => "DCHUBP_REQ_SIZE_CONFIG",
+            HubpReqSizeConfigC => "DCHUBP_REQ_SIZE_CONFIG_C",
+            HubpClkCntl => "HUBP_CLK_CNTL",
+            HubpreqSurfaceControl => "DCSURF_SURFACE_CONTROL",
+            HubpreqExpansionMode => "DCN_EXPANSION_MODE",
+            HubpreqTtuQosWm => "DCN_TTU_QOS_WM",
+            HubpreqGlobalTtuCntl => "DCN_GLOBAL_TTU_CNTL",
+            HubpreqSurf0TtuCntl0 => "DCN_SURF0_TTU_CNTL0",
+            HubpreqSurf0TtuCntl1 => "DCN_SURF0_TTU_CNTL1",
+            HubpreqCur0TtuCntl0 => "DCN_CUR0_TTU_CNTL0",
+            HubpreqCur0TtuCntl1 => "DCN_CUR0_TTU_CNTL1",
+            HubpreqVmMxL1TlbCntl => "DCN_VM_MX_L1_TLB_CNTL",
+            HubpreqBlankOffset0 => "BLANK_OFFSET_0",
+            HubpreqBlankOffset1 => "BLANK_OFFSET_1",
+            HubpreqDstDimensions => "DST_DIMENSIONS",
+            HubpreqDstAfterScaler => "DST_AFTER_SCALER",
+            HubpreqPrefetchSettings => "PREFETCH_SETTINGS",
+            HubpreqVblankParameters0 => "VBLANK_PARAMETERS_0",
+            HubpreqVblankParameters1 => "VBLANK_PARAMETERS_1",
+            HubpreqVblankParameters2 => "VBLANK_PARAMETERS_2",
+            HubpreqVblankParameters3 => "VBLANK_PARAMETERS_3",
+            HubpreqVblankParameters4 => "VBLANK_PARAMETERS_4",
+            HubpreqNomParameters0 => "NOM_PARAMETERS_0",
+            HubpreqNomParameters1 => "NOM_PARAMETERS_1",
+            HubpreqNomParameters4 => "NOM_PARAMETERS_4",
+            HubpreqNomParameters5 => "NOM_PARAMETERS_5",
+            HubpreqPerLineDeliveryPre => "PER_LINE_DELIVERY_PRE",
+            HubpreqPerLineDelivery => "PER_LINE_DELIVERY",
+            HubpreqCursorSettings => "CURSOR_SETTINGS",
+            HubpreqRefFreqToPixFreq => "REF_FREQ_TO_PIX_FREQ",
+            HubpreqDstYDeltaDrqLimit => "DST_Y_DELTA_DRQ_LIMIT",
+            HubpretControl => "HUBPRET_CONTROL",
+            DppControl => "DPP_CONTROL",
+            CnvcSurfacePixelFormat => "CNVC_SURFACE_PIXEL_FORMAT",
+            CnvcFormatControl => "FORMAT_CONTROL",
+            DsclSclMode => "SCL_MODE",
+            DsclControl => "DSCL_CONTROL",
+            DsclRecoutStart => "RECOUT_START",
+            DsclRecoutSize => "RECOUT_SIZE",
+            DsclMpcSize => "MPC_SIZE",
+            DsclLbDataFormat => "LB_DATA_FORMAT",
+            CmControl => "CM_CONTROL",
+            CmIcscControl => "CM_ICSC_CONTROL",
+            CmGamutRemapControl => "CM_GAMUT_REMAP_CONTROL",
+            CmDgamControl => "CM_DGAM_CONTROL",
+            CmBlndgamControl => "CM_BLNDGAM_CONTROL",
+            MpccTopSel => "MPCC_TOP_SEL",
+            MpccBotSel => "MPCC_BOT_SEL",
+            MpccOppId => "MPCC_OPP_ID",
+            MpccControl => "MPCC_CONTROL",
+            MpcOutMux => "MUX",
+            DchubbubArbWatermark => "DCHUBBUB_ARB_WATERMARK",
+            DchubbubArbDfReqOutstand => "DCHUBBUB_ARB_DF_REQ_OUTSTAND",
+            DchubbubArbSatLevel => "DCHUBBUB_ARB_SAT_LEVEL",
+            DchubbubArbDramStateCntl => "DCHUBBUB_ARB_DRAM_STATE_CNTL",
+            DchubbubArbWatermarkChangeCntl => "DCHUBBUB_ARB_WATERMARK_CHANGE_CNTL",
+            DchubbubGlobalTimerCntl => "DCHUBBUB_GLOBAL_TIMER_CNTL",
+            DppclkDtoCtrl => "DPPCLK_DTO_CTRL",
+            DppclkDtoParam => "DTO_PARAM",
+            RefclkCntl => "REFCLK_CNTL",
+            HubpreqVmidSettings0 => "VMID_SETTINGS_0",
+            HubpreqFlipControl => "DCSURF_FLIP_CONTROL",
+            HubpreqVmSystemApertureLow => "DCN_VM_SYSTEM_APERTURE_LOW_ADDR",
+            HubpreqVmSystemApertureHigh => "DCN_VM_SYSTEM_APERTURE_HIGH_ADDR",
+            DsclTapControl => "SCL_TAP_CONTROL",
+            DsclHorzScaleRatio => "SCL_HORZ_FILTER_SCALE_RATIO",
+            DsclVertScaleRatio => "SCL_VERT_FILTER_SCALE_RATIO",
+            HubpreqDebugDb => "HUBPREQ_DEBUG_DB",
         }
     }
 
@@ -215,13 +396,24 @@ impl R {
             OptcDataSourceSelect | OptcDataFormatControl | OptcInputClockControl | OptcInputGlobalControl => "ODM",
             VtgControl => "VTG", OppPipeControl => "OPP_PIPE", DpgControl | DpgDimensions | DpgOffsetSegment => "DPG",
             DigFeCntl | DigBeCntl | DigBeEnCntl => "DIG", PhypllPixclkResyncCntl => "PHYPLL", HpdIntStatus | HpdControl => "HPD",
-            DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl => "HUBP",
-            HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh => "HUBPREQ",
+            DomainPgStatus => "DOMAIN", HubpSurfaceConfig | HubpCntl | HubpreqDebugDb => "HUBP",
+            HubpreqSurfacePitch | HubpreqPrimarySurfaceAddress | HubpreqPrimarySurfaceAddressHigh | HubpreqVmidSettings0 | HubpreqFlipControl | HubpreqVmSystemApertureLow | HubpreqVmSystemApertureHigh => "HUBPREQ",
             DentistDispclkCntl | DcnVmFbLocationBase | DcnVmFbLocationTop | DcnVmFbOffset | DcnVmAgpBot | DcnVmAgpTop
                 | DcnVmAgpBase => "",
             CcDcPipeDis | DmcubCntl | DmcubSecCntl | DmcubScratch | DmcubInbox0Wptr | DmcubInbox0Rptr | DmcubInbox1BaseAddress
                 | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
                 | DmcubGpintDataout | DmcubTimerCurrent => "",
+            HubpAddrConfig | HubpTilingConfig | HubpPriViewportStart | HubpPriViewportDimension | HubpReqSizeConfig | HubpReqSizeConfigC | HubpClkCntl => "HUBP",
+            HubpreqSurfaceControl | HubpreqExpansionMode | HubpreqTtuQosWm | HubpreqGlobalTtuCntl | HubpreqSurf0TtuCntl0 | HubpreqSurf0TtuCntl1 | HubpreqCur0TtuCntl0 | HubpreqCur0TtuCntl1 | HubpreqVmMxL1TlbCntl | HubpreqBlankOffset0 | HubpreqBlankOffset1 | HubpreqDstDimensions | HubpreqDstAfterScaler | HubpreqPrefetchSettings | HubpreqVblankParameters0 | HubpreqVblankParameters1 | HubpreqVblankParameters2 | HubpreqVblankParameters3 | HubpreqVblankParameters4 | HubpreqNomParameters0 | HubpreqNomParameters1 | HubpreqNomParameters4 | HubpreqNomParameters5 | HubpreqPerLineDeliveryPre | HubpreqPerLineDelivery | HubpreqCursorSettings | HubpreqRefFreqToPixFreq | HubpreqDstYDeltaDrqLimit => "HUBPREQ",
+            HubpretControl => "HUBPRET",
+            DppControl => "DPP_TOP",
+            CnvcSurfacePixelFormat | CnvcFormatControl => "CNVC_CFG",
+            DsclSclMode | DsclControl | DsclRecoutStart | DsclRecoutSize | DsclMpcSize | DsclLbDataFormat | DsclTapControl | DsclHorzScaleRatio | DsclVertScaleRatio => "DSCL",
+            CmControl | CmIcscControl | CmGamutRemapControl | CmDgamControl | CmBlndgamControl => "CM",
+            MpccTopSel | MpccBotSel | MpccOppId | MpccControl => "MPCC",
+            MpcOutMux => "MPC_OUT",
+            DchubbubArbWatermark | DchubbubArbDfReqOutstand | DchubbubArbSatLevel | DchubbubArbDramStateCntl | DchubbubArbWatermarkChangeCntl | DchubbubGlobalTimerCntl | DppclkDtoCtrl | RefclkCntl => "",
+            DppclkDtoParam => "DPPCLK",
             _ => "OTG",
         }
     }
@@ -314,6 +506,58 @@ pub mod field {
     pub const DMCUB_PWAIT_MODE_STATUS: Field = f(20, 1);
     pub const DMCUB_SEC_RESET: Field = f(16, 1); // DMCUB_SEC_CNTL
     pub const DMCUB_SEC_RESET_STATUS: Field = f(21, 1);
+    // The firmware's pipe as step 4's reference (batches 9 and 10, dcn_2_1_0_sh_mask.h).
+    pub const PRI_VIEWPORT_X_START: Field = f(0, 14);
+    pub const PRI_VIEWPORT_Y_START: Field = f(16, 14);
+    pub const PRI_VIEWPORT_WIDTH: Field = f(0, 14);
+    pub const PRI_VIEWPORT_HEIGHT: Field = f(16, 14);
+    pub const SW_MODE: Field = f(0, 5);
+    pub const SWATH_HEIGHT: Field = f(0, 3);
+    pub const PTE_ROW_HEIGHT_LINEAR: Field = f(4, 3);
+    pub const CHUNK_SIZE: Field = f(8, 3);
+    pub const MIN_CHUNK_SIZE: Field = f(11, 2);
+    pub const REFCYC_H_BLANK_END: Field = f(0, 13);
+    pub const DLG_V_BLANK_END: Field = f(16, 15);
+    pub const MIN_DST_Y_NEXT_START: Field = f(0, 18);
+    pub const REFCYC_PER_HTOTAL: Field = f(0, 21);
+    pub const REFCYC_X_AFTER_SCALER: Field = f(0, 13);
+    pub const DST_Y_AFTER_SCALER: Field = f(16, 3);
+    pub const VRATIO_PREFETCH: Field = f(0, 22);
+    pub const DST_Y_PREFETCH: Field = f(24, 8);
+    pub const REFCYC_PER_LINE_DELIVERY_L: Field = f(0, 13);
+    pub const REF_FREQ_TO_PIX_FREQ: Field = f(0, 21);
+    pub const DST_Y_DELTA_DRQ_LIMIT: Field = f(0, 15);
+    pub const MIN_TTU_VBLANK: Field = f(0, 24);
+    pub const REFCYC_PER_REQ_DELIVERY: Field = f(0, 23);
+    pub const DPP_CLOCK_ENABLE: Field = f(4, 1);
+    pub const CNVC_SURFACE_PIXEL_FORMAT: Field = f(0, 7);
+    pub const DSCL_MODE: Field = f(0, 3);
+    pub const RECOUT_START_X: Field = f(0, 13);
+    pub const RECOUT_START_Y: Field = f(16, 13);
+    pub const LOW14: Field = f(0, 14); // RECOUT_WIDTH, MPC_WIDTH
+    pub const HIGH14: Field = f(16, 14); // RECOUT_HEIGHT, MPC_HEIGHT
+    pub const CM_BYPASS: Field = f(0, 1);
+    pub const MPCC_SEL: Field = f(0, 4); // MPCC_TOP_SEL, MPCC_BOT_SEL, MPCC_OPP_ID, MPC_OUT_MUX; 0xF: none
+    pub const MPCC_MODE: Field = f(0, 2);
+    pub const MPCC_GLOBAL_ALPHA: Field = f(16, 8);
+    pub const DTO_PHASE: Field = f(0, 8); // DPPCLKn_DTO_PHASE
+    pub const DTO_MODULO: Field = f(16, 8);
+    pub const WATERMARK_14: Field = f(0, 14);
+    pub const HUBP_CLOCK_ENABLE: Field = f(0, 1);
+    pub const HUBP_VREADY_AT_OR_AFTER_VSYNC: Field = f(8, 1);
+    pub const HUBP_UNDERFLOW_STATUS: Field = f(28, 3);
+    /// DCHUBP_CNTL's other statuses and their clears (dcn_2_1_0_sh_mask.h): in blank, a request timed out.
+    pub const HUBP_IN_BLANK: Field = f(3, 1);
+    pub const HUBP_TIMEOUT_STATUS: Field = f(20, 4);
+    pub const HUBP_TIMEOUT_STATUS_CLEAR: Field = f(26, 1);
+    pub const HUBP_UNDERFLOW_CLEAR: Field = f(31, 1);
+    /// DCN_TTU_QOS_WM, and the QoS fields of DCN_SURF0_TTU_CNTL0 and DCN_CUR0_TTU_CNTL0.
+    pub const QOS_LEVEL_LOW_WM: Field = f(0, 14);
+    pub const QOS_LEVEL_HIGH_WM: Field = f(16, 14);
+    pub const QOS_LEVEL_FIXED: Field = f(24, 4);
+    pub const QOS_RAMP_DISABLE: Field = f(28, 1);
+    pub const OPTC_UNDERFLOW_OCCURRED_STATUS: Field = f(10, 1);
+    pub const OPTC_UNDERFLOW_CLEAR: Field = f(12, 1);
     pub const PGFSM_POWER_ON: u32 = 0;
 }
 
@@ -389,14 +633,36 @@ pub enum Step {
     Call(Table),
     /// Wait for OTG `otg`'s frame counter to move `frames` times, for at most `timeout_us`: the generator runs.
     Frames { otg: u8, frames: u32, timeout_us: u32 },
-    /// Stage `n` (1 to `STAGES`) of first light begins here: the steps up to the next marker are one stage.
+    /// Stage `n` (1 to `STAGES`) begins here: the steps up to the next marker are one stage.
     Begin(u8),
+    /// Step 4's reference (stage 9): the firmware's pipe measured and pipe 1's request, DLG and TTU values derived from
+    /// it and from step 1's batches 9 and 10; nothing written.
+    Reference,
+    /// Step 4's picture (stage 10): drawn into `display`'s own surface (BAR 0's slot 5); no register written.
+    Draw,
+    /// Step 4's stages 11 to 15: their writes are built from stage 9's reference when it has run.
+    Late,
+    /// No new underflow on the firmware's pipe or on pipe 1 since stage 9 (their HUBPs' and ODMs' statuses).
+    NoUnderflow,
+    /// Read the register back and log it with its field, against what the stage last wrote to it.
+    ReadBack { reg: Reg, field: Field },
+    /// Stage 15 with the pattern off: both pipes' statuses read at each of OTG1's next `frames` frames, polled without
+    /// sleeping; the firmware's showing anything new fails at once, pipe 1's are kept by frame and cleared.
+    Watch { frames: u32 },
+    /// Stage 16: the surface offered to the compositor as the second screen (213-KRN-0272, `display.wit` 1.3).
+    Offer,
 }
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
-pub const STAGES: u8 = 8;
+/// Step 3's stages 1 to 8 (first light), then step 4's from 9 (213-DRV-0092: MIND Core's picture on the second output).
+pub const STAGES: u8 = 16;
+pub const FIRST_LIGHT: u8 = 8;
+/// The first stage that writes pipe 1's HUBP, DPP or MPC (the guard lets them through from here), and the last.
+pub const PIPE_WRITES_FROM: u8 = 11;
+pub const PIPE_WRITES_TO: u8 = 15;
 pub const STAGE_NAMES: [&str; STAGES as usize] =
-    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY"];
+    ["OTG CLOCKS", "PIXEL CLOCK", "TIMING", "TEST PATTERN", "START", "FRONT END", "BACK END", "PHY", "REFERENCE", "DRAW",
+     "PIPE CLOCKS", "DPP", "HUBP", "MPC", "UNBLANK", "OFFER"];
 
 /// The pipe a plan drives: its timing generator, OPP and DIG front end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,7 +707,7 @@ pub enum PlanError {
     Full,
 }
 
-pub const MAX_STEPS: usize = 64;
+pub const MAX_STEPS: usize = 192;
 
 /// An ordered list of steps.
 #[derive(Clone, Copy, Debug)]
@@ -455,13 +721,13 @@ impl Plan {
     pub fn get(&self, i: usize) -> Option<Step> { self.steps[..self.len].get(i).copied().flatten() }
     pub fn len(&self) -> usize { self.len }
     pub fn is_empty(&self) -> bool { self.len == 0 }
-    fn push(&mut self, step: Step) -> Result<(), PlanError> {
+    pub(crate) fn push(&mut self, step: Step) -> Result<(), PlanError> {
         if self.len == MAX_STEPS { return Err(PlanError::Full); }
         self.steps[self.len] = Some(step);
         self.len += 1;
         Ok(())
     }
-    fn update(&mut self, reg: Reg, fields: &[(Field, u32)]) -> Result<(), PlanError> {
+    pub(crate) fn update(&mut self, reg: Reg, fields: &[(Field, u32)]) -> Result<(), PlanError> {
         let (mask, value) = fields.iter().fold((0, 0), |(m, v), (field, x)| (m | field.mask(), v | field.put(*x)));
         self.push(Step::Update { reg, mask, value })
     }
@@ -570,6 +836,28 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     Ok(plan)
 }
 
+/// Step 4's stages after first light's (213-DRV-0092): 9, the reference; 10, the picture drawn; 11 to 15, built from
+/// the reference when stage 9 has run.
+pub fn second_pipe(plan: &mut Plan) -> Result<(), PlanError> {
+    plan.push(Step::Begin(9))?;
+    plan.push(Step::Reference)?;
+    plan.push(Step::Begin(10))?;
+    plan.push(Step::Draw)?;
+    for n in PIPE_WRITES_FROM..=PIPE_WRITES_TO { plan.push(Step::Begin(n))?; plan.push(Step::Late)?; }
+    plan.push(Step::Begin(16))?;
+    plan.push(Step::Offer)?;
+    Ok(())
+}
+
+/// The steps of stage `n` in `plan` (its markers left out).
+pub fn steps_in(plan: &Plan, n: u8) -> impl Iterator<Item = Step> + '_ {
+    let mut current = 0;
+    plan.steps().filter(move |s| if let Step::Begin(m) = s { current = *m; false } else { current == n })
+}
+
+/// Stage 3's VSTARTUP_START: the lines of the vertical blank after the sync (step 4 keeps it for its plane).
+pub fn vstartup(otg: &Otg) -> u32 { (otg.v_blank_end - otg.v_sync_end).clamp(1, 0x3FF) }
+
 fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {
     use field::*;
     use R::*;
@@ -588,7 +876,7 @@ fn write_timing(plan: &mut Plan, t: u8, otg: &Otg) -> Result<(), PlanError> {
     plan.update(reg(VtgControl, t)?, &[(VTG0_ENABLE, 0)])?;
     plan.update(reg(OtgControl, t)?, &[(OTG_START_POINT_CNTL, 0), (OTG_FIELD_NUMBER_CNTL, 0)])?;
     // Global sync with no plane behind the pipe: VSTARTUP inside the vertical blank, after the sync.
-    let vstartup = (otg.v_blank_end - otg.v_sync_end).clamp(1, 0x3FF);
+    let vstartup = vstartup(otg);
     plan.update(reg(OtgVstartupParam, t)?, &[(VSTARTUP_START, vstartup)])?;
     plan.update(reg(OtgVupdateParam, t)?, &[(VUPDATE_OFFSET, 0), (VUPDATE_WIDTH, 1)])?;
     plan.update(reg(OtgVreadyParam, t)?, &[(VREADY_OFFSET, 1)])?;
