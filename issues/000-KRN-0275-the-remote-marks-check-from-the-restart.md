@@ -27,10 +27,21 @@ So the check missed a state the screen showed: a race in the check, not in the c
 
 ## Acceptance criteria
 
-- [ ] `x86: services, storage, audio` passes on x32 beside a busy lane, and the red is seen in each run.
+- [x] `x86: services, storage, audio` passes on x32 beside a busy lane, and the red is seen in each run.
 - [ ] The gate's groups pass.
 
 **Not covered:** a machine slow enough that one screendump takes longer than 6 s.
+
+## Progress (2026-11-22)
+
+**Made** on `claude/000-KRN-0275-the-remote-marks-check-from-the-restart`, with round 171's `main` merged in (eb592ec468).
+
+**Runs through Effector, at eb592ec468:**
+- `x86: services, storage, audio` on x32 and x32-2 at once, two runs each, one after the other: 4 of 4 passed (1009 to 1011 s each);
+- that is the load under which round 171's run failed;
+- the check passes only when red, yellow and grey are all seen, so the red was seen in each run.
+
+**Left:** the gate's groups.
 
 ## Related
 
