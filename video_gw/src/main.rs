@@ -177,10 +177,13 @@ fn timing(live: &Live) -> String {
 // A stream's reads for the log: how many were answered and the longest time between two (158-DRV-0082).
 fn answered(s: &Stream) -> String { format!(" ({} READS ANSWERED, AT MOST {} MS APART)", s.answers, s.apart_ns / 1_000_000) }
 
-// What a camera stream got, for the log.
+// What a camera stream got, for the log: with why frames broke and how they ended (158-DRV-0082).
 fn report(live: &Live) -> String {
-    format!("{} GOOD FRAMES, {} BROKEN (THE LAST {} BYTES OF {}), {} PACKETS OF {} BYTES, {} DAMAGED, FIRST HEADER {:02X?}",
-        live.assembler.good, live.assembler.broken, live.assembler.last_bytes, live.size.exact_bytes().unwrap_or(live.assembler.capacity()), live.packets, live.bytes, live.damaged, &live.header[..live.header_len])
+    let c = live.assembler.causes;
+    format!("{} GOOD FRAMES, {} BROKEN (THE LAST {} BYTES OF {}; BY: {} ERROR BIT, {} DAMAGED, {} BAD HEADER, {} OVERFLOW, {} BULK START, {} BULK FAILED, {} SIZE; ENDED BY EOF {}, BY FID {}), {} PACKETS OF {} BYTES, {} DAMAGED, FIRST HEADER {:02X?}",
+        live.assembler.good, live.assembler.broken, live.assembler.last_bytes, live.size.exact_bytes().unwrap_or(live.assembler.capacity()),
+        c.error_bit, c.damaged, c.header, c.overflow, c.bulk_start, c.bulk_failed, c.size, c.by_eof, c.by_fid,
+        live.packets, live.bytes, live.damaged, &live.header[..live.header_len])
 }
 
 impl Usb {

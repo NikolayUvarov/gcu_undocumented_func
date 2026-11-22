@@ -176,7 +176,10 @@ This holds for that machine, those cameras and that release (MC-12.1).
     - **YUY2 1280×720 at 10:** 73 good frames and 45 broken, again whole (1 843 200 bytes); the spill at most 158 KB.
     - **Camera 1 beside them:** 452 good and 125 broken in 20 s.
     - **Camera 0 in 640×480 alone:** 294 good and 7 broken in 12 s.
-    - **So the queue limit is mended.** The frames that still break beside a second camera come whole: the camera's own error bit or a frame-ID change, not lost bytes. That is not yet looked at.
+    - **So the queue limit is mended.** The frames that still break beside a second camera come whole: not lost bytes.
+  - **Why they break, now counted:** each broken frame is counted once for every cause it had (`uvc::Causes`): the payloads' error bit, a host controller's error, a payload header that does not parse, more bytes than a frame holds, a bulk payload that started without a valid header or whose transfer failed, or the wrong size alone. Every frame's end is counted as by EOF or by a new frame ID. The close line gives them (`BY: n ERROR BIT, … SIZE; ENDED BY EOF n, BY FID n`).
+    - A frame counted broken at its exact size points to an overflow: its end was not seen, and the next frame's bytes ran into it. The bulk start count would show whether a payload of a multiple of 4096 bytes ended without a zero-length packet, so that the next payload's header went in as data.
+    - Host cases in `tests/uvc_host.rs`. Not run on the Ryzen yet.
 - **A restarted `usb_host` left `video_gw` with stale cameras** (found on that run): the old entries stayed beside the new (`CAMERAS: 0 V, 1 V, 2 IR, 3 IR`), and "camera 1" named a handle of the old instance. Its probe answered not-found.
   - **The fix:** the client counts its attaches (`Host::attaches`, `libmind/src/usb.rs`), and each camera keeps the count it was claimed under. After its claims, `look` drops a camera of an earlier count (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`); a stream on it fails its next pump and is marked gone.
   - **Not run on the Ryzen yet.** No QEMU device is a camera.
