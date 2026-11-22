@@ -45,7 +45,7 @@ True gives the survey's order of boots 70 to 81. At 0 batches and 0 stages neith
 **One line a stage, in either order.** Each stage ends with the survey's line, now with its time and what it did:
 ```
 S2 PIXEL CLOCK DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS); 0.3 MS, 1 WRITES, TABLE 12 20 US (3 STEPS, 2 WRITES), THE PHY SET UP ALREADY: THE SHORT PATH
-S15 UNBLANK DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS); 5025.3 MS, 2 WRITES, 1 WAITS 42420 US, WATCHED 300 FRAMES IN 4982 MS CLEAN, THE LONGEST GAP 50 US
+S15 UNBLANK DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS); 5025.3 MS, 2 WRITES, 1 WAITS 42420 US, WATCHED 300 FRAMES IN 4982 MS CLEAN, LONGEST GAP 50 US AT FRAME 2
 ```
 These are the model's lines, at 3440x1440 with synthetic tables. Each line names, as far as the stage has them:
 - its writes, and its waits with their time;
@@ -53,7 +53,7 @@ These are the model's lines, at 3440x1440 with synthetic tables. Each line names
 - table 12's path;
 - stage 9's clocks;
 - whether stage 13 read the pitch back as written;
-- stage 15's watch;
+- stage 15's watch, with the longest gap between two reads and the frame it came before (the head first released, e458838ac, logged the gap without its frame);
 - stage 16's offer.
 
 **The times.** At the end, `STEP 3'S TIMES (MS)` gives:

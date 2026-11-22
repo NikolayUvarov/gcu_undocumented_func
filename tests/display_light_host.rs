@@ -1587,7 +1587,12 @@ fn the_production_orders_log_is_a_line_a_stage_with_its_time_and_the_detail_only
     assert!(line(9).contains(", OTG0 AT 26") && line(9).ends_with("KHZ, THE REFERENCE 48000 KHZ"), "{}", line(9));
     assert!(line(10).ends_with(", 3440x1440 DRAWN AND READ BACK"), "{}", line(10));
     assert!(line(13).ends_with(", THE PITCH READ BACK AS WRITTEN"), "{}", line(13));
-    assert!(line(15).contains(", WATCHED 300 FRAMES IN ") && line(15).contains(" MS CLEAN, THE LONGEST GAP "), "{}", line(15));
+    assert!(line(15).contains(", WATCHED 300 FRAMES IN ") && line(15).contains(" MS CLEAN, LONGEST GAP ") && line(15).contains(" US AT FRAME "), "{}", line(15));
+    // The gap and its frame as the survey's detail gives them.
+    let gap = number_after(&s.log, "S15 WATCHED 300 FRAMES", "THE LONGEST GAP BETWEEN READS ");
+    let at = number_after(&s.log, "S15 WATCHED 300 FRAMES", "US, BEFORE FRAME ");
+    let (pgap, pat) = (number_after(&p.log, "S15 UNBLANK DONE", "LONGEST GAP "), number_after(&p.log, "S15 UNBLANK DONE", "US AT FRAME "));
+    assert!(pat >= 1 && pat <= 300 && at >= 1 && at <= 300 && pgap > 0 && gap > 0, "{} {} {} {}", gap, at, pgap, pat);
     assert!(line(16).ends_with(", OFFERED 3440x1440 PITCH 13824"), "{}", line(16));
     assert!(p.log[19].starts_with("STEP 3'S TIMES (MS): IN ALL ") && p.log[20].starts_with("STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS"), "{:#?}", &p.log[19..]);
     // The times: the watch 300 of HDMI-A-1's frames (from a read inside the first), stage 9's count 30 of DP-2's from
