@@ -188,6 +188,8 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // H2Cs, as Linux's rtw89_mac_port_cfg_func_sw waits before it turns the port's function off.
     port_linked:bool,port_due:Option<(u64,bool)>,
     tx_watch:TxWatch,floor:FloorState,
+    // receive_service::MINUTE_DETAIL: held frames probed and the beacon interval's phase read (the bench's detail).
+    detail:bool,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -233,7 +235,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             tight:POLL_TIGHT_WHILE_PENDING,tight_alternates:POLL_TIGHT_ALTERNATES,tight_kind:data_mode::FloorKind::None,tight_switch_due:false,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
-            linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default(),floor:FloorState::default()})
+            linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default(),floor:FloorState::default(),
+            detail:crate::receive_service::MINUTE_DETAIL})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -277,6 +280,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     /// The data queues' frames final on DMA and the RPQ (tx.rs RPQ_ALONE), as on the Ryzen.
     #[cfg(test)]
     pub(crate) fn rpq_alone(&mut self){self.data().rpq_alone()}
+    /// Whether held frames are probed and the phase read (receive_service::MINUTE_DETAIL).
+    #[cfg(test)]
+    pub(crate) fn minute_detail(mut self,on:bool)->Self{self.detail=on;self}
     fn info(&mut self)->wlanhw::Info{
         let mut channels=List::default();channels.push(self.data().channel());
         // Its own channels: 1 to 13 on 2.4 GHz and the 5 GHz ones at 20 MHz (wlanhw.wit 2.0, 550-NET-0059, 213-DRV-0087).
@@ -362,8 +368,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 released:seen.released,length:seen.length,age_us:seen.age_us})}
             self.ended(unicast,false,now);
             // 213-DRV-0091: what holds it, probed while the MAC still has it.
-            let w=&mut self.tx_watch;
-            let probe=if w.probes<HELD_PROBES{w.probes+=1;true}else if !w.minute_probed{w.minute_probed=true;true}else{false};
+            let detail=self.detail;let w=&mut self.tx_watch;
+            let probe=detail&&if w.probes<HELD_PROBES{w.probes+=1;true}else if !w.minute_probed{w.minute_probed=true;true}else{false};
             if probe{
                 let(began,submitted)=self.pending.as_ref().map_or((now,Phase::default()),|p|(p.began,p.phase));let at=self.phase();
                 let registers=self.data().held();
@@ -540,6 +546,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     // 213-DRV-0091: where in the beacon interval now is: by our clock since the last beacon taken from the ring, and by the
     // port's TSF; the interval as the last beacon gave it.
     fn phase(&mut self)->Phase{
+        if !self.detail{return Phase::default()}
         let c=self.data().counts();let interval=u64::from(c.beacon_interval_us);if interval==0{return Phase::default()}
         let now_us=time::monotonic_ns()/1000;
         let clock_us=(c.beacon_at_us!=0&&now_us>=c.beacon_at_us).then(||(now_us-c.beacon_at_us)%interval);

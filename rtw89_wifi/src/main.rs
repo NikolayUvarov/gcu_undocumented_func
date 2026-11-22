@@ -322,69 +322,72 @@ fn served(event: receive_service::Event) {
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], other_beacons);
             mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN; HISR0 HALT_C2H {}, WDT_TIMEOUT {} (213-DRV-0091)",
                 channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
-            mind::println!("[RTW89] TRAFFIC ON {}: RX POLLS: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {}; OF {} (213-DRV-0091)",
-                channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
-            mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
-                channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
-            // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
-            // 213-DRV-0104: how long sends took to their answer when in time, by size, and how long the next took to come.
-            for (class, bins) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.answer_ms.iter()) {
-                mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS (2 TO 30, 10 TO 90), {}: {} (213-DRV-0104)", channel, class, Spaced(bins));
+            // The minute's detail on the bench only (receive_service::MINUTE_DETAIL; 213-DRV-0091, 0102, 0104).
+            if receive_service::MINUTE_DETAIL {
+                mind::println!("[RTW89] TRAFFIC ON {}: RX POLLS: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {}; OF {} (213-DRV-0091)",
+                    channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
+                mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
+                    channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
+                // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
+                // 213-DRV-0104: how long sends took to their answer when in time, by size, and how long the next took to come.
+                for (class, bins) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.answer_ms.iter()) {
+                    mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS (2 TO 30, 10 TO 90), {}: {} (213-DRV-0104)", channel, class, Spaced(bins));
+                }
+                // 213-DRV-0104: an ended send's final submission: to its fetch seen, and from that to its release seen (µs bins:
+                // 250 to 2000, 1000 to 10000, then 20000, 50000, more).
+                for (class, (f, r)) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.fetch_us.iter().zip(tx.release_us.iter())) {
+                    mind::println!("[RTW89] TRAFFIC ON {}: SUBMITTED TO FETCHED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(f));
+                    mind::println!("[RTW89] TRAFFIC ON {}: FETCHED TO RELEASED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(r));
+                }
+                mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
+                    channel, Spaced(&tx.gap_ms), tx.peak_sends);
+                // 213-DRV-0091: the service's steps: waits for a request (2 ms asked) and the work after them.
+                mind::println!("[RTW89] TRAFFIC ON {}: SERVICE STEPS: WAITS OVER 5 / 10 MS {} / {}, THE LONGEST {} US; WORK OVER 5 / 10 MS {} / {}, THE LONGEST {} US (213-DRV-0091)",
+                    channel, tx.wait_over[0], tx.wait_over[1], tx.wait_longest_us, tx.work_over[0], tx.work_over[1], tx.work_longest_us);
+                // 213-DRV-0104: sends to one station by the rate they went at and by tries, and what the access point sent us.
+                const TX_RATES: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
+                mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[..6], &tx.by_rate[..6]));
+                mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 12 TO 54 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[6..], &tx.by_rate[6..]));
+                mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY TRIES, 1 TO 15: {} (213-DRV-0104)", channel, Spaced(&tx.by_tries[1..]));
+                let r = tx.rx_rate;
+                mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US {}, {} WITH THE RETRY BIT; BY LEGACY RATE:{} (213-DRV-0104)",
+                    channel, r.iter().sum::<u32>(), tx.rx_retry, Counted(&TX_RATES_RX, &r[..12]));
+                mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US BY HT RATE:{}; OTHER {} (213-DRV-0104)", channel, Counted(&MCS, &r[12..28]), r[28]);
+                let behind = tx.behind_label();
+                mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {}; {} ({} POLLS) (213-DRV-0104)",
+                    channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind, tx.tight_label(), tx.tight_polls);
+                mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
+                    channel, tx.clock, tx.tsf);
+                let [pd, cck, limit, edcca] = floor.registers;
+                let held = if floor.on() { "THIS MINUTE FLOOR ON" } else if floor.off() { "THIS MINUTE FLOOR OFF" }
+                    else if floor.set { "SET AS LINUX" } else { "AS FOUND" };
+                mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; {}{} (213-DRV-0102)",
+                    channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, held,
+                    if floor.switch_failures != 0 { "; A WRITE FAULTED" } else { "" });
+                // Every field is written; one not read back is named, apart from the switch (213-DRV-0102, boot 93).
+                let w = floor.written;
+                if w.unread != 0 {
+                    let names = |m: u8| [(1, " 4860"), (2, " 4B64"), (4, " 4B74"), (8, " 4884")].map(|(b, n)| if m & b != 0 { n } else { "" });
+                    let (same, other) = (names(w.unchanged), names(w.unread & !w.unchanged));
+                    mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR: EVERY FIELD WRITTEN; READ AS BEFORE THE WRITE:{}{}{}{}{}; READ OTHERWISE:{}{}{}{}{} (213-DRV-0102)",
+                        channel, same[0], same[1], same[2], same[3], if w.unchanged == 0 { " NONE" } else { "" },
+                        other[0], other[1], other[2], other[3], if w.unread & !w.unchanged == 0 { " NONE" } else { "" });
+                }
+                let r = floor.ppdu_rssi;
+                mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
+                let n = floor.no_rpl;
+                mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {}; NO RPL {} (213-DRV-0102)",
+                    channel, &r[9..], floor.unparsed, n.iter().sum::<u32>());
+                mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &n[..9]);
+                mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, ON FROM -65 DBM: {:?}, THE LAST BELOW -100 (213-DRV-0102)", channel, &n[9..]);
+                let (sum, count) = floor.header_over;
+                let tenths = if count == 0 { 0 } else { (sum * 5 + if sum < 0 { -(i64::from(count) / 2) } else { i64::from(count) / 2 }) / i64::from(count) };
+                mind::println!("[RTW89] TRAFFIC ON {}: OFDM TO US: THE HEADER'S AVERAGE {}{}.{} DB OVER THE RPL, ON {} REPORTS (213-DRV-0102)",
+                    channel, if tenths < 0 { "-" } else { "" }, tenths.abs() / 10, tenths.abs() % 10, count);
+                let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
+                mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
+                    channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
             }
-            // 213-DRV-0104: an ended send's final submission: to its fetch seen, and from that to its release seen (µs bins:
-            // 250 to 2000, 1000 to 10000, then 20000, 50000, more).
-            for (class, (f, r)) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.fetch_us.iter().zip(tx.release_us.iter())) {
-                mind::println!("[RTW89] TRAFFIC ON {}: SUBMITTED TO FETCHED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(f));
-                mind::println!("[RTW89] TRAFFIC ON {}: FETCHED TO RELEASED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(r));
-            }
-            mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
-                channel, Spaced(&tx.gap_ms), tx.peak_sends);
-            // 213-DRV-0091: the service's steps: waits for a request (2 ms asked) and the work after them.
-            mind::println!("[RTW89] TRAFFIC ON {}: SERVICE STEPS: WAITS OVER 5 / 10 MS {} / {}, THE LONGEST {} US; WORK OVER 5 / 10 MS {} / {}, THE LONGEST {} US (213-DRV-0091)",
-                channel, tx.wait_over[0], tx.wait_over[1], tx.wait_longest_us, tx.work_over[0], tx.work_over[1], tx.work_longest_us);
-            // 213-DRV-0104: sends to one station by the rate they went at and by tries, and what the access point sent us.
-            const TX_RATES: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
-            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[..6], &tx.by_rate[..6]));
-            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 12 TO 54 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[6..], &tx.by_rate[6..]));
-            mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY TRIES, 1 TO 15: {} (213-DRV-0104)", channel, Spaced(&tx.by_tries[1..]));
-            let r = tx.rx_rate;
-            mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US {}, {} WITH THE RETRY BIT; BY LEGACY RATE:{} (213-DRV-0104)",
-                channel, r.iter().sum::<u32>(), tx.rx_retry, Counted(&TX_RATES_RX, &r[..12]));
-            mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US BY HT RATE:{}; OTHER {} (213-DRV-0104)", channel, Counted(&MCS, &r[12..28]), r[28]);
-            let behind = tx.behind_label();
-            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {}; {} ({} POLLS) (213-DRV-0104)",
-                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind, tx.tight_label(), tx.tight_polls);
-            mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
-                channel, tx.clock, tx.tsf);
-            let [pd, cck, limit, edcca] = floor.registers;
-            let held = if floor.on() { "THIS MINUTE FLOOR ON" } else if floor.off() { "THIS MINUTE FLOOR OFF" }
-                else if floor.set { "SET AS LINUX" } else { "AS FOUND" };
-            mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR 4860={:08X} 4B64={:08X} 4B74={:08X} 4884={:08X}; THE AP AT {:?} DBM OVER {} BEACONS; {}{} (213-DRV-0102)",
-                channel, pd, cck, limit, edcca, floor.bss_dbm, floor.measured, held,
-                if floor.switch_failures != 0 { "; A WRITE FAULTED" } else { "" });
-            // Every field is written; one not read back is named, apart from the switch (213-DRV-0102, boot 93).
-            let w = floor.written;
-            if w.unread != 0 {
-                let names = |m: u8| [(1, " 4860"), (2, " 4B64"), (4, " 4B74"), (8, " 4884")].map(|(b, n)| if m & b != 0 { n } else { "" });
-                let (same, other) = (names(w.unchanged), names(w.unread & !w.unchanged));
-                mind::println!("[RTW89] TRAFFIC ON {}: DETECTION FLOOR: EVERY FIELD WRITTEN; READ AS BEFORE THE WRITE:{}{}{}{}{}; READ OTHERWISE:{}{}{}{}{} (213-DRV-0102)",
-                    channel, same[0], same[1], same[2], same[3], if w.unchanged == 0 { " NONE" } else { "" },
-                    other[0], other[1], other[2], other[3], if w.unread & !w.unchanged == 0 { " NONE" } else { "" });
-            }
-            let r = floor.ppdu_rssi;
-            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &r[..9]);
-            let n = floor.no_rpl;
-            mind::println!("[RTW89] TRAFFIC ON {}: PPDU BY SIGNAL, ON FROM -65 DBM: {:?}, THE LAST BELOW -100; UNPARSED {}; NO RPL {} (213-DRV-0102)",
-                channel, &r[9..], floor.unparsed, n.iter().sum::<u32>());
-            mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, 5 DB BINS FROM -20 DBM: {:?} (213-DRV-0102)", channel, &n[..9]);
-            mind::println!("[RTW89] TRAFFIC ON {}: NO RPL BY THE HEADER, ON FROM -65 DBM: {:?}, THE LAST BELOW -100 (213-DRV-0102)", channel, &n[9..]);
-            let (sum, count) = floor.header_over;
-            let tenths = if count == 0 { 0 } else { (sum * 5 + if sum < 0 { -(i64::from(count) / 2) } else { i64::from(count) / 2 }) / i64::from(count) };
-            mind::println!("[RTW89] TRAFFIC ON {}: OFDM TO US: THE HEADER'S AVERAGE {}{}.{} DB OVER THE RPL, ON {} REPORTS (213-DRV-0102)",
-                channel, if tenths < 0 { "-" } else { "" }, tenths.abs() / 10, tenths.abs() % 10, count);
-            let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
-            mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
-                channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
             if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
         }
         receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {

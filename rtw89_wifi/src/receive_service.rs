@@ -18,8 +18,10 @@ const WAIT_MS: u64 = 1000;
 const WAITERS: usize = 4;
 const FRAMES: usize = 4;
 const FRAME_BYTES: usize = frames::HEADER_BYTES + frames::FRAME_MAX;
+/// A bench switch (213-DRV-0091, 0102, 0104): true adds the minute's detail lines to main's three and probes held frames;
+/// false, for a machine in use, does neither.
+pub const MINUTE_DETAIL: bool = false;
 
-/// What the driver logs while it serves; the native entry prints them in the agreed words.
 /// One path's calibration results at admission (213-DRV-0091). IQK: LOK's IDAC and VBUF words and whether they fall in
 /// Linux's ranges (`_lok_finetune_check`), the one-shots' failure flags (LOK, TX and RX, NCTL's report flag), the restore;
 /// DPK: TXAGC, thermal, the sync's correlation and DC (Linux's `_dpk_sync_check`: DC at most 200, correlation at least
@@ -45,6 +47,7 @@ fn calibration(calibrated: &channel_rfk::Completed) -> [CalibrationPath; 2] {
     })
 }
 
+/// What the driver logs while it serves; the native entry prints them in the agreed words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event {
     /// `[RTW89] SERVING WLANHW: RECEIVE ONLY UNTIL A COUNTRY IS APPLIED`, on this channel.
