@@ -198,4 +198,7 @@ impl RegisterIo for Device{
     fn delay_us(&mut self,us:u32)->io::Result<()>{self.station.delay_us(us)}
 }
 impl fwcmd::Bus for Device{fn pci_command(&mut self)->io::Result<u16>{self.station.pci_command()}}
-impl btc_session::DeviceIo for Device{fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.station.bar}}
+impl btc_session::DeviceIo for Device{
+    // INTx asserted while a HISR0 bit is set that HIMR0 enables (213-DRV-0091).
+    fn pci_status(&mut self)->io::Result<u16>{let(isr,imr)=(self.raw().get(0x1a4,4),self.raw().get(0x1a0,4));Ok(if isr&imr!=0{8}else{0})}
+    fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.station.bar}}

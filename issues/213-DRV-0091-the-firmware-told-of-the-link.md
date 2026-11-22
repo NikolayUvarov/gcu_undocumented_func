@@ -304,6 +304,32 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
+**2026-11-22, could HIMR0's halt bit be left on with no interrupt reaching anyone?** (branch `claude/213-DRV-0091-the-halt-interrupt`, on the HISR0 read; host cases, not run)
+- **What this driver's code and the kernel's say:**
+  - **MSI is not enabled by anyone for this device.** The kernel aims a device's MSI or MSI-X only when init grants a driver `PLATFORM_DEVICE_MSI`/`_MSIX` (kernel/src/pci.rs `msi`, `msix`). rtw89_wifi holds no interrupt capability.
+  - **INTx Disable is whatever the firmware left.** The kernel's Command transitions (`pci_control.rs`) change bits 0 to 2 only and keep the rest. rtw89_wifi's configuration access is read only (`SYSCALL_DEVICE_CONFIG`, offsets below 256).
+  - **A legacy line goes to the 8259 PIC,** where the kernel masks every device line but 0, 1 and 2 (timer, keyboard, cascade; `arch/x86_64/interrupts.rs`).
+    - A line is unmasked only while a task holds `Capability::Interrupt` for it, and masked again when none does (scheduler.rs).
+    - No IOAPIC is programmed; report.rs only counts them.
+    - The PIC is set edge-triggered, so a level INTx held asserted gives one edge. On a line held by another driver, that would hide that driver's later edges.
+  - **So the bit can be set with no interrupt reaching anyone**, provided that MSI and MSI-X are off and the line is not 0 to 2 (or INTx is disabled, or there is no pin), and no other task holds that line. The HISR0 read clears the halt bits at each check, so an INTx assertion would last until the next check only.
+- **What the logs say:** nothing yet. No boot log carries this device's Command, Status, interrupt line or MSI control.
+- **The change:**
+  - **The PCI state is logged after the download:** `[RTW89] PCI INTERRUPT STATE: COMMAND c (INTX ENABLED|DISABLED), STATUS s (INTERRUPT b), LINE l, PIN p, MSI CONTROL …, MSI-X CONTROL … (213-DRV-0091)`, read through the capability list (`mac::pci_interrupt`).
+  - **`mac::HALT_INTERRUPT_AS_LINUX`:** false, the strict path, keeps HIMR0 masked as now. True leaves B_AX_HALT_C2H_INT_EN on after the download, as `rtw89_pci_enable_intr` does, unless `mac::halt_interrupt_refusal` finds MSI enabled, MSI-X enabled, or INTx enabled to line 0, 1 or 2. In that case it logs why it stays masked.
+  - **The guards** (post_mac's three host-mask checks) require every bit clear on the strict path, and all but HIMR0's halt bit when it is left on (`mac::host_mask_required`).
+  - **Each `HISR0 HALT BITS` line now gives PCI Status bit 3, `PCI INTX ASSERTED|NOT ASSERTED|UNREAD`,** read before the bits are cleared (`DeviceIo::pci_status`). With the halt bit on, it shows whether the device raised INTx.
+- **Host cases:**
+  - `the_pci_interrupt_state_says_whether_the_halt_interrupt_may_be_left_on` (tests/rtw89_mac_host.rs) covers:
+    - the capability walk (PM, MSI, PCIe, MSI-X);
+    - each refusal and each allowance;
+    - an unreadable device;
+    - the guards' required bits on both paths;
+    - `halt_interrupt_on` written and checked.
+  - The HISR0 case now expects INTx not asserted under the mask.
+  - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+  - With the constant set true, the release build builds and only the case's "the strict path is the default" assertion fails.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
