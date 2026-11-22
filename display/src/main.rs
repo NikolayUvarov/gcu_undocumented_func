@@ -8,6 +8,7 @@ extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
 #[allow(dead_code)] mod dcn;
+#[allow(dead_code)] mod ddc;
 #[allow(dead_code)] mod edid;
 #[allow(dead_code)] mod light;
 #[allow(dead_code)] mod picture;
@@ -27,6 +28,10 @@ const BATCHES_ALLOWED: u8 = 0;
 /// writer: it logs each stage with every write it would make. Raised one run at a time, on the DRV owner session's word,
 /// and only with BATCHES_ALLOWED at 10 or more (step 1's first ten).
 const STAGES_ALLOWED: u8 = 0;
+/// When true, step 2 reads HDMI-A-1's EDID over its DDC line before step 3 (213-DRV-0095), the I2C engine put back as
+/// batch 11 found it; its result is logged only, and its failure leaves steps 3 and 4 as they are. Needs
+/// BATCHES_ALLOWED 11. Set on the DRV owner session's word.
+const EDID_ALLOWED: bool = false;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
 const UNDO_AFTER_STAGES: bool = false;
@@ -65,6 +70,7 @@ fn main(_info: &'static BootInfo) {
     }
     let mut store = batches::Store::default();
     let (read, mmio) = step1(id, engine, &mut store);
+    step2(&store, mmio.as_ref());
     let written = step3(&store, mmio, vfct.as_ref().map(|t| t.as_slice()));
     match (read, written) {
         (0, 0) => mind::println!("[DISPLAY] NO REGISTER READ OR WRITTEN"),
@@ -86,6 +92,35 @@ fn step1(id: u32, engine: usize, store: &mut batches::Store) -> (usize, Option<M
     let mut registers = Registers(mmio);
     let read = batches::run_into(&mut registers, BATCHES_ALLOWED, &mut Log, store).registers_read;
     (read, Some(registers.0))
+}
+
+/// Step 2 (213-DRV-0095): the EDID over DDC1, on step 1's mapping; logged only.
+fn step2(store: &batches::Store, mmio: Option<&Mmio>) {
+    if !EDID_ALLOWED { mind::println!("[DISPLAY] STEP 2 (THE EDID OVER DDC1) NOT RUN: THIS BUILD DOES NOT ASK FOR IT"); return; }
+    let Some(mmio) = mmio else { mind::println!("[DISPLAY] STEP 2 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW"); return };
+    if let Ok(read) = ddc::read(store, &mut Ddc(mmio), &mut Log) { ddc::describe(&read, &mut Log); }
+}
+
+// Step 2's access to the engine: reads, the writes ddc.rs's guard lets through, and time.
+struct Ddc<'a>(&'a Mmio);
+impl batches::Bus for Ddc<'_> {
+    fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
+        let offset = reg.offset() as usize;
+        (offset + 4 <= self.0.len()).then(|| self.0.read32(offset))
+    }
+}
+impl light::Poke for Ddc<'_> {
+    fn write(&mut self, reg: light::Writable, value: u32) {
+        let offset = reg.reg().offset() as usize;
+        if offset + 4 <= self.0.len() { self.0.write32(offset, value); }
+    }
+}
+impl light::Clock for Ddc<'_> {
+    fn now_us(&mut self) -> u64 { mind::time::monotonic_ns() / 1000 }
+    fn delay_us(&mut self, us: u32) {
+        let end = mind::time::monotonic_ns() + us as u64 * 1000;
+        while mind::time::monotonic_ns() < end { core::hint::spin_loop(); }
+    }
 }
 
 /// Step 3: the writes it made. At STAGES_ALLOWED 0 it only describes the stages, for the pipe step 1 found or, with

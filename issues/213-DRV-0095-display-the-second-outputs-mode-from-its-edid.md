@@ -81,13 +81,8 @@ The preferred timing, if all the limits below allow it; otherwise the largest th
 | The pitch | the hardware rounds the field, to a unit of at most 128 pixels (213-DRV-0092, "The pitch"); Linux used 3456 for 3440 | 3456 pixels (13,824 bytes), 27 x 128 |
 
 Two things are left to see before the mode is set:
-- **Linux drove 3440x1440 with two pipes** (0 and 3 combined, 213-DRV-0085). Why Display Core split it is DML's choice
-  and is not checked. One pipe at 720 MHz carries 324 MHz by the table, but DML's other limits are not ported:
-  - the line buffer at 3440 pixels;
-  - the DET;
-  - the urgent latency with both pipes fetching, 2.2 GB/s in all.
-
-  Stage 15's watch would show an underflow.
+- **One pipe or two:** see "One pipe or two" below. One DPP carries 3440 pixels a line; Linux's two were its split
+  policy, not a limit.
 - **The marks and the mirror** follow the offered size. The compositor fits DP-2's 2560x1600 into 3440x1440: 2304x1440
   from x 568, so the bands shrink but stay (KRN's stretched mode is the rest).
 
@@ -111,12 +106,109 @@ host cases, a local probe with HDMI signalling above 165 MHz; MC-12.2: a model, 
   infoframe) from MIND Core. That is the run to ask the maintainer about, not the PHY's bus. Stage 2's line still names
   the path each boot.
 
+## One pipe or two for 3440x1440 at 324 MHz
+
+Linux drove HDMI-A-1 with two pipes, and DP-2 too. They were combined by **MPC**, not ODM:
+- HDMI-A-1: MPCC 0 over MPCC 3 into OPP 0, HUBP 0 and 3 at 1720x1440 each;
+- DP-2: HUBP 1 and 2 at 1280x1600 each.
+
+These come from Display Core's dump of 2026-11-21 (hwdocs/cezanne-display.md). That is Display Core's split policy on
+DCN 2.1, `pipe_split_policy = MPC_SPLIT_DYNAMIC` (dcn21_resource.c): four pipes for two planes, each plane split. The
+firmware drives DP-2's 2560 with one pipe.
+
+DML 2.1's limits for one DPP (display_mode_vba_21.c, dcn20_fpu.c's `dcn2_1_ip`, Linux v7.0):
+- **The swath:** at most 8192 pixels for a linear surface (`MaximumSwathWidthSupport`).
+- **The DET:** 164 KB, half for each swath. At 4 bytes a pixel and a linear swath of one line, that is over 20,000
+  pixels, capped at 8192.
+- **The line buffer:** 789,504 bits at 36 bits a pixel with one vertical tap, about 21,900 pixels.
+- **`dpp_output_buffer_pixels` 2560** is not a limit. Past it, DML counts half a line of latency hiding in that buffer,
+  not one.
+- **The DPP clock:** one DPP needs the pixel clock at 1:1, 324 MHz x 1.005. That is within even DPM state 0's 400 MHz
+  DPPCLK, and the firmware left 720 MHz. Without either, DML's `NoOfDPP` would be 2.
+
+So one pipe carries 3440x1440 at 324 MHz, and no ODM path is needed. Stage 15's watch remains the check on the hardware,
+with the shorter latency hiding and both pipes fetching (2.2 GB/s in all).
+
+## Step 2: the EDID read (second commit)
+
+`ddc.rs`, run by `display` between step 1 and step 3 when `EDID_ALLOWED` is set (committed false), after batch 11:
+- **Before any write:** if batch 11 was not read, if HPD 1 shows no monitor, or if the engine is held by the hardware
+  or the DMCU, nothing is written.
+- **Display Core's order** (`dce_i2c_hw.c`, `hw_ddc.c`, `hw_gpio.c`):
+  1. the pads to hardware I2C: each pin's mask 0, both pull-downs on, the pad out of AUX mode;
+  2. out of soft reset, the engine asked for and its grant seen;
+  3. 100 kHz from the microsecond time base (`set_speed`): a prescale of 480 from 48 MHz;
+  4. the control, DDC1's set-up (time limit 3, enabled), the arbitration's queue bit;
+  5. for each 128-byte block: transaction 0 writes its offset to 0x50 without a stop, transaction 1 reads 128 bytes;
+     their bytes go into the buffer;
+  6. the status reset, GO, and `DC_I2C_SW_STATUS` polled for at most 500 ms;
+  7. the reply read out of the buffer from its index 3.
+- **Blocks:** the base block, then its extension if it announces one; more would need E-DDC's segment pointer.
+- **Checks:** the header, and each block's checksum.
+- **Given back always**, after a read or any failure:
+  - `release_engine`: a soft reset if a transfer is still the engine's, the status reset, then
+    `DC_I2C_SW_DONE_USING_I2C_REG`, and again if the engine is still held;
+  - then every register written put back, last first;
+  - then each checked against what batch 11 read.
+
+  `DC_I2C_DATA` is written as Display Core writes it, without a read first, and read only for the reply.
+- **Writes:** only through `light::ddc_writable`, which lets through the I2C engine's control, arbitration, DDC1's
+  speed and set-up, the transactions, the buffer and DDC1's pad mask, and nothing else.
+- **What a failure leaves:** a NACK, a timeout, no answer or a bad block ends step 2 with the engine given back. Steps 3
+  and 4 go on as without it, so the mirror comes up.
+- **The log:**
+  - the EDID's hash, its maker's code, product, year and name, and the extension count;
+  - the preferred timing;
+  - whether it is an HDMI sink and its maximum TMDS clock (the HDMI 1.4 and HDMI Forum blocks);
+  - every timing it gives in full, with whether DVI carries it;
+  - its standard timings, sizes and rates only;
+  - its CTA VICs;
+  - the DVI candidate below.
+
+  Its bytes are not logged.
+- **Host cases** (`display_ddc_host.rs`, 4) on a model of the engine (grant and release, the indexed buffer, the
+  transactions on GO against a monitor at 0x50):
+  - both blocks in Display Core's order, the engine as found after;
+  - one block when no extension is announced;
+  - a NACK, an engine that never ends a transfer, a bad checksum, each given back as found;
+  - held by the DMCU, batch 11 not read, no monitor: not one write;
+  - the guard;
+  - what the EDID says.
+
+## A mode within DVI first
+
+Before HDMI signalling: the largest timing the monitor gives in full (a detailed timing, or a CTA VIC it lists) within
+DVI's 165 MHz whose shape is nearer its preferred timing's than 1920x1080's (`Edid::nearer_shape_within`). If there is
+one, it is a first, smaller step with no new signalling. Step 2's log names it, or says there is none.
+- **What is known before the read:** Linux's mode list (sysfs, 2026-11-21) has 3440x1440 twice, then 3840x2160 (the
+  CTA 4K VICs), 2560x1440, 1920x1200, 1920x1080 and smaller. Their rates are not in it.
+- **3440x1440 at 30 Hz:** if the second 3440x1440 is 30 Hz in the same 3600x1500 total, it is 162 MHz and fits.
+- **Nothing else fits** DVI and is nearer the 2.39:1 shape. 2560x1440, 1920x1200 and the 4K modes are 16:9 or 16:10,
+  and 2560x1080 is not listed (185 MHz at 60 Hz in any case).
+- Standard timings give no clock, so they are listed but not chosen.
+
+## HDMI signalling, the step after
+
+Display Core's writes for an HDMI stream (`enc1_stream_encoder_hdmi_set_stream_attribute`,
+`enc2_update_hdmi_info_packet`, Linux v7.0). Each is an ordinary register write with its undo, logged before it is
+made, as in the stages:
+- table 4 (DIGxEncoderControl) in HDMI mode (encoder mode 3), and table 76 in HDMI mode;
+- `HDMI_CONTROL`: packet generation version 1, keep-out mode, no deep colour, no scrambling and the clock channel at
+  the character rate below 340 MHz, null packets filled;
+- `HDMI_VBI_PACKET_CONTROL`: the general control packet sent and continued, null packets sent, no ACP;
+- `HDMI_GC`: AVMUTE 0;
+- the AVI infoframe as generic packet 0: `AFMT_GENERIC_HDR` and `AFMT_GENERIC_0` to `7` through the AFMT index, then
+  `HDMI_GENERIC_PACKET_CONTROL0` (send and continue) and `_CONTROL1` (its line);
+- no audio: `HDMI_AUDIO_INFO_SEND` and the audio clock regeneration are left as they are.
+
+The stage-by-stage runs and stage 15's watch are its safeguard, as for stage 15.
+
 ## Plan
 
-1. **Batch 11, read-only** (this commit), then its run on the Ryzen on the owner session's word, with
+1. **Batch 11, read-only** (first commit), then its run on the Ryzen on the owner session's word, with
    `BATCHES_ALLOWED` 11.
-2. **The EDID read** as its own stage, before stage 1, with its undo, host cases on a model of the I2C engine, then a
-   run.
+2. **The EDID read, step 2** (second commit), on the model; then its run, with `EDID_ALLOWED`, on the owner session's
+   word.
 3. **The mode, from what the read gives:**
    - the timing;
    - tables 12, 4 and 76's parameters, in HDMI signalling above 165 MHz;
@@ -131,8 +223,10 @@ host cases, a local probe with HDMI signalling above 165 MHz; MC-12.2: a model, 
 - [x] Batch 11 reads HDMI-A-1's DDC line and the I2C engine, read-only and never `DC_I2C_DATA`, with host cases; steps 3
   and 4 still need only batches 1 to 10.
 - [ ] Batch 11's run on the Ryzen, with its values recorded here.
-- [ ] The EDID read over DDC1 on the Ryzen: its checksums good, its preferred timing 3440x1440 at 324 MHz as Linux's
-  copy says; host cases on a model of the engine, the undo included.
+- [x] Step 2 reads the EDID over DDC1 in Display Core's order and gives the engine back as found after a read and after
+  every failure; host cases on a model of the engine (`display_ddc_host.rs`).
+- [ ] Step 2 on the Ryzen: its checksums good, its preferred timing 3440x1440 at 324 MHz as Linux's mode says, the
+  engine as found after; what it says of a mode within DVI recorded here.
 - [ ] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
   (MC-12.1).
 

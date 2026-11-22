@@ -293,6 +293,17 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused { Firmware(u32), OffRoute(u32) }
 
+/// Step 2's writes (213-DRV-0095, `ddc.rs`): the I2C engine's control, arbitration, DDC1's speed and set-up, its four
+/// transactions and buffer, and DDC1's pad mask; nothing else, whatever the pipe.
+pub const DDC_WRITES: [R; 7] = [R::DcI2cControl, R::DcI2cArbitration, R::DcI2cDdc1Speed, R::DcI2cDdc1Setup, R::DcI2cTransaction,
+                                R::DcI2cData, R::DcGpioDdc1Mask];
+/// A write of step 2: one of `DDC_WRITES`' registers (any of the four transactions), else refused.
+pub fn ddc_writable(reg: Reg) -> Result<Writable, Refused> {
+    let o = reg.offset();
+    let ok = DDC_WRITES.iter().any(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o)));
+    if ok { Ok(Writable(reg)) } else { Err(Refused::OffRoute(o)) }
+}
+
 const fn seg1(d: u32) -> u32 { (dcn::SEGMENT[1] + d) * 4 }
 const fn seg2(d: u32) -> u32 { (dcn::SEGMENT[2] + d) * 4 }
 
