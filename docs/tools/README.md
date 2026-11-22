@@ -486,6 +486,7 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
   - with `-s`, writes one frame as a 24-bit BMP;
   - with `-t`, records an AVI of Motion JPEG frames (the encoder of `record`).
   - Defaults: 320 × 240 at 10 frames a second.
+  - **Its cameras and their modes** (158-APP-0147, 158-APP-0152, `video.wit` 1.1): `-c n` picks a camera of those the gateway lists, and `n` or Tab steps to the next. `-m n` picks one of the camera's modes at its own size and rate, in place of `-z` and `-r`; one the list does not hold, or that is not offered now, is refused with what is. `m` steps to the next mode the gateway offers and Shift+`m` to the one before, each opened at its own size, so it comes unscaled. The mode in use is in `[CAMERA] OPENED … : MODE 1 (OF 0 TO 2), 320x240 at 10/s SYNTHETIC` and the window's title. A camera with one mode offered, or a gateway of 1.0, is named and stays as it is. A still or a recording keeps its camera and mode.
 - **Sources.** There is no camera driver yet: UVC over `usb_host` is the next step of 158. With `video/synthetic` on the boot disk, the gateway serves a moving test pattern instead: eight colour bars moving left 4 pixels a frame, and the frame number in the bottom rows. The QEMU `vfs` suite checks the still against it pixel for pixel.
 
 ### 4.13 `check`, `bench`, `kbench` — checks and measurements (main task 176)
