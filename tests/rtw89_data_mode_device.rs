@@ -19,6 +19,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub halt_codes:Vec<u32>,
     // Writes to HALT_H2C_CTRL or HALT_H2C in the data mode: the host's answers to the firmware (M2, M4).
     pub halt_h2c_writes:usize,
+    // HISR0 bits the hardware raises, one at each read of HISR0 that finds it clear; a posted code raises HALT_C2H too.
+    pub hisr_raise:Vec<u32>,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -96,6 +98,8 @@ impl Device{
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
         let filter_fault=self.control.borrow().filter_fault;
         if self.active&&(at==0x160||at==0x168){self.control.borrow_mut().halt_h2c_writes+=1;}
+        // HISR0 is cleared by writing its bits back.
+        if at==0x1a4&&width==4{let v=self.raw().get(0x1a4,4)&!value;self.raw().put(0x1a4,4,v);return Ok(())}
         if armed&&self.active&&at==fwcmd::INDEX&&width==2{
             if let Some(raw)=self.control.borrow_mut().command_bt.take(){self.station.base.bt=raw;}
             let ppdu=std::mem::take(&mut self.control.borrow_mut().ppdu_on_command);for n in 0..ppdu{self.raw().inject_packet(0,1,&[n as u8;20]);}
@@ -178,7 +182,10 @@ impl RegisterIo for Device{
             }
         }
         if at==0x164&&self.raw().get(0x164,4)==0&&!self.control.borrow().halt_codes.is_empty(){
-            let code=self.control.borrow_mut().halt_codes.remove(0);self.raw().put(0x16c,4,code);self.raw().put(0x164,4,1);}
+            let code=self.control.borrow_mut().halt_codes.remove(0);self.raw().put(0x16c,4,code);self.raw().put(0x164,4,1);
+            let isr=self.raw().get(0x1a4,4)|1<<21;self.raw().put(0x1a4,4,isr);}
+        if at==0x1a4&&self.raw().get(0x1a4,4)==0&&!self.control.borrow().hisr_raise.is_empty(){
+            let bits=self.control.borrow_mut().hisr_raise.remove(0);self.raw().put(0x1a4,4,bits);}
         if self.active&&(0x40000..0x40020).contains(&at)&&self.control.borrow().window_dead>0{
             let mut c=self.control.borrow_mut();c.window_dead-=1;if std::mem::take(&mut c.window_dead_ser){c.ser=true;}return Ok(0xdead_beef)}
         if self.active&&self.control.borrow().fault==15&&at==fwcmd::DMA_BUSY{return Ok(1<<18)}
@@ -191,4 +198,7 @@ impl RegisterIo for Device{
     fn delay_us(&mut self,us:u32)->io::Result<()>{self.station.delay_us(us)}
 }
 impl fwcmd::Bus for Device{fn pci_command(&mut self)->io::Result<u16>{self.station.pci_command()}}
-impl btc_session::DeviceIo for Device{fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.station.bar}}
+impl btc_session::DeviceIo for Device{
+    // INTx asserted while a HISR0 bit is set that HIMR0 enables (213-DRV-0091).
+    fn pci_status(&mut self)->io::Result<u16>{let(isr,imr)=(self.raw().get(0x1a4,4),self.raw().get(0x1a0,4));Ok(if isr&imr!=0{8}else{0})}
+    fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.station.bar}}

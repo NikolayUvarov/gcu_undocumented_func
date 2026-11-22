@@ -241,6 +241,121 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - **The traffic also differed.** Boot 62 carried the night's Effector traffic, and most of the old driver's time was in short daytime runs.
   - **Still to read:** the rest of boot 59, boots 63 and 64, and the night's boots. They add old-driver time only from boot 59, so a fair comparison needs a night with the old driver too. No such night is planned.
 
+**2026-11-22, the night on the Ryzen: boots 63 to 65** (read from the log volume through the server, without a lease; channel 8, UZ, A0:36:BC:11:F8:88):
+- **The builds:**
+  - boot 63: 202611212213, step 1 as b3db40619, 22:18 to 22:37;
+  - boot 64: 202611212235, with c6202f1c8, 22:39 to 22:47;
+  - boot 65: 202611212244, with 4ae48ce88, from 22:48, 5.3 hours read.
+- **What the night did not have:** no hole, no RECEIVE STALLED, no `MEDIUM ERROR`, and no firmware error code. HALT_C2H_CTRL read 0 at every data-mode check, and all 315 minute lines of boot 65 read 0 L0, 0 L1, 0 L2 and 0 unknown.
+- **The data mode stopped once in boot 64 and four times in boot 65,** each time with `Register(Fault { kind: Clock, register: 0, value: 2000 })`.
+  - **The cause is this branch's own.** `read_again()` waited 2000 µs between reads, but the platform's `io::short_delay` refuses more than 1000 µs, and the value in the fault is that delay.
+  - **So the mending did nothing.** Every check that met DEADBEEF, unmended by the recovery path, stopped on its first wait. No `CHECK MET` line was reached.
+  - **Why the host cases passed:** the host model's delay had no limit.
+  - **Each stop cost the link 5.0 to 7.1 s.** netstack kept its address and connection, and TCP bytes came again after about 8.5 s. One restart, pid 51 at 11497.8 s, failed in the PCIe PHY stage (a Timeout at 0x10A0, value 29); the next started 0.35 s later.
+  - **The registers at the five stops:** HALT_C2H_CTRL and HALT_C2H read 0. SER_DBG_INFO read F0000002, F0000001, F0000008, 0, and 0 in boot 64.
+- **The firmware still recovers, without a code.**
+  - SER_DBG_INFO's count rose in three of boot 65's five runs: to 2, to 1, and from 1 to 8. That is about 10 recoveries in 5.3 hours.
+  - None left HALT_C2H_CTRL set at a check, and none was met as a recovery between operations.
+  - Each driver finds the halt C2H interrupt enabled by the firmware (HIMR0 0x00200000, B_AX_HALT_C2H_INT_EN) and masks it, unlike Linux, which keeps it.
+  - Whether the firmware posts its codes only while that bit is on is not known.
+- **The minutes, by run:**
+
+  | Run | Minutes | Beacons a minute, median (min to max) | Late sends a minute, median (max) | Sent / acked |
+  |---|---|---|---|---|
+  | Boot 63 | 19 | 583 (577–586) | 1 (6) | 7598 / 7570 |
+  | Boot 64, pid 49 | 6 | 582.5 (581–585) | 0.5 (2) | 4711 / 4702 |
+  | Boot 65, pid 21 | 66 | 583 (544–586) | 1 (26) | 9575 / 9435 |
+  | Boot 65, pid 49 | 35 | 583 (571–586) | 0 (6) | 5055 / 5024 |
+  | Boot 65, pid 50 | 89 | 583 (578–586) | 0 (3) | 12898 / 12838 |
+  | Boot 65, pid 52 | 74 | 584 (579–586) | 0 (4) | 10692 / 10637 |
+  | Boot 65, pid 57 | 51, running | 584 (552–586) | 0 (4) | 7944 / 7908 |
+
+  The inbox was never full.
+
+**2026-11-22, the wait mended** (host cases; not yet run on the Ryzen):
+- **The wait:** `read_again()` waits 1000 µs between reads, up to 16 reads in all, about the same 15 ms as before.
+- **The host model** (`tests/rtw89_pipeline_device.rs`) now refuses a delay over 1000 µs as `io::short_delay` does.
+  - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
+  - After the change, all 40 pass, and the release build builds.
+
+**2026-11-22, why the driver masks HIMR0's halt bit, and HISR0 read under the mask** (branch `claude/213-DRV-0091-the-halt-status`, on 07e59deb9; host cases, not yet run on the Ryzen):
+- **Who masks the bit, and why.** `mac::mask_host` came with 71589b8b9 (213-DRV-0032, 2026-11-04, "the bounded diagnostic passes on the Ryzen").
+  - Its message: "the three host interrupt masks cleared, before the MAC preparation and after the download (the firmware enables HIMR0's halt interrupt), as disable_intr does".
+  - main.rs's note: "The firmware enables its halt interrupt (HIMR0 bit 21); this polled driver keeps host interrupts masked".
+  - 213-DRV-0032's table records it: HIMR0 `00200000` after the download, 0 before.
+  - So the reason is that this driver polls and has no interrupt handler. Masking was to follow `rtw89_pci_disable_intr`, the state Linux keeps before it starts. Nothing in the issue or the code says the bit was masked to change the firmware's behaviour.
+- **What Linux does with the bit** (pci.c, pci.h and rtw8852be.c at 05f7e89):
+  - The 8852BE uses `rtw89_pci_config_intr_mask`, which sets `halt_c2h_intrs = B_AX_HALT_C2H_INT_EN` (bit 21 alone; WDT_TIMEOUT, bit 22, is added only by the `_v1` mask functions of other chips).
+  - `rtw89_pci_ops_start` calls `rtw89_pci_enable_intr`, which writes HIMR0 (0x1A0) with it. `rtw89_pci_disable_intr` writes 0 only around stops and while the interrupt is handled.
+  - `rtw89_pci_recognize_intrs` reads HISR0 (0x1A4), keeps the bits of `halt_c2h_intrs`, and writes them back to clear them. A halt C2H bit leads to `rtw89_ser_notify(rtw89_mac_get_err_status())`.
+  - So Linux runs with bit 21 on, and this driver runs with it off.
+- **The change: `firmware_status()` now reads HISR0 first at each check.**
+  - When bit 21 (HALT_C2H) or bit 22 (WDT_TIMEOUT) is set, it writes those bits back, as `rtw89_pci_recognize_intrs` does, then reads SER_DBG_INFO and counts them.
+  - It then reads HALT_C2H_CTRL as before.
+  - Nothing is answered to the firmware, and HIMR0 stays masked.
+  - New line: `[RTW89] HISR0 HALT BITS n: <hisr> (HALT_C2H WDT_TIMEOUT) WITH HALT_C2H_CTRL <ctrl>; SER_DBG_INFO <v>; CLEARED AS LINUX DOES, NOTHING ANSWERED (213-DRV-0091)`.
+  - The minute line adds `HISR0 HALT_C2H h, WDT_TIMEOUT w`.
+- **What it tells.** If the silent recoveries raise HISR0's halt bit with HALT_C2H_CTRL still 0, the firmware signals the host and posts no code. If HISR0 stays clear too, the firmware does not signal the host for them at all, at least under this mask.
+- **Host case:** `service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing`. The model's HISR0 is cleared by writing its bits back, and a posted code raises bit 21. The case covers:
+  - a HALT_C2H bit with no code, then a WDT_TIMEOUT bit, each seen once and cleared;
+  - a posted L0_RESET_DONE, with its bit and its code;
+  - nothing written to HALT_H2C or its control;
+  - the minute line counting 2 HALT_C2H and 1 WDT_TIMEOUT.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, could HIMR0's halt bit be left on with no interrupt reaching anyone?** (branch `claude/213-DRV-0091-the-halt-interrupt`, on the HISR0 read; host cases, not run)
+- **What this driver's code and the kernel's say:**
+  - **MSI is not enabled by anyone for this device.** The kernel aims a device's MSI or MSI-X only when init grants a driver `PLATFORM_DEVICE_MSI`/`_MSIX` (kernel/src/pci.rs `msi`, `msix`). rtw89_wifi holds no interrupt capability.
+  - **INTx Disable is whatever the firmware left.** The kernel's Command transitions (`pci_control.rs`) change bits 0 to 2 only and keep the rest. rtw89_wifi's configuration access is read only (`SYSCALL_DEVICE_CONFIG`, offsets below 256).
+  - **A legacy line goes to the 8259 PIC,** where the kernel masks every device line but 0, 1 and 2 (timer, keyboard, cascade; `arch/x86_64/interrupts.rs`).
+    - A line is unmasked only while a task holds `Capability::Interrupt` for it, and masked again when none does (scheduler.rs).
+    - No IOAPIC is programmed; report.rs only counts them.
+    - The PIC is set edge-triggered, so a level INTx held asserted gives one edge. On a line held by another driver, that would hide that driver's later edges.
+  - **So the bit can be set with no interrupt reaching anyone**, provided that MSI and MSI-X are off and the line is not 0 to 2 (or INTx is disabled, or there is no pin), and no other task holds that line. The HISR0 read clears the halt bits at each check, so an INTx assertion would last until the next check only.
+- **What the logs said before this change:** nothing. No boot log carried this device's Command, Status, interrupt line or MSI control.
+- **What the Ryzen logs with it** (boots 69 and 70, releases 202611220523 and after, with the constant false):
+
+  `PCI INTERRUPT STATE: COMMAND 0007 (INTX ENABLED), STATUS 0010 (INTERRUPT 0), LINE 255, PIN 1, MSI CONTROL Some(0080), MSI-X CONTROL None`
+
+  - MSI is present but not enabled (64-bit capable, Enable 0), and there is no MSI-X.
+  - INTx is enabled on INTA, and the firmware left the interrupt line at 255: none assigned.
+  - So `halt_interrupt_refusal` allows the bit on this machine, and by the code above an INTx assertion has no line to reach.
+  - That the chipset routes INTA nowhere is not shown by this. The `PCI INTX` field of the HISR0 lines would show the device asserting it.
+- **The change:**
+  - **The PCI state is logged after the download:** `[RTW89] PCI INTERRUPT STATE: COMMAND c (INTX ENABLED|DISABLED), STATUS s (INTERRUPT b), LINE l, PIN p, MSI CONTROL …, MSI-X CONTROL … (213-DRV-0091)`, read through the capability list (`mac::pci_interrupt`).
+  - **`mac::HALT_INTERRUPT_AS_LINUX`:** false, the strict path, keeps HIMR0 masked as now. True leaves B_AX_HALT_C2H_INT_EN on after the download, as `rtw89_pci_enable_intr` does, unless `mac::halt_interrupt_refusal` finds MSI enabled, MSI-X enabled, or INTx enabled to line 0, 1 or 2. In that case it logs why it stays masked.
+  - **The guards** (post_mac's three host-mask checks) require every bit clear on the strict path, and all but HIMR0's halt bit when it is left on (`mac::host_mask_required`).
+  - **Each `HISR0 HALT BITS` line now gives PCI Status bit 3, `PCI INTX ASSERTED|NOT ASSERTED|UNREAD`,** read before the bits are cleared (`DeviceIo::pci_status`). With the halt bit on, it shows whether the device raised INTx.
+- **Host cases:**
+  - `the_pci_interrupt_state_says_whether_the_halt_interrupt_may_be_left_on` (tests/rtw89_mac_host.rs) covers:
+    - the capability walk (PM, MSI, PCIe, MSI-X);
+    - each refusal and each allowance;
+    - an unreadable device;
+    - the guards' required bits on both paths;
+    - `halt_interrupt_on` written and checked.
+  - The HISR0 case now expects INTx not asserted under the mask.
+  - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+  - With the constant set true, the release build builds and only the case's "the strict path is the default" assertion fails.
+
+**2026-11-22, the mended check on the Ryzen: its first meeting** (boot 74, release 202611220644, from S/rz37 ff2eee6e2. Its rtw89_wifi is fab92488e: the mended check, the firmware's error codes, the HISR0 read, the PCI interrupt state line, `HALT_INTERRUPT_AS_LINUX` false. It was the boot image's driver in boots 69 to 76 from 05:29 UTC):
+- **The line, at about 07:19 UTC:**
+
+  ```
+  1776.947 rtw89_wifi: [RTW89] CHECK MET AN UNREADABLE CMAC 1: 40018 READ DEADBEEF, READABLE AGAIN AFTER 2 READS IN 1341 US; SER_DBG_INFO 00000000 -> F000001F (213-DRV-0091)
+  ```
+
+  - **It met the night's register.** The window, 0x40018, read DEADBEEF as at the night's stops, and the second read 1.3 ms later answered.
+  - **The data mode went on.** The minute lines from 1806 to 2286 s show traffic, beacons and acknowledged sends, with no hole and the inbox never full.
+- **The firmware recovered during it, silently.**
+  - SER_DBG_INFO in the probes read 0 at 66 s, F000001E at 666 and 1266 s, and F000001F at 1866 s, so the meeting came with one step of the count.
+  - The BB and the scheduler were never off, so the line says `AN UNREADABLE CMAC`.
+  - HISR0 showed no halt bit, and no error code came.
+- **A wording to mend later:** the line's "before" value is the session's last-seen SER_DBG_INFO, 0 since the admission with no recovery outlasted, not a read just before the meeting. The step was 1E to 1F.
+- **Not yet shown:**
+  - This is one meeting only.
+  - The count's rise of 30 between 66 and 666 s of this boot, during the display's stage runs, is not explained. In boot 65 it rose by 1 or 2 at a time.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

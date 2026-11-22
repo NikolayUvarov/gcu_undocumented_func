@@ -37,6 +37,9 @@ impl btc_session::DeviceIo for Native {
         device_config(SLOT_DEV0, 0).map_err(|_| Fault::new(FaultKind::Access, 0, 0))
     }
     fn bar_len(&self) -> usize { self.bar.len() }
+    fn pci_status(&mut self) -> io::Result<u16> {
+        device_config(SLOT_DEV0, 4).map(|value| (value >> 16) as u16).map_err(|_| Fault::new(FaultKind::Access, 6, 0))
+    }
 }
 
 enum Error {
@@ -149,6 +152,23 @@ impl startup::Diagnostic for Attempt<'_> {
                 // The firmware enables its halt interrupt (HIMR0 bit 21); this polled driver keeps host interrupts masked.
                 let masks = mac::mask_host(&mut self.native).map_err(Error::Io)?;
                 if masks != [0; 3] { mind::println!("[RTW89] THE FIRMWARE ENABLED HOST INTERRUPTS (HIMR {:08X?}): MASKED", masks); }
+                // 213-DRV-0091: the device's interrupt state; with HALT_INTERRUPT_AS_LINUX, the halt bit left on where it reaches no one.
+                let state = mac::pci_interrupt(|at| device_config(SLOT_DEV0, at).ok());
+                match state {
+                    Some(s) => mind::println!("[RTW89] PCI INTERRUPT STATE: COMMAND {:04X} (INTX {}), STATUS {:04X} (INTERRUPT {}), LINE {}, PIN {}, MSI CONTROL {:04X?}, MSI-X CONTROL {:04X?} (213-DRV-0091)",
+                        s.command, if s.command & 1 << 10 != 0 { "DISABLED" } else { "ENABLED" }, s.status, s.status >> 3 & 1, s.line, s.pin, s.msi, s.msix),
+                    None => mind::println!("[RTW89] PCI INTERRUPT STATE UNREADABLE (213-DRV-0091)"),
+                }
+                if mac::HALT_INTERRUPT_AS_LINUX {
+                    match state.map(|s| mac::halt_interrupt_refusal(&s)) {
+                        Some(None) => {
+                            mac::halt_interrupt_on(&mut self.native).map_err(Error::Io)?;
+                            mind::println!("[RTW89] HIMR0 HALT_C2H LEFT ON AS LINUX LEAVES IT; NO HANDLER, HISR0 POLLED (DEBUG, 213-DRV-0091)");
+                        }
+                        Some(Some(why)) => mind::println!("[RTW89] THE HALT INTERRUPT LEFT MASKED: {} (213-DRV-0091)", why),
+                        None => mind::println!("[RTW89] THE HALT INTERRUPT LEFT MASKED: THE PCI STATE UNREAD (213-DRV-0091)"),
+                    }
+                }
                 self.ready = Some(ready);
             }
             Stage::PhyCap => {
@@ -300,8 +320,8 @@ fn served(event: receive_service::Event) {
                 channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms);
             mind::println!("[RTW89] TRAFFIC ON {}: THE BEACONS ABOVE ARE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}'S; {} BEACONS OF OTHERS FILTERED OUT (213-DRV-0090)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], other_beacons);
-            mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN (213-DRV-0091)",
-                channel, e.l0, e.l1, e.l2, e.unknown);
+            mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN; HISR0 HALT_C2H {}, WDT_TIMEOUT {} (213-DRV-0091)",
+                channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
             if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
         }
         receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
@@ -331,6 +351,10 @@ fn served(event: receive_service::Event) {
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
+        receive_service::Event::HaltStatus { count, hisr, ctrl, ser, intx } =>
+            mind::println!("[RTW89] HISR0 HALT BITS {}: {:08X} ({}{}) WITH HALT_C2H_CTRL {:08X}; SER_DBG_INFO {:08X}; PCI INTX {}; CLEARED AS LINUX DOES, NOTHING ANSWERED (213-DRV-0091)",
+                count, hisr, if hisr & (1 << 21) != 0 { "HALT_C2H " } else { "" }, if hisr & (1 << 22) != 0 { "WDT_TIMEOUT" } else { "" }, ctrl, ser,
+                match intx { Some(true) => "ASSERTED", Some(false) => "NOT ASSERTED", None => "UNREAD" }),
         receive_service::Event::FirmwareError { count, ctrl, raw, ser, code, name, level, event: ser_event } =>
             mind::println!("[RTW89] THE FIRMWARE'S ERROR CODE {}: HALT_C2H {:08X} (CTRL {:08X}) = MAC_AX_ERR_{} {:04X}, {:?} ({}); SER_DBG_INFO {:08X}; NOT ANSWERED (213-DRV-0091)",
                 count, raw, ctrl, name, code, level, ser_event, ser),
