@@ -508,9 +508,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     fn floor_event(&mut self,event:Event){if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}}
     // 213-DRV-0102: the minute's PPDU reports by signal, taken, and the floor's registers now.
     fn floor_minute(&mut self)->data_mode::FloorMinute{
-        let(ppdu_rssi,unparsed)=self.data().take_ppdu_rssi();let c=self.data().counts();
+        let(ppdu_rssi,no_rpl,unparsed,header_over)=self.data().take_ppdu_rssi();let c=self.data().counts();
         let minute=data_mode::FloorMinute{ppdu_rssi,unparsed,registers:self.data().floor_registers(),bss_dbm:c.bss_dbm(),measured:c.bss_measured,
-            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures),written:core::mem::take(&mut self.floor.written)};
+            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures),written:core::mem::take(&mut self.floor.written),
+            no_rpl,header_over};
         // The next minute holds the other kind, switched at the next poll with no send pending.
         if self.floor.alternates&&self.floor.linux.is_some(){self.floor.switch_due=true;}
         minute

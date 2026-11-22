@@ -627,6 +627,9 @@ fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,
     // FIVE's report is -63 dBm: igi 47, OFDM PD (47 - 31) >> 1 = 8, CCK 24 - 110 = -86 (0xAA), EDCCA 66.
     let Some(Event::FloorSet{dbm:-63,measured:8,ofdm_pd:8,cck_pd:0xaa,edcca:66,written:true,registers,..})=set else{panic!("{set:?}")};
     assert_eq!((registers[0]>>6&31,registers[0]>>30&1,registers[1]>>24,registers[2]>>30&1,registers[3]&0xff,registers[3]>>24),(8,1,0xaa,1,66,66));
+    // An OFDM report not to this radio (DATA's with to_self cleared) has no RPL: binned apart by its header, -56 dBm.
+    let mut other=bytes(crate::captures::DATA);other[16]&=!1;
+    c.borrow_mut().buffers=vec![other,bytes(crate::captures::DATA)];ipc::advance(10);assert!(service.step());
     let mut traffic=None;
     for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
@@ -634,6 +637,7 @@ fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,
     assert!(floor.set&&floor.bss_dbm==Some(-63)&&floor.measured>=8,"{floor:?}");
     assert_eq!(floor.ppdu_rssi[8],floor.ppdu_rssi.iter().sum::<u32>(),"-63 dBm in the -60 to -64 bin: {floor:?}");
     assert!(floor.ppdu_rssi[8]>=8,"{floor:?}");assert_eq!(floor.registers,registers);
+    assert_eq!((floor.no_rpl[7],floor.no_rpl.iter().sum::<u32>(),floor.header_over),(1,1,(9,1)),"-55 to -59 dBm, 4.5 dB: {floor:?}");
     let _=Event::FloorRefused{channel:36};drop(service);clean();
 });}
 

@@ -8,9 +8,16 @@ use crate::rxdesc;
 /// The RX descriptor's packet type of a PPDU status report (RTW89_CORE_RX_TYPE_PPDU_STAT).
 pub(crate) const TYPE: u8 = 1;
 
-/// One report: the PPDU count and the data rate its frame carries in the descriptor, and the signal in dBm.
+/// One report: the PPDU count and the data rate its frame carries in the descriptor, the signal in dBm as Linux has it,
+/// the header's stronger path uncorrected, and how the paths were moved (213-DRV-0102).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Report { pub count: u8, pub rate: u16, pub signal_dbm: i8 }
+pub(crate) struct Report { pub count: u8, pub rate: u16, pub signal_dbm: i8, pub header_dbm: i8, pub conversion: Conversion }
+
+/// `Header`: the paths stand (a break, or an IE walk that failed). `Rpl`: moved by an RPL, `header_over` the header's
+/// average less it in half-dB, from IE 1 (OFDM to this radio) or IE 0 (CCK). `NoRpl`: no IE gave one (an OFDM PPDU not
+/// to this radio), so Linux moves the paths by 0 less the average, which leaves `signal_dbm` without meaning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Conversion { Header, Rpl { header_over: i16, ofdm: bool }, NoRpl }
 
 const MAC_INFO: usize = 8;
 const MAC_USER: usize = 4;
@@ -58,32 +65,39 @@ pub(crate) fn parse(descriptor: [u32; 3], payload: &[u8]) -> Option<Report> {
     if h0 & (1 << 7) == 0 || ((h0 >> 8) & 255) as usize * 8 != payload.len() - at { return None; }
     let average = (h0 >> 24) as u8;
     let mut rssi = [(h1 & 255) as u8, ((h1 >> 8) & 255) as u8];
+    let header_dbm = dbm(rssi[0].max(rssi[1]));
+    let mut conversion = Conversion::Header;
     // rtw89_core_rx_parse_phy_sts: the IEs of a parsed PPDU type; RPL from IE 0 (CCK) or IE 1 (OFDM, to this radio).
     if h0 & 31 >= CCK_PKT {
         let end = payload.len();
         let mut pos = at + PHY_HEADER + if h0 & (1 << 5) != 0 { PHY_HEADER } else { 0 };
-        let mut rpl = 0u8;
+        let mut rpl: Option<(u8, bool)> = None;
         let mut parsed = true;
         while pos < end {
             let Some(ie) = word(payload, pos) else { parsed = false; break };
             let kind = (ie & 31) as usize;
             let length = match IE_LENGTHS[kind] { 0xff => ((ie >> 5) & 127) as usize * 8, fixed => usize::from(fixed) };
             match kind {
-                0 => rpl = ((((ie >> 7) & 511) >> 1) & 255) as u8,
-                1 if rate >= OFDM6 && to_self => rpl = ((ie >> 8) & 255) as u8,
+                0 => rpl = Some((((((ie >> 7) & 511) >> 1) & 255) as u8, false)),
+                1 if rate >= OFDM6 && to_self => rpl = Some((((ie >> 8) & 255) as u8, true)),
                 _ => {}
             }
             pos += length;
             if pos > end || length == 0 { parsed = false; break; }
         }
         // __rtw8852bx_convert_rpl_to_rssi: each path's RSSI moved by the RPL's difference from the average, wrapping as u8.
+        // Linux's rpl_avg stays 0 when no IE gave one (core.c:2006), and the paths are moved all the same.
         if parsed {
-            let delta = rpl.wrapping_sub(average);
+            let delta = rpl.map_or(0, |(value, _)| value).wrapping_sub(average);
             for value in &mut rssi { *value = value.wrapping_add(delta); }
+            conversion = match rpl {
+                Some((value, ofdm)) => Conversion::Rpl { header_over: i16::from(average) - i16::from(value), ofdm },
+                None => Conversion::NoRpl,
+            };
         }
     }
     // __rtw8852bx_query_ppdu: the stronger path.
-    Some(Report { count, rate, signal_dbm: dbm(rssi[0].max(rssi[1])) })
+    Some(Report { count, rate, signal_dbm: dbm(rssi[0].max(rssi[1])), header_dbm, conversion })
 }
 
 /// wlanhw.wit's receive header byte 2: the signal as minus dBm, 0 when not measured.
