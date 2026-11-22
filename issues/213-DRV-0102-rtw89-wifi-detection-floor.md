@@ -199,6 +199,27 @@ One change, one measurement:
   - Linux does 480 to 826 KB/s on this channel. These are two uploads and a failure, under the answer path of 213-DRV-0104.
 - **Next:** the same paired minutes on the boot with a95ed0064, where the ON minutes hold EDCCA's 66 and the CCK fields as far as they take.
 
+**2026-11-22, boot 95 ("boot A"): Linux's floor with EDCCA 66, under a load of uploads** (release 202611221605, the bench tree 047917b60 with this branch to 2a7b08fc5, both switches true; 16:11 to 16:48 UTC):
+- **The load:** the stick's boot0082.log (225,391 bytes) uploaded through the Effector server every 37 s for 30 minutes. Each upload is timed on the machine, from the gateway's `open-file … admitted` to the agent's `COMPLETED`.
+- **The log:** the cable's ring read at 16:12, 16:15, 16:22, 16:32 and 16:42, and the owner's tail, joined: 31 minute lines (15 OFF, 15 ON, 14 triples) and 46 uploads.
+- **The ON minutes held Linux's values:**
+  - 4860=EC8DFA94 (OFDM PD 10 for the AP at −59 dBm);
+  - 4884=42384242 (EDCCA 66 on all three fields);
+  - 4B64 and 4B74 written, reading 0 as before (`READ AS BEFORE THE WRITE: 4B64 4B74`).
+- **The figures.** ON less the mean of its two OFF neighbours, with t-based 95% intervals:
+  - Uploads: OFF 23, median 4.9 s, mean 5.2 s; ON 22, median 5.7 s, mean 5.3 s. SD about 1.9 s, rank-sum p 0.79, no failure. About 1.6 s (30% of the mean) could have been resolved.
+  - Late frames per send: +0.002 [−0.003, +0.007] at 0.013.
+  - Holds: +16 ms [−9, +42] around 141 ms.
+  - First-try share: −0.12 [−0.33, +0.09].
+  - PPDU a minute: −1328 [−1846, −810]. The end bins fell by 755 [−862, −648], lower in all 14; the middle bins by 573 [−1123, −23].
+- **Shown:** the floor removes detections, and the uploads, late frames and holds do not follow, within the intervals above, in this half hour.
+- **Not shown:** smaller effects; another hour; the CCK fields, whatever 4B64 and 4B74 are.
+- **This hour against boot 93's:** the late frames are of two kinds.
+  - Boot 93: short (median 289 bytes), 80% held before their first try, 68% then acknowledged at it.
+  - Boot A: the upload's full frames (median 1458 bytes), 44% with failed tries already by the deadline, about 40% acknowledged at the first try.
+  - Neither the access point's beacons (578 against 576 a minute), its strength (−59 against −61 dBm), the EDCCA snapshot at the holds (FB or P20 at 7 of 34 against 12 of 71, both with a median of −77 dBm) nor the PPDU count (32.3k against 25.0k) told the hours apart.
+  - The logs do not have the access point's rate to us, our rate per frame, or the channel's busy time.
+
 **2026-11-22, the histogram's end bins mended** (this branch; host cases, not run on the Ryzen):
 - **What Linux does with a PPDU status not addressed to it** (05f7e89):
   - `rtw89_core_parse_phy_status_ie01` returns before it reads IE 1's RSSI_AVG_FD when `!phy_ppdu->to_self` (core.c:2006). So `rpl_avg` keeps the 0 of its initializer (core.c:3237).
