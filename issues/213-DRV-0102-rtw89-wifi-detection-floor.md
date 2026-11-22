@@ -30,13 +30,13 @@ So our receiver may count faint frames of distant networks as a busy medium wher
 ## What Linux does (pinned source at 05f7e89)
 
 - **The RSSI.** `rtw89_phy_dig_update_rssi_info` (phy.c:6454) sets `igi_rssi = ch_info->rssi_min >> 1`, with RSSI raw (dBm + 110) × 2 (core.h:52, RTW89_RSSI_RAW_TO_DBM). At −60 dBm, `igi_rssi` is 50.
-- **The FA offset.** `rtw89_phy_cal_igi_fa_rssi` (phy.c:6851) adds a false-alarm offset to `igi_fa_rssi` and clamps it to `igi_rssi` − 10 .. + 25. But `__rtw89_phy_dig_dyn_pd_th` (phy.c:6773) takes `final_rssi = min(rssi, igi_rssi)`, so the PD bound never rises above what `igi_rssi` gives.
+- **The FA offset.** `rtw89_phy_cal_igi_fa_rssi` (phy.c:6851) adds a false-alarm offset to `igi_fa_rssi` and clamps it to `igi_rssi` − 10 .. + 25. But `__rtw89_phy_dig_dyn_pd_th` (phy.c:6768, the min at 6781) takes `final_rssi = min(rssi, igi_rssi)`, so the PD bound never rises above what `igi_rssi` gives.
 - **The OFDM bound.** Under region = `pd_low_th_offset` 16 (phy.c:6498) + PD_TH_SB_FLTR_CMP_VAL 7 + PD_TH_BW20_CMP_VAL 0 (phy.h:120, 122; `rtw89_phy_dig_cal_under_region`, phy.c:6737).
   - `ofdm_cca_th = clamp(final_rssi, PD_TH_MIN_RSSI 8 + 23, PD_TH_MAX_RSSI 70 + 23)` (phy.h:114, 115).
   - `pd_val = (ofdm_cca_th − 23 − 8) >> 1`, written into R_SEG0R_PD_V1 0x4860's B_SEG0R_PD_LOWER_BOUND_MSK [10:6], with the spatial-reuse enable BIT(30) (`rtw89_phy_dig_dyn_pd_th`, phy.c:6799; reg.h:8683 to 8692; rtw8852b.c:218 to 220).
 - **The CCK bound.** `cck_cca_th = max(final_rssi − 23, CCKPD_TH_MIN_RSSI −18)` (phy.h:116), and `pd_val = cck_cca_th − IGI_RSSI_MAX 110` (phy.h:113).
   - Written into R_BMODE_PDTH_V1 0x4B64 [31:24], with B_BMODE_PDTH_LIMIT_EN_MSK_V1, BIT(30) of 0x4B74 (reg.h:8821 to 8826; rtw8852b.c:221 to 224).
-- **EDCCA.** `rtw89_phy_edcca_get_thre_by_rssi` (phy.c:7862), when linked: `rssi_min >> 1` − RSSI_UNIT_CONVER 110 + EDCCA_UNIT_CONVER 128 − EDCCA_TH_REF 3, at least EDCCA_TH_L2H_LB 66 (phy.h:131 to 135).
+- **EDCCA.** `rtw89_phy_edcca_get_thre_by_rssi` (phy.c:7860), when linked: `rssi_min >> 1` − RSSI_UNIT_CONVER 110 + EDCCA_UNIT_CONVER 128 − EDCCA_TH_REF 3, at least EDCCA_TH_L2H_LB 66 (phy.h:131 to 135).
   - `rtw89_phy_edcca_thre_calc` (phy.c:7879) writes it into R_SEG0R_EDCCA_LVL_V1 0x4884's [7:0], [15:8] and the PPDU level [31:24] (reg.h:8686 to 8689; rtw8852b.c:242 to 246).
 - **Linux tracks all of this.** DIG and EDCCA run from the periodic track work and follow the RSSI and the false alarms.
 
