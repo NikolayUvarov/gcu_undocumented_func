@@ -1,4 +1,4 @@
-# 213-DRV-0095 — `display`: the second output plugged and unplugged
+# 213-DRV-0096 — `display`: the second output plugged and unplugged
 
 **Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.4
 
@@ -28,4 +28,4 @@ it until the next boot.
 
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (HPD 1, step 1), [213-DRV-0096](213-DRV-0096-display-the-second-outputs-mode-from-its-edid.md).
+[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (HPD 1, step 1), [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).

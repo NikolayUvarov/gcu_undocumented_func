@@ -356,23 +356,39 @@ offered the second screen, and the compositor took it.**
 ```
 
 - **What the logs show:** both boots kept the firmware's pipe unchanged after every stage, and neither pipe underflowed.
-- **What waits for the maintainer:** what HDMI-A-1 showed, the picture at stage 15 and the mirror at stage 16. The owner
-  session passes on his answers. DP-2 was not watched by eye through stages 11 to 16.
+- **What the maintainer saw** (boot 76, release 202611220741, with the mirror up; his words through the owner session):
+  1. «На обоих экранах изображение одинаковое (второе следует за первым)»: both screens show the same picture, the
+     second following the first.
+  2. «отметки видны»: the marks are visible.
+  3. «кажется, что не рвется.»: it seems not to tear.
+
+  This is his look at that machine with its two monitors, in that release (MC-12.1). It is not a guarantee for another
+  machine, monitor, mode or boot (MC-12.9). Earlier today he saw first light's squares, over several boots. He did not
+  report on stage 15's own picture, and DP-2 was not watched by eye through stages 11 to 16.
+- **His remark, verbatim:** «Единственно замечание в том, что второй экран имеет другое разрешение физическое и картинка
+  имеет темные полосы по краям. Хотелось бы иметь поддержку режимов растягивания, 1 к 1 (как сейчас) и расширения
+  рабочего стола на оба монитора с относительным позиционированием.» That is: the second screen has another physical
+  resolution, so the picture has dark bands at the edges. He would like a stretched mode, one to one (as now), and the
+  desktop extended over both monitors with relative positions.
+  - The stretched mirror and the extended desktop are the compositor's (KRN) and `wm`'s (APP). The owner session asked
+    them in messages today.
+  - The part that is `display`'s is the second screen in the monitor's own mode, 3440x1440 at 324 MHz on this one, not
+    1920x1080: [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).
 
 **Not done, written down as tasks (2026-11-22, the owner session's list):**
-- [213-DRV-0095](213-DRV-0095-display-the-second-output-plugged-and-unplugged.md): the second output's hot-plug. HPD 1
+- [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md): the second screen in its monitor's
+  own mode, from its EDID, not the fixed 1920x1080. On this machine that is 3440x1440 at 324 MHz.
+- [213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md): the second output's hot-plug. HPD 1
   off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
-- [213-DRV-0096](213-DRV-0096-display-the-second-outputs-mode-from-its-edid.md): the second screen's mode from its
-  EDID, not the fixed 1920x1080.
 - [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md): table 12's cold path on the Ryzen, by
   213-DRV-0086's procedure.
 - [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md): the stages at start without the survey's
   pauses: a production order, and how many seconds it takes.
 - [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md): the committed default (everything off) against a
   machine that should simply come up with both screens.
-- [213-DRV-0100](213-DRV-0100-display-the-second-screens-vertical-blank.md): OTG1's vertical blank for the mirror,
-  through a display.wit 1.4 from KRN, if the mirror tears.
-- **DP-2 by eye through stages 11 to 16:** criterion 3 below.
+- **DP-2 by eye through stages 11 to 16,** and stage 15's own picture: criterion 3 below.
+- **Closed at once:** [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done), the
+  vertical blank for a display.wit 1.4. The maintainer saw no tearing, so KRN keeps 1.3.
 
 ## Acceptance criteria
 
@@ -383,10 +399,13 @@ offered the second screen, and the compositor took it.**
   `display_picture_host.rs`, and the stage 9 and 10 cases.
 - [ ] On the Ryzen, HDMI-A-1 shows stage 10's picture through pipe 1 with straight edges, while DP-2 keeps MIND Core's
   screen through stages 11 to 15; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
-  Boot 75's log shows stage 15 clean and the firmware's pipe unchanged; the maintainer's answer, and DP-2 by eye, are
-  still to come.
-- [ ] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's. Boot
-  76's log shows the compositor taking the second screen; the maintainer's answer is still to come.
+  Boot 75's log shows stage 15 clean and the firmware's pipe unchanged. The maintainer saw the same picture on both
+  screens with stage 16's mirror up, but did not report on stage 15's own picture, and DP-2 was not watched by eye
+  through the stages.
+- [x] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's. Boot
+  76's log shows the compositor taking the second screen, and the maintainer saw the same picture on both, the second
+  following the first, with the marks and no tearing seen. This is his look on the Ryzen with its two monitors
+  (MC-12.1).
 
 ## Related
 
