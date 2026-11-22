@@ -1,7 +1,13 @@
 //! Host tests of libmind/src/video.rs (issue 158): the synthetic test source the video gateway serves and that the
 //! QEMU test reads back from `camera`'s files, and the YUY2 conversion a UVC camera's frames need.
+extern crate alloc;
 #[path = "../libmind/src/video.rs"]
 mod video;
+#[path = "../libmind/src/jpeg.rs"]
+mod jpeg;
+#[path = "../libmind/src/jpegdec.rs"]
+#[allow(dead_code)]
+mod jpegdec;
 use video::*;
 
 #[test]
@@ -68,4 +74,63 @@ fn yuy2_scaled_to_the_size_asked_for() {
     let mut beyond = [1u32; 4];
     yuy2_scaled(&source[..4], 4, 2, &mut beyond, 2, 2);
     assert_eq!(beyond[2..], [0, 0], "rows the source lacks are black");
+}
+
+// 158-DRV-0083: a frame converted in bands, other work between them, is the frame converted whole.
+#[test]
+fn a_yuy2_picture_converted_in_bands_is_the_one_converted_whole() {
+    let (w, h, ow, oh) = (64, 48, 40, 30);
+    let source: Vec<u8> = (0..w * h * 2).map(|i| (i * 7 % 251) as u8).collect();
+    let mut whole = vec![0u32; ow * oh];
+    yuy2_scaled(&source, w, h, &mut whole, ow, oh);
+    let mut banded = vec![0xDEAD_BEEFu32; ow * oh];
+    for start in (0..oh).step_by(7) { yuy2_scaled_rows(&source, w, h, &mut banded, ow, oh, start..(start + 7).min(oh)); }
+    assert_eq!(banded, whole);
+    let mut one = vec![1u32; ow * oh];
+    yuy2_scaled_rows(&source, w, h, &mut one, ow, oh, 3..4);
+    assert!(one[..3 * ow].iter().all(|&p| p == 1) && one[3 * ow..4 * ow] == whole[3 * ow..4 * ow] && one[4 * ow..].iter().all(|&p| p == 1), "only the rows asked for");
+}
+
+// 158-DRV-0084: a decoded frame's rows, given in turn, scale to the picture asked for as yuy2_scaled samples one, up and
+// down, every output row written once.
+#[test]
+fn decoded_rows_scale_as_a_yuy2_frame_does() {
+    for (w, h, ow, oh) in [(64, 48, 40, 30), (40, 30, 64, 48), (32, 16, 32, 16), (1280, 720, 640, 480), (20, 10, 7, 3)] {
+        let source: Vec<u32> = (0..w * h).map(|i| i as u32).collect();
+        let mut out = vec![u32::MAX; ow * oh];
+        for y in 0..h { scale_row(y, &source[y * w..(y + 1) * w], h, &mut out, ow, oh); }
+        for oy in 0..oh {
+            for ox in 0..ow { assert_eq!(out[oy * ow + ox], ((oy * h / oh) * w + ox * w / ow) as u32, "{w}x{h} to {ow}x{oh} at ({ox}, {oy})"); }
+        }
+    }
+    let mut out = vec![7u32; 4];
+    scale_row(5, &[1, 2], 2, &mut out, 2, 2);
+    assert_eq!(out, vec![7; 4], "a row past the picture writes nothing");
+}
+
+// 158-DRV-0084: a Motion JPEG frame of the test pattern, decoded row by row into the picture asked for as video_gw does
+// (jpegdec::decode, then scale_row): at its own size its counter reads back and its bars are within JPEG's error; scaled
+// down, each pixel is near the one it samples.
+#[test]
+fn a_motion_jpeg_frame_of_the_pattern_decodes_into_the_picture() {
+    let (w, h) = (320, 240);
+    let mut frame = vec![0u32; w * h];
+    fill(4321, w, h, &mut frame);
+    let mut data = Vec::new();
+    jpeg::Encoder::new(90).encode(&frame, w, h, w, &mut data);
+    for (ow, oh) in [(w, h), (160, 120), (200, 100)] {
+        let mut out = vec![0u32; ow * oh];
+        let (gw, gh) = jpegdec::decode(&data, 640, &mut |y, row| scale_row(y, row, h, &mut out, ow, oh)).unwrap();
+        assert_eq!((gw, gh), (w, h));
+        let channels = |p: u32| [p >> 16 & 255, p >> 8 & 255, p & 255];
+        let (mut sum, mut n) = (0u64, 0u64);
+        for oy in 0..oh {
+            for ox in 0..ow {
+                let want = frame[(oy * h / oh) * w + ox * w / ow];
+                for (a, b) in channels(out[oy * ow + ox]).into_iter().zip(channels(want)) { sum += a.abs_diff(b) as u64; n += 1; }
+            }
+        }
+        assert!((sum as f64 / n as f64) < 6.0, "{ow}x{oh}: mean error {:.2}", sum as f64 / n as f64);
+        if (ow, oh) == (w, h) { assert_eq!(counter(w, h, |x, y| out[y * w + x]), Some(4321), "the frame number survives the coding"); }
+    }
 }

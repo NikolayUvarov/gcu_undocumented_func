@@ -820,6 +820,13 @@ impl Scheduler {
     }
 
     // The PCI function with a BAR covering physical (or port) address `base`.
+    // Registers inside the memory BAR that holds the boot framebuffer: frame memory, such as a second screen's buffer
+    // (213-KRN-0271), mapped write-combining as the framebuffer is; x86 alone, where that attribute exists (000-KRN-0081).
+    fn in_screens_bar(&self, physical: usize, size: usize) -> bool {
+        let (fb, (start, end)) = (self.boot.fb_ptr as u64, (physical as u64, physical as u64 + size as u64));
+        cfg!(target_arch = "x86_64") && fb != 0 && self.devices.iter().flat_map(|d| d.bars.iter())
+            .any(|b| !b.io && b.size != 0 && (b.base..b.base + b.size).contains(&fb) && start >= b.base && end <= b.base + b.size)
+    }
     fn device_at(&self, base: u64) -> Option<&pci::Device> { self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)) }
 
     // Capability over a platform resource the kernel has validated (PLATFORM_CAP).
@@ -899,7 +906,7 @@ impl Scheduler {
                 if let Some((_, other)) = sharers.next() {
                     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} AT {:X} SHARES ITS PAGE WITH {:06X} (CLASS {:06X}), WHICH NO OTHER DRIVER GETS\n", b, device.location(), bar.base, other.location(), other.class));
                 }
-                let enabled = unsafe { if kind == PLATFORM_DEVICE_BAR_IDLE { pci::registers_only(&device) } else { pci::enable(&device) } };
+                let enabled = unsafe { if kind == PLATFORM_DEVICE_BAR_IDLE { pci::registers_only(&device) } else { pci::enable_memory(&device) } };
                 if !enabled { return Err(ERR_IO); }
                 self.devices[a].granted = true;
                 Ok(Capability::Mmio(bar.base as usize, (end - bar.base) as usize))
@@ -1773,7 +1780,7 @@ impl Scheduler {
                     Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 =>
                         (physical, size, rights & CAP_WRITE != 0, if screen(physical, size) { paging::Caching::WriteCombining } else { paging::Caching::Memory }),
                     Some(Capability::Dma(physical, size)) => (physical, size, true, paging::Caching::Memory),
-                    Some(Capability::Mmio(physical, size)) => (physical, size, true, paging::Caching::Device),
+                    Some(Capability::Mmio(physical, size)) => (physical, size, true, if self.in_screens_bar(physical, size) { paging::Caching::WriteCombining } else { paging::Caching::Device }),
                     _ => (0, 0, false, paging::Caching::Memory),
                 };
                 let device = caching == paging::Caching::Device;

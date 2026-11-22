@@ -1,4 +1,4 @@
-//! `hub-api 2` over HTTP (docs/hub/README.md, 10): the devices' routes, the agents', the admin's and the board, each
+//! `hub-api 3` over HTTP (docs/hub/README.md, 10): the devices' routes, the agents', the admin's and the board, each
 //! signed over a challenge the hub gave, and every answer carrying the next challenge. The pages are `pages`'.
 
 use crate::event::{Decision, Event, Owner};
@@ -152,7 +152,7 @@ pub fn write_summary(w: &mut Writer, r: &Item) {
     w.field_int("id", r.id as i64).field_str("title", &r.form.title).field_str("kind", r.form.kind.name()).field_str("state", r.state.name())
         .field_int("filed_ms", r.filed as i64).field_int("since_ms", r.since as i64).field_str("visibility", r.form.visibility.name())
         .field_bool("security", r.form.security).field_int("posts", r.thread.len() as i64)
-        .field_bool("open_question", r.thread.iter().any(|p| p.message.kind == MessageKind::Question && !p.answered));
+        .field_bool("open_question", r.waits_for_user().0).field_bool("open_proposal", r.waits_for_user().1);
     if let Some(t) = &r.track { w.field_str("track", t); }
     if let Some(t) = &r.task { w.field_str("task", t); }
     if let Some(t) = &r.release { w.field_str("release", t); }
@@ -184,9 +184,10 @@ pub fn write_request(w: &mut Writer, r: &Item) {
         w.begin_object().field_int("n", p.n as i64).field_int("at_ms", p.at as i64).field_str("author", &p.author.text())
             .field_str("kind", p.message.kind.name()).field_str("text", &p.message.text);
         if let Some(a) = p.message.answers { w.field_int("answers", a as i64); }
+        if let Some(c) = p.message.consent { w.field_str("consent", c.name()); }
         if let Some(v) = p.message.verdict { w.field_str("verdict", v.name()); }
         if let Some(r) = &p.message.release { w.field_str("release", r); }
-        if p.message.kind == MessageKind::Question { w.field_bool("answered", p.answered); }
+        if matches!(p.message.kind, MessageKind::Question | MessageKind::Proposal) { w.field_bool("answered", p.answered); }
         if !p.message.attachments.is_empty() { write_attachments(w, &p.message.attachments, &p.received); }
         w.end_object();
     }
@@ -379,7 +380,7 @@ fn device_route(s: &mut Shared, req: &Request, cx: &Context, rest: &str) -> Resu
             let message = wire::read(text, wire::decode_message).map_err(wire_refusal)?;
             post(s, now, Actor::Device(device), id, message)
         }
-        _ => Err(refuse(404, "route", "no such route of hub-api 2")),
+        _ => Err(refuse(404, "route", format!("no such route of {}", improve_proto::API))),
     }
 }
 

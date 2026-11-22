@@ -1,6 +1,6 @@
 //! `mindhub`: MIND Hub's separate server (docs/hub/README.md, 100003-APP-0146), on Linux. Users' requests and their
 //! conversation, registration with the admin's answer, trust and anti-flood, the board and the agents' API, over
-//! `hub-api 2` with `improve/proto`'s forms.
+//! `hub-api 3` with `improve/proto`'s forms.
 
 pub mod api;
 pub mod client;

@@ -16,6 +16,7 @@ done
 (cd tests/storewrite_stub && cargo build --release --target-dir "$OUT/mind-storewrite-target") # a write through a read-only store scope (311-APP-0121)
 (cd tests/clip_stub && cargo build --release --target-dir "$OUT/mind-clip-target") # the clipboard from a program in front and behind (000-APP-0032)
 (cd tests/levels_stub && cargo build --release --target-dir "$OUT/mind-levels-target") # the audio levels through a plain client (000-DRV-0057)
+(cd tests/video_stub && cargo build --release --target-dir "$OUT/mind-video-target") # two cameras at once through the video gateway (158-DRV-0082)
 (cd tests/wlansim && cargo build --release --target-dir "$OUT/mind-wlansim-target") # the stand-in radio (550-NET-0018)
 (cd virtio_net && cargo build --release --features late-attach --target-dir "$OUT/mind-late-attach-target") # 000-NET-0036
 (cd tests/wlansim && cargo build --release --features slow --target-dir "$OUT/mind-wlansim-slow-target") # 550-NET-0030
