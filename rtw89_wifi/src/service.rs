@@ -28,6 +28,12 @@ const SEND_TRIES:u8=8;
 // stood here stopped the driver over frames on their way, and each stop cost the station its address and connections.
 const KEEP_LATE:bool=true;
 const LATE_MS:u64=5000;
+// 213-DRV-0104 step 2: what a late send is answered at its deadline. NotAcknowledged is the driver as it was; the day
+// wlanhw's `sent` has a pending outcome (NET's to version), a `Pending` answer goes here, the frame kept pending as now.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+enum LateAnswer{NotAcknowledged}
+const LATE_ANSWER:LateAnswer=LateAnswer::NotAcknowledged;
+fn late_answer(attempts:u8)->wlanhw::Sent{match LATE_ANSWER{LateAnswer::NotAcknowledged=>wlanhw::Sent{acked:false,attempts}}}
 const WAIT_MS:u64=1000;
 const WAITERS:usize=4;
 const FRAMES:usize=16;
@@ -277,7 +283,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             pending.deadline=pending.deadline.saturating_add(LATE_MS);let call=pending.call.take().unwrap();
             let attempts=u8::try_from(seen.tries).unwrap_or(15).clamp(1,15);
             let unicast=pending.unicast;
-            let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:false,attempts}));
+            let _=wlanhw::reply_send(call,Ok(&late_answer(attempts)));
             self.data().extend_send(LATE_MS*1000);self.lates=self.lates.saturating_add(1);
             if self.event.is_none(){self.event=Some(Event::LateFrame{count:self.lates,finished:seen.finished,fetched:seen.fetched,
                 released:seen.released,length:seen.length,age_us:seen.age_us})}
