@@ -82,6 +82,13 @@
   - the link's throughput against before: the young boot's log gave reads of 76 KB, about 30 KB/s, not the earlier 137.8 KB.
 - It holds for that machine and that release (MC-12.1).
 
+**With the cameras** (release 202611221746, boot 98 with the same `usb_host`; 2026-11-22 17:58–17:59 UTC; CAM under a lease, the stubs typed with the shell in front; the raw lines are in `S/cam-logs/ryzen-2026-11-22-1758-cameras-0101.log`):
+- **The run:** camera 1 at 320×240 and camera 0 at 640×480 at 25, 60 s each, with five timed log reads over the cable in their middle.
+- **The tally:** that minute had 3453 transfers deferred, every one answered, the longest 16 ms; the other minutes 1 to 359. Every minute had 0 not found, 0 timed out, 0 stopped and 0 waited on.
+- **The bulk rings:** camera 1's never stood empty. Camera 0's stood empty once, for 0.0 ms, not in a wait, as camera 1 closed beside it. No line names a wait.
+- **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
+- **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
+
 ## Related
 
 [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md), [000-LNK-0050](000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.md), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
