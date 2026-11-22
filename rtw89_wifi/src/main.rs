@@ -300,8 +300,8 @@ fn served(event: receive_service::Event) {
                 channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms);
             mind::println!("[RTW89] TRAFFIC ON {}: THE BEACONS ABOVE ARE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}'S; {} BEACONS OF OTHERS FILTERED OUT (213-DRV-0090)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], other_beacons);
-            mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN (213-DRV-0091)",
-                channel, e.l0, e.l1, e.l2, e.unknown);
+            mind::println!("[RTW89] TRAFFIC ON {}: THE FIRMWARE'S ERROR CODES {} L0, {} L1, {} L2, {} UNKNOWN; HISR0 HALT_C2H {}, WDT_TIMEOUT {} (213-DRV-0091)",
+                channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
             if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
         }
         receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
@@ -331,6 +331,9 @@ fn served(event: receive_service::Event) {
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
+        receive_service::Event::HaltStatus { count, hisr, ctrl, ser } =>
+            mind::println!("[RTW89] HISR0 HALT BITS {}: {:08X} ({}{}) WITH HALT_C2H_CTRL {:08X}; SER_DBG_INFO {:08X}; CLEARED AS LINUX DOES, NOTHING ANSWERED (213-DRV-0091)",
+                count, hisr, if hisr & (1 << 21) != 0 { "HALT_C2H " } else { "" }, if hisr & (1 << 22) != 0 { "WDT_TIMEOUT" } else { "" }, ctrl, ser),
         receive_service::Event::FirmwareError { count, ctrl, raw, ser, code, name, level, event: ser_event } =>
             mind::println!("[RTW89] THE FIRMWARE'S ERROR CODE {}: HALT_C2H {:08X} (CTRL {:08X}) = MAC_AX_ERR_{} {:04X}, {:?} ({}); SER_DBG_INFO {:08X}; NOT ANSWERED (213-DRV-0091)",
                 count, raw, ctrl, name, code, level, ser_event, ser),
