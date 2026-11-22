@@ -40,8 +40,9 @@ fn supported_board(board:&Board)->Result<(),Error>{
 }
 
 fn source_tssi_limit(group:defaults::Group,channel:u8)->Result<i16,Error>{
-    // The actual source PMAC template is HT20 MCS7, one TX path and no beamforming.
-    defaults::default_limit_2g(0,1,2,false,group,channel).map(|v|i16::from(v.quarter_dbm)).map_err(|_|Error::TssiPower)
+    // The actual source PMAC template is HT20 MCS7, one TX path and no beamforming; the band's table (213-DRV-0087).
+    let limit=if channel>14{defaults::default_limit_5g(0,1,2,false,group,channel)}else{defaults::default_limit_2g(0,1,2,false,group,channel)};
+    limit.map(|v|i16::from(v.quarter_dbm)).map_err(|_|Error::TssiPower)
 }
 
 fn tssi_cap(table:i16,limits:Constraints)->Result<(),Error>{
@@ -98,6 +99,12 @@ mod tests{
     fn actual_pmac_mcs7_limit_is_selected_when_ofdm_limit_differs(){
         let ofdm=defaults::default_limit_2g(0,1,1,false,defaults::Group::FCC,9).unwrap().quarter_dbm;
         assert_eq!(ofdm,78);assert_eq!(source_tssi_limit(defaults::Group::FCC,9).unwrap(),76);
+    }
+    #[test]
+    fn a_5_ghz_channel_takes_the_5_ghz_mcs_limit(){
+        let mcs=defaults::default_limit_5g(0,1,2,false,defaults::Group::ETSI,100).unwrap().quarter_dbm;
+        assert_eq!(source_tssi_limit(defaults::Group::ETSI,100).unwrap(),i16::from(mcs));assert!(mcs>=48);
+        assert!(matches!(source_tssi_limit(defaults::Group::ETSI,34),Err(Error::TssiPower)));
     }
     #[test]
     fn quarter_dbm_table_boundary_is_not_rounded_up(){

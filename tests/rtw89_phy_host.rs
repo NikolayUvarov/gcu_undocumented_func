@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[path="../rtw89_wifi/src/band.rs"] mod band;
 #[path = "../rtw89_wifi/src/io.rs"] mod io;
 #[path = "../rtw89_wifi/src/registers.rs"] mod registers;
 #[path = "../rtw89_wifi/src/power.rs"] mod power;
@@ -607,8 +608,8 @@ impl dack::DackIo for Device {
         if let Some(model)=self.tssi.as_mut(){
             assert_eq!(notice.calibration,dack::Calibration::Iqk);
             match notice.state{
-                dack::RfkState::Start=>{assert!(!model.outer);assert_eq!(notice.phy_map,0x10);model.outer=true;},
-                dack::RfkState::OneshotStart=>{assert!(model.outer&&!model.nested);assert_eq!(notice.phy_map,0x13);model.nested=true;},
+                dack::RfkState::Start=>{assert!(!model.outer);assert_eq!(notice.phy_map&0x3f,0x10,"band bits aside");model.outer=true;},
+                dack::RfkState::OneshotStart=>{assert!(model.outer&&!model.nested);assert_eq!(notice.phy_map&0x3f,0x13);model.nested=true;},
                 dack::RfkState::OneshotStop=>{assert!(model.outer&&model.nested);model.nested=false;},
                 dack::RfkState::Stop=>{assert!(model.outer&&!model.nested);model.outer=false;},
             }

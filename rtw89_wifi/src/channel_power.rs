@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2019-2022, 2024 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
-//! Pure initial 2 GHz/20 MHz power-register image; callers still need actual policy and firmware provenance.
+//! Pure 20 MHz power-register image, 2.4 and 5 GHz; callers still need actual policy and firmware provenance.
+
+use crate::band::{self, Band};
 
 use crate::channel_policy::{self as defaults, Error, Group};
 
@@ -45,10 +47,27 @@ fn reference(decrease_eighth_dbm: u16) -> Result<u32, Error> {
     Ok(((0xac - decrease_eighth_dbm) as u32) << 18 | (cw as u32) << 9)
 }
 
+// The band's default tables, as Linux's rtw89_phy_set_txpwr_* read them for a 20 MHz channel.
+struct Tables {
+    byrate: fn(u8, u8, u8) -> Result<defaults::Entry, Error>,
+    limit: fn(u8, u8, u8, bool, Group, u8) -> Result<defaults::DefaultLimit, Error>,
+    ru: fn(u8, u8, Group, u8) -> Result<defaults::DefaultLimit, Error>,
+    shape: fn(u8, Group) -> Result<defaults::Entry, Error>,
+}
+fn tables(channel: u8) -> Result<(Band, Tables), Error> {
+    Ok(match band::band(channel).ok_or(Error::Index)? {
+        Band::Ghz2 => (Band::Ghz2, Tables { byrate: defaults::default_byrate_2g, limit: defaults::default_limit_2g,
+            ru: defaults::default_ru_2g, shape: defaults::default_shape_2g }),
+        Band::Ghz5 => (Band::Ghz5, Tables { byrate: defaults::default_byrate_5g, limit: defaults::default_limit_5g,
+            ru: defaults::default_ru_5g, shape: defaults::default_shape_5g }),
+    })
+}
+
 /// This private builder performs no MMIO and returns no transmit authorization.
 /// Dynamic antenna-gain tables must be absent under the actual verified default-table provenance.
+/// On 5 GHz there is no CCK DFIR (`rtw8852bx_set_tx_shape`), so the image has eight writes fewer.
 pub(crate) fn build(group: Group, channel: u8, limits: Constraints) -> Result<Image, Error> {
-    if !(1..=13).contains(&channel) { return Err(Error::Index); }
+    let (band, t) = tables(channel)?;
     if limits.per_ntx.iter().chain(limits.per_path.iter()).any(|v| !(-64..=63).contains(v)) { return Err(Error::PowerRange); }
     let difference = (limits.per_path[0] as i16 - limits.per_path[1] as i16) * 4;
     let ref_a = reference(if difference > 0 { 0 } else { -difference as u16 })?;
@@ -59,7 +78,7 @@ pub(crate) fn build(group: Group, channel: u8, limits: Constraints) -> Result<Im
         for (section, count) in [4, 8, 12, 4].into_iter().enumerate() {
             if streams == 2 && section < 2 { continue; }
             for index in 0..count {
-                rate_bytes[used] = defaults::rf_to_mac(defaults::default_byrate_2g(streams, section as u8, index)?.value);
+                rate_bytes[used] = defaults::rf_to_mac((t.byrate)(streams, section as u8, index)?.value);
                 used += 1;
             }
         }
@@ -67,19 +86,21 @@ pub(crate) fn build(group: Group, channel: u8, limits: Constraints) -> Result<Im
     image.bytes(0xd2c0, &rate_bytes);
     let mut offsets = 0;
     for index in 0..5 {
-        let value = defaults::rf_to_mac(defaults::default_byrate_2g(1, 4, index)?.value);
+        let value = defaults::rf_to_mac((t.byrate)(1, 4, index)?.value);
         if !(-8..=7).contains(&value) { return Err(Error::PowerRange); }
         offsets |= ((value as u8 & 15) as u32) << (index * 4);
     }
     image.push(0xd204, 0x000fffff, offsets);
-    let shape = if defaults::default_shape_2g(0, group)?.value == 0 { FLAT } else { SHARP };
-    for (i, value) in shape.into_iter().enumerate() { image.push(PHY + 0x2300 + i * 4, u32::MAX, value); }
-    image.push(PHY + 0x4494, 0x03000000, (defaults::default_shape_2g(1, group)?.value as u32) << 24);
+    if band == Band::Ghz2 {
+        let shape = if defaults::default_shape_2g(0, group)?.value == 0 { FLAT } else { SHARP };
+        for (i, value) in shape.into_iter().enumerate() { image.push(PHY + 0x2300 + i * 4, u32::MAX, value); }
+    }
+    image.push(PHY + 0x4494, 0x03000000, ((t.shape)(1, group)?.value as u32) << 24);
     for streams in 1..=2 {
         let mut page = [0i8; 40];
         for (slot, bandwidth, section) in [(0,0,0), (2,1,0), (4,0,1), (6,0,2)] {
             for bf in 0..2 {
-                let table = defaults::default_limit_2g(bandwidth, streams, section, bf != 0, group, channel)?;
+                let table = (t.limit)(bandwidth, streams, section, bf != 0, group, channel)?;
                 page[slot + bf] = defaults::rf_to_mac(table.quarter_dbm).min(limits.per_ntx[streams as usize - 1]);
             }
         }
@@ -88,7 +109,7 @@ pub(crate) fn build(group: Group, channel: u8, limits: Constraints) -> Result<Im
     for streams in 1..=2 {
         let mut page = [0i8; 24];
         for ru in 0..3 {
-            let table = defaults::default_ru_2g(ru, streams, group, channel)?;
+            let table = (t.ru)(ru, streams, group, channel)?;
             page[ru as usize * 8] = defaults::rf_to_mac(table.quarter_dbm).min(limits.per_ntx[streams as usize - 1]);
         }
         image.bytes(0xd33c + 24 * (streams as usize - 1), &page);
@@ -107,15 +128,17 @@ pub(crate) const UNKNOWN_COUNTRY_STEPS: i8 = 3;
 /// section's 20 MHz non-beamformed limit, as `build` writes them for the MAC.
 pub(crate) fn maximum(group: Group, channel: u8, limits: Constraints) -> Result<[i8; 2], Error> {
     if limits.per_ntx.iter().any(|v| !(-64..=63).contains(v)) { return Err(Error::PowerRange); }
+    let (band, t) = tables(channel)?;
     let mut most = [i8::MIN; 2];
     for streams in 1..=2u8 {
-        // Limit sections: CCK and OFDM for their own rates, MCS for MCS and HE-DCM (by-rate sections 2 and 3).
+        // Limit sections: CCK and OFDM for their own rates, MCS for MCS and HE-DCM (by-rate sections 2 and 3); no CCK on 5 GHz.
         for (by_rate, count, limit) in [(0u8, 4u8, 0u8), (1, 8, 1), (2, 12, 2), (3, 4, 2)] {
+            if by_rate == 0 && band == Band::Ghz5 { continue; }
             let source = if by_rate < 2 { 1 } else { streams };
-            let table = defaults::default_limit_2g(0, streams, limit, false, group, channel)?;
+            let table = (t.limit)(0, streams, limit, false, group, channel)?;
             let cap = defaults::rf_to_mac(table.quarter_dbm).min(limits.per_ntx[streams as usize - 1]);
             for index in 0..count {
-                let rate = defaults::rf_to_mac(defaults::default_byrate_2g(source, by_rate, index)?.value);
+                let rate = defaults::rf_to_mac((t.byrate)(source, by_rate, index)?.value);
                 most[streams as usize - 1] = most[streams as usize - 1].max(rate.min(cap));
             }
         }

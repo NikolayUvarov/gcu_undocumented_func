@@ -90,4 +90,4 @@ pub mod mem{
 }
 pub mod dev{pub fn cap_info(slot:usize)->(usize,usize,usize){(super::ipc::kind(slot),0,0)}}
 pub mod time{pub fn monotonic_ns()->u64{super::ipc::clock()}}
-pub mod network{pub const BAND_2GHZ:u8=1;pub const BAND_2GHZ_OFDM:u8=4;}
+pub mod network{pub const BAND_2GHZ:u8=1;pub const BAND_5GHZ:u8=2;pub const BAND_2GHZ_OFDM:u8=4;}

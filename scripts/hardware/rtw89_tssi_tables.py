@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce pinned RTL8852B initial 2 GHz TSSI data; no network or device access."""
+"""Reproduce pinned RTL8852B TSSI data, 2.4 and 5 GHz; no network or device access."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -18,7 +18,11 @@ TABLES = [('sys_defs',17), ('sys_a_defs_2g',4), ('sys_b_defs_2g',4),
           ('dac_gain_defs_a',52), ('dac_gain_defs_b',51),
           ('slope_a_defs_2g',12), ('slope_b_defs_2g',12),
           ('align_a_2g_all_defs',9), ('align_b_2g_all_defs',9),
-          ('slope_defs_a',3), ('slope_defs_b',3)]
+          ('slope_defs_a',3), ('slope_defs_b',3),
+          # 213-DRV-0087: the 5 GHz system, slope and per-sub-band alignment defaults.
+          ('sys_a_defs_5g',4), ('sys_b_defs_5g',4), ('slope_a_defs_5g',12), ('slope_b_defs_5g',12),
+          ('align_a_5g1_all_defs',9), ('align_a_5g2_all_defs',9), ('align_a_5g3_all_defs',9),
+          ('align_b_5g1_all_defs',9), ('align_b_5g2_all_defs',9), ('align_b_5g3_all_defs',9)]
 
 def one(source, pattern):
     matches = re.findall(pattern, source, re.S)
@@ -49,6 +53,13 @@ def signed_bytes(body):
         raise ValueError('invalid thermal array')
     return values
 
+def signed_rows(body):
+    """The three sub-band rows of a 5 GHz thermal array, 30 signed bytes each."""
+    rows = re.findall(r'\{([^{}]*)\}', body)
+    if len(rows) != 3 or re.sub(r'\{[^{}]*\}', '', body).replace(',', '').strip():
+        raise ValueError('unrecognized 5 GHz thermal rows')
+    return [signed_bytes(row) for row in rows]
+
 def extract(raw):
     sources = {}
     for name, pin in PINS.items():
@@ -75,6 +86,12 @@ def extract(raw):
             values = signed_bytes(one(sources['rtw8852b_table.c'],
                 r'static const s8 _txpwr_track_delta_swingidx_'+name+r'\[\] = \{(.*?)\};'))
             thermal.append(('THERMAL_'+path.upper()+'_'+direction.upper(), values))
+    for path in ('a', 'b'):
+        for direction in ('n', 'p'):
+            name = '5g'+path+'_'+direction
+            rows = signed_rows(one(sources['rtw8852b_table.c'],
+                r'static const s8 _txpwr_track_delta_swingidx_'+name+r'\[\]\[DELTA_SWINGIDX_SIZE\] = \{(.*?)\n\};'))
+            thermal.append(('THERMAL_5G_'+path.upper()+'_'+direction.upper(), rows))
     return tables, thermal
 
 def render(data):
@@ -88,7 +105,11 @@ def render(data):
         lines.extend('    ('+', '.join(f'0x{v:08x}' for v in row)+'),' for row in rows)
         lines.extend(['];', ''])
     for name, values in thermal:
-        lines.append('pub(crate) const '+name+': [i8;30] = ['+', '.join(map(str, values))+'];')
+        if isinstance(values[0], list):
+            rows = ', '.join('['+', '.join(map(str, row))+']' for row in values)
+            lines.append('pub(crate) const '+name+': [[i8;30];3] = ['+rows+'];')
+        else:
+            lines.append('pub(crate) const '+name+': [i8;30] = ['+', '.join(map(str, values))+'];')
     return '\n'.join(lines)+'\n'
 
 def main():

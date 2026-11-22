@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract pinned RTL8852B default 2 GHz power data; this is not a channel policy."""
+"""Extract pinned RTL8852B default 2 GHz and 5 GHz power data; this is not a channel policy."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -100,10 +100,26 @@ def extract(power, regd):
     tables["SHAPE_RU_2G"] = ({k[1:]: v for k, v in shape_ru.items() if k[0] == 0}, (16,))
     rates = byrate(body(p, "rtw89_8852b_txpwr_byrate"))
     tables["BYRATE_2G"] = ({k[1:]: v for k, v in rates.items() if k[0] == 0}, (2, 5, 12))
+    # 213-DRV-0087: the 5 GHz tables, all four bandwidths; CCK's by-rate stays the 2 GHz table's, as Linux reads it.
+    tables["LIMIT_5G"] = (designated(body(p, "rtw89_8852b_txpwr_lmt_5g"), (4, 2, 3, 2, 16, 53)), (4, 2, 3, 2, 16, 53))
+    tables["RU_5G"] = (designated(body(p, "rtw89_8852b_txpwr_lmt_ru_5g"), (5, 2, 16, 53)), (5, 2, 16, 53))
+    tables["SHAPE_5G"] = ({k[1:]: v for k, v in shape.items() if k[0] == 1}, (2, 16))
+    tables["SHAPE_RU_5G"] = ({k[1:]: v for k, v in shape_ru.items() if k[0] == 1}, (16,))
+    tables["BYRATE_5G"] = ({k[1:]: v for k, v in rates.items() if k[0] == 1}, (2, 5, 12))
+    if any(k[1] == 0 for k in tables["BYRATE_5G"][0]):
+        raise ValueError("5 GHz CCK by-rate data requires review")
     mapping = countries(body(r, "rtw89_regd_map"))
-    if any(k[0] >= 3 for k in tables["RU_2G"][0]):
+    if any(k[0] >= 3 for k in (*tables["RU_2G"][0], *tables["RU_5G"][0])):
         raise ValueError("new RU format requires review")
     return tables, mapping
+
+
+def index_type(dimensions):
+    """The Rust index type of a flattened table: u16 while every slot fits."""
+    size = 1
+    for dimension in dimensions:
+        size *= dimension
+    return "u16" if size <= 1 << 16 else "u32"
 
 
 def flat(coords, dimensions):
@@ -120,7 +136,7 @@ def render(tables, mapping):
              f"// Linux {COMMIT}; power SHA-256 {POWER_SHA256}; regd SHA-256 {REGD_SHA256}.",
              "//! Default chip data only; no frequency permission or firmware override is implied.", ""]
     for name, (rows, dimensions) in tables.items():
-        lines += [f"// Dimensions {dimensions}; omitted C entries are implicit zero.", f"pub const {name}: &[(u16, i8)] = &["]
+        lines += [f"// Dimensions {dimensions}; omitted C entries are implicit zero.", f"pub const {name}: &[({index_type(dimensions)}, i8)] = &["]
         lines += [f"    ({flat(k, dimensions)}, {v})," for k, v in sorted(rows.items())]
         lines += ["];", ""]
     lines += ["pub const COUNTRIES: &[([u8; 2], [u8; 3], u8)] = &["]
