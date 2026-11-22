@@ -32,10 +32,11 @@ pub enum Outcome{Empty,Packet(rxdesc::Packet),Dropped(rxdesc::Error)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct Stop{pub request:Option<Fault>,pub hci:Option<Fault>,pub idle:Option<Fault>}
 
-/// One channel's polls since they were last taken (213-DRV-0091): the longest time between two, and the most descriptors
-/// found waiting at one (the hardware index ahead of the host's, out of DESCRIPTORS).
+/// One channel's polls since they were last taken (213-DRV-0091): the longest time between two and when it ended, how
+/// many gaps passed 5 and 10 ms, and the most descriptors found waiting at one (the hardware index ahead of the host's,
+/// out of DESCRIPTORS).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub struct Polls{pub longest_gap_us:u64,pub most_waiting:u16}
+pub struct Polls{pub longest_gap_us:u64,pub longest_at_us:u64,pub over_5ms:u32,pub over_10ms:u32,pub most_waiting:u16}
 pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,copied:Option<rxdesc::Packet>,
     polls:[Polls;2],last_poll:[Option<u64>;2],_exclusive:PhantomData<&'a mut[u8]>}
 impl<'a> Rings<'a>{
@@ -131,7 +132,12 @@ impl<'a> Rings<'a>{
         let channel=channel.index();
         // 213-DRV-0091: the time since this channel's last poll, and below the descriptors waiting at this one.
         let now=bus.now_us();
-        if let Some(last)=self.last_poll[channel]{let p=&mut self.polls[channel];p.longest_gap_us=p.longest_gap_us.max(now.saturating_sub(last));}
+        if let Some(last)=self.last_poll[channel]{
+            let(p,gap)=(&mut self.polls[channel],now.saturating_sub(last));
+            if gap>p.longest_gap_us{p.longest_gap_us=gap;p.longest_at_us=now;}
+            if gap>5_000{p.over_5ms=p.over_5ms.saturating_add(1);}
+            if gap>10_000{p.over_10ms=p.over_10ms.saturating_add(1);}
+        }
         self.last_poll[channel]=Some(now);
         let result=(||{
             let mut timed=TimedIo::new(bus,u64::from(budget_us));

@@ -616,7 +616,8 @@ fn service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls(){run(0,t
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
     let Some(Event::Traffic{polls:[q,_],..})=traffic else{panic!("no traffic line")};
     // The model's bus clock moves by its own delays, not by the service's minute: the gap is the model's.
-    assert!(q.most_waiting>=3&&q.longest_gap_us>0,"{q:?}");
+    assert!(q.most_waiting>=3&&q.longest_gap_us>0&&q.longest_at_us>0,"{q:?}");
+    assert!(q.over_10ms<=q.over_5ms,"{q:?}");
     let mut next=None;
     for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
         if let Some(e@Event::Traffic{..})=service.take_event(){next=Some(e);break}}
