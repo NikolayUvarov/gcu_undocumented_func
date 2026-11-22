@@ -317,6 +317,15 @@ fn served(event: receive_service::Event) {
                 n, ms, wifi, kept, ppdu, pressure, sent, acked);
             if let Some(probe) = probe { pieces("HOLE END", &probe); }
         }
+        receive_service::Event::Linked { channel, bssid: b, aid, was, before, after } => {
+            match aid {
+                Some(aid) => mind::println!("[RTW89] THE FIRMWARE TOLD: CONNECTED TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ON CHANNEL {} AS AID {} (JOIN INFO AND ADDRESS CAM AS INFRA; 213-DRV-0091)",
+                    b[0], b[1], b[2], b[3], b[4], b[5], channel, aid),
+                None => mind::println!("[RTW89] THE FIRMWARE TOLD: NO LINK ON CHANNEL {} (WAS AID {}; 213-DRV-0091)", channel, was.unwrap_or(0)),
+            }
+            if let Some(probe) = before { pieces("LINK BEFORE", &probe); }
+            if let Some(probe) = after { pieces("LINK AFTER", &probe); }
+        }
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),
