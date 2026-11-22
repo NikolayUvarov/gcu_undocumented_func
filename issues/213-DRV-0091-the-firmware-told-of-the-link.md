@@ -313,7 +313,15 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
     - No IOAPIC is programmed; report.rs only counts them.
     - The PIC is set edge-triggered, so a level INTx held asserted gives one edge. On a line held by another driver, that would hide that driver's later edges.
   - **So the bit can be set with no interrupt reaching anyone**, provided that MSI and MSI-X are off and the line is not 0 to 2 (or INTx is disabled, or there is no pin), and no other task holds that line. The HISR0 read clears the halt bits at each check, so an INTx assertion would last until the next check only.
-- **What the logs say:** nothing yet. No boot log carries this device's Command, Status, interrupt line or MSI control.
+- **What the logs said before this change:** nothing. No boot log carried this device's Command, Status, interrupt line or MSI control.
+- **What the Ryzen logs with it** (boots 69 and 70, releases 202611220523 and after, with the constant false):
+
+  `PCI INTERRUPT STATE: COMMAND 0007 (INTX ENABLED), STATUS 0010 (INTERRUPT 0), LINE 255, PIN 1, MSI CONTROL Some(0080), MSI-X CONTROL None`
+
+  - MSI is present but not enabled (64-bit capable, Enable 0), and there is no MSI-X.
+  - INTx is enabled on INTA, and the firmware left the interrupt line at 255: none assigned.
+  - So `halt_interrupt_refusal` allows the bit on this machine, and by the code above an INTx assertion has no line to reach.
+  - That the chipset routes INTA nowhere is not shown by this. The `PCI INTX` field of the HISR0 lines would show the device asserting it.
 - **The change:**
   - **The PCI state is logged after the download:** `[RTW89] PCI INTERRUPT STATE: COMMAND c (INTX ENABLED|DISABLED), STATUS s (INTERRUPT b), LINE l, PIN p, MSI CONTROL …, MSI-X CONTROL … (213-DRV-0091)`, read through the capability list (`mac::pci_interrupt`).
   - **`mac::HALT_INTERRUPT_AS_LINUX`:** false, the strict path, keeps HIMR0 masked as now. True leaves B_AX_HALT_C2H_INT_EN on after the download, as `rtw89_pci_enable_intr` does, unless `mac::halt_interrupt_refusal` finds MSI enabled, MSI-X enabled, or INTx enabled to line 0, 1 or 2. In that case it logs why it stays masked.
