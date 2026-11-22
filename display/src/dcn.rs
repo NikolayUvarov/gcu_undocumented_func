@@ -108,10 +108,12 @@ pub enum R {
     // dce_i2c_hw and hw_ddc read them; never DC_I2C_DATA, whose read moves its index.
     DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
     MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y,
+    // Step 2's (213-DRV-0095): the engine's buffer, written and read only by the EDID read, never by a batch.
+    DcI2cData,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 155] = {
+pub const ALL: [R; 156] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -141,7 +143,7 @@ pub const ALL: [R; 155] = {
      HubpreqVmidSettings0, HubpreqFlipControl, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio,
      HubpreqDebugDb,
      DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
-     MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y]
+     MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y, DcI2cData]
 };
 
 impl R {
@@ -159,7 +161,7 @@ impl R {
             DchubbubArbSatLevel => 1,
             DcI2cTransaction => 4,
             DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | MicrosecondTimeBaseDiv
-                | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y => 1,
+                | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => 1,
             DchubbubArbDramStateCntl => 1,
             DchubbubArbWatermarkChangeCntl => 1,
             DchubbubGlobalTimerCntl => 1,
@@ -284,7 +286,7 @@ impl R {
             DcI2cControl => (2, 0x1E98), DcI2cArbitration => (2, 0x1E99), DcI2cSwStatus => (2, 0x1E9B), DcI2cDdc1HwStatus => (2, 0x1E9C),
             DcI2cDdc1Speed => (2, 0x1EA2), DcI2cDdc1Setup => (2, 0x1EA3), DcI2cTransaction => (2, 0x1EAE + i),
             MicrosecondTimeBaseDiv => (1, 0x7B), DcGpioDdc1Mask => (2, 0x28D0), DcGpioDdc1A => (2, 0x28D1), DcGpioDdc1En => (2, 0x28D2),
-            DcGpioDdc1Y => (2, 0x28D3),
+            DcGpioDdc1Y => (2, 0x28D3), DcI2cData => (2, 0x1EB2),
         };
         Reg::new((SEGMENT[segment] + dword) * 4).ok()
     }
@@ -402,6 +404,7 @@ impl R {
             DcI2cDdc1HwStatus => "DC_I2C_DDC1_HW_STATUS", DcI2cDdc1Speed => "DC_I2C_DDC1_SPEED", DcI2cDdc1Setup => "DC_I2C_DDC1_SETUP",
             DcI2cTransaction => "DC_I2C_TRANSACTION", MicrosecondTimeBaseDiv => "MICROSECOND_TIME_BASE_DIV",
             DcGpioDdc1Mask => "DC_GPIO_DDC1_MASK", DcGpioDdc1A => "DC_GPIO_DDC1_A", DcGpioDdc1En => "DC_GPIO_DDC1_EN", DcGpioDdc1Y => "DC_GPIO_DDC1_Y",
+            DcI2cData => "DC_I2C_DATA",
         }
     }
 
@@ -421,7 +424,7 @@ impl R {
                 | DmcubInbox1Size | DmcubInbox1Wptr | DmcubInbox1Rptr | DmcubOutbox1Wptr | DmcubOutbox1Rptr | DmcubGpintDatain1
                 | DmcubGpintDataout | DmcubTimerCurrent => "",
             DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | DcI2cTransaction
-                | MicrosecondTimeBaseDiv | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y => "",
+                | MicrosecondTimeBaseDiv | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => "",
             HubpAddrConfig | HubpTilingConfig | HubpPriViewportStart | HubpPriViewportDimension | HubpReqSizeConfig | HubpReqSizeConfigC | HubpClkCntl => "HUBP",
             HubpreqSurfaceControl | HubpreqExpansionMode | HubpreqTtuQosWm | HubpreqGlobalTtuCntl | HubpreqSurf0TtuCntl0 | HubpreqSurf0TtuCntl1 | HubpreqCur0TtuCntl0 | HubpreqCur0TtuCntl1 | HubpreqVmMxL1TlbCntl | HubpreqBlankOffset0 | HubpreqBlankOffset1 | HubpreqDstDimensions | HubpreqDstAfterScaler | HubpreqPrefetchSettings | HubpreqVblankParameters0 | HubpreqVblankParameters1 | HubpreqVblankParameters2 | HubpreqVblankParameters3 | HubpreqVblankParameters4 | HubpreqNomParameters0 | HubpreqNomParameters1 | HubpreqNomParameters4 | HubpreqNomParameters5 | HubpreqPerLineDeliveryPre | HubpreqPerLineDelivery | HubpreqCursorSettings | HubpreqRefFreqToPixFreq | HubpreqDstYDeltaDrqLimit => "HUBPREQ",
             HubpretControl => "HUBPRET",
