@@ -89,7 +89,7 @@
 - **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
 - **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
 
-## For a successor (state on 2026-11-22, 18:50 UTC)
+## For a successor (state on 2026-11-22, 19:20 UTC)
 
 How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
 
@@ -97,7 +97,10 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
   - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
   - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
   - **49bd2fede** makes `usbload` wait for and check the tally.
-  - Neither has run on hardware. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`), was going at 18:50.
+  - Neither has run on hardware. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`, outputs in `/tmp/claude-1000/cam/s12/`), was going at 18:50.
+- **The USB agent took over at 18:50** (CAM's context ran out). Its runs, under the shared lock, write to `/home/un/.local/share/mind-bench/cam/runs/`, each with a `status` file:
+  - `s13`: the landing head bf9942b64 itself, with the build, the fixtures, all of `host_tests.sh` and QEMU's `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio`, `vfs`, `block` and `usbload` (`tests/s13-run.sh`);
+  - `s14`: 000-DRV-0081 (`claude/000-DRV-0081-a-close-tells-the-device-first`, from the landing head), the same set (`tests/s14-run.sh`).
 - **Reading a run:**
   - The once-a-boot line is `A BULK TRANSFER ANSWERED FROM THE LOOP: …`.
   - The minute's tally is `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`. What is right: a equals n, 0 in the four after, and the longest tens of ms at most.
