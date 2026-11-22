@@ -112,6 +112,28 @@ logged in full before its first write:
   - an underflow at stage 15, a busy MPCC, stage 9 without a reference, stage 10 without a surface;
   - the picture's glyphs and layout, and the 45-degree lean an off-by-one pitch gives.
 
+**The first release of stages 9 and 10 faulted (2026-11-22, boot 69, release 202611220523, dbc8f6e3e, switches
+10/10/false).**
+- **What happened:** `display` read all ten batches (282 registers, nothing written), then took a page fault (vector 14)
+  before step 3's first line. init restarted it, and it faulted the same way each time, about every 52 s. No stage ran
+  and nothing was written.
+- **The cause:** display's ELF asked for no stack (no `PT_GNU_STACK`), so it ran on the 64 KiB a task gets by default,
+  with an unmapped guard page below (262-KRN-0164). Steps 3 and 4 hold about 76 KB by value:
+  - the VBIOS interpreter (20,840 bytes) and the journal (16,392), as `Box::new` builds them on the stack;
+  - `Light` (5,736) and its plans (3,848 each, three live);
+  - step 1's values (2,576) and stage 10's row (7,680).
+
+  That is past the guard page.
+- **Fixed in 13c77c7b9:**
+  - `linker.ld` asks for 256 KiB.
+  - `light::STEP3_STACK_BYTES` (76,240) is bounded by half of it, at compile time and in a host case that reads
+    `linker.ld`. The case also shows that the 64 KiB would have failed the bound.
+- **Step 3 once a boot.** Since init restarts a faulting program, step 3 now leaves a mark before stage 1:
+  `OTG1_OTG_VERTICAL_INTERRUPT2_POSITION = 0x5A5A`, a register whose interrupt is off.
+  - A start that finds the mark runs no stage and writes nothing.
+  - The undo never takes the mark back.
+  - A machine boot clears OTG1's registers: step 1 has read them 0 after every boot, though Linux drove OTG1 before.
+
 ## Acceptance criteria
 
 - [ ] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
