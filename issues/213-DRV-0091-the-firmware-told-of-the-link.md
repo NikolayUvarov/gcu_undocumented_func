@@ -423,6 +423,38 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 
   The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
+**2026-11-22, boot 81: the instrument's first idle half hour** (release 202611221107, S/rz37 57b609354. It is step 2 plus 8e57f1c56. Its USB side changed with it too: CAM's usb_host steps and usb_serial's pieces. Read through the server):
+- **Two USB events, neither ours:** the speakerphone left the hub (`XHCI 1: DEVICE ON PORT 1.4 GONE`, 321.1 s, 11:16:42 UTC), and the cable's converter on the PC's side failed (`[LINK] MARK: Unconnected`, 706.5 s, 11:23:07 UTC). From then on there was no load, and boot 81 is an idle run.
+- **A meeting with no recovery:** `833.232 … CHECK MET AN UNREADABLE CMAC 1: 40018 READ DEADBEEF, READABLE AGAIN AFTER 2 READS IN 1327 US; SER_DBG_INFO 00000000 -> 00000000`.
+  - SER_DBG_INFO did not move at this check or any other, and the boot has no `SER_DBG_INFO STEP` line.
+  - The window can read DEADBEEF for about 1.3 ms without a recovery being counted.
+  - It came two minutes after the link's mark went Unconnected (11:25:14 against 11:23:07 UTC). The times show no more than that.
+- **The ring's polls, 31 minutes to 1866 s:**
+  - RXQ's longest gap a minute had a median of 18.8 ms (18.3 to 19.8 ms), and 27.0 ms in the first minute.
+  - The most descriptors waiting at one poll had a median of 31, at most 39 of 256.
+  - RPQ never had more than 1 waiting.
+  - The minutes with a probe (every tenth) were no longer than the others, so the probe does not set the 19 ms.
+- **What the design intends and what it does not explain:**
+  - Each service step waits at most POLL_MS (2 ms) for a request (`recv_timeout`), then drains up to DRAIN (64) descriptors of each ring. The checks and the coexistence reconcile run once in CHECK_MS (10 ms) after the queue reads empty. So the design's cadence is about 2 ms plus a step's own work.
+  - The worst cases written into the loop:
+    - a recovery outlasted: SER_WAIT_US 60 ms plus SER_GRACE_US 20 ms;
+    - an unreadable window read again: 16 reads 1 ms apart;
+    - an H2C waiting its whole COMMAND_US: 100 ms;
+    - the service's 16-frame buffer full, which leaves RXQ unread until wlan reads.
+  - None of these recurs every minute at idle. So the steady 19 ms is not explained by the design, and its cause is not known.
+  - Headroom: at idle about 525 descriptors arrive a second (frames and PPDU reports), so 256 last about half a second. Even 100 ms leaves half the ring.
+- **To place the 19 ms** (this commit): the minute line also gives each ring's gaps over 5 ms and over 10 ms, and how long ago the longest ended:
+
+  ```
+  [RTW89] TRAFFIC ON c: RX POLL GAPS OVER 5 / 10 MS: RXQ a / b, RPQ c / d; THE LONGEST ENDED x / y MS AGO (213-DRV-0091)
+  ```
+
+  - Many such gaps a minute would be periodic work of our own.
+  - A handful at random offsets would be the scheduler.
+  - A fixed offset from the minute line would be the minute's own work.
+
+  The new host case is `the_rings_keep_their_poll_gaps_and_backlog_until_taken` (tests/rtw89_rx_host.rs). The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).

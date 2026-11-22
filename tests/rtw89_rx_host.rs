@@ -215,3 +215,22 @@ fn partial_copy_or_empty_receive_cannot_reuse_previous_validated_metadata(){
     assert_eq!(&out[20..64],&[0x53;44]);assert_eq!(&out[64..100],&[0x42;36]);assert_eq!(d.get(0x1050)&0xfff,1);
     d.time_step=0;stop(&mut q,&mut d);
 }
+
+// 213-DRV-0091: each ring keeps the longest time between two of its polls and when it ended, the gaps over 5 and 10 ms,
+// and the most descriptors waiting at one poll; taking them starts them again.
+#[test]
+fn the_rings_keep_their_poll_gaps_and_backlog_until_taken(){
+    let mut d=Device::new();let mut r=Region::new();let mut q=active(&mut r,&mut d);let mut out=vec![0;rx::BUFFER_BYTES];
+    for step in [0,3_000,7_000,12_000]{d.now+=step;assert_eq!(q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap(),Outcome::Empty);}
+    let at=d.now;
+    for index in 0..3{d.put_packet(0,index,&packet(&[index as u8;24],false,0));}
+    d.now+=1_000;let _=q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap();
+    let [rxq,rpq]=q.polls();
+    assert_eq!(rxq,rx::Polls{longest_gap_us:12_000,longest_at_us:at,over_5ms:2,over_10ms:1,most_waiting:3});
+    assert_eq!(rpq,rx::Polls::default(),"RPQ not polled");
+    assert_eq!(q.take_polls()[0],rxq);assert_eq!(q.polls()[0],rx::Polls::default(),"taken: they start again");
+    d.now+=2_000;let _=q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap();
+    assert_eq!(q.polls()[0].longest_gap_us,2_000,"the gap since the last poll, across the take");
+    while q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap()!=Outcome::Empty{}
+    stop(&mut q,&mut d);
+}

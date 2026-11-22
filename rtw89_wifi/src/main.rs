@@ -324,6 +324,9 @@ fn served(event: receive_service::Event) {
                 channel, e.l0, e.l1, e.l2, e.unknown, e.hisr_halt, e.hisr_wdt);
             mind::println!("[RTW89] TRAFFIC ON {}: RX POLLS: RXQ LONGEST GAP {} US, MOST WAITING {}; RPQ LONGEST GAP {} US, MOST WAITING {}; OF {} (213-DRV-0091)",
                 channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
+            let ago = |at: u64| (mind::time::monotonic_ns() / 1000).saturating_sub(at) / 1000;
+            mind::println!("[RTW89] TRAFFIC ON {}: RX POLL GAPS OVER 5 / 10 MS: RXQ {} / {}, RPQ {} / {}; THE LONGEST ENDED {} / {} MS AGO (213-DRV-0091)",
+                channel, q.over_5ms, q.over_10ms, p.over_5ms, p.over_10ms, ago(q.longest_at_us), ago(p.longest_at_us));
             if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
         }
         receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
