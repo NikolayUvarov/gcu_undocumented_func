@@ -76,7 +76,7 @@ impl Receiving{
                 require(&mut timed,fwcmd::DMA_BUSY,0x000b0f00,0)?;
                 require(&mut timed,0xc348,0xffff,0)?;require(&mut timed,0xc6ec,1<<7,0)?;
             }
-            for at in HOST_MASKS{require(&mut timed,at,u32::MAX,0)?;}
+            for at in HOST_MASKS{require(&mut timed,at,mac::host_mask_required(at,mac::HALT_INTERRUPT_AS_LINUX),0)?;}
             require(&mut timed,fwcmd::BASE_LOW,u32::MAX,self.command_physical as u32)?;require(&mut timed,fwcmd::BASE_HIGH,u32::MAX,0)?;
             require(&mut timed,fwcmd::BDRAM,u32::MAX,28|4<<8|1<<16)?;
             let count=timed.read16(fwcmd::NUMBER)?;
@@ -144,7 +144,7 @@ fn guard(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&rx::Rings<'_>,board:&Boar
     require(bus,fwcmd::INIT_CONFIG,HCI|1<<18,1<<11)?;
     require(bus,fwcmd::DMA_STOP,STOP_MASK,STOPPED)?;
     require(bus,fwcmd::DMA_BUSY,fwcmd::BUSY_MASK,0)?;
-    for at in HOST_MASKS{require(bus,at,u32::MAX,0)?;}
+    for at in HOST_MASKS{require(bus,at,mac::host_mask_required(at,mac::HALT_INTERRUPT_AS_LINUX),0)?;}
     require(bus,fwcmd::BASE_LOW,u32::MAX,queue.physical() as u32)?;require(bus,fwcmd::BASE_HIGH,u32::MAX,0)?;
     require(bus,fwcmd::BDRAM,u32::MAX,28|4<<8|1<<16)?;
     let count=bus.read16(fwcmd::NUMBER)?;
@@ -201,7 +201,7 @@ fn activate_inner(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&mut rx::Rings<'_
         require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,RECEIVING)?;
         require(&mut timed,fwcmd::INIT_CONFIG,HCI|1<<18,HCI)?;
         require(&mut timed,0xc348,0xffff,0)?;require(&mut timed,0xc6ec,1<<7,0)?;
-        for at in HOST_MASKS{require(&mut timed,at,u32::MAX,0)?;}
+        for at in HOST_MASKS{require(&mut timed,at,mac::host_mask_required(at,mac::HALT_INTERRUPT_AS_LINUX),0)?;}
         timed.delay_us(0)?;
         Ok(())
     })();
