@@ -38,7 +38,9 @@ impl<B:RegisterIo> RegisterIo for Window<'_,B>{
 }
 
 /// PCI configuration and the mapped BAR belong to the same exclusively owned RTL8852BE function.
-pub trait DeviceIo:fwcmd::Bus { fn pci_id(&mut self)->io::Result<u32>; fn bar_len(&self)->usize; }
+pub trait DeviceIo:fwcmd::Bus { fn pci_id(&mut self)->io::Result<u32>; fn bar_len(&self)->usize;
+    /// PCI Status (213-DRV-0091: its bit 3, the device asserting INTx); a bus that cannot read it says so.
+    fn pci_status(&mut self)->io::Result<u16>{Err(Fault::new(FaultKind::Access,6,0))} }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,InboxOverflow,Malformed,Rejected(u8),Coexistence,PacketHandler }
