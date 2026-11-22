@@ -123,6 +123,19 @@ The maintainer (2026-11-21): switching must be possible from inside the applicat
 - **The programs' keys:** 158-APP-0152 (APP, on `claude/wizardly-franklin-kec1a9`) waits for this branch.
 
 
+**The maintainer's look, 2026-11-22** (the Ryzen at its keyboard, release 202611212244 with 5145dab32's `usb_host` and `video_gw` as the boot image's services, the two cameras `0471:A6CA` and `0471:A6CD`; the steps the owner session passed to him from CAM's check). His words: «1, 2. всё так; 3. всё так; 4. всё так; 5. выход из камеры работает. Проверку считаю успешной.» That is, by his own look:
+1. **Two windows:** `wm camera -c 0, camera -c 1` showed both cameras at once, both moving.
+2. **The next-camera key:** `n` in one window, while the other window kept moving with no pause. Camera 1 being held by the other window, the program closed its camera, was refused the other and opened its own again (the deferred re-open); the freeze he had seen on 2026-11-21 is gone.
+3. **MJPEG:** camera 0 at `-z 1280x720 -r 25`, which the gateway streams as MJPEG (YUY2 gives 10 a second at that size).
+4. **Both cameras in MJPEG at once:** both at 1280×720.
+5. **Leaving:** Esc or `q` ends a camera.
+
+This holds for that machine, those cameras and that release (MC-12.1).
+
+**What it meets of the criteria:** none newly.
+- He changed mode by `camera`'s `-z` and `-r`, since APP's mode key (158-APP-0152) is not in `main` yet, so the fourth criterion waits for it.
+- Linux's lists are still to be read (the second), and each offered mode with a stated tolerance is still to be shown (the third).
+
 ## Related
 
 [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [158-DRV-0084](158-DRV-0084-mjpeg-frames-decoded.md), [158-APP-0147](158-APP-0147-switching-between-cameras-in-camera-and-wm.md).

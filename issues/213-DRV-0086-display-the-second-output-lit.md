@@ -70,8 +70,8 @@ writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's o
 ## Progress: step 1, ready to run (2026-11-21)
 
 On `claude/213-DRV-0086-display-reads-the-engine`, built on KRN's
-[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.md) and
-[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md) (the `display` boot image; `init`'s grant of two windows
+[213-KRN-0270](../issues-done/213-KRN-0270-the-radeons-registers-for-display.done) and
+[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done) (the `display` boot image; `init`'s grant of two windows
 of BAR 5, the engine's registers [0, 0x1B000) in slot 2 and the SMU mailbox's page [0x58000, 0x59000) in slot 3, BAR 0
 [0x1000000, 0x2400000) in slot 5 and a read-only copy of the ACPI VFCT table in slot 4; the command register left at the
 firmware's 0006; ABI 37, handoff 38) with the survey branch merged in. `display/src/main.rs` replaces KRN's stub:

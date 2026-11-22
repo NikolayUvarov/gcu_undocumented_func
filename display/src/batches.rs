@@ -10,7 +10,9 @@ use crate::dcn::{field::*, Field, Reg, R};
 use crate::timing::Otg;
 use core::fmt;
 
-pub const BATCHES: u8 = 10;
+pub const BATCHES: u8 = 11;
+/// The batches steps 3 and 4 need read: batch 11 (the DDC line, 213-DRV-0095) is for the EDID's read, not for them.
+pub const STEP3_BATCHES: u8 = 10;
 /// The most registers one batch reads (batch 2: 19 for each of the four timing generators).
 pub const MAX_REGISTERS: usize = 80;
 /// After a batch's name is logged and before its first read: long enough for the line to be kept.
@@ -90,6 +92,16 @@ const APERTURE: [R; 6] = {
 };
 /// Batch 8 around the scratch registers: whether the board has a DMCUB and its control; its mailboxes.
 const DMCUB_HEAD: [R; 3] = [R::CcDcPipeDis, R::DmcubCntl, R::DmcubSecCntl];
+/// Batch 11 (213-DRV-0095): HDMI-A-1's DDC line, DC_GPIO_DDC1 (the VBIOS's I2C line 0), and the I2C engine, as
+/// dce_i2c_hw and hw_ddc read them before a transfer: who holds the engine, its last transfer, the line's speed and
+/// set-up, the four transactions, the microsecond time base its speed is set from, and the pads' mode and levels.
+/// DC_I2C_DATA is not read: a read of it moves its index.
+const DDC1: [(R, u8); 15] = {
+    use R::*;
+    [(DcI2cArbitration, 0), (DcI2cControl, 0), (DcI2cSwStatus, 0), (DcI2cDdc1HwStatus, 0), (DcI2cDdc1Speed, 0), (DcI2cDdc1Setup, 0),
+     (DcI2cTransaction, 0), (DcI2cTransaction, 1), (DcI2cTransaction, 2), (DcI2cTransaction, 3), (MicrosecondTimeBaseDiv, 0),
+     (DcGpioDdc1Mask, 0), (DcGpioDdc1A, 0), (DcGpioDdc1En, 0), (DcGpioDdc1Y, 0)]
+};
 const DMCUB_TAIL: [R; 10] = {
     use R::*;
     [DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress, DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr,
@@ -127,7 +139,7 @@ pub const BOARD_PHYS: [u8; 4] = [0, 1, 3, 4];
 pub fn title(batch: u8) -> &'static str {
     match batch {
         1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", 8 => "DMCUB",
-        9 => "PIPE REFERENCE", 10 => "PATH AND SHARED", _ => "?",
+        9 => "PIPE REFERENCE", 10 => "PATH AND SHARED", 11 => "DDC1", _ => "?",
     }
 }
 
@@ -161,6 +173,7 @@ pub fn plan(batch: u8, known: &Known) -> List {
         }
         9 => if let (Some(p), Some(t)) = (known.firmware_pipe, known.running_otg) { reference_hubp(&mut list, p, t) },
         10 => if let Some(p) = known.firmware_pipe { path_and_shared(&mut list, p) },
+        11 => for (r, n) in DDC1 { list.push(r, n); },
         _ => {}
     }
     list
@@ -275,8 +288,10 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut impl Out, store: &mut
             values.push(n, v);
         }
         summarize(batch, &values, &mut known, out);
-        report.batches_read = batch;
-        store.batches = batch;
+        report.batches_read += 1;
+        // The store counts the batches read one after another from the first: steps 3 and 4 need 1 to 10 all read,
+        // and batch 11 after an empty 9 or 10 does not stand for them.
+        if store.batches + 1 == batch { store.batches = batch; }
         out.pause(PAUSE_BETWEEN_BATCHES_MS);
     }
     out.line(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN", report.batches_read, BATCHES, report.registers_read));
@@ -342,6 +357,7 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
         }
         9 => if let (Some(p), Some(t)) = (known.firmware_pipe, known.running_otg) { summarize_reference(v, p, t, out) },
         10 => if let Some(p) = known.firmware_pipe { summarize_path(v, p, out) },
+        11 => summarize_ddc1(v, out),
         5 => {
             for n in 0..5u8 {
                 out.line(format_args!("B5 DIG{} FE: FROM OTG {}, SYMCLK_FE_ON {}", LETTERS[n as usize],
@@ -425,6 +441,24 @@ impl fmt::Display for Ratio19 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 { Some(v) => { let r = v as u64 * 10_000 >> 19; write!(f, "{}.{:04}", r / 10_000, r % 10_000) } None => f.write_str("-") }
     }
+}
+
+fn summarize_ddc1(v: &Values, out: &mut impl Out) {
+    use R::*;
+    let owner = |s: Option<u32>| match s { Some(0) => "NOBODY", Some(1) => "SOFTWARE", Some(2) => "THE DMCU", Some(_) => "BOTH", None => "-" };
+    out.line(format_args!("B11 I2C ENGINE: HELD BY {} (SW REQ {}, DMCU REQ {}); LAST TRANSFER STATUS {}, DONE {}; DDC SELECT {}; DDC1 HW STATUS {}",
+        owner(v.field(DcI2cArbitration, 0, DC_I2C_REG_RW_CNTL_STATUS)), Opt(v.field(DcI2cArbitration, 0, DC_I2C_SW_USE_I2C_REG_REQ)),
+        Opt(v.field(DcI2cArbitration, 0, DC_I2C_DMCU_USE_I2C_REG_REQ)), Opt(v.field(DcI2cSwStatus, 0, DC_I2C_SW_STATUS_BITS)),
+        Opt(v.field(DcI2cSwStatus, 0, DC_I2C_SW_DONE)), Opt(v.field(DcI2cControl, 0, DC_I2C_DDC_SELECT)), Opt(v.field(DcI2cDdc1HwStatus, 0, DC_I2C_DDC1_HW_STATUS_BITS))));
+    out.line(format_args!("B11 DDC1: ENABLED {}, TIME LIMIT {}, PRESCALE {}, THRESHOLD {}; MICROSECOND TIME BASE {}, XTAL REF DIV {}",
+        Opt(v.field(DcI2cDdc1Setup, 0, DC_I2C_DDC1_ENABLE)), Opt(v.field(DcI2cDdc1Setup, 0, DC_I2C_DDC1_TIME_LIMIT)),
+        Opt(v.field(DcI2cDdc1Speed, 0, DC_I2C_DDC1_PRESCALE)), Opt(v.field(DcI2cDdc1Speed, 0, DC_I2C_DDC1_THRESHOLD)),
+        Opt(v.field(MicrosecondTimeBaseDiv, 0, MICROSECOND_TIME_BASE)), Opt(v.field(MicrosecondTimeBaseDiv, 0, XTAL_REF_DIV))));
+    let pad = |r: R, f: Field| Opt(v.field(r, 0, f));
+    out.line(format_args!("B11 DDC1 PADS: AUX MODE {}; CLOCK MASK {} EN {} A {} Y {}; DATA MASK {} EN {} A {} Y {}",
+        pad(DcGpioDdc1Mask, AUX_PAD1_MODE), pad(DcGpioDdc1Mask, DC_GPIO_DDC1CLK_MASK), pad(DcGpioDdc1En, DC_GPIO_DDC1CLK_BIT),
+        pad(DcGpioDdc1A, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Mask, DC_GPIO_DDC1DATA_MASK),
+        pad(DcGpioDdc1En, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1A, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1DATA_BIT)));
 }
 
 fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut impl Out) {

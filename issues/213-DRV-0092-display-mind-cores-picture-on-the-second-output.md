@@ -1,6 +1,6 @@
 # 213-DRV-0092 — `display`: MIND Core's picture on the Ryzen's second output
 
-**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — (the compositor's second screen: KRN's display.wit 1.3, [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), merged here for stage 16) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`, step 4) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — (the compositor's second screen: KRN's display.wit 1.3, [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), landed in `main` 8e7687635) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -319,14 +319,93 @@ interface.
   - DML's prefetch values for pipe 1;
   - the SMU's view of two displays.
 
+**Boot 75 (2026-11-22, release 202611220729, e20a0244f, switches 10/15/false): stage 15 ran clean.**
+
+```
+121.434 S15 WROTE HUBP1_DCHUBP_CNTL AT 0EE3C = 000F011A (WAS 000F011B)
+121.501 S15 OTG1 COUNTED 3 FRAMES IN 46 MS
+121.522 S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1
+121.543 S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)
+126.550 S15 WATCHED 300 FRAMES OF OTG1 IN 4986 MS (60.167 HZ) WITH THE PATTERN OFF: 0 PASSED BETWEEN TWO READS; THE LONGEST GAP BETWEEN READS 21 US, BEFORE FRAME 90
+126.570 S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES
+126.703 S15 UNBLANK DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)
+129.724 STEP 3 STOPPED AFTER STAGE 15 OF 15 AS THIS BUILD ALLOWS; 161 WRITES MADE ARE LEFT IN PLACE
+```
+
+- **The watch:** all 300 frames were read one by one, every row of the log's frames a row of dots.
+- **What made the underflow go is not shown.** Boot 75 had all five of e20a0244f's changes at once against boot 74:
+  - OTG1's global sync for a plane;
+  - `HUBP_VREADY_AT_OR_AFTER_VSYNC` 1;
+  - `HUBPREQ_DEBUG_DB` 0x100;
+  - QoS level 8;
+  - the QoS high watermark of four lines.
+
+  Each is Display Core's. No run took one back to see.
+- **The 676 ms gap of boot 74 did not come back.** The longest gap between two reads was 21 us. Boot 75's watch reads
+  without sleeping, while boot 74's frame wait slept, so this says nothing about boot 74's sleep.
+
+**Boot 76 (2026-11-22, release 202611220741, aa1d54a93 with KRN's 213-KRN-0272, switches 10/16/false): stage 16
+offered the second screen, and the compositor took it.**
+
+```
+126.382 S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES
+130.596 [COMPOSITOR] SECOND SCREEN 1920X1080, PITCH 7680, Bgr, FROM PID 38: THE FIRST MIRRORED AT 1728X1080 FROM 96,0
+130.596 S16 OFFERED THE SECOND SCREEN: 1920x1080, PITCH 7680 BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT
+130.617 S16 OFFER DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)
+133.638 STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS; 161 WRITES MADE ARE LEFT IN PLACE
+```
+
+- **What the logs show:** both boots kept the firmware's pipe unchanged after every stage, and neither pipe underflowed.
+- **What the maintainer saw** (boot 76, release 202611220741, with the mirror up; his words through the owner session):
+  1. «На обоих экранах изображение одинаковое (второе следует за первым)»: both screens show the same picture, the
+     second following the first.
+  2. «отметки видны»: the marks are visible.
+  3. «кажется, что не рвется.»: it seems not to tear.
+
+  This is his look at that machine with its two monitors, in that release (MC-12.1). It is not a guarantee for another
+  machine, monitor, mode or boot (MC-12.9). Earlier today he saw first light's squares, over several boots. He did not
+  report on stage 15's own picture, and DP-2 was not watched by eye through stages 11 to 16.
+- **His remark, verbatim:** «Единственно замечание в том, что второй экран имеет другое разрешение физическое и картинка
+  имеет темные полосы по краям. Хотелось бы иметь поддержку режимов растягивания, 1 к 1 (как сейчас) и расширения
+  рабочего стола на оба монитора с относительным позиционированием.» That is: the second screen has another physical
+  resolution, so the picture has dark bands at the edges. He would like a stretched mode, one to one (as now), and the
+  desktop extended over both monitors with relative positions.
+  - The stretched mirror and the extended desktop are the compositor's (KRN) and `wm`'s (APP). The owner session asked
+    them in messages today.
+  - The part that is `display`'s is the second screen in the monitor's own mode, 3440x1440 at 324 MHz on this one, not
+    1920x1080: [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).
+
+**Not done, written down as tasks (2026-11-22, the owner session's list):**
+- [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md): the second screen in its monitor's
+  own mode, from its EDID, not the fixed 1920x1080. On this machine that is 3440x1440 at 324 MHz.
+- [213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md): the second output's hot-plug. HPD 1
+  off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
+- [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md): table 12's cold path on the Ryzen, by
+  213-DRV-0086's procedure.
+- [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md): the stages at start without the survey's
+  pauses: a production order, and how many seconds it takes.
+- [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md): the committed default (everything off) against a
+  machine that should simply come up with both screens.
+- **DP-2 by eye through stages 11 to 16,** and stage 15's own picture: criterion 3 below.
+- **Closed at once:** [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done), the
+  vertical blank for a display.wit 1.4. The maintainer saw no tearing, so KRN keeps 1.3.
+
 ## Acceptance criteria
 
-- [ ] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
+- [x] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
   the state the Ryzen showed (213-DRV-0086's `WARM`) cover each stage, its undo and the widened watch.
-- [ ] Stage 10's picture, read back on the model, has the border, the diagonals, the cross and the letters in place.
+  `display_light_host.rs`; the committed switches stay 0.
+- [x] Stage 10's picture, read back on the model, has the border, the diagonals, the cross and the letters in place.
+  `display_picture_host.rs`, and the stage 9 and 10 cases.
 - [ ] On the Ryzen, HDMI-A-1 shows stage 10's picture through pipe 1 with straight edges, while DP-2 keeps MIND Core's
   screen through stages 11 to 15; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
-- [ ] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's.
+  Boot 75's log shows stage 15 clean and the firmware's pipe unchanged. The maintainer saw the same picture on both
+  screens with stage 16's mirror up, but did not report on stage 15's own picture, and DP-2 was not watched by eye
+  through the stages.
+- [x] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's. Boot
+  76's log shows the compositor taking the second screen, and the maintainer saw the same picture on both, the second
+  following the first, with the marks and no tearing seen. This is his look on the Ryzen with its two monitors
+  (MC-12.1).
 
 ## Related
 

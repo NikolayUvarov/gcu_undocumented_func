@@ -579,9 +579,11 @@ fn keep_waiting(all: &[Value]) {
     ids.sort_unstable();
     let mut old = [0u8; waiting::BYTES];
     let before = mind::fs::File::open(waiting::FILE).ok().and_then(|f| f.read_at(0, &mut old).ok()).and_then(|n| core::str::from_utf8(&old[..n]).ok()).and_then(waiting::read);
-    if before.as_deref() == Some(ids.as_slice()) { return; }
+    if before.as_ref().is_some_and(|b| b.ids == ids) { return; }
+    // Each write counts one more change, so that a reader that missed one still sees it.
+    let change = before.map_or(1, |b| b.change.wrapping_add(1));
     let _ = mind::fs::mkdir(waiting::DIR);
-    if let Ok(mut file) = mind::fs::File::create(waiting::FILE) { let _ = file.write_at(0, waiting::text(&ids).as_bytes()); }
+    if let Ok(mut file) = mind::fs::File::create(waiting::FILE) { let _ = file.write_at(0, waiting::text(change, &ids).as_bytes()); }
 }
 
 /// The user's requests read again after a change of the user's, for `keep_waiting`; a refusal keeps what was there.

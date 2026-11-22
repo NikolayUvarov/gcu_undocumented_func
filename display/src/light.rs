@@ -105,7 +105,7 @@ fn copied(r: &Reference, reg: R) -> u32 { COPIED.iter().position(|&c| c == reg).
 
 /// The reference from step 1's values, once all its batches were read and they name one firmware's pipe.
 pub fn reference(s: &Store, f: &Firmware, c: &Choice) -> Option<Reference> {
-    if s.batches() < crate::batches::BATCHES { return None; }
+    if s.batches() < crate::batches::STEP3_BATCHES { return None; }
     let pipe = (0..4u8).find(|&n| f.hubps[n as usize])?;
     let t = f.otg;
     let mut copies = [0u32; COPIED.len()];
@@ -236,7 +236,7 @@ pub enum Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ALL {})", batch, crate::batches::BATCHES),
+            Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ITS FIRST {})", batch, crate::batches::STEP3_BATCHES),
             Refusal::RunningOtgs(n) => write!(f, "{} TIMING GENERATORS RUN, NOT ONE", n),
             Refusal::BackEnds(n) => write!(f, "{} DIG BACK ENDS ARE ENABLED, NOT ONE", n),
             Refusal::HdmiDriven => f.write_str("PHY A (HDMI-A-1) IS ALREADY DRIVEN"),
@@ -258,7 +258,7 @@ const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 /// reads and writes no register step 1 has not read on the same boot (batch 7 holds DCCG's pixel rate and PLL resync),
 /// and it does not run while batch 8 shows the DMCUB enabled and out of reset.
 pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
-    if s.batches() < crate::batches::BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
+    if s.batches() < crate::batches::STEP3_BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
     if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
     let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
     let runs = (0..4).filter(|&t| running(t)).count() as u8;
