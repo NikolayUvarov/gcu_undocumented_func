@@ -184,6 +184,32 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
   - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended` now also counts a refusal and ten late answers.
   - The 40 `rtw89_*_host.rs` files pass: 4887 cases, 0 failed. The release build builds.
 
+**2026-11-22, boot 96 ("boot B"): SEND_BEHIND_LATE alternating on the Ryzen, under the uploads** (the bench tree 9b34fca4f with this branch to ae508f493; the floor as found in every minute; 16:53 to 17:24 UTC):
+- **The load and the log:**
+  - The load was the same as boot 95's: 225,391 bytes every 37 s for 30 minutes.
+  - The cable's ring was read at 16:52, 16:55, 17:02, 17:12 and 17:22, and joined with the owner's tail: 31 minute lines (15 OFF, 15 ON, 14 triples) and 47 uploads, 5 of them straddling a boundary.
+  - No stop, timeout, recovery or fault line.
+- **Parking runs on the hardware.** In the ON minutes 27 frames were parked, all 27 released, 15 of them acknowledged.
+- **The figures.** ON less the mean of its two OFF neighbours, from the minute lines by `paired.py --kind behind`:
+
+  | Figure | OFF | ON | Paired |
+  |---|---|---|---|
+  | Busy refusals | 135 of 6406 sends | 19 of 6359 | −0.019 a send offered, lower in 12 of 14 (sign test p 0.013) |
+  | Late frames never acknowledged | 1 | 13 | — |
+  | Frames lost to `wlan` (refused + never) | 136 (2.1%) | 32 (0.5%) | — |
+  | Late frames per send | 0.014 | 0.015 | +0.002 [−0.002, +0.006] |
+  | Late frames' holds | median 148 ms | 144 ms | −6 ms [−34, +22] |
+  | Uploads, machine-timed | 21, median 8.1 s, mean 10.2 s | 20, median 7.7 s, mean 8.9 s | rank-sum p 0.70; SD about 4.9 s, about 4.3 s resolvable |
+
+- **Shown:** parking turns most refusals into frames sent. It loses 12 of 27 parked frames that a resubmission would probably have saved.
+- **Not shown:** any change in the upload time. Boot 95's uploads (the floor as found in its OFF minutes too) took a median 4.9 s, and boot 96's 8.1 s, so one hour against the next differs more than either switch.
+- **So a 225 KB upload is a poor probe of the send path.** With 98.5% of sends in time and under 2.5% lost either way, it takes 5 to 8 s. That is about 32 ms a full frame, one frame at a time, and also four or five rounds of TCP's slow start over a 300 to 900 ms round trip to the server. These logs cannot tell the two apart: the driver did not log in-time send times, and netstack logs no round trip or window.
+- **A resubmission-preserving variant would need:**
+  - The parked frame keeps its `Request` (its bytes and tries), not only its submission.
+  - On a release not acknowledged, below its limit, the parked frame is submitted again, with the retry bit, on a submission slot of its own beside the pending one's. That is a second `Pending`, a buffer counted in the bound, and its WP sequence matched as now.
+  - Its new try goes behind the frame behind it: one frame of reordering in the TID. TCP's three-duplicate threshold is not reached at a window of two.
+  - The other way is the hardware's own retries (the WD's TX count limit above SELECTED_LIMIT 1, for data queues only): no reordering, but the RPQ gives no try count. That is NET's to accept (`attempts` unknown).
+
 **2026-11-22, each send's time to its answer** (this branch; host cases, not run):
 - **Why:** an upload of 225 KB takes 5 to 8 s whether frames are parked or refused (boots 95 and 96). That is about 32 ms a full frame, sent one at a time. So what caps it may be the time a frame takes when it is in time, or the time before the next one comes. The driver did not log either.
 - **Four lines a minute:**
