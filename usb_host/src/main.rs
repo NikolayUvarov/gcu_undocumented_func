@@ -61,7 +61,13 @@ struct Controller {
 const MAX_RESTARTS: u8 = 8;
 const RESTARTS_APART_MS: u64 = 600_000;
 
-struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2], pending: [Option<Pending>; MAX_PENDING], deferred: u64, said_deferred: bool }
+struct Host { roots: &'static mut [Option<Controller>; XHCI_MAX], buffers: [Option<Mapping>; mind::usb::BADGES], scanned: u64, ehci: &'static mut [Option<ehci::Bus>; 2], pending: [Option<Pending>; MAX_PENDING], deferred: u64, said_deferred: bool, tally: Tally }
+
+// The bulk transfers answered from the loop in the minute so far, said once a minute when there were any (000-DRV-0101):
+// deferred, answered, answered not-found (device or controller gone), timed out, stopped for a client's new instance,
+// waited on for want of room, and the longest from its request to its answer; `since`: the minute's start (uptime ms).
+#[derive(Default)]
+struct Tally { deferred: u32, answered: u32, gone: u32, timed_out: u32, forgotten: u32, waited: u32, longest_ms: u64, since: u64 }
 
 // A client's bulk transfer on xHCI that did not end within BULK_SPIN_NS (000-DRV-0101): its answer deferred, so usb_host
 // serves its other clients meanwhile and answers from its loop. Which controller (and its set-up's generation), device
@@ -646,9 +652,10 @@ impl Host {
         }
         let free = self.pending.iter().position(Option::is_none);
         match (free, call.defer()) {
-            (Some(at), Ok(())) => { p.call = Some(call); self.pending[at] = Some(p); self.deferred += 1; }
+            (Some(at), Ok(())) => { p.call = Some(call); self.pending[at] = Some(p); self.deferred += 1; self.tally.deferred += 1; }
             // No room to defer it: waited on, as before.
             _ => {
+                self.tally.waited += 1;
                 let r = loop {
                     if !p.started { break Err(Error::Other(mind::abi::ERR_BUSY)); }
                     let done = self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, BULK_TIMEOUT_MS * 1_000_000));
@@ -746,6 +753,7 @@ impl Host {
                 // Its controller was set up again or its device went: the pages went with them, or go back here.
                 if let Some(root) = self.roots.get_mut(p.c).and_then(Option::as_mut).filter(|r| r.generation == p.generation) { if let Some(page) = p.page { root.xhci.release(page); } }
                 answer(&mut p, Err(Error::NotFound));
+                self.tally.gone += 1;
                 continue;
             }
             if !p.started { self.place(&mut p); if !p.started { self.pending[at] = Some(p); continue; } }
@@ -757,8 +765,10 @@ impl Host {
                     // The first answered from the loop is said, with how long it took (000-DRV-0101).
                     if !self.said_deferred { self.said_deferred = true; mind::println!("[USB] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT {} ENDPOINT {:02X}, {} BYTES, {} MS (000-DRV-0101)", p.slot, p.address, p.length, (mind::time::uptime_ms() as u64).saturating_sub(p.since)); }
                     answer(&mut p, r);
+                    self.tally.answered += 1;
+                    self.tally.longest_ms = self.tally.longest_ms.max(waited);
                 }
-                (pending::Next::TimedOut, _) => { self.abandon(&p); answer(&mut p, Err(Error::Other(ERR_TIMEOUT))); }
+                (pending::Next::TimedOut, _) => { self.abandon(&p); answer(&mut p, Err(Error::Other(ERR_TIMEOUT))); self.tally.timed_out += 1; }
                 _ => self.pending[at] = Some(p),
             }
         }
@@ -771,7 +781,20 @@ impl Host {
             let Some(mut p) = self.pending[at].take() else { continue };
             self.abandon(&p);
             answer(&mut p, Err(Error::NotFound));
+            self.tally.forgotten += 1;
         }
+    }
+
+    // The minute's tally said when it held any, then begun again.
+    fn say_tally(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        if now.saturating_sub(self.tally.since) < 60_000 { return; }
+        let t = &self.tally;
+        if t.deferred + t.waited > 0 {
+            mind::println!("[USB] BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: {} DEFERRED, {} ANSWERED, {} NOT FOUND, {} TIMED OUT, {} STOPPED, {} WAITED ON; THE LONGEST {} MS (000-DRV-0101)",
+                t.deferred, t.answered, t.gone, t.timed_out, t.forgotten, t.waited, t.longest_ms);
+        }
+        self.tally = Tally { since: now, ..Tally::default() };
     }
     fn pending_bulks(&self) -> bool { self.pending.iter().any(Option::is_some) }
 
@@ -1083,7 +1106,7 @@ fn main(_info: &'static BootInfo) {
         };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
-    let mut host = Host { roots, buffers: core::array::from_fn(|_| None), scanned: 0, ehci: buses, pending: [const { None }; MAX_PENDING], deferred: 0, said_deferred: false };
+    let mut host = Host { roots, buffers: core::array::from_fn(|_| None), scanned: 0, ehci: buses, pending: [const { None }; MAX_PENDING], deferred: 0, said_deferred: false, tally: Tally::default() };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     for root in host.roots.iter_mut().flatten() { root.scan(); }
@@ -1096,8 +1119,9 @@ fn main(_info: &'static BootInfo) {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait);
         // A bulk stream's finished transfers go into its spill and their TDs back on the ring (158-DRV-0082).
         for root in host.roots.iter_mut().flatten() { root.xhci.pump(); if streaming { root.xhci.spill_streams(); root.xhci.watch_streams(); } }
-        // The deferred bulk transfers that ended are answered (000-DRV-0101).
+        // The deferred bulk transfers that ended are answered, and their minute's tally said (000-DRV-0101).
         if host.pending_bulks() { host.bulks(); }
+        host.say_tally();
         // A controller that stopped with an error is set up again, its devices found anew by the next scan, and it takes
         // no stream from then on: its other devices (the link's converter on the Ryzen) come back (000-DRV-0073). So is
         // one that left a command unanswered, the device it stopped at left alone (000-DRV-0075): the boot stick and
