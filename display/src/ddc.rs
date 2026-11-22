@@ -239,20 +239,14 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         self.update(DcI2cControl, 0, &[(SW_STATUS_RESET, 1)], true)?;
         self.update(DcI2cDdc1Setup, 0, &[(DATA_DRIVE_EN, 0), (CLK_DRIVE_EN, 0), (DATA_DRIVE_SEL, 0), (INTRA_TRANSACTION_DELAY, 0), (INTRA_BYTE_DELAY, 0)], true)?;
         self.update(DcI2cControl, 0, &[(SOFT_RESET, 0), (SW_STATUS_RESET, 0), (SEND_RESET, 0), (GO, 0), (TRANSACTION_COUNT, 1)], true)?;
-        self.update(DcI2cControl, 0, &[(GO, 1)], true)?;
-        let start = self.e.now_us();
-        let status = loop {
-            let s = self.read(DcI2cSwStatus, 0)?;
-            if STATUS.get(s) != USED_BY_SW { break s; }
-            if self.e.now_us().saturating_sub(start) > WAIT_LIMIT_US { return Err(Failure::NoAnswer { block, status: s }); }
-            self.e.delay_us(POLL_US);
-        };
-        let us = self.e.now_us().saturating_sub(start);
+        // GO: the clock taken right after its write and the status polled at once; the write logged after the transfer,
+        // so that no log line lies between GO and the first read of the status (boot 78 measured the poll only).
+        let (status, us, polls) = self.go(block)?;
         if status & SW_STOPPED_ON_NACK != 0 { return Err(Failure::Nack { block, status }); }
         if status & SW_TIMEOUT != 0 { return Err(Failure::Timeout { block, status }); }
         if status & SW_ABORTED != 0 { return Err(Failure::Aborted { block, status }); }
-        self.out.line(format_args!("D BLOCK {}: THE TRANSFER ENDED IN {} US, SW STATUS {:08X}{}", block, us, status,
-            if status & SW_DONE != 0 { " (DONE)" } else { "" }));
+        self.out.line(format_args!("D BLOCK {}: FROM GO TO THE TRANSFER'S END {} US, OVER {} READS OF THE STATUS {} US APART; SW STATUS {:08X}{}",
+            block, us, polls, POLL_US, status, if status & SW_DONE != 0 { " (DONE)" } else { "" }));
         // The reply after the three bytes written: both addresses and the offset.
         self.buffer((3 << INDEX.shift) | DATA_RW | INDEX_WRITE)?;
         for b in bytes.iter_mut() { *b = DATA.get(self.read(DcI2cData, 0)?) as u8; }
@@ -260,6 +254,33 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         if sum != 0 { return Err(Failure::Checksum { block }); }
         self.out.line(format_args!("D BLOCK {}: {} BYTES READ, CHECKSUM GOOD", block, BLOCK));
         Ok(())
+    }
+
+    // DC_I2C_GO written and the status polled until the engine no longer has the transfer: (status, us from GO, reads).
+    fn go(&mut self, block: u8) -> Result<(u32, u64, u32), Failure> {
+        let x = at(R::DcI2cControl, 0);
+        let w = ddc_writable(x).map_err(|_| Failure::Refused(x.offset()))?;
+        let old = self.read(R::DcI2cControl, 0)?;
+        let v = (old & !GO.mask()) | GO.mask();
+        if self.len == MAX_WRITES { return Err(Failure::JournalFull); }
+        self.journal[self.len] = Some((w, old, true));
+        self.len += 1;
+        self.e.write(w, v);
+        let start = self.e.now_us();
+        let mut polls = 0;
+        let result = loop {
+            let s = self.read(R::DcI2cSwStatus, 0);
+            polls += 1;
+            match s {
+                Ok(s) if STATUS.get(s) != USED_BY_SW => break Ok(s),
+                Ok(s) if self.e.now_us().saturating_sub(start) > WAIT_LIMIT_US => break Err(Failure::NoAnswer { block, status: s }),
+                Ok(_) => self.e.delay_us(POLL_US),
+                Err(why) => break Err(why),
+            }
+        };
+        let us = self.e.now_us().saturating_sub(start);
+        self.out.line(format_args!("D WROTE {} = {:08X} (WAS {:08X}), LOGGED AFTER THE TRANSFER", Name(x), v, old));
+        result.map(|s| (s, us, polls))
     }
 
     // release_engine, then every register written put back, last first; then each checked against batch 11.

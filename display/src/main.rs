@@ -32,6 +32,10 @@ const STAGES_ALLOWED: u8 = 0;
 /// batch 11 found it; its result is logged only, and its failure leaves steps 3 and 4 as they are. Needs
 /// BATCHES_ALLOWED 11. Set on the DRV owner session's word.
 const EDID_ALLOWED: bool = false;
+/// When true, steps 3 and 4 light HDMI-A-1 in HDMI signalling (213-DRV-0095): table 4 and 76 in HDMI mode, the HDMI
+/// engine, its general control packet and an AVI infoframe; the mode stays 1920x1080 (VIC 16). Set on the DRV owner
+/// session's word.
+const HDMI_SIGNALLING: bool = false;
 /// When true, the stages that ran are undone, last first, before display idles: the undo is seen on the hardware and
 /// nothing is left for the next boot. Set on the DRV owner session's word, with STAGES_ALLOWED.
 const UNDO_AFTER_STAGES: bool = false;
@@ -132,7 +136,8 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usi
         Err(why) if STAGES_ALLOWED == 0 => { mind::println!("[DISPLAY] STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why); (light::EXPECTED, true) }
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
-    let plan = match light::Light::new(found.0, found.1, timing) {
+    let signal = if HDMI_SIGNALLING { dcn::Signal::Hdmi } else { dcn::Signal::Dvi };
+    let plan = match light::Light::new_with(found.0, found.1, timing, signal) {
         Ok(plan) => plan.with_reference(light::reference(store, &found.0, &found.1)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
