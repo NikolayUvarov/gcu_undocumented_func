@@ -264,7 +264,7 @@ impl Model {
                 Step::Wait { reg, mask, value, .. } => assert_eq!(self.read(reg) & mask, value, "wait {} never ends at {:x}", i, reg.offset()),
                 Step::Call(t) => self.tables.push((i, t)),
                 Step::Frames { otg, .. } => assert_eq!(self.read(R::OtgControl.at(otg).unwrap()) & 1, 1, "frames waited for on a stopped generator"),
-                Step::Reference | Step::Draw | Step::Late | Step::NoUnderflow | Step::ReadBack { .. } | Step::Begin(_) => {} // step 4's, after first light's plan
+                Step::Reference | Step::Draw | Step::Late | Step::NoUnderflow | Step::ReadBack { .. } | Step::Watch { .. } | Step::Begin(_) => {} // step 4's, after first light's plan
             }
         }
     }

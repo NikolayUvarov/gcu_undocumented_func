@@ -141,7 +141,7 @@ fn firmware_known() -> Known { Known { hubp_powered: Some([true; 4]), running_ot
 #[test]
 fn the_batches_are_the_proposal_and_stay_in_the_engine() {
     let counts: Vec<usize> = (1..=BATCHES).map(|b| plan(b, &firmware_known()).len()).collect();
-    assert_eq!(counts, vec![10, 76, 8, 20, 13, 6, 14, 31, 43, 68]);
+    assert_eq!(counts, vec![10, 76, 8, 20, 13, 6, 14, 31, 44, 68]);
     // Batches 9 and 10 only once batches 2 and 4 named the firmware's pipe.
     assert!(plan(9, &all_powered()).is_empty() && plan(10, &all_powered()).is_empty());
     for b in 1..=BATCHES {
@@ -174,7 +174,7 @@ fn a_build_that_may_read_nothing_reads_nothing_and_names_every_batch() {
     assert!(l[0].contains("THIS BUILD MAY READ 0"));
     for b in 1..=BATCHES { assert!(l.iter().any(|x| x.starts_with(&format!("B{} ", b)) && x.contains("NOT READ")), "batch {}", b); }
     let would = |b: u8| l.iter().filter(|x| x.starts_with(&format!("B{} WOULD READ ", b))).count();
-    assert_eq!((1..=BATCHES).map(would).collect::<Vec<_>>(), vec![10, 76, 8, 20, 13, 6, 14, 31, 43, 68]);
+    assert_eq!((1..=BATCHES).map(would).collect::<Vec<_>>(), vec![10, 76, 8, 20, 13, 6, 14, 31, 44, 68]);
     assert!(l.iter().any(|x| x.starts_with("B4 HUBP: NOT READ") && x.contains("ONLY FOR EACH HUBP n THAT B3 SHOWS POWERED")));
     assert!(l.last().unwrap().starts_with("STEP 1 DONE: 0 OF 10 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN"));
     assert!(!events.iter().any(|e| matches!(e, Event::Pause(_))));

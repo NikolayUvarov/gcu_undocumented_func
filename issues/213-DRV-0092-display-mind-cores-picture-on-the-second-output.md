@@ -94,9 +94,9 @@ logged in full before its first write:
 |---|---|
 | 11 | DPP1's and HUBP1's clock enables |
 | 12 | DPP1's format, colour stages and scaler as the firmware DPP's; recout and MPC size 1920x1080 |
-| 13 | HUBP1, still blanked: the surface at FB base + 0x1000000, pitch field 1919, viewport 1920x1080, the requestor, VM aperture, prefetch, QoS and cursor settings as the firmware HUBP's; DLG and TTU from stage 9; VREADY as the firmware's. The log gives the pitch field written and the firmware's, and the pitch register read back just after its write |
+| 13 | HUBP1, still blanked: the surface at FB base + 0x1000000, pitch field 1919, viewport 1920x1080, the requestor, VM aperture, prefetch, QoS and cursor settings as the firmware HUBP's; DLG and TTU from stage 9; VREADY as the firmware's. The log gives the pitch field written and the firmware's, and the pitch register read back just after its write; since boot 74 also, first, OTG1's global sync for a plane (VUPDATE offset and width, VREADY offset), then two frames; the QoS as Display Core's (level 8, high watermark four lines); `HUBPREQ_DEBUG_DB` = 0x100 (the DLG's test mode off) and VREADY after the sync by `hubp2_vready_at_or_After_vsync`'s rule |
 | 14 | MPCC1 from DPP1 to OPP1 (bottom none, the firmware MPCC's blending); `MPC_OUT1_MUX` to MPCC1 |
-| 15 | HUBP1 unblanked; three frames; no new underflow on either pipe; the pattern off; three frames; no new underflow. An underflow puts stage 15's writes back at once (the pattern on, then HUBP1's CNTL as stage 13 left it) before any line is logged, then undoes 14 to 1 |
+| 15 | HUBP1 unblanked; three frames; no new underflow or request timeout on either pipe; the pattern off; then the watch: 300 frames of OTG1 read one by one without sleeping, both pipes' HUBP and ODM statuses at each. The firmware's showing anything new puts stage 15 back at once; pipe 1's are kept by frame, cleared and watched on, and after the watch fail the stage, put back at once (the pattern on, then HUBP1's CNTL as stage 13 left it), then 14 to 1 |
 
 - **The guard** lets pipe 1's HUBP, DPP, MPCC and output mux through only from stage 11. First light's stages and their
   tables cannot reach them, and pipe 0's blocks stay refused.
@@ -106,7 +106,7 @@ logged in full before its first write:
   - DSCL's own blank timing, which Linux's bypass path leaves alone too.
 - **Copied rather than computed:** the prefetch, VM-row, QoS and cursor values. They were set for the firmware's larger
   mode, which leaves pipe 1 more time, not less. A mistake shows as an underflow, which fails stage 15 and undoes it.
-- **Host cases** (`display_light_host.rs`, 28; `display_picture_host.rs`, 4; batches, 11):
+- **Host cases** (`display_light_host.rs`, 29; `display_picture_host.rs`, 4; batches, 11):
   - all fifteen stages on the model, with the registers written and copied, and the guard by stage;
   - the undo of all fifteen;
   - an underflow at stage 15, a busy MPCC, stage 9 without a reference, stage 10 without a surface;
@@ -193,6 +193,99 @@ interface.
     - a dark panel with the four lines in yellow.
   - **An underflow:** HUBP1 is blanked again behind the pattern at once. Everything is then undone, and HDMI-A-1 goes
     dark.
+
+**Boot 73 (2026-11-22, release 202611220637, switches 10/14/false): stages 11 to 14 went through.**
+- **The writes:** each stage was logged and done, with the firmware's pipe unchanged:
+  - `S11 PIPE CLOCKS DONE` at 102.1 s;
+  - `S12 DPP DONE` at 106.9 s;
+  - `S13 HUBP DONE` at 112.6 s, after `S13 READ BACK HUBPREQ1_DCSURF_SURFACE_PITCH AT 0EE8C = 0000077F, AS WRITTEN: FIELD 1919`;
+  - `S14 MPC DONE` at 116.9 s.
+- **The stop:** step 3 stopped after stage 14 with its 156 writes left in place. The squares stayed on HDMI-A-1.
+
+**Boot 74 (2026-11-22, release 202611220644, switches 10/15/false): stage 15 met an underflow.**
+- **What the log shows:**
+
+  ```
+  121.093 S15 WROTE HUBP1_DCHUBP_CNTL AT 0EE3C = 000F001A (WAS 000F001B)
+  121.148 S15 OTG1 COUNTED 3 FRAMES IN 34 MS
+  121.181 S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP1 AND ODM1
+  121.201 S15 WROTE DPG1_DPG_CONTROL AT 135B8 = 00661000 (WAS 00661001)
+  121.899 S15 OTG1 COUNTED 41 FRAMES IN 676 MS
+  121.982 S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C (102F0012); ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING STAGES 14 TO 1
+  ```
+- **What came after:** the two writes were put back before the line (121.919 and 121.940), then stages 14 to 1 were undone. HDMI-A-1 went dark, and DP-2's pipe stayed unchanged.
+- **HUBP1's CNTL, 000F001A to 102F0012, field by field** (`dcn_2_1_0_sh_mask.h`):
+
+  | Field | 000F001A | 102F0012 |
+  |---|---|---|
+  | `HUBP_BLANK_EN` (0) | 0 | 0 |
+  | `HUBP_NO_OUTSTANDING_REQ` (1) | 1 | 1 |
+  | `HUBP_IN_BLANK` (3) | 1 | **0** |
+  | `HUBP_VTG_SEL` (7:4) | 1 | 1 |
+  | `HUBP_VREADY_AT_OR_AFTER_VSYNC` (8) | 0 | 0 |
+  | `HUBP_TTU_DISABLE` (12) | 0 | 0 |
+  | `HUBP_XRQ_NO_OUTSTANDING_REQ` (19:16) | F | F |
+  | `HUBP_TIMEOUT_STATUS` (23:20) | 0 | **2** |
+  | `HUBP_UNDERFLOW_STATUS` (30:28) | 0 | **1** |
+
+  The fields mean the following:
+  - `IN_BLANK` fell: the pipe left blank, as unblanking it should.
+  - `UNDERFLOW_STATUS` rose: a sticky record of an underflow.
+  - `TIMEOUT_STATUS` rose to 2, so a request timed out. Display Core never reads it.
+  - At the read, no request was outstanding, as the two "no outstanding" fields show.
+  - The firmware's HUBP0 (000F000A) had neither status.
+- **The reading: a real underflow, not a side effect of the unblank.**
+  - Linux clears a HUBP's underflow only in `dcn10_did_underflow_occur`, a check helper, and an OPTC's only in DCN 1.0's
+    `false_optc_underflow_wa`. Neither runs when a plane is enabled (`dcn10_hwseq.c`, `dcn20_hwseq.c`, Linux v7.0).
+  - The three frames behind the pattern showed nothing. The status rose once the pattern stopped hiding the pipe, and it
+    came with a timeout.
+- **The 41 frames:** they were 676 ms at the firmware's 60 Hz (41 frames take about 683 ms). The frame wait sleeps 1 ms
+  between reads (`delay_us` → `mind::time::sleep`). Its first sleep after the pattern went off came back after 676 ms,
+  and no other task logged meanwhile. So the status was read once, after those frames, and the frame it rose in is not
+  known.
+
+**What stage 13 did not program as Display Core does for a pipe going live** (`dcn20_program_pipe`,
+`dcn20_program_tg`, `dcn20_enable_plane`, `dcn20_update_dchubp_dpp`, `hubp21_setup`, `hubp2_setup_interdependent`,
+`hubp2_vready_at_or_After_vsync`, `display_rq_dlg_calc_21.c`; Linux v7.0):
+
+| What | Display Core | Stage 13 (boot 74) | Since this commit |
+|---|---|---|---|
+| OTG1's global sync | `program_global_sync` with DML's values when the plane is added, then `set_vtg_params` | first light's, for no plane: VSTARTUP 36, VUPDATE offset 0 width 1, VREADY 1 | VUPDATE offset 550 (a quarter line, DML's `VUpdateOffsetPix`), width 177 and VREADY 166 (the firmware's 320 and 300 at 268.5 MHz, the same times at 148.5); VSTARTUP kept |
+| `HUBP_VREADY_AT_OR_AFTER_VSYNC` | 1 when VSTARTUP − (VREADY + VUPDATE width + offset) / htotal ≤ the blank's end: 1 here | 0, the firmware's | 1, by that rule |
+| `HUBPREQ_DEBUG_DB` | 0x100 ("disable_dlg_test_mode") before every setup | not written | 0x100; batch 9 reads the firmware's |
+| `QoS_LEVEL_FIXED` (surface, cursor) | 8, ramp on | 0: only `REFCYC_PER_REQ_DELIVERY` was written over HUBP1's 0 | 8; the firmware's pipe has 8 |
+| `QoS_LEVEL_HIGH_WM` | 4 × htotal × ref/pix: 2844 at 48 MHz | 1682, pipe 0's | 2844; low watermark 0 |
+| `MIN_TTU_VBLANK`, prefetch, VBLANK parameters, `DST_AFTER_SCALER` | from DML for the mode and VSTARTUP | the firmware's pipe's | unchanged: DML is not ported; the firmware's VSTARTUP is 13, pipe 1's 36 lines leave more time |
+| Line and request delivery | Display Core's (620, 21183) | Display Core's | unchanged; the firmware's own pipe has 0 for both (no deadline) |
+| Watermarks A to D, arbiter, `DRAM_STATE_CNTL` | recomputed for both pipes | the firmware's, one set for all: urgent 510, SR enter 1210, SR exit 1060, DRAM 2210; self-refresh forced off (2) | unchanged |
+| DPP clock DTO for DPP1 | set to the pipe's DPPCLK | disabled: the full global DPPCLK | unchanged (more clock, not less) |
+| `DCN_VM_MX_L1_TLB_CNTL` | L1 TLB on, `SYSTEM_ACCESS_MODE` 3 | 0, the firmware's | unchanged: the firmware's pipe scans with 0 |
+| SMU: hard minimum DCFCLK, deep-sleep DCFCLK, display count | sent for two displays | as the firmware left them, for one | unchanged: step 4 does not talk to the SMU |
+
+- **The watch** (stage 15 since this commit): after the pattern goes off, 300 frames of OTG1 (5 s), read one by one
+  without sleeping.
+  - Each new frame reads HUBP0, ODM0, HUBP1 and ODM1.
+  - The firmware's pipe showing a new underflow or timeout puts stage 15 back at once.
+  - Pipe 1's are kept by frame and cleared: `HUBP_UNDERFLOW_CLEAR`, `HUBP_TIMEOUT_STATUS_CLEAR` and
+    `OPTC_UNDERFLOW_CLEAR`, each written 1 then 0, over the register's own bits without its read-only statuses.
+  - After the watch, any of pipe 1's fails the stage, which is put back at once and then undone whole.
+  - The log names:
+    - the frames that passed between two reads;
+    - the longest gap between reads, and the frame it came before;
+    - the first frame of each status, and how many frames had it;
+    - all 300 frames, 60 a line: `.` none, `U` underflow, `T` timeout, `B` both, `O` ODM, `X` ODM and HUBP, `-` not
+      read.
+- **Host cases** (`display_light_host.rs`, 29): boot 70's values with the new stage 13 writes, and the watch:
+  - clean, 300 frames;
+  - a one-off underflow some 17 frames in, kept at its frame, the stage failing after the full watch;
+  - an underflow that comes back each frame;
+  - the firmware's HUBP underflowing during the watch, put back at once;
+  - a request timeout;
+  - a 676 ms stall of display, shown as 40 frames not read.
+- **Not shown:**
+  - which of the differences caused boot 74's underflow: only the next run can tell;
+  - DML's prefetch values for pipe 1;
+  - the SMU's view of two displays.
 
 ## Acceptance criteria
 

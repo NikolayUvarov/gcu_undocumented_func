@@ -169,6 +169,7 @@ pub fn plan(batch: u8, known: &Known) -> List {
 fn reference_hubp(list: &mut List, p: u8, t: u8) {
     for r in HUBP_REFERENCE { list.push(r, p); }
     for r in [R::OtgVstartupParam, R::OtgVupdateParam, R::OtgVreadyParam] { list.push(r, t); }
+    list.push(R::HubpreqDebugDb, p);
 }
 
 fn path_and_shared(list: &mut List, p: u8) {

@@ -61,6 +61,11 @@ pub struct Reference {
     pub refclk_cntl: u32, pub timer_cntl: u32,
     /// The firmware's HUBP's HUBP_VREADY_AT_OR_AFTER_VSYNC (its DCHUBP_CNTL, batch 4).
     pub vready: u32,
+    /// The firmware's OTG's global sync (OTG_VSTARTUP_PARAM, OTG_VUPDATE_PARAM, OTG_VREADY_PARAM) and its HUBP's
+    /// HUBPREQ_DEBUG_DB, batch 9.
+    pub sync: [u32; 3], pub debug_db: u32,
+    /// Its requests' QoS level (DCN_SURF0_TTU_CNTL0's QoS_LEVEL_FIXED).
+    pub qos_level: u32,
     /// The firmware's pipe's registers stage 12 to 14 copy, in `COPIED`'s order.
     pub copies: [u32; COPIED.len()],
 }
@@ -97,6 +102,8 @@ pub fn reference(s: &Store, f: &Firmware, c: &Choice) -> Option<Reference> {
         firmware_mux: sel(R::MpcOutMux, f.opp)?, firmware_bot: sel(R::MpccBotSel, pipe)?,
         refclk_cntl: s.get(R::RefclkCntl, 0)?, timer_cntl: s.get(R::DchubbubGlobalTimerCntl, 0)?,
         copies, vready: s.field(R::HubpCntl, pipe, HUBP_VREADY_AT_OR_AFTER_VSYNC)?,
+        sync: [s.get(R::OtgVstartupParam, t)?, s.get(R::OtgVupdateParam, t)?, s.get(R::OtgVreadyParam, t)?],
+        debug_db: s.get(R::HubpreqDebugDb, pipe)?, qos_level: s.field(R::HubpreqSurf0TtuCntl0, pipe, QOS_LEVEL_FIXED)?,
         pipe, otg: t,
         h_total: s.field(R::OtgHTotal, t, COUNTER_LOW)?, v_total: s.field(R::OtgVTotal, t, COUNTER_LOW)?,
         h_blank_end: s.field(R::OtgHBlankStartEnd, t, COUNTER_HIGH)?, v_blank_end: s.field(R::OtgVBlankStartEnd, t, COUNTER_HIGH)?,
@@ -122,7 +129,19 @@ pub struct Derived {
     pub min_dst_y_next_start: u32, pub line_delivery_pre: u32, pub req_delivery_pre: u32,
     /// The underflow statuses as stage 9 found them: HUBP and ODM of the firmware's pipe, then of pipe 1.
     pub underflow: [u32; 4],
+    /// Pipe 1's OTG's global sync for its plane (VUPDATE's offset and width, VREADY's offset, in pixels), the HUBP's
+    /// HUBP_VREADY_AT_OR_AFTER_VSYNC by hubp2_vready_at_or_After_vsync's rule, and its QoS high watermark.
+    pub vupdate_offset: u32, pub vupdate_width: u32, pub vready_offset: u32, pub vready_after_vsync: u32, pub qos_high_wm: u32,
 }
+
+/// What hubp2_vready_at_or_After_vsync writes to HUBPREQ_DEBUG_DB before each setup: "disable_dlg_test_mode", bit 8 set.
+pub const DLG_TEST_MODE_OFF: u32 = 1 << 8;
+/// Display Core's QoS level for a plane's and the cursor's requests (dml21's qos_level_fixed_l and _cur0).
+pub const QOS_LEVEL: u32 = 8;
+/// Stage 15's watch with the pattern off, in OTG1's frames: five seconds at 60 Hz.
+pub const WATCH_FRAMES: u32 = 300;
+/// The watch's mark for a frame that passed between two reads.
+const SKIPPED: u8 = 0x80;
 
 /// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
 pub const SURFACE_OFFSET: u64 = 0x0100_0000;
@@ -514,6 +533,8 @@ impl Light {
                 n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
             Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
+            Step::Watch { frames } => out.line(format_args!("S{} {} WATCH {} FRAMES OF OTG{} WITH THE PATTERN OFF, READING WITHOUT SLEEP: AT EACH FRAME BOTH PIPES' HUBP AND ODM; THE FIRMWARE'S UNDERFLOWING OR TIMING OUT UNDOES AT ONCE; PIPE {}'S KEPT BY FRAME, CLEARED AND WATCHED ON, THEN FAIL THE STAGE",
+                n, verb, frames, self.choice.pipe.otg, self.choice.pipe.otg)),
             Step::Late | Step::Begin(_) => {}
         }
     }
@@ -536,7 +557,7 @@ impl Light {
                     12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
                     13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, picture::PITCH - 1)),
                     14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
-                    _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF; NO NEW UNDERFLOW ON EITHER PIPE (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o)),
+                    _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, WATCH_FRAMES)),
                 }
             }
             _ => for step in self.stage(n) { self.step_line(n, verb, step, out); },
@@ -580,6 +601,8 @@ pub enum Failure {
     PlanFull,
     /// An underflow, new since stage 9, at this HUBP's or ODM's register.
     Underflow { offset: u32, value: u32 },
+    /// A request timed out at this HUBP (its HUBP_TIMEOUT_STATUS new since stage 9).
+    RequestTimeout { offset: u32, value: u32 },
     /// Stage 10: the surface is not mapped, or a sample read back differs from what was drawn.
     NoSurface,
     SurfaceDiffers { x: u32, y: u32 },
@@ -614,6 +637,7 @@ impl fmt::Display for Failure {
             Failure::OutputMuxInUse { opp, mux } => write!(f, "OPP{}'S OUTPUT MUX NAMES MPCC {:X} (ITS OWN OR 15 WANTED)", opp, mux),
             Failure::PlanFull => f.write_str("STAGES 11 TO 15 DO NOT FIT A PLAN"),
             Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
+            Failure::RequestTimeout { offset, value } => write!(f, "A REQUEST TIMEOUT AT {:05X} ({:08X})", offset, value),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
@@ -744,13 +768,93 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                     let x = reg.at(inst).ok_or(Failure::NoReference)?;
                     let v = read(e, x)?;
                     if field.get(v) & !field.get(d.underflow[i]) != 0 { return Err(Failure::Underflow { offset: x.offset(), value: v }); }
+                    if reg == R::HubpCntl && HUBP_TIMEOUT_STATUS.get(v) & !HUBP_TIMEOUT_STATUS.get(d.underflow[i]) != 0 { return Err(Failure::RequestTimeout { offset: x.offset(), value: v }); }
                 }
                 out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
+            }
+            Step::Watch { frames } => {
+                let d = derived.as_ref().ok_or(Failure::NoReference)?;
+                watch(light, e, n, frames, d, out)?;
             }
             Step::Late | Step::Begin(_) => {}
         }
     }
     Ok(())
+}
+
+/// Stage 15's watch with the pattern off: OTG1's frame count read without sleeping, both pipes' HUBP and ODM statuses at
+/// each new frame. The firmware's showing an underflow or a timeout fails at once; pipe 1's are kept by frame, cleared
+/// (HUBP_UNDERFLOW_CLEAR, HUBP_TIMEOUT_STATUS_CLEAR, OPTC_UNDERFLOW_CLEAR: one, then zero) and watched on, and after the
+/// watch fail the stage. Then the frames are logged, sixty a line.
+fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, out: &mut dyn Out) -> Result<(), Failure> {
+    let r = light.reference.ok_or(Failure::NoReference)?;
+    let q = light.choice.pipe.otg;
+    let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference);
+    let (count, h0, o0, h1, o1) = (at(R::OtgStatusFrameCount, q)?, at(R::HubpCntl, r.pipe)?, at(R::OptcInputGlobalControl, r.otg)?,
+                                   at(R::HubpCntl, q)?, at(R::OptcInputGlobalControl, q)?);
+    let hubp_clear = light.guard.check_at(h1, n).map_err(Failure::Refused)?;
+    let odm_clear = light.guard.check_at(o1, n).ok();
+    let new = |field: dcn::Field, v: u32, was: u32| field.get(v) & !field.get(was) != 0;
+    let clears = HUBP_UNDERFLOW_CLEAR.mask() | HUBP_TIMEOUT_STATUS_CLEAR.mask();
+    // The clears are written over the registers' own bits, their read-only statuses left out (dcn_2_1_0_sh_mask.h).
+    const HUBP_STATUSES: u32 = 0x70FF_000A; // NO_OUTSTANDING_REQ, IN_BLANK, XRQ_NO_OUTSTANDING_REQ, TIMEOUT_STATUS, UNDERFLOW_STATUS
+    const ODM_STATUSES: u32 = 0x8000_2C00; // UNDERFLOW_OCCURRED_STATUS, _INT_STATUS, _OCCURRED_CURRENT, DOUBLE_BUFFER_PENDING
+    let frames = frames.min(WATCH_FRAMES);
+    let mut marks = [0u8; WATCH_FRAMES as usize];
+    let first = read(e, count)? & 0xFF_FFFF;
+    let start = e.now_us();
+    let (mut seen, mut last, mut gap, mut gap_at, mut skipped, mut cleared) = (0u32, start, 0u64, 0u32, 0u32, 0u32);
+    let mut found: Option<(u32, Failure)> = None;
+    let limit = frames as u64 * 20_000 + 200_000;
+    while seen < frames {
+        let now = e.now_us();
+        if now.saturating_sub(start) > limit { return Err(Failure::NoFrames(seen)); }
+        if now.saturating_sub(last) > gap { (gap, gap_at) = (now - last, seen + 1); }
+        last = now;
+        let c = (read(e, count)?.wrapping_sub(first) & 0xFF_FFFF).min(frames);
+        if c <= seen { continue; }
+        let (v0, w0, v1, w1) = (read(e, h0)?, read(e, o0)?, read(e, h1)?, read(e, o1)?);
+        // The firmware's pipe: at once.
+        if new(HUBP_UNDERFLOW_STATUS, v0, d.underflow[0]) { return Err(Failure::Underflow { offset: h0.offset(), value: v0 }); }
+        if new(HUBP_TIMEOUT_STATUS, v0, d.underflow[0]) { return Err(Failure::RequestTimeout { offset: h0.offset(), value: v0 }); }
+        if new(OPTC_UNDERFLOW_OCCURRED_STATUS, w0, d.underflow[1]) { return Err(Failure::Underflow { offset: o0.offset(), value: w0 }); }
+        let (u1, t1, od1) = (new(HUBP_UNDERFLOW_STATUS, v1, d.underflow[2]), new(HUBP_TIMEOUT_STATUS, v1, d.underflow[2]),
+                             new(OPTC_UNDERFLOW_OCCURRED_STATUS, w1, d.underflow[3]));
+        for f in seen..c - 1 { marks[f as usize] = SKIPPED; skipped += 1; }
+        marks[c as usize - 1] = u1 as u8 | (t1 as u8) << 1 | (od1 as u8) << 2;
+        if found.is_none() {
+            if u1 { found = Some((c, Failure::Underflow { offset: h1.offset(), value: v1 })); }
+            else if t1 { found = Some((c, Failure::RequestTimeout { offset: h1.offset(), value: v1 })); }
+            else if od1 { found = Some((c, Failure::Underflow { offset: o1.offset(), value: w1 })); }
+        }
+        if u1 || t1 { let v = v1 & !HUBP_STATUSES & !clears; e.write(hubp_clear, v | clears); e.write(hubp_clear, v); cleared += 1; }
+        if let (true, Some(w)) = (od1, odm_clear) {
+            let v = w1 & !ODM_STATUSES & !OPTC_UNDERFLOW_CLEAR.mask();
+            e.write(w, v | OPTC_UNDERFLOW_CLEAR.mask());
+            e.write(w, v);
+            cleared += 1;
+        }
+        seen = c;
+    }
+    let us = e.now_us().saturating_sub(start).max(1);
+    let millihertz = frames as u64 * 1_000_000_000 / us;
+    out.line(format_args!("S{} WATCHED {} FRAMES OF OTG{} IN {} MS ({}.{:03} HZ) WITH THE PATTERN OFF: {} PASSED BETWEEN TWO READS; THE LONGEST GAP BETWEEN READS {} US, BEFORE FRAME {}",
+        n, frames, q, us / 1000, millihertz / 1000, millihertz % 1000, skipped, gap, gap_at));
+    let marked = &marks[..frames as usize];
+    let with = |bit: u8| marked.iter().filter(|&&m| m != SKIPPED && m & bit != 0).count();
+    match &found {
+        Some((f, why)) => out.line(format_args!("S{} HUBP{}: UNDERFLOW IN {} FRAMES, REQUEST TIMEOUT IN {}; ODM{} UNDERFLOW IN {}; THE FIRST AT FRAME {} (ABOUT {} MS AFTER THE PATTERN WENT OFF): {}; CLEARED {} TIMES",
+            n, q, with(1), with(2), q, with(4), f, *f as u64 * us / frames as u64 / 1000, why, cleared)),
+        None => out.line(format_args!("S{} NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN {} FRAMES", n, frames)),
+    }
+    for (i, chunk) in marked.chunks(60).enumerate() {
+        let mut line = [b'.'; 60];
+        for (c, &m) in line.iter_mut().zip(chunk) {
+            *c = if m == SKIPPED { b'-' } else { match m & 7 { 0 => b'.', 1 => b'U', 2 => b'T', 3 => b'B', 4 => b'O', _ => b'X' } };
+        }
+        out.line(format_args!("S{} FRAMES {:3} TO {:3}: {}", n, i * 60 + 1, i * 60 + chunk.len(), core::str::from_utf8(&line[..chunk.len()]).unwrap_or("")));
+    }
+    match found { Some((_, why)) => Err(why), None => Ok(()) }
 }
 
 /// Which path a table took through PHY A's control register bus: for table 12, whether the PHY was set up already (its
@@ -838,7 +942,17 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let status = |e: &mut E, reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference).and_then(|x| read(e, x));
     let underflow = [status(e, R::HubpCntl, r.pipe)?, status(e, R::OptcInputGlobalControl, r.otg)?, status(e, R::HubpCntl, q)?,
                      status(e, R::OptcInputGlobalControl, q)?];
+    // Pipe 1's global sync for its plane, as dcn20_program_tg writes DML's before the plane goes live: VSTARTUP stage
+    // 3's; VUPDATE's offset a quarter line (DML's VUpdateOffsetPix); its width and VREADY's offset the firmware's times
+    // (DCFCLK deep sleep and DPPCLK cycles, clocks both pipes share) at pipe 1's pixel clock, rounded up.
+    let (fw_width, fw_vready) = (VUPDATE_WIDTH.get(r.sync[1]), VREADY_OFFSET.get(r.sync[2]));
+    let at_pix1 = |x: u32| (x as u64 * pix1).div_ceil(pixel_khz.max(1) as u64).max(1) as u32;
+    let vstartup1 = dcn::vstartup(&otg);
+    let (vupdate_offset, vupdate_width, vready_offset) = ((h1 as u32).div_ceil(4), at_pix1(fw_width), at_pix1(fw_vready));
+    let vready_after_vsync = (vstartup1.saturating_sub((vready_offset + vupdate_width + vupdate_offset) / h1 as u32) <= otg.v_blank_end) as u32;
+    let qos_high_wm = refcyc(4 * h1).min(0x3FFF);
     let d = Derived {
+        vupdate_offset, vupdate_width, vready_offset, vready_after_vsync, qos_high_wm,
         firmware_pixel_khz: pixel_khz, reference_khz, ref_to_pix: ratio1 as u32, per_htotal: refcyc(h1 * 256),
         refcyc_h_blank_end: refcyc(otg.h_blank_end as u64), dlg_v_blank_end: otg.v_blank_end, line_delivery: line1,
         req_delivery: req1, min_dst_y_next_start: otg.v_blank_start * 4,
@@ -852,6 +966,12 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
         d.per_htotal, d.refcyc_h_blank_end, d.dlg_v_blank_end, d.line_delivery, d.req_delivery, requests1));
     out.line(format_args!("S{} PIPE {}: NEXT START {} (V_BLANK_START {} x 4), PREFETCH LINE {} REQ {}; UNDERFLOW STATUSES {:08X} {:08X} {:08X} {:08X}",
         n, q, d.min_dst_y_next_start, otg.v_blank_start, d.line_delivery_pre, d.req_delivery_pre, underflow[0], underflow[1], underflow[2], underflow[3]));
+    out.line(format_args!("S{} PIPE {}'S SYNC FOR ITS PLANE: VSTARTUP {} (STAGE 3'S), VUPDATE OFFSET {} WIDTH {}, VREADY {} (THE FIRMWARE'S OTG{}: VSTARTUP {}, VUPDATE {} WIDTH {}, VREADY {}); VREADY AT OR AFTER VSYNC {} (THE FIRMWARE'S HUBP {})",
+        n, q, vstartup1, d.vupdate_offset, d.vupdate_width, d.vready_offset, r.otg, VSTARTUP_START.get(r.sync[0]), VUPDATE_OFFSET.get(r.sync[1]), fw_width, fw_vready,
+        d.vready_after_vsync, r.vready));
+    out.line(format_args!("S{} PIPE {}'S QOS: LEVEL {} (THE FIRMWARE'S {}), HIGH WATERMARK {} (4 LINES; THE FIRMWARE'S {}); HUBPREQ_DEBUG_DB {:08X} (THE FIRMWARE'S {:08X})",
+        n, q, QOS_LEVEL, r.qos_level, d.qos_high_wm, QOS_LEVEL_HIGH_WM.get(copied(&r, R::HubpreqTtuQosWm)),
+        DLG_TEST_MODE_OFF, r.debug_db));
     Ok(d)
 }
 
@@ -885,13 +1005,22 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, DsclRecoutSize, q, &[(WHOLE, h << 16 | w)])?;
     put(&mut p, DsclMpcSize, q, &[(WHOLE, h << 16 | w)])?;
     mark(&mut p, 13)?;
+    // Its OTG's global sync for the plane first, as dcn20_program_tg; two frames for it to take.
+    put(&mut p, OtgVupdateParam, q, &[(VUPDATE_OFFSET, d.vupdate_offset), (VUPDATE_WIDTH, d.vupdate_width)])?;
+    put(&mut p, OtgVreadyParam, q, &[(VREADY_OFFSET, d.vready_offset)])?;
+    p.push(Step::Frames { otg: q, frames: 2, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
     for reg in [HubpSurfaceConfig, HubpTilingConfig, HubpReqSizeConfig, HubpReqSizeConfigC, HubpreqExpansionMode, HubpretControl,
                 HubpreqSurfaceControl, HubpreqFlipControl, HubpreqVmidSettings0, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh,
                 HubpreqVmMxL1TlbCntl, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0, HubpreqVblankParameters1,
-                HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqTtuQosWm, HubpreqGlobalTtuCntl,
-                HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqDstYDeltaDrqLimit] {
+                HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqGlobalTtuCntl,
+                HubpreqCur0TtuCntl1, HubpreqDstYDeltaDrqLimit] {
         put(&mut p, reg, q, &[(WHOLE, copied(r, reg))])?;
     }
+    // The QoS as Display Core's DLG sets it for every plane (display_rq_dlg_calc_21.c): level 8 with its ramp, the high
+    // watermark four lines.
+    put(&mut p, HubpreqTtuQosWm, q, &[(QOS_LEVEL_LOW_WM, 0), (QOS_LEVEL_HIGH_WM, d.qos_high_wm)])?;
+    put(&mut p, HubpreqCur0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, REFCYC_PER_REQ_DELIVERY.get(copied(r, HubpreqCur0TtuCntl0))),
+        (QOS_LEVEL_FIXED, QOS_LEVEL), (QOS_RAMP_DISABLE, 0)])?;
     let surface = r.fb_base + SURFACE_OFFSET;
     put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, picture::PITCH as u32 - 1)])?;
     p.push(Step::ReadBack { reg: at(HubpreqSurfacePitch, q)?, field: PITCH }).map_err(|_| Failure::PlanFull)?;
@@ -905,9 +1034,11 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, HubpreqRefFreqToPixFreq, q, &[(WHOLE, d.ref_to_pix)])?;
     put(&mut p, HubpreqPerLineDelivery, q, &[(WHOLE, d.line_delivery)])?;
     put(&mut p, HubpreqPerLineDeliveryPre, q, &[(WHOLE, d.line_delivery_pre)])?;
-    put(&mut p, HubpreqSurf0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, d.req_delivery)])?;
+    put(&mut p, HubpreqSurf0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, d.req_delivery), (QOS_LEVEL_FIXED, QOS_LEVEL), (QOS_RAMP_DISABLE, 0)])?;
     put(&mut p, HubpreqSurf0TtuCntl1, q, &[(REFCYC_PER_REQ_DELIVERY, d.req_delivery_pre)])?;
-    put(&mut p, HubpCntl, q, &[(HUBP_VREADY_AT_OR_AFTER_VSYNC, r.vready)])?;
+    // hubp2_vready_at_or_After_vsync: the DLG's test mode off, then VREADY's place against the sync by its rule.
+    put(&mut p, HubpreqDebugDb, q, &[(WHOLE, DLG_TEST_MODE_OFF)])?;
+    put(&mut p, HubpCntl, q, &[(HUBP_VREADY_AT_OR_AFTER_VSYNC, d.vready_after_vsync)])?;
     mark(&mut p, 14)?;
     put(&mut p, MpccBotSel, q, &[(WHOLE, 0xF)])?;
     put(&mut p, MpccControl, q, &[(WHOLE, copied(r, MpccControl))])?;
@@ -919,8 +1050,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
     p.push(Step::NoUnderflow).map_err(|_| Failure::PlanFull)?;
     put(&mut p, DpgControl, o, &[(DPG_EN, 0)])?;
-    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PlanFull)?;
-    p.push(Step::NoUnderflow).map_err(|_| Failure::PlanFull)?;
+    p.push(Step::Watch { frames: WATCH_FRAMES }).map_err(|_| Failure::PlanFull)?;
     Ok(p)
 }
 
@@ -1077,7 +1207,7 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
             }
             Err(why) => {
                 // An underflow: the stage taken back before the line that says so (the pattern on again, the HUBP blanked).
-                let at_once = matches!(why, Failure::Underflow { .. });
+                let at_once = matches!(why, Failure::Underflow { .. } | Failure::RequestTimeout { .. });
                 if at_once { undo(light, e, interp, journal, n, true, out); }
                 out.line(format_args!("S{} {} FAILED: {}; {}UNDOING STAGES {} TO 1", n, name, why,
                     if at_once { "ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; " } else { "" }, if at_once { n - 1 } else { n }));
