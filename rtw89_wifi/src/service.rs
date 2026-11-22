@@ -62,7 +62,21 @@ pub(crate) enum Fatal{Radio(data_mode::Failure),Ipc(sys::Error),Clock,TransmitTi
 pub(crate) struct Stall{pub quiet_ms:u64,pub frames:u64,pub sent:u32,pub acked:u32}
 // `grace_us`: the data mode's grace when the send began; a recovery it outlasts since moves `deadline` (OUTLAST_SER).
 // `call` is None once a late send was answered (KEEP_LATE) and only its release is awaited.
-struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64,unicast:bool,began:u64}
+// `phase`: where in the beacon interval it was submitted, by our clock and by the TSF (213-DRV-0091).
+struct Pending{call:Option<wire::Call>,slot:usize,deadline:u64,grace_us:u64,unicast:bool,began:u64,phase:Phase}
+// 213-DRV-0091: how sends are held in the MAC. The first HELD_PROBES late frames of a run are probed, then one a minute;
+// one frame released in time after the first is probed once beside them. A minute's releases by the beacon interval's
+// phase, its late frames' outcomes and holds, and the frame buffer's full spells, for the minute line.
+const HELD_PROBES:u32=8;
+// 213-DRV-0091 step 2, a bench switch: true (as now) sets port 0 for INFRA once linked; false leaves it as before step 2.
+const PORT_AS_LINUX:bool=true;
+use data_mode::Phase;
+fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
+struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
+    full_since:Option<u64>}
+impl Default for TxWatch{fn default()->Self{Self{probes:0,minute_probed:false,not_held:false,held:None,minute:Default::default(),holds:[0;32],
+    holds_n:0,full_since:None}}}
+impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_ms=self.minute.full_longest_ms.max(ms);}}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -104,6 +118,7 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // 213-DRV-0091 step 2: port 0 set for INFRA, and its change due at a time: a beacon interval and a millisecond after the
     // H2Cs, as Linux's rtw89_mac_port_cfg_func_sw waits before it turns the port's function off.
     port_linked:bool,port_due:Option<(u64,bool)>,
+    tx_watch:TxWatch,
 }
 /// The counts a hole's lines are told against (213-DRV-0090).
 #[derive(Clone,Copy,Default)]
@@ -147,7 +162,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
-            linked:None,link_change:None,links:0,port_linked:false,port_due:None})
+            linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default()})
     }
     /// The channel was admitted at `eirp_half_dbm` under the station's country, after `settings` set-country requests.
     pub(crate) fn under(mut self,eirp_half_dbm:i8,settings:u64)->Self{self.country=Some((eirp_half_dbm,settings));self}
@@ -161,6 +176,10 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     pub(crate) fn take_unreadable(&mut self)->Option<data_mode::Unreadable>{self.data().take_unreadable()}
     #[cfg(test)]
     pub(crate) fn take_firmware_error(&mut self)->Option<data_mode::FirmwareError>{self.data().take_firmware_error()}
+    #[cfg(test)]
+    pub(crate) fn take_held(&mut self)->Option<Event>{self.tx_watch.held.take()}
+    #[cfg(test)]
+    pub(crate) fn data_held(&mut self)->data_mode::Held{self.data().held()}
     #[cfg(test)]
     pub(crate) fn take_halt_status(&mut self)->Option<data_mode::HaltStatus>{self.data().take_halt_status()}
     #[cfg(test)]
@@ -248,8 +267,23 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             if self.event.is_none(){self.event=Some(Event::LateFrame{count:self.lates,finished:seen.finished,fetched:seen.fetched,
                 released:seen.released,length:seen.length,age_us:seen.age_us})}
             self.ended(unicast,false,now);
+            // 213-DRV-0091: what holds it, probed while the MAC still has it.
+            let w=&mut self.tx_watch;
+            let probe=if w.probes<HELD_PROBES{w.probes+=1;true}else if !w.minute_probed{w.minute_probed=true;true}else{false};
+            if probe{
+                let(began,submitted)=self.pending.as_ref().map_or((now,Phase::default()),|p|(p.began,p.phase));let at=self.phase();
+                let registers=self.data().held();
+                self.tx_watch.held=Some(Event::Held{n:self.lates,held:true,ms:now.saturating_sub(began),submitted,at,registers});
+            }
         }
         if self.pending.is_some(){self.finish_send()?}
+        // 213-DRV-0091: the frame buffer's full spells.
+        let full=self.frames.count==FRAMES;let w=&mut self.tx_watch;
+        match(full,w.full_since){
+            (true,None)=>{w.full_since=Some(now);w.minute.full_times=w.minute.full_times.saturating_add(1);}
+            (false,Some(since))=>{w.full_longest_ms_max(now.saturating_sub(since));w.full_since=None;}
+            _=>{}
+        }
         // The receive queue is drained by the receive alone. With the buffer full it is left unread, its packets waiting
         // in the ring, and the release reports are still read.
         let mut empty=false;
@@ -283,6 +317,20 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
             if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
             let pending=self.pending.take().unwrap();let now=time::monotonic_ns()/1_000_000;
+            // 213-DRV-0091: the release's phase in the beacon interval, by our clock and by the TSF.
+            let at=self.phase();
+            for(bins,us)in[(&mut self.tx_watch.minute.clock,at.clock_us),(&mut self.tx_watch.minute.tsf,at.tsf_us)]{
+                if let Some(bin)=bin(us){bins[bin]=bins[bin].saturating_add(1);}
+            }
+            if pending.call.is_some()&&self.tx_watch.probes>0&&!self.tx_watch.not_held{
+                self.tx_watch.not_held=true;let registers=self.data().held();
+                self.tx_watch.held=Some(Event::Held{n:0,held:false,ms:now.saturating_sub(pending.began),submitted:pending.phase,at,registers});
+            }
+            if pending.call.is_none(){
+                let m=&mut self.tx_watch.minute;m.late=m.late.saturating_add(1);
+                if done.acked&&attempts==1{m.first_try=m.first_try.saturating_add(1);}if !done.acked{m.not_acked=m.not_acked.saturating_add(1);}
+                let w=&mut self.tx_watch;if w.holds_n<w.holds.len(){w.holds[w.holds_n]=u16::try_from(now.saturating_sub(pending.began)).unwrap_or(u16::MAX);w.holds_n+=1;}
+            }
             // A late send was counted when it was answered (KEEP_LATE); how long its release took in the end is logged.
             if let Some(call)=pending.call{let _=wlanhw::reply_send(call,Ok(&wlanhw::Sent{acked:done.acked,attempts}));self.ended(pending.unicast,done.acked,now);}
             else if self.event.is_none(){self.event=Some(Event::LateRelease{ms:now.saturating_sub(pending.began),attempts,acked:done.acked})}
@@ -304,7 +352,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 let after=probed.then(||self.data().probe());
                 let event=Event::Linked{channel,bssid,aid:change,was,before,after};
                 let now=time::monotonic_ns()/1_000_000;
-                if change.is_some()!=self.port_linked{self.port_due=Some((now.saturating_add(PORT_WAIT_MS),change.is_some()));}
+                if PORT_AS_LINUX&&change.is_some()!=self.port_linked{self.port_due=Some((now.saturating_add(PORT_WAIT_MS),change.is_some()));}
                 if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}Ok(())
             }
             Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),
@@ -324,6 +372,22 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             Err(failure) if failure.shutdown.is_some()=>Err(Fatal::Radio(failure)),
             Err(_)=>Ok(()),
         }
+    }
+    // 213-DRV-0091: where in the beacon interval now is: by our clock since the last beacon taken from the ring, and by the
+    // port's TSF; the interval as the last beacon gave it.
+    fn phase(&mut self)->Phase{
+        let c=self.data().counts();let interval=u64::from(c.beacon_interval_us);if interval==0{return Phase::default()}
+        let now_us=time::monotonic_ns()/1000;
+        let clock_us=(c.beacon_at_us!=0&&now_us>=c.beacon_at_us).then(||(now_us-c.beacon_at_us)%interval);
+        Phase{clock_us,tsf_us:self.data().tsf().map(|tsf|tsf%interval),interval_us:c.beacon_interval_us}
+    }
+    // 213-DRV-0091: the minute's sends, taken: the next minute starts at zero, a full spell going on counted to now.
+    fn tx_minute(&mut self,now:u64)->data_mode::TxMinute{
+        let w=&mut self.tx_watch;w.minute_probed=false;
+        if let Some(since)=w.full_since{w.full_longest_ms_max(now.saturating_sub(since));}
+        let holds=&mut w.holds[..w.holds_n];holds.sort_unstable();
+        w.minute.median_hold_ms=holds.get(holds.len()/2).map_or(0,|h|u64::from(*h));w.holds_n=0;
+        core::mem::take(&mut w.minute)
     }
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
     fn ended(&mut self,unicast:bool,acked:bool,now:u64){
@@ -361,7 +425,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let traffic=Event::Traffic{channel,wifi:c.wifi,kept:self.kept,filtered:c.filtered,invalid:c.invalid,pressure:c.pressure,
             ppdu:c.ppdu_reports,beacons:c.beacons,bssid,other_beacons:c.other_beacons,
             refused:(self.minutes==1&&c.refused.count!=0).then_some(c.refused),sent:self.sent.0,acked:self.sent.1,late:self.lates,holes:self.holes.0,longest_ms:self.holes.1,probe,
-            errors:c.errors,polls:self.data().take_polls()};
+            errors:c.errors,polls:self.data().take_polls(),tx:self.tx_minute(now)};
         if self.event.is_none(){self.event=Some(traffic)}else{self.later=Some(traffic)}
     }
     // The counts now, for a hole's lines.
@@ -481,7 +545,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                         // KEEP_LATE: the queue's own budget never ends a frame first; the service's deadlines do. Within a step
                         // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).
                         if self.late{self.data().extend_send(LATE_MS*1000);}
-                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now})
+                        let phase=self.phase();
+                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase})
                     },
                     Err(failure)=>{let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},
@@ -524,6 +589,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             if let Some(u)=self.owner.as_deref_mut().and_then(|data|data.take_unreadable()){
                 events(Event::Unreadable{count:u.count,register:u.register,value:u.value,reads:u.reads,waited_us:u.waited_us,
                     ser_before:u.ser_before,ser_after:u.ser_after,recovered:u.recovered})}
+            if let Some(held)=self.tx_watch.held.take(){events(held)}
             if let Some(s)=self.owner.as_deref_mut().and_then(|data|data.take_ser_step()){
                 events(Event::SerStep{count:s.count,from:s.from,to:s.to,since_us:s.since_us,polls:s.polls})}
             if let Some(h)=self.owner.as_deref_mut().and_then(|data|data.take_halt_status()){

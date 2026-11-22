@@ -594,6 +594,53 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
     let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0,intx:None};drop(service);clean();
 });}
 
+// 213-DRV-0091: a late frame the MAC holds is probed while it holds it: the first HELD_PROBES of a run, then one a minute;
+// a frame released in time after the first is probed once beside them. The minute line counts the late frames released,
+// those acknowledged at the first try and their median hold, and the frame buffer's full spells.
+#[test]
+fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    let mut held=vec![];
+    for n in 1..=10u32{
+        c.borrow_mut().hold_reports=true;
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none());
+        ipc::advance(91);assert!(service.step(),"late {n}");assert!(ipc::response(send).is_some(),"answered at its deadline");
+        held.extend(service.take_held());
+        c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());
+        let _=service.take_event();
+    }
+    let probed:Vec<_>=held.iter().map(|e|match e{Event::Held{n,held:true,ms,..}=>{assert!(*ms>=90,"{e:?}");*n},e=>panic!("{e:?}")}).collect();
+    assert_eq!(probed,[1,2,3,4,5,6,7,8,9],"eight, then one in the minute");
+    // A frame released in time after them: probed once beside them.
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert!(matches!(service.take_held(),Some(Event::Held{held:false,..})),"the in-time frame's probe");
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert!(service.take_held().is_none(),"once only");
+    // The frame buffer fills: twenty frames for the station and no reader.
+    {let mut c=c.borrow_mut();for _ in 0..20{c.incoming.push(packet());}}for _ in 0..4{ipc::advance(5);assert!(service.step());}
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{tx,..})=traffic else{panic!("no traffic line")};
+    assert_eq!((tx.late,tx.first_try,tx.not_acked),(10,10,0),"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
+    assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
+    let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};
+    drop(service);clean();
+});}
+
+// 213-DRV-0091: the calibrations' lines say PASS or FAIL by Linux's criteria (rtw8852b_rfk.c): DPK's sync at most 200 of
+// DC on I and Q and at least 170 of correlation; IQK's LOK in range and no one-shot failing.
+#[test]
+fn calibration_results_are_judged_by_linuxs_criteria(){
+    use crate::receive_service::CalibrationPath;
+    let good=CalibrationPath{dpk_correlation:170,dpk_dc:[200,200],..Default::default()};assert!(good.dpk_ok()&&good.iqk_ok());
+    assert!(!CalibrationPath{dpk_correlation:169,..good}.dpk_ok());assert!(!CalibrationPath{dpk_dc:[201,0],..good}.dpk_ok());
+    assert!(!CalibrationPath{dpk_dc:[0,201],..good}.dpk_ok());
+    for bad in[CalibrationPath{lok_range_fail:true,..good},CalibrationPath{tx_fails:1,..good},CalibrationPath{rx_fails:1,..good},
+        CalibrationPath{lok_fails:1,..good},CalibrationPath{restore_fail:true,..good}]{assert!(!bad.iqk_ok(),"{bad:?}");}
+}
+
 // 213-DRV-0091: every step of SER_DBG_INFO is placed at the check that sees it, with the time since the check before and
 // the ring's polls so far; the minute line gives RXQ's and RPQ's longest gap between two polls and the most waiting at one.
 #[test]
