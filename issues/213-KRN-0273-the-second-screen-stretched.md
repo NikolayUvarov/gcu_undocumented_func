@@ -1,6 +1,6 @@
 # 213-KRN-0273 — The second screen stretched or kept in shape: `display.wit` 1.4, chosen by the shell
 
-**Type:** `compositor`, IDL (`display.wit` 1.4) · **Owner:** `KRN` (the kernel session), for the maintainer's ask through DRV · **Priority:** P1 · **Status:** in progress (made, 2026-11-22) · **Blocked by:** APP's shell command, for the choice at the console (`issues/requests-APP.md`) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.11, MC-6.1, MC-12.1, MC-12.3, MC-12.4
+**Type:** `compositor`, IDL (`display.wit` 1.4) · **Owner:** `KRN` (the kernel session), for the maintainer's ask through DRV · **Priority:** P1 · **Status:** in progress (made, 2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.11, MC-6.1, MC-12.1, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -46,11 +46,15 @@ This task is the first two. The extended desktop needs `wm` and is [177-KRN-0274
 
 In `main` since round 171 (3879683b05, `LANDING/2026-11-22T1222Z-KRN-landed-3879683b.md` on `internal-dev-messages`), with DRV's 213-DRV-0092 (`display` puts MIND Core's screen on the second output) and APP's 158-APP-0152. The gate passed all groups on both architectures.
 
-One group failed once and passed alone on x32: `x86: services, storage, audio`, in `gateway_stub_check`. The cause was the check's own race: it began to sample the Effector mark after a dmesg read that took longer than the red's 6 s. Nothing in this task's code was involved; the fix is 000-KRN-0275, on `claude/000-KRN-0275-the-remote-marks-check-from-the-restart`.
+One group failed once and passed alone on x32: `x86: services, storage, audio`, in `gateway_stub_check`. The cause was the check's own race: it began to sample the Effector mark after a dmesg read that took longer than the red's 6 s. Nothing in this task's code was involved; the fix is [000-KRN-0275](../issues-done/000-KRN-0275-the-remote-marks-check-from-the-restart.done), landed in round 172.
 
-**Left:**
-- APP's shell command (`issues/requests-APP.md`);
-- the Ryzen run.
+**The shell's command is in `main` since round 172** (8a7e1f9335): APP's 213-APP-0158.
+- `screen second` shows `mirror`.
+- `screen second keep|stretch` calls `mirror-fit` and keeps the choice in `data/displays.txt`. The shell sets it again at its start.
+
+DRV's 213-DRV-0095 (the monitor's own mode from its EDID) landed in the same round.
+
+**Left:** the Ryzen run, with the lines and the look the acceptance criteria name.
 
 A stick written from `main` carries the compositor's part.
 

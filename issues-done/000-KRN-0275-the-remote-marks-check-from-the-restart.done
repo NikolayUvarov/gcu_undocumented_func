@@ -1,6 +1,6 @@
-# 000-KRN-0275 — The remote mark's check samples the screen from the restart on, not after a slow dmesg read
+# 000-KRN-0275 — The remote mark's check samples the screen from the restart on, not after a slow dmesg read — done
 
-**Type:** tests (`tests/qemu_smoke.py`, `gateway_stub_check`) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-22) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`, `gateway_stub_check`) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-22) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -28,7 +28,7 @@ So the check missed a state the screen showed: a race in the check, not in the c
 ## Acceptance criteria
 
 - [x] `x86: services, storage, audio` passes on x32 beside a busy lane, and the red is seen in each run.
-- [ ] The gate's groups pass.
+- [x] The gate's groups pass.
 
 **Not covered:** a machine slow enough that one screendump takes longer than 6 s.
 
@@ -41,8 +41,15 @@ So the check missed a state the screen showed: a race in the check, not in the c
 - that is the load under which round 171's run failed;
 - the check passes only when red, yellow and grey are all seen, so the red was seen in each run.
 
-**Left:** the gate's groups.
+
+## Resolution
+
+`gateway_stub_check` in `tests/qemu_smoke.py` samples the Effector mark from the stub's restart on, and reads dmesg at most every 3 s. It landed in round 172 (8a7e1f9335, `LANDING/2026-11-22T1519Z-KRN-landed-8a7e1f93.md` on `internal-dev-messages`). That gate passed every group with no failure, `x86: services, storage, audio` on i9 among them.
+
+Before landing, the group passed 4 of 4 on x32 and x32-2 at once.
+
+These runs are evidence for those machines and loads, not a proof that a slower machine sees the red (MC-12.2).
 
 ## Related
 
-[800-KRN-0156](800-KRN-0156-the-remote-marks-in-the-compositor.md) (the marks), [352-KRN-0268](../issues-done/352-KRN-0268-the-live-volume-in-memory.done) (the stub's logging rate, round 164).
+[800-KRN-0156](../issues/800-KRN-0156-the-remote-marks-in-the-compositor.md) (the marks), [352-KRN-0268](../issues-done/352-KRN-0268-the-live-volume-in-memory.done) (the stub's logging rate, round 164).
