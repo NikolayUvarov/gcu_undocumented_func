@@ -247,6 +247,35 @@ fn quiesce_holds_on_the_ryzens_dma_stop_without_rxq_or_rpq_bits() {
     assert_eq!(bus.get(fwcmd::DMA_STOP) & 3, 0);
 }
 
+// 213-DRV-0091: the device's PCI interrupt state, read through its capability list, and when the halt interrupt may be
+// left on as Linux leaves it.
+#[test]
+fn the_pci_interrupt_state_says_whether_the_halt_interrupt_may_be_left_on() {
+    let mut space = [0u32; 64];
+    space[1] = 0x0010_0006; space[0x3c / 4] = 0x0000_010a; space[0x34 / 4] = 0x40;
+    space[0x40 / 4] = 0x0080_5001; space[0x50 / 4] = 0x0080_7005; space[0x70 / 4] = 0x0000_0010;
+    let read = |space: [u32; 64]| mac::pci_interrupt(|at| Some(space[at / 4]));
+    let state = read(space).unwrap();
+    assert_eq!(state, mac::PciInterrupt { command: 6, status: 0x10, line: 10, pin: 1, msi: Some(0x80), msix: None });
+    assert_eq!(mac::halt_interrupt_refusal(&state), None, "INTx to a masked line, MSI off");
+    space[0x50 / 4] |= 1 << 16; assert_eq!(mac::halt_interrupt_refusal(&read(space).unwrap()), Some("MSI ENABLED"));
+    space[0x50 / 4] &= !(1 << 16); space[0x3c / 4] = 0x0000_0101;
+    assert_eq!(mac::halt_interrupt_refusal(&read(space).unwrap()), Some("INTX ROUTED TO A LINE THE PIC NEVER MASKS"));
+    space[1] |= 1 << 10; assert_eq!(mac::halt_interrupt_refusal(&read(space).unwrap()), None, "INTx disabled");
+    space[1] &= !(1 << 10); space[0x3c / 4] = 0x0000_00ff; assert_eq!(mac::halt_interrupt_refusal(&read(space).unwrap()), None, "no pin");
+    space[0x70 / 4] = 0x8000_0011; space[0x50 / 4] = 0x0080_7005;
+    assert_eq!(read(space).unwrap().msix, Some(0x8000));
+    space[0x3c / 4] = 0x0000_010a; assert_eq!(mac::halt_interrupt_refusal(&read(space).unwrap()), Some("MSI-X ENABLED"));
+    space[1] = u32::MAX; assert_eq!(read(space), None);
+    assert_eq!(mac::pci_interrupt(|at| (at != 0x3c).then_some(6)), None, "a read refused");
+    // The guards: every bit of every mask on the strict path, all but HIMR0's halt bit when it is left on.
+    assert_eq!([0x1a0, 0x10b0, 0x13b0].map(|at| mac::host_mask_required(at, false)), [u32::MAX; 3]);
+    assert_eq!([0x1a0, 0x10b0, 0x13b0].map(|at| mac::host_mask_required(at, true)), [!(1 << 21), u32::MAX, u32::MAX]);
+    assert!(!mac::HALT_INTERRUPT_AS_LINUX, "the strict path is the default");
+    let mut bus = Device::new(); mac::halt_interrupt_on(&mut bus).unwrap(); assert_eq!(bus.get(0x1a0), 1 << 21);
+    let mut bus = Device::new(); bus.ignore_write = Some(0x1a0); assert!(mac::halt_interrupt_on(&mut bus).is_err());
+}
+
 #[test]
 fn host_interrupts_left_enabled_are_masked_and_reported() {
     let mut bus = Device::new();
