@@ -89,6 +89,36 @@
 - **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
 - **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
 
+## For a successor (state on 2026-11-22, 18:50 UTC)
+
+How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
+
+- **The heads:**
+  - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
+  - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
+  - **49bd2fede** makes `usbload` wait for and check the tally.
+  - Neither has run on hardware. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`), was going at 18:50.
+- **Reading a run:**
+  - The once-a-boot line is `A BULK TRANSFER ANSWERED FROM THE LOOP: …`.
+  - The minute's tally is `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`. What is right: a equals n, 0 in the four after, and the longest tens of ms at most.
+  - **Stop and take it back on:**
+    - a TIMED OUT;
+    - a NOT FOUND with no device gone;
+    - `usb_storage`'s `NO ANSWER TO READ`, `THE DEVICE IS GONE OR WAS RESET` or `CLAIMING IT AGAIN` with no restart;
+    - `vfs_server`'s `THE USB DRIVE DOES NOT ANSWER`;
+    - `[SERIAL] THE CONVERTER IS GONE`;
+    - `THE ENDPOINT IS RESET` repeating;
+    - a controller error or an unanswered command;
+    - the Effector journal's lines.
+- **What exercises it on the Ryzen:**
+  - the cable's reads, through the CH340's bulk OUT in 256-byte pieces;
+  - the stick's reads and writes.
+  - The cameras' video goes by `bulk-stream`, not by this path.
+- **Left:**
+  - control transfers, commands and a port's reset still hold the loop for a few ms each;
+  - EHCI's bulk transfers are still waited on;
+  - a real halt, timeout or client death while a transfer is deferred has not happened on any machine.
+
 ## Related
 
 [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md), [000-LNK-0050](000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.md), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
