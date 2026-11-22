@@ -50,6 +50,8 @@ const TIGHT_US:u64=2_000;
 // io::short_delay spins on the clock (no sleep below the scheduler's tick); 100 µs keeps the light poll, about 20 MMIO
 // reads, under a tenth of the pace.
 const TIGHT_PACE_US:u32=100;
+// 213-DRV-0104: a receive that waited less than this found its request already there.
+const FOUND_WAITING_US:u64=100;
 const WAIT_MS:u64=1000;
 const WAITERS:usize=4;
 const FRAMES:usize=16;
@@ -109,9 +111,11 @@ fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
 // 213-DRV-0104: `answered`: when the last send was answered or refused; `second`: when the current second of arrivals began
 // and how many sends arrived in it.
 struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
-    full_since:Option<u64>,answered:Option<u64>,second:(u64,u32)}
+    full_since:Option<u64>,answered:Option<u64>,second:(u64,u32),
+    // 213-DRV-0104: when this step's receive returned (µs) and how long it waited.
+    received_us:u64,waited_us:u64}
 impl Default for TxWatch{fn default()->Self{Self{probes:0,minute_probed:false,not_held:false,held:None,minute:Default::default(),holds:[0;32],
-    holds_n:0,full_since:None,answered:None,second:(0,0)}}}
+    holds_n:0,full_since:None,answered:None,second:(0,0),received_us:0,waited_us:0}}}
 impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_ms=self.minute.full_longest_ms.max(ms);}
     // 213-DRV-0104: a send answered busy, counted for the minute line.
     fn busy(&mut self){self.minute.busy=self.minute.busy.saturating_add(1);self.answered=Some(time::monotonic_ns()/1_000_000);}
@@ -127,6 +131,12 @@ impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_m
         for(us,over,longest)in[(wait_us,&mut m.wait_over,&mut m.wait_longest_us),(work_us,&mut m.work_over,&mut m.work_longest_us)]{
             if us>5_000{over[0]=over[0].saturating_add(1);}if us>10_000{over[1]=over[1].saturating_add(1);}*longest=(*longest).max(us);
         }
+    }
+    // 213-DRV-0104: a send begun: from its receive to its dispatch and from that to its submission, µs.
+    fn begun(&mut self,dispatched_us:u64,submitted_us:u64){
+        let(m,d,s)=(&mut self.minute,data_mode::us_bin(dispatched_us.saturating_sub(self.received_us)),data_mode::us_bin(submitted_us.saturating_sub(dispatched_us)));
+        m.to_dispatch_us[d]=m.to_dispatch_us[d].saturating_add(1);m.to_submit_us[s]=m.to_submit_us[s].saturating_add(1);
+        if self.waited_us<FOUND_WAITING_US{m.found_waiting=m.found_waiting.saturating_add(1);}
     }
     // 213-DRV-0104: a send of `length` bytes answered in time, `ms` after its arrival.
     fn in_time(&mut self,ms:u64,length:usize){
@@ -726,6 +736,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let slot=if self.pending.as_ref().is_some_and(|p|p.slot==RECEIVE[0]){RECEIVE[1]}else{RECEIVE[0]};
         // 213-DRV-0091: how long the wait for a request and the step's work took, for the minute line.
         let waited=time::monotonic_ns();let received=Endpoint::SERVICE.recv_timeout(slot,POLL_MS);let worked=time::monotonic_ns();
+        self.tx_watch.received_us=worked/1000;self.tx_watch.waited_us=worked.saturating_sub(waited)/1000;
         let now=time::monotonic_ns()/1_000_000;
         if now<self.last_ms{self.fail(Fatal::Clock)}else{self.last_ms=now;if let Err(e)=self.progress(now){self.fail(e)}}
         let dispatch_now=time::monotonic_ns()/1_000_000;
@@ -767,7 +778,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 if let Err(failure)=result{if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}}
             },
             wlanhw::Request::Send{frame,rate,attempts}=>{
-                self.tx_watch.arrived(now);
+                self.tx_watch.arrived(now);let dispatched_us=time::monotonic_ns()/1000;
                 if self.refused{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));return}
                 // 5 GHz is OFDM alone: 6 to 54 Mb/s (wlanhw.wit `bands` bit 1).
                 if self.data().channel()>14&&rate<12{let _=wlanhw::reply_send(call,Err(wlanhw::Error::Invalid));return}
@@ -793,7 +804,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                         // the 10 ms margin was not always enough (the Ryzen, 2026-11-08: Tx(Io(Timeout)) inside a drain).
                         if self.late{self.data().extend_send(LATE_MS*1000);}
                         let phase=self.phase();
-                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase,rate,length:frame.len()})
+                        self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase,rate,length:frame.len()});
+                        self.tx_watch.begun(dispatched_us,time::monotonic_ns()/1000);
                     },
                     Err(failure)=>{if error(&failure)==wlanhw::Error::Busy{self.tx_watch.busy();}let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},

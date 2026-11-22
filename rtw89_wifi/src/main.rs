@@ -341,6 +341,9 @@ fn served(event: receive_service::Event) {
                 }
                 mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
                     channel, Spaced(&tx.gap_ms), tx.peak_sends);
+                // 213-DRV-0104: each send begun: from its receive to its dispatch (the step's work first), and to its submission.
+                mind::println!("[RTW89] TRAFFIC ON {}: RECEIVE TO DISPATCH BY US: {}; FOUND WAITING {} (213-DRV-0104)", channel, Spaced(&tx.to_dispatch_us), tx.found_waiting);
+                mind::println!("[RTW89] TRAFFIC ON {}: DISPATCH TO SUBMISSION BY US: {} (213-DRV-0104)", channel, Spaced(&tx.to_submit_us));
                 // 213-DRV-0091: the service's steps: waits for a request (2 ms asked) and the work after them.
                 mind::println!("[RTW89] TRAFFIC ON {}: SERVICE STEPS: WAITS OVER 5 / 10 MS {} / {}, THE LONGEST {} US; WORK OVER 5 / 10 MS {} / {}, THE LONGEST {} US (213-DRV-0091)",
                     channel, tx.wait_over[0], tx.wait_over[1], tx.wait_longest_us, tx.work_over[0], tx.work_over[1], tx.work_longest_us);

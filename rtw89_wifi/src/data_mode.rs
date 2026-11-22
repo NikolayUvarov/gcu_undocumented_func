@@ -284,7 +284,10 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     // that to its release seen, in US_BINS (us_bin).
     pub fetch_us:[[u32;US_BINS];3],pub release_us:[[u32;US_BINS];3],
     // 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING (as `behind`), and the tight polls made.
-    pub tight:FloorKind,pub tight_fixed:bool,pub tight_polls:u32}
+    pub tight:FloorKind,pub tight_fixed:bool,pub tight_polls:u32,
+    // 213-DRV-0104: each send begun, from its receive to its dispatch (the step's work before it) and from that to its
+    // submission (begin's checks and the submit), in US_BINS; those the receive found waiting (FOUND_WAITING_US).
+    pub to_dispatch_us:[u32;US_BINS],pub to_submit_us:[u32;US_BINS],pub found_waiting:u32}
 /// 213-DRV-0104: µs bins: 250 µs each to 2 ms, 1 ms each to 10 ms, then to 20 ms, to 50 ms, and 50 ms or more.
 pub const US_BINS:usize=19;
 pub fn us_bin(us:u64)->usize{if us<2_000{(us/250)as usize}else if us<10_000{8+((us-2_000)/1_000)as usize}else if us<20_000{16}else if us<50_000{17}else{18}}

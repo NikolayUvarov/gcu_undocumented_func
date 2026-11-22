@@ -330,6 +330,20 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **Host case** `service_probes_and_places_releases_only_with_the_minute_detail`: without the switch, no probe of the held frame or the in-time one and no release placed in the beacon interval; with it, both probes and the releases placed. The minute's late and tried sends are counted either way. The held-frame case raises the switch.
 - The 40 `rtw89_*_host.rs` files pass: 4890 cases, 0 failed. `02_build.sh` builds.
 
+**2026-11-22, a send's time from its receive to its submission** (branch `claude/213-DRV-0104-begin-light`; host cases, not run):
+- **Why:** boot 99's ON minutes answer full-size frames in 2 to 4 ms, and the hardware fetches within 250 µs. What comes before the submission was not timed. A request is dispatched only after its step's own work (`progress`: the rings' polls and the drain, the checks every CHECK_MS, a pending send's progress, the link, the holes). `DataSession::begin` then makes the data mode's liveness checks and the coexistence reconcile for every send.
+- **Two lines a minute** (with MINUTE_DETAIL):
+
+  ```
+  [RTW89] TRAFFIC ON c: RECEIVE TO DISPATCH BY US: …; FOUND WAITING n (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: DISPATCH TO SUBMISSION BY US: … (213-DRV-0104)
+  ```
+
+  - Each send begun is timed from its step's receive returning to its dispatch, and from the dispatch to `begin`'s return (the checks, the reconcile and the submission). The bins are those of the fetch and release lines.
+  - FOUND WAITING counts the sends whose receive returned within 100 µs: the request was there before the wait began. How long it had waited, through the step before, the driver cannot see.
+- **Host case:** the held-frame case's twelve sends begun are counted in both lines. The model's receive always waits its 2 ms, so none is found waiting there.
+- The 40 `rtw89_*_host.rs` files pass; `02_build.sh` builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

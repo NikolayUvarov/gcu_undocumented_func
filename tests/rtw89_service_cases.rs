@@ -873,6 +873,9 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     // 213-DRV-0104: every ended send's submission to fetch and fetch to release, by size: twelve of 64 bytes.
     let timed:Vec<(u32,u32)>=tx.fetch_us.iter().zip(tx.release_us.iter()).map(|(f,r)|(f.iter().sum(),r.iter().sum())).collect();
     assert_eq!(timed,vec![(12,12),(0,0),(0,0)],"{tx:?}");
+    // Every send begun timed from its receive to its dispatch and to its submission. The model's receive waits its whole
+    // 2 ms with a request queued too, so none is found waiting.
+    assert_eq!((tx.to_dispatch_us.iter().sum::<u32>(),tx.to_submit_us.iter().sum::<u32>(),tx.found_waiting),(12,12,0),"{tx:?}");
     let in_time:Vec<u32>=tx.answer_ms.iter().map(|c|c.iter().sum()).collect();
     assert_eq!((in_time,tx.gap_ms.iter().sum::<u32>()),(vec![2,0,0],12),"two of 64 bytes in time, 13 arrivals: {tx:?}");
     assert!(tx.answer_ms[0][..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
