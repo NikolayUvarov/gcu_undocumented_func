@@ -8190,8 +8190,8 @@ def camera_check(vm):
     vm.logged("SHELL RESUMED.", since)
     time.sleep(.2); vm.collect(); vm.output = ""
     # -m: a mode at its own size, and one past the list refused with the count.
-    require(vm.command("camera -m 7 -s data/none.bmp", timeout=30), "camera: mode 7: the gateway lists 3 modes for camera 0, numbers 0 to 2")
-    require(vm.command("camera -m 0 -s data/cam640.bmp", timeout=60), "[CAMERA] STILL data/cam640.bmp: 640X480, FRAME ")
+    require(vm.command("camera -m 7 -s ram:none.bmp", timeout=30), "camera: mode 7: the gateway lists 3 modes for camera 0, numbers 0 to 2")
+    require(vm.command("camera -m 0 -s ram:cam640.bmp", timeout=60), "[CAMERA] STILL ram:cam640.bmp: 640X480, FRAME ")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open; "
           "-c beyond the list refused, n with one camera named (158-APP-0147); the pattern's three modes stepped by m and Shift+m, "
