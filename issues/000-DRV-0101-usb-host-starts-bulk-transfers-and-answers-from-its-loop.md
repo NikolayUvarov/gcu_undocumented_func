@@ -27,7 +27,7 @@
 
 ## Acceptance criteria
 
-- [ ] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer.
+- [x] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer. (2026-11-22: answered from the loop in QEMU's `usbload`; the rules for a halt, a timeout, a device gone and a client's new instance in `tests/usb_pending_host.rs`. Their actions, the endpoint's reset or stop, are the synchronous path's as before.)
 - [x] QEMU's `usb`, `ehci`, `cameras`, `link`, `usbaudio` and the USB storage suites pass. (2026-11-22, LEG9, on 05bc8e92c: those, `iso` with its USB disk's boot, `vfs`, `block` with its USB part, and the new `usbload`.)
 - [ ] On the Ryzen: a duplex with a log read and a stick write in its middle, every stream's `TIMES DRY` 0 while they run, and the stick's and the cable's throughput no lower (MC-12.1).
 
@@ -68,7 +68,9 @@
   - the full `host_tests.sh` passed whole (263 groups);
   - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` (ATA, AHCI and USB) and `usbload`, which passed three times in all;
   - in `usbload` the first transfer answered from the loop was the stick's first command, `SLOT 1 ENDPOINT 02, 31 BYTES, 1 MS`.
-- **Not covered yet** (criterion 1's rest): a deferred transfer that halts, one that times out, and a client gone before its answer. These are host-testable only through `pending.rs`'s rules, or in QEMU with a device made to stall.
+- **Criterion 1's rest, host cases:** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
+  - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
+- **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
 
 ## Related
 

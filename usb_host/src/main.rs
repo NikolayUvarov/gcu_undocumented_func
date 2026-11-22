@@ -749,27 +749,27 @@ impl Host {
             let Some(mut p) = self.pending[at].take() else { continue };
             let here = self.roots.get(p.c).and_then(Option::as_ref).filter(|r| r.generation == p.generation)
                 .is_some_and(|r| r.devices[p.index].is_some_and(|d| d.generation == p.device && d.slot == p.slot));
-            if !here {
-                // Its controller was set up again or its device went: the pages went with them, or go back here.
-                if let Some(root) = self.roots.get_mut(p.c).and_then(Option::as_mut).filter(|r| r.generation == p.generation) { if let Some(page) = p.page { root.xhci.release(page); } }
-                answer(&mut p, Err(Error::NotFound));
-                self.tally.gone += 1;
-                continue;
-            }
-            if !p.started { self.place(&mut p); if !p.started { self.pending[at] = Some(p); continue; } }
-            let done = self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, 0));
+            if here && !p.started { self.place(&mut p); if !p.started { self.pending[at] = Some(p); continue; } }
+            let ended = if here { self.roots[p.c].as_mut().and_then(|r| r.xhci.finished(p.slot, p.target, 0)) } else { None };
             let waited = (mind::time::uptime_ms() as u64).saturating_sub(p.since);
-            match (pending::next(done.is_some(), waited, BULK_TIMEOUT_MS), done) {
-                (pending::Next::Answer, Some(done)) => {
-                    let r = self.bulk_end(&p, done);
+            match pending::answer(here, false, ended, p.length, waited, BULK_TIMEOUT_MS) {
+                None => self.pending[at] = Some(p),
+                Some(pending::Answer::Gone) => {
+                    // Its controller was set up again or its device went: the pages went with them, or go back here.
+                    if let Some(root) = self.roots.get_mut(p.c).and_then(Option::as_mut).filter(|r| r.generation == p.generation) { if let Some(page) = p.page { root.xhci.release(page); } }
+                    answer(&mut p, Err(Error::NotFound));
+                    self.tally.gone += 1;
+                }
+                Some(pending::Answer::TimedOut) => { self.abandon(&p); answer(&mut p, Err(Error::Other(ERR_TIMEOUT))); self.tally.timed_out += 1; }
+                Some(pending::Answer::Stopped) => { self.abandon(&p); answer(&mut p, Err(Error::NotFound)); self.tally.forgotten += 1; }
+                Some(pending::Answer::Moved(_) | pending::Answer::Reset(_)) => {
+                    let r = self.bulk_end(&p, ended.unwrap_or(Err(0)));
                     // The first answered from the loop is said, with how long it took (000-DRV-0101).
-                    if !self.said_deferred { self.said_deferred = true; mind::println!("[USB] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT {} ENDPOINT {:02X}, {} BYTES, {} MS (000-DRV-0101)", p.slot, p.address, p.length, (mind::time::uptime_ms() as u64).saturating_sub(p.since)); }
+                    if !self.said_deferred { self.said_deferred = true; mind::println!("[USB] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT {} ENDPOINT {:02X}, {} BYTES, {} MS (000-DRV-0101)", p.slot, p.address, p.length, waited); }
                     answer(&mut p, r);
                     self.tally.answered += 1;
                     self.tally.longest_ms = self.tally.longest_ms.max(waited);
                 }
-                (pending::Next::TimedOut, _) => { self.abandon(&p); answer(&mut p, Err(Error::Other(ERR_TIMEOUT))); self.tally.timed_out += 1; }
-                _ => self.pending[at] = Some(p),
             }
         }
     }
@@ -779,6 +779,7 @@ impl Host {
         for at in 0..MAX_PENDING {
             if !self.pending[at].as_ref().is_some_and(|p| p.badge == badge) { continue; }
             let Some(mut p) = self.pending[at].take() else { continue };
+            if pending::answer(true, true, None, p.length, 0, BULK_TIMEOUT_MS) != Some(pending::Answer::Stopped) { continue; }
             self.abandon(&p);
             answer(&mut p, Err(Error::NotFound));
             self.tally.forgotten += 1;
