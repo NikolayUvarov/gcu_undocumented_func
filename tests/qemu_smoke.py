@@ -11220,8 +11220,15 @@ def usbaudio_suite(args):
             require(log, "[AUDIO] USB PLAYBACK STARTED")
             stopped = re.search(r"\[AUDIO\] USB PLAYBACK STOPPED: INTERFACE \d+; (\d+) PACKETS SENT, (\d+) OF THEM SILENCE", log)
             assert stopped and int(stopped[1]) > 500, log
-            usb = vm.service_logs("usb_host", "STREAMS OUT")
+            # Its close (000-DRV-0081): SET_INTERFACE 0 before the endpoint is dropped, and no error from it on the stream's last line.
+            usb = vm.service_logs("usb_host", "STREAMS CLOSED")
             require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            closed = re.search(rf"INTERFACE {attached[3]} SETTING 0: STREAMS CLOSED, THE DEVICE TOLD FIRST: SET_INTERFACE DONE IN ([\d.]+) MS, ENDPOINTS DROPPED IN ([\d.]+) MS", usb)
+            assert closed, usb
+            dci = (int(attached[4], 16) & 0xF) * 2 + (int(attached[4], 16) >> 7)
+            ended = re.search(rf"ENDPOINT {dci}: STREAM ENDED: \d+ PACKETS SENT, \d+ MISSED, \d+ TIMES DRY \([^)]*\), (\d+) WITH ERRORS", usb)
+            assert ended and ended[1] == "0", usb
+            in_close = re.search(rf"ENDPOINT {dci}: (\d+) TDS ENDED IN ITS CLOSE", usb)
             # A device plugged in beside it is the one used; the first waits, and comes back when that one goes.
             vm.qmp("device_add", driver="usb-audio", bus="axhci.0", audiodev="usnd2", id="uac2")
             waits, again = "WAITS: A DEVICE SET UP AFTER IT IS USED", "AGAIN: THE DEVICE SET UP AFTER IT WENT"
@@ -11272,7 +11279,8 @@ def usbaudio_suite(args):
             heard.append(loud / channels / rate)
     print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
           f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
-          f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
+          f"{heard[0]:.2f} s of tone; its close told the device first (SET_INTERFACE {closed[1]} ms, the endpoint dropped {closed[2]} ms after) "
+          f"with 0 errors on the stream's last line ({in_close[1] if in_close else 0} TDs ended in the close); a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
           f"unplugged, the codec again", flush=True)
     audiostub_check(args)
 
