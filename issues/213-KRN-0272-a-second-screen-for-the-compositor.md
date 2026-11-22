@@ -4,7 +4,7 @@
 
 ## Problem
 
-`display` lit the Ryzen's second output (HDMI-A-1) on 2026-11-22 with the engine's test pattern, through [213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md)'s grant. DRV's next stage (213-DRV-0092) puts a picture of its own in the range of BAR 0 init granted it, and unblanks the second pipe on it. After that the pixels of a second screen exist, and nothing in the system knows of them.
+`display` lit the Ryzen's second output (HDMI-A-1) on 2026-11-22 with the engine's test pattern, through [213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done)'s grant. DRV's next stage (213-DRV-0092) puts a picture of its own in the range of BAR 0 init granted it, and unblanks the second pipe on it. After that the pixels of a second screen exist, and nothing in the system knows of them.
 
 DRV asked for an interface on 2026-11-22 (`KRN/2026-11-22T0459Z-DRV-request-a-second-screen-offered-to-the-compositor-by-display.md` on `internal-dev-messages`). Through it a display driver tells the compositor:
 - that a second screen exists, and when it comes or goes;
@@ -37,9 +37,9 @@ A mirror of the first screen comes first; an extended screen comes later, with `
 ## Acceptance criteria
 
 - [x] `tests/compositor_mirror_host.rs`: the Ryzen's two shapes and others fit centred; each picture pixel shows the nearest source pixel in bounds; a changed source span touches exactly the picture pixels that show it.
-- [ ] Builds for x86 and aarch64; the IDL fuzzer with `display` 1.3; every gate group passes on both architectures (the compositor runs in all of them, with no second screen).
+- [x] Builds for x86 and aarch64; the IDL fuzzer with `display` 1.3; every gate group passes on both architectures (the compositor runs in all of them, with no second screen).
 - [ ] **On the Ryzen** (DRV, with 213-DRV-0092's `display`): the compositor logs `SECOND SCREEN 1920X1080 …: THE FIRST MIRRORED AT 1728X1080 FROM 96,0`, and the maintainer sees MIND Core's screen on both monitors, the marks on both.
-- [ ] docs/idl and docs/api say what changed.
+- [x] docs/idl and docs/api say what changed.
 
 **Not covered:** whether the second screen tears, and how much; the frame timing is the next step if it does.
 
@@ -58,6 +58,12 @@ A mirror of the first screen comes first; an extended screen comes later, with `
 - DRV's run on the Ryzen;
 - the docs criterion, met by docs/idl and docs/api on the branch.
 
+## Landed (2026-11-22)
+
+In `main` since round 169 (8e76876351, `LANDING/2026-11-22T0748Z-KRN-landed-8e768763.md` on `internal-dev-messages`), with DRV's 213-DRV-0086, 0087, 0090, 0091, 158-DRV-0082 to 0084 and APP's request. The gate passed all 61 groups on both architectures, among them the host tests (the mirror's tests and the IDL fuzzer with `display` 1.3). No second screen is offered in any of them.
+
+**Left:** DRV's run on the Ryzen, with 213-DRV-0092's `display` offering HDMI-A-1. A stick written from `main` carries the compositor's part.
+
 ## Related
 
-[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
+[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
