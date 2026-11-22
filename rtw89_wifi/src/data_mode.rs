@@ -75,7 +75,7 @@ pub(crate) struct FirmwareError{pub count:u32,pub ctrl:u32,pub raw:u32,pub ser:u
 pub struct Errors{pub l0:u32,pub l1:u32,pub l2:u32,pub unknown:u32,pub hisr_halt:u32,pub hisr_wdt:u32}
 /// The n-th check that found HISR0's halt bits set (213-DRV-0091): HISR0, HALT_C2H_CTRL and SER_DBG_INFO then.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub(crate) struct HaltStatus{pub count:u32,pub hisr:u32,pub ctrl:u32,pub ser:u32}
+pub(crate) struct HaltStatus{pub count:u32,pub hisr:u32,pub ctrl:u32,pub ser:u32,pub intx:Option<bool>}
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
 pub(crate) const SCHEDULER:u16=0x010f;
@@ -406,22 +406,24 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     // 213-DRV-0091: the firmware's error status, as mac.c's rtw89_mac_get_err_status takes it, counted and kept for the line.
     fn firmware_status(&mut self,deadline:u64)->Result<(),Cause>{
         let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
-        let read=(||->io::Result<(u32,u32,Option<u32>,u32)>{
+        let read=(||->io::Result<(u32,u32,Option<u32>,u32,Option<bool>)>{
             // All ones is a device that does not answer, which the checks report.
             let isr=io::read32(&mut window,HISR0)?;let halt=if isr==u32::MAX{0}else{isr&(HISR0_HALT_C2H|HISR0_WDT_TIMEOUT)};
+            // PCI Status bit 3 before the bits are cleared: whether the device asserts INTx for them.
+            let intx=if halt!=0{window.bus.pci_status().ok().map(|status|status&8!=0)}else{None};
             if halt!=0{window.write32(HISR0,halt)?;}
             let ctrl=io::read32(&mut window,HALT_C2H_CTRL)?;let set=ctrl!=0&&ctrl!=u32::MAX;
             let raw=if set{let raw=io::read32(&mut window,HALT_C2H)?;window.write32(HALT_C2H_CTRL,0)?;Some(raw)}else{None};
             let ser=if set||halt!=0{io::read32(&mut window,SER_DBG_INFO)?}else{0};
-            Ok((if halt!=0{isr}else{0},ctrl,raw,ser))
+            Ok((if halt!=0{isr}else{0},ctrl,raw,ser,intx))
         })();
         self.session.last=window.last;
-        let(isr,ctrl,raw,ser)=read.map_err(Cause::Register)?;
+        let(isr,ctrl,raw,ser,intx)=read.map_err(Cause::Register)?;
         if isr!=0{
             let e=&mut self.counts.errors;
             if isr&HISR0_HALT_C2H!=0{e.hisr_halt=e.hisr_halt.saturating_add(1)}
             if isr&HISR0_WDT_TIMEOUT!=0{e.hisr_wdt=e.hisr_wdt.saturating_add(1)}
-            self.halts=self.halts.saturating_add(1);self.halt_status=Some(HaltStatus{count:self.halts,hisr:isr,ctrl,ser});
+            self.halts=self.halts.saturating_add(1);self.halt_status=Some(HaltStatus{count:self.halts,hisr:isr,ctrl,ser,intx});
         }
         let Some(raw)=raw else{return Ok(())};
         let(code,name,level,event)=firmware_error(raw);let e=&mut self.counts.errors;

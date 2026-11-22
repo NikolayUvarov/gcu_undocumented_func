@@ -88,8 +88,9 @@ pub enum Event {
     /// by mac.h's name with its level and ser.c's event. Nothing is answered to the firmware.
     FirmwareError { count: u32, ctrl: u32, raw: u32, ser: u32, code: u32, name: &'static str, level: data_mode::Level, event: &'static str },
     /// The n-th check that found HISR0's halt bits (HALT_C2H, WDT_TIMEOUT) set under this driver's mask (213-DRV-0091),
-    /// with HALT_C2H_CTRL and SER_DBG_INFO then; the bits cleared as Linux's rtw89_pci_recognize_intrs does.
-    HaltStatus { count: u32, hisr: u32, ctrl: u32, ser: u32 },
+    /// with HALT_C2H_CTRL and SER_DBG_INFO then, and PCI Status bit 3 (INTx asserted) if read; the bits cleared as Linux's
+    /// rtw89_pci_recognize_intrs does.
+    HaltStatus { count: u32, hisr: u32, ctrl: u32, ser: u32, intx: Option<bool> },
     /// The firmware told of the station's link (213-DRV-0091): connected to `bssid` as `aid` (join info and address CAM as
     /// INFRA), or no link again (None); `was`, the AID before; the registers just before and after, the first two times.
     Linked { channel: u8, bssid: [u8; 6], aid: Option<u16>, was: Option<u16>, before: Option<data_mode::Probe>, after: Option<data_mode::Probe> },

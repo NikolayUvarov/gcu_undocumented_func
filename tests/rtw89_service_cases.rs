@@ -551,7 +551,8 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
     c.borrow_mut().hisr_raise=vec![1<<21,1<<22];
     let mut seen=vec![];
     for _ in 0..20{ipc::advance(20);assert!(service.step());seen.extend(service.take_halt_status());if seen.len()==2{break}}
-    let got:Vec<_>=seen.iter().map(|h|(h.count,h.hisr,h.ctrl)).collect();assert_eq!(got,[(1,1<<21,0),(2,1<<22,0)]);
+    let got:Vec<_>=seen.iter().map(|h|(h.count,h.hisr,h.ctrl,h.intx)).collect();
+    assert_eq!(got,[(1,1<<21,0,Some(false)),(2,1<<22,0,Some(false))],"HIMR0 masked: INTx not asserted");
     for _ in 0..3{ipc::advance(20);assert!(service.step());}assert!(service.take_halt_status().is_none(),"cleared as Linux clears it");
     // A posted code: its HISR0 bit at a check, and the code read and named.
     c.borrow_mut().halt_codes=vec![0x0003];let(mut halt,mut code)=(None,None);
@@ -564,7 +565,7 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
         if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
     let Some(Event::Traffic{errors,..})=traffic else{panic!("no traffic line")};
     assert_eq!(errors,Errors{l0:1,l1:0,l2:0,unknown:0,hisr_halt:2,hisr_wdt:1});
-    let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0};drop(service);clean();
+    let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0,intx:None};drop(service);clean();
 });}
 
 // 213-DRV-0091: a station check that meets an unreadable CMAC window (DEADBEEF, the Ryzen's boot 62 twice in 98 minutes)
