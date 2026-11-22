@@ -4,7 +4,7 @@
 
 ## Problem
 
-[213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md)'s mirror keeps the first screen's shape. On the Ryzen that is 2560x1600 on 1920x1080: 1728x1080 from x 96, with black columns each side. The maintainer saw it on 2026-11-22 (`KRN/2026-11-22T0829Z-DRV-the-maintainer-saw-the-mirror-and-asks-for-stretch-fit-and-an-extended-desktop.md` on `internal-dev-messages`) and asked for three ways to use a second screen:
+[213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done)'s mirror keeps the first screen's shape. On the Ryzen that is 2560x1600 on 1920x1080: 1728x1080 from x 96, with black columns each side. The maintainer saw it on 2026-11-22 (`KRN/2026-11-22T0829Z-DRV-the-maintainer-saw-the-mirror-and-asks-for-stretch-fit-and-an-extended-desktop.md` on `internal-dev-messages`) and asked for three ways to use a second screen:
 - stretched;
 - 1 to 1, as now;
 - the desktop extended over both monitors, the second placed relative to the first.
@@ -44,4 +44,4 @@ This task is the first two. The extended desktop needs `wm` and is [177-KRN-0274
 
 ## Related
 
-[213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md), [213](213-amd-ryzen-pc.md).
+[213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done), [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md), [213](213-amd-ryzen-pc.md).

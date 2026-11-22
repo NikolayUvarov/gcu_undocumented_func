@@ -1,6 +1,6 @@
-# 213-KRN-0272 — A second screen for the compositor: `display.wit` 1.3, offered by a display driver and mirrored into
+# 213-KRN-0272 — A second screen for the compositor: `display.wit` 1.3, offered by a display driver and mirrored into — done
 
-**Type:** `compositor`, IDL (`display.wit` 1.3, `mmio` handles), `init` · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0092 · **Priority:** P1 · **Status:** in progress (made, 2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.11, MC-6.1, MC-12.1, MC-12.3, MC-12.4
+**Type:** `compositor`, IDL (`display.wit` 1.3, `mmio` handles), `init` · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0092 · **Priority:** P1 · **Status:** done (2026-11-22) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-3.11, MC-6.1, MC-12.1, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -38,7 +38,7 @@ A mirror of the first screen comes first; an extended screen comes later, with `
 
 - [x] `tests/compositor_mirror_host.rs`: the Ryzen's two shapes and others fit centred; each picture pixel shows the nearest source pixel in bounds; a changed source span touches exactly the picture pixels that show it.
 - [x] Builds for x86 and aarch64; the IDL fuzzer with `display` 1.3; every gate group passes on both architectures (the compositor runs in all of them, with no second screen).
-- [ ] **On the Ryzen** (DRV, with 213-DRV-0092's `display`): the compositor logs `SECOND SCREEN 1920X1080 …: THE FIRST MIRRORED AT 1728X1080 FROM 96,0`, and the maintainer sees MIND Core's screen on both monitors, the marks on both.
+- [x] **On the Ryzen** (DRV, with 213-DRV-0092's `display`; see Resolution): the compositor logs `SECOND SCREEN 1920X1080 …: THE FIRST MIRRORED AT 1728X1080 FROM 96,0`, and the maintainer sees MIND Core's screen on both monitors, the marks on both.
 - [x] docs/idl and docs/api say what changed.
 
 **Not covered:** whether the second screen tears, and how much; the frame timing is the next step if it does.
@@ -81,10 +81,29 @@ DRV ran it on the Ryzen with both monitors (`KRN/2026-11-22T0749Z-DRV-your-displ
 
 This is evidence for that machine, those monitors and that release (MC-12.1).
 
-**Not yet known:**
-- what a person sees: whether the mirror follows the first screen, whether the marks show on both, and whether it tears. The maintainer is asked, and DRV sends his words;
-- `screen-gone` on hardware: no unplug and no undo were made after stage 16.
+**What the maintainer saw** (DRV's `KRN/2026-11-22T0829Z-DRV-the-maintainer-saw-the-mirror-and-asks-for-stretch-fit-and-an-extended-desktop.md`), in his words:
+- «На обоих экранах изображение одинаковое (второе следует за первым)»: the second screen follows the first;
+- «отметки видны»: the marks show;
+- «кажется, что не рвется»: it does not seem to tear.
+
+`screen-gone` has not run on hardware: no unplug and no undo were made after stage 16.
+
+## Resolution
+
+**Made:** `display.wit` 1.3 (`offer-screen`, `screen-gone`, `BADGE_SCREEN`), `mmio` as an IDL handle, `init`'s badged client for `display`, and the compositor's mirror with the marks. It landed in round 169 (8e76876351).
+
+**Shown:**
+- on the Ryzen with its two monitors (release 202611220741, MC-12.1): the compositor's line as expected, and the maintainer's look above;
+- in the gate: every group on both architectures.
+
+**Asked next by the maintainer, and split off:**
+- the picture stretched or kept in shape: [213-KRN-0273](../issues/213-KRN-0273-the-second-screen-stretched.md);
+- the desktop extended over both monitors: 177-KRN-0274's plan, on the same branch.
+
+No frame signal is asked for while no tearing is seen.
+
+**Left uncovered:** `screen-gone` on hardware; tearing measured rather than looked at.
 
 ## Related
 
-[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](213-amd-ryzen-pc.md).
+[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).
