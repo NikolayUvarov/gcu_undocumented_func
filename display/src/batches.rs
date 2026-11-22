@@ -327,9 +327,9 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut impl Out) {
         4 => {
             for n in 0..4 {
                 let Some(low) = v.get(HubpreqPrimarySurfaceAddress, n) else { continue };
-                out.line(format_args!("B4 HUBP{}: SURFACE {:04X}_{:08X}, FORMAT {}, PITCH {}, ROTATION {}, BLANK {}, TTU_DISABLE {}",
+                out.line(format_args!("B4 HUBP{}: SURFACE {:04X}_{:08X}, FORMAT {}, PITCH FIELD {}, ROTATION {}, BLANK {}, TTU_DISABLE {}",
                     n, v.field(HubpreqPrimarySurfaceAddressHigh, n, PRIMARY_SURFACE_ADDRESS_HIGH).unwrap_or(0), low,
-                    Opt(v.field(HubpSurfaceConfig, n, SURFACE_PIXEL_FORMAT)), Opt(v.field(HubpreqSurfacePitch, n, PITCH).map(|p| p + 1)),
+                    Opt(v.field(HubpSurfaceConfig, n, SURFACE_PIXEL_FORMAT)), Opt(v.field(HubpreqSurfacePitch, n, PITCH)),
                     Opt(v.field(HubpSurfaceConfig, n, ROTATION_ANGLE)), Opt(v.field(HubpCntl, n, HUBP_BLANK_EN)),
                     Opt(v.field(HubpCntl, n, HUBP_TTU_DISABLE))));
             }

@@ -628,6 +628,8 @@ pub enum Step {
     Late,
     /// No new underflow on the firmware's pipe or on pipe 1 since stage 9 (their HUBPs' and ODMs' statuses).
     NoUnderflow,
+    /// Read the register back and log it with its field, against what the stage last wrote to it.
+    ReadBack { reg: Reg, field: Field },
 }
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).

@@ -513,6 +513,7 @@ impl Light {
             Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
                 n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
+            Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
             Step::Late | Step::Begin(_) => {}
         }
     }
@@ -523,8 +524,9 @@ impl Light {
             (true, Some(p)) => {
                 for step in dcn::steps_in(p, n) { self.step_line(n, verb, step, out); }
                 if n == 13 {
-                    out.line(format_args!("S{} PITCH FIELD {} ({} PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP{} HOLDS {}",
-                        n, picture::PITCH - 1, picture::PITCH, self.reference.map_or(0, |r| r.pipe), self.reference.map_or(0, |r| r.pitch_field)));
+                    out.line(format_args!("S{} PITCH FIELD {} ({} PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP{} HOLDS {} FOR ITS {} PIXELS",
+                        n, picture::PITCH - 1, picture::PITCH, self.reference.map_or(0, |r| r.pipe), self.reference.map_or(0, |r| r.pitch_field),
+                        self.reference.map_or(0, |r| r.width)));
                 }
             }
             (true, None) => {
@@ -686,6 +688,7 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                     late: Option<&Plan>, out: &mut dyn Out) -> Result<(), Failure> {
     let built = light.stage(n).any(|s| matches!(s, Step::Late));
     let steps = match (built, late) { (true, Some(p)) => dcn::steps_in(p, n), (true, None) => return Err(Failure::NoReference), _ => dcn::steps_in(&light.plan, n) };
+    let mut last: Option<(Reg, u32)> = None;
     for step in steps {
         match step {
             Step::Update { reg, mask, value } => {
@@ -694,7 +697,16 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                 let new = (old & !mask) | value;
                 if !journal.push(w, old, n) { return Err(Failure::JournalFull); }
                 e.write(w, new);
+                last = Some((reg, new));
                 out.line(format_args!("S{} WROTE {} = {:08X} (WAS {:08X})", n, Name(reg), new, old));
+            }
+            Step::ReadBack { reg, field } => {
+                let v = read(e, reg)?;
+                match last.filter(|l| l.0 == reg) {
+                    Some((_, w)) if w == v => out.line(format_args!("S{} READ BACK {} = {:08X}, AS WRITTEN: FIELD {}", n, Name(reg), v, field.get(v))),
+                    Some((_, w)) => out.line(format_args!("S{} READ BACK {} = {:08X}, NOT {:08X} AS WRITTEN: FIELD {}, NOT {}", n, Name(reg), v, w, field.get(v), field.get(w))),
+                    None => out.line(format_args!("S{} READ BACK {} = {:08X}: FIELD {}", n, Name(reg), v, field.get(v))),
+                }
             }
             Step::Wait { reg, mask, value, timeout_us } => {
                 let start = e.now_us();
@@ -882,6 +894,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     }
     let surface = r.fb_base + SURFACE_OFFSET;
     put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, picture::PITCH as u32 - 1)])?;
+    p.push(Step::ReadBack { reg: at(HubpreqSurfacePitch, q)?, field: PITCH }).map_err(|_| Failure::PlanFull)?;
     put(&mut p, HubpreqPrimarySurfaceAddressHigh, q, &[(WHOLE, (surface >> 32) as u32)])?;
     put(&mut p, HubpreqPrimarySurfaceAddress, q, &[(WHOLE, surface as u32)])?;
     put(&mut p, HubpPriViewportStart, q, &[(WHOLE, 0)])?;
@@ -936,15 +949,22 @@ fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> 
 /// the stage (PHY A was off). The PHY's own control register bus (`RDPCS_TX_CR_ADDR`/`_DATA`) is left as it is: a
 /// write to its data register is a write into the PHY, so putting it back would write stale values into the PHY. What
 /// the stage set inside the PHY stays; the undo says how much.
-fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, out: &mut dyn Out) {
+fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, at_once: bool, out: &mut dyn Out) {
+    let p = light.choice.output.phy as u32;
+    let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
+    // At once (an underflow): the stage's own writes put back, last first, before any line is logged.
+    let mut i = journal.len;
+    while at_once && i > 0 {
+        i -= 1;
+        let Some((w, old, stage)) = journal.items[i] else { continue };
+        if stage == n && w.reg().offset() != cr_addr && w.reg().offset() != cr_data { e.write(w, old); }
+    }
     let mut off = Journal::default();
     if let Some(t) = light.off_call(n) {
         if let Err(why) = call(light, e, interp, &mut off, t, 'U', n, true, out) {
             out.line(format_args!("U{} TABLE {} STOPPED ({}); RESTORING STAGE {}'S WRITES ANYWAY", n, t.index(), why, n));
         }
     }
-    let p = light.choice.output.phy as u32;
-    let (cr_addr, cr_data) = (seg2(0x2934 + 0xD8 * p), seg2(0x2935 + 0xD8 * p));
     let (mut restored, mut addresses, mut data) = (0, 0, 0);
     let staged = |o: u32| journal.items[..journal.len].iter().flatten().any(|(w, _, s)| *s == n && w.reg().offset() == o);
     let mut i = journal.len;
@@ -955,8 +975,9 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
         let o = w.reg().offset();
         if o == cr_addr { addresses += 1; continue; }
         if o == cr_data { data += 1; continue; }
-        e.write(w, old);
         restored += 1;
+        if at_once { out.line(format_args!("U{} RESTORED {} = {:08X} AT ONCE", n, Name(w.reg()), old)); continue; }
+        e.write(w, old);
         out.line(format_args!("U{} RESTORED {} = {:08X}", n, Name(w.reg()), old));
     }
     let mut j = off.len;
@@ -1048,15 +1069,19 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
                 out.line(format_args!("S{} {} NOT READY: {}; STAGES 1 TO {} STAY AS THEY ARE, STEP 4 STOPS HERE", n, name, why, n - 1));
                 if then_undo {
                     out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", n - 1, STAGES, journal.len, n - 1));
-                    for m in (1..n).rev() { undo(light, e, interp, journal, m, out); }
+                    for m in (1..n).rev() { undo(light, e, interp, journal, m, false, out); }
                 }
                 out.line(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {}: STAGE {} NOT READY; {} WRITES MADE {}", n - 1, STAGES, n, journal.len,
                     if then_undo { "ARE UNDONE" } else { "ARE LEFT IN PLACE" }));
                 return Outcome::NotReady { done: n - 1, stage: n, why };
             }
             Err(why) => {
-                out.line(format_args!("S{} {} FAILED: {}; UNDOING STAGES {} TO 1", n, name, why, n));
-                for m in (1..=n).rev() { undo(light, e, interp, journal, m, out); }
+                // An underflow: the stage taken back before the line that says so (the pattern on again, the HUBP blanked).
+                let at_once = matches!(why, Failure::Underflow { .. });
+                if at_once { undo(light, e, interp, journal, n, true, out); }
+                out.line(format_args!("S{} {} FAILED: {}; {}UNDOING STAGES {} TO 1", n, name, why,
+                    if at_once { "ITS WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; " } else { "" }, if at_once { n - 1 } else { n }));
+                for m in (1..if at_once { n } else { n + 1 }).rev() { undo(light, e, interp, journal, m, false, out); }
                 let after = light.watch.read(e).ok();
                 let same = after.map(|a| light.watch.changed(&baseline, &a).is_none());
                 out.line(format_args!("STEP 3 FAILED AT STAGE {} AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", n,
@@ -1068,7 +1093,7 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
     }
     if then_undo && allowed > 0 {
         out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", allowed, STAGES, journal.len, allowed));
-        for m in (1..=allowed).rev() { undo(light, e, interp, journal, m, out); }
+        for m in (1..=allowed).rev() { undo(light, e, interp, journal, m, false, out); }
         let same = light.watch.read(e).ok().map(|a| light.watch.changed(&baseline, &a).is_none());
         out.line(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", allowed, STAGES,
             match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));

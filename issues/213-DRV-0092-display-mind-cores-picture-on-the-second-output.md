@@ -94,9 +94,9 @@ logged in full before its first write:
 |---|---|
 | 11 | DPP1's and HUBP1's clock enables |
 | 12 | DPP1's format, colour stages and scaler as the firmware DPP's; recout and MPC size 1920x1080 |
-| 13 | HUBP1, still blanked: the surface at FB base + 0x1000000, pitch field 1919, viewport 1920x1080, the requestor, VM aperture, prefetch, QoS and cursor settings as the firmware HUBP's; DLG and TTU from stage 9; VREADY as the firmware's. The log gives the pitch field written and the firmware's |
+| 13 | HUBP1, still blanked: the surface at FB base + 0x1000000, pitch field 1919, viewport 1920x1080, the requestor, VM aperture, prefetch, QoS and cursor settings as the firmware HUBP's; DLG and TTU from stage 9; VREADY as the firmware's. The log gives the pitch field written and the firmware's, and the pitch register read back just after its write |
 | 14 | MPCC1 from DPP1 to OPP1 (bottom none, the firmware MPCC's blending); `MPC_OUT1_MUX` to MPCC1 |
-| 15 | HUBP1 unblanked; three frames; no new underflow on either pipe; the pattern off; three frames; no new underflow |
+| 15 | HUBP1 unblanked; three frames; no new underflow on either pipe; the pattern off; three frames; no new underflow. An underflow puts stage 15's writes back at once (the pattern on, then HUBP1's CNTL as stage 13 left it) before any line is logged, then undoes 14 to 1 |
 
 - **The guard** lets pipe 1's HUBP, DPP, MPCC and output mux through only from stage 11. First light's stages and their
   tables cannot reach them, and pipe 0's blocks stay refused.
@@ -106,7 +106,7 @@ logged in full before its first write:
   - DSCL's own blank timing, which Linux's bypass path leaves alone too.
 - **Copied rather than computed:** the prefetch, VM-row, QoS and cursor values. They were set for the firmware's larger
   mode, which leaves pipe 1 more time, not less. A mistake shows as an underflow, which fails stage 15 and undoes it.
-- **Host cases** (`display_light_host.rs`, 25; `display_picture_host.rs`, 4; batches, 11):
+- **Host cases** (`display_light_host.rs`, 28; `display_picture_host.rs`, 4; batches, 11):
   - all fifteen stages on the model, with the registers written and copied, and the guard by stage;
   - the undo of all fifteen;
   - an underflow at stage 15, a busy MPCC, stage 9 without a reference, stage 10 without a surface;
@@ -133,6 +133,66 @@ logged in full before its first write:
   - A start that finds the mark runs no stage and writes nothing.
   - The undo never takes the mark back.
   - A machine boot clears OTG1's registers: step 1 has read them 0 after every boot, though Linux drove OTG1 before.
+
+**Boot 70 (2026-11-22, release 202611220537, 13c77c7b9, switches 10/10/false): stage 9 refused, everything undone.**
+- **What happened:** stages 1 to 8 lit HDMI-A-1 again. Stage 9 then refused, and stages 8 to 1 were undone: 98 restores
+  (3 of them of registers only the off calls wrote), every off call run to its end.
+- **The two errors:**
+  - The reference clock came out 43,837 kHz. It had been taken from the firmware's `REF_FREQ_TO_PIX_FREQ`, which is the
+    GOP's own value. Its `PER_HTOTAL` gives 48 MHz by Display Core's formula, as `REFCLK_CNTL` 0 (the crystal) and the
+    global timer's divider 1 say. The GOP's line and request delivery are 0, and its blank ends are not Display Core's.
+  - The MPC check wanted MPCC1 free (`OPP_ID` 15). The firmware wires every MPCC n from DPP n to OPP n in passthrough
+    (`MPCC0_MPCC_CONTROL` 0xFFFF0461), so MPCC1's `OPP_ID` is 1, its own OPP.
+- **Fixed in d562026b2:**
+  - The reference clock comes from `PER_HTOTAL`, rounded to the MHz within 0.5%, and both estimates are logged.
+  - Pipe 1's DLG and TTU are computed from the clocks directly, with 30 requests a line (1920 / 64), not the GOP's.
+  - The MPC check reads the tree as the firmware wired it. Its refusal says which of three reasons, with the values.
+  - Stage 9, 10 or 16 not ready stops step 4 and leaves the stages before it in place.
+
+**Boot 71 (2026-11-22, release 202611220554, d562026b2, switches 10/10/false): stages 9 and 10 went through.**
+- **Stage 9:** OTG0 counted 30 frames in 500,246 us (59.970 Hz, pixel clock 268,495 kHz). The reference clock was
+  47,998 kHz by `PER_HTOTAL` (43,835 by `REF_FREQ_TO_PIX_FREQ`), taken as 48,000. Pipe 1 for 1920x1080 at 148.5 MHz:
+  REF/PIX 0.3232, `PER_HTOTAL` 182,044, `H_BLANK_END` 62, `V_BLANK_END` 41, line 620, request 21,183, next start 4,484.
+  These are the values the host cases expect.
+- **Stage 10:** drawn at slot 5's start with a pitch of 1920 pixels, nine samples read back as drawn.
+- **Step 3 stopped after stage 10** with its 95 writes left in place. The squares stayed on HDMI-A-1 and DP-2 was
+  unchanged.
+
+**The pitch.** Display Core writes the pitch less one (`hubp2_program_size`), and step 4 writes 1919 for 1920. The
+firmware's HUBP0 holds 2560 for its 2560 pixels.
+- **What this machine shows:** both conventions give a straight picture here:
+  - the GOP's 2560 on DP-2 now;
+  - Linux's 3455 for 3456 and 2559 for 2560 (Linux's state of 2026-11-21, in `display_batches_host.rs`).
+- **So the hardware rounds the field.** It rounds 2559 and 2560 to the same row, and 3455 and 3456 too, so its unit is at
+  most 128 pixels.
+- **What follows for step 4:** 1920 is a multiple of 128. So 1919 and 1920 give the same 1920-pixel row, and stage 15's
+  picture cannot tell the two conventions apart. Step 4 keeps Display Core's 1919.
+- **The read-back:** stage 13 reads the pitch register back right after writing it, and logs it with its field. A
+  register that keeps other bits than those written shows there.
+- **Step 1's batch 4 summary:** it printed the field plus one (`PITCH 2561` for the GOP's 2560), so it now prints the
+  field as read (`PITCH FIELD 2560`).
+
+**Stages 11 to 15 on the Ryzen.** The owner session's plan is three releases: 11 to 14 first, then 15, then 16 with KRN's
+interface.
+- **Timing:** at boot 71's pace (about 21 ms a log line, 1 s before each stage's writes, 3 s after each stage), the
+  stages write at about:
+  - 102 s (11);
+  - 106.5 s (12);
+  - 112 s (13);
+  - 116.7 s (14);
+  - 121 s (15).
+- **What the maintainer should see:**
+  - **Stages 11 to 14:** they turn on pipe 1's clocks, then set its DPP, its HUBP (blanked) and its MPCC to OPP1. The
+    squares stay on HDMI-A-1, because OPP1's pattern generator replaces whatever the MPC sends. DP-2 should not change:
+    no write reaches pipe 0's blocks.
+  - **Stage 15:** HUBP1 is unblanked behind the pattern; three frames later, with no new underflow, the pattern goes
+    off. The squares then give way to the picture, on a dark blue ground:
+    - a white border all round;
+    - both diagonals, corner to corner;
+    - a cross through the centre;
+    - a dark panel with the four lines in yellow.
+  - **An underflow:** HUBP1 is blanked again behind the pattern at once. Everything is then undone, and HDMI-A-1 goes
+    dark.
 
 ## Acceptance criteria
 
