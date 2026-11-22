@@ -352,8 +352,8 @@ fn served(event: receive_service::Event) {
                 channel, r.iter().sum::<u32>(), tx.rx_retry, Counted(&TX_RATES_RX, &r[..12]));
             mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US BY HT RATE:{}; OTHER {} (213-DRV-0104)", channel, Counted(&MCS, &r[12..28]), r[28]);
             let behind = tx.behind_label();
-            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
-                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {}; {} ({} POLLS) (213-DRV-0104)",
+                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind, tx.tight_label(), tx.tight_polls);
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
             let [pd, cck, limit, edcca] = floor.registers;

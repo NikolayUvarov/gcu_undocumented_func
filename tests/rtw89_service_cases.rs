@@ -715,6 +715,56 @@ fn service_alternates_sending_behind_a_late_frame_by_the_minute(){run(7,true,tru
     let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
 });}
 
+// 213-DRV-0104, POLL_TIGHT_WHILE_PENDING: a send is answered in the step that took it, not the next; with its release held
+// the tight poll gives up after TIGHT_US and the send is answered at its release; a frame that arrives while it polls is
+// taken and its waiter woken in that step; and by the minute when it alternates.
+#[test]
+fn service_polls_tight_while_a_send_is_pending(){
+    for tight in [false,true]{run(0,true,true,|data,_|{
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+        assert_eq!(ipc::response(send).is_some(),tight,"answered in its own step only with the tight poll");
+        assert!(service.step());assert!(ipc::response(send).is_some());drop(service);clean();
+    });}
+    for tight in [false,true]{run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let wait=ipc::words(6,0);assert!(service.step());assert!(ipc::response(wait).is_none(),"nothing received yet");
+        // The release held; a frame for the station comes 600 register reads into the step, after the send was taken.
+        c.borrow_mut().hold_reports=true;c.borrow_mut().incoming_after=Some((600,vec![packet()]));
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none(),"held");
+        assert_eq!(ipc::response(wait).is_some(),tight,"the frame taken and the waiter woken in that step only while polling");
+        c.borrow_mut().hold_reports=false;ipc::advance(5);assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its release");
+        assert!(ipc::response(wait).is_some());
+        let mut traffic=None;
+        for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+            if let Some(Event::Traffic{tx,..})=service.take_event(){traffic=Some(tx);break}}
+        let tx=traffic.expect("a minute line");
+        assert_eq!(tx.tight_label(),if tight{"TIGHT ALWAYS"}else{"TIGHT NEVER"});
+        if tight{assert!((10..=25).contains(&tx.tight_polls),"gave up after about TIGHT_US / TIGHT_PACE_US polls: {}",tx.tight_polls);}
+        else{assert_eq!(tx.tight_polls,0);}
+        drop(service);clean();
+    });}
+    // Alternating: the partial minute never, then off, then on. The frame buffer fills (nobody reads), so the tight poll
+    // reads the release queue alone: data frames final on DMA and the RPQ, as on the Ryzen (RPQ_ALONE, no firmware report).
+    run(7,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(false,true);service.rpq_alone();assert!(service.step());
+        let mut labels=vec![];
+        for _ in 0..3{
+            let mut line=None;
+            for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+                if let Some(Event::Traffic{tx,..})=service.take_event(){line=Some(tx);break}}
+            let tx=line.expect("a minute line");labels.push(tx.tight_label());
+            let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let own_step=ipc::response(send).is_some();
+            assert!(service.step());assert!(ipc::response(send).is_some());
+            labels.push(if own_step{"ANSWERED IN ITS STEP"}else{"ANSWERED NEXT STEP"});
+        }
+        assert_eq!(labels,["TIGHT NEVER","ANSWERED NEXT STEP","THIS MINUTE TIGHT OFF","ANSWERED IN ITS STEP","THIS MINUTE TIGHT ON","ANSWERED NEXT STEP"]);
+        drop(service);clean();
+    });
+}
+
 // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
 // then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
 #[test]

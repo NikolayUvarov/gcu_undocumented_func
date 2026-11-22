@@ -28,6 +28,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub hold_reports:bool,pub held_reports:Vec<[u8;32]>,
     // 213-DRV-0104: sends' RPQ releases held back the same way (the RPQ-alone path, its frames held in the MAC).
     pub hold_rpq:bool,pub held_rpq:Vec<u32>,
+    // 213-DRV-0104: frames for `incoming` after this many more register reads (one arriving in the middle of a step).
+    pub incoming_after:Option<(usize,Vec<Vec<u8>>)>,
     pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize,
     // The firmware's L0 recovery after a CMAC error (the Ryzen, 2026-11-08): at the next scheduler read, the scheduler
     // zeroed, SER_DBG_INFO 1 and CMAC_ERR_ISR 8; `ser_heal`: the firmware restores it after that many more reads.
@@ -58,6 +60,8 @@ impl Device{
         let mut c=self.control.borrow_mut();c.wifi_pending=pending;c.wifi_max_pending=c.wifi_max_pending.max(pending);
     }
     fn inject_old(&mut self){
+        let due={let mut c=self.control.borrow_mut();match c.incoming_after.as_mut(){Some((0,_))=>c.incoming_after.take().map(|(_,f)|f),Some((n,_))=>{*n-=1;None},None=>None}};
+        if let Some(frames)=due{self.control.borrow_mut().incoming.extend(frames);}
         if self.pending_ack.as_ref().is_some_and(|(at,_)|self.station.base.inner.now>=*at){
             let(_,packet)=self.pending_ack.take().unwrap();let identity=Self::word(&packet,0);let flags=Self::word(&packet,4);let sequence=identity>>24;
             for done in [false,true]{if flags&(1<<if done{15}else{14})==0{continue}
