@@ -715,6 +715,56 @@ fn service_alternates_sending_behind_a_late_frame_by_the_minute(){run(7,true,tru
     let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
 });}
 
+// 213-DRV-0104, POLL_TIGHT_WHILE_PENDING: a send is answered in the step that took it, not the next; with its release held
+// the tight poll gives up after TIGHT_US and the send is answered at its release; a frame that arrives while it polls is
+// taken and its waiter woken in that step; and by the minute when it alternates.
+#[test]
+fn service_polls_tight_while_a_send_is_pending(){
+    for tight in [false,true]{run(0,true,true,|data,_|{
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+        assert_eq!(ipc::response(send).is_some(),tight,"answered in its own step only with the tight poll");
+        assert!(service.step());assert!(ipc::response(send).is_some());drop(service);clean();
+    });}
+    for tight in [false,true]{run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let wait=ipc::words(6,0);assert!(service.step());assert!(ipc::response(wait).is_none(),"nothing received yet");
+        // The release held; a frame for the station comes 600 register reads into the step, after the send was taken.
+        c.borrow_mut().hold_reports=true;c.borrow_mut().incoming_after=Some((600,vec![packet()]));
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none(),"held");
+        assert_eq!(ipc::response(wait).is_some(),tight,"the frame taken and the waiter woken in that step only while polling");
+        c.borrow_mut().hold_reports=false;ipc::advance(5);assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its release");
+        assert!(ipc::response(wait).is_some());
+        let mut traffic=None;
+        for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+            if let Some(Event::Traffic{tx,..})=service.take_event(){traffic=Some(tx);break}}
+        let tx=traffic.expect("a minute line");
+        assert_eq!(tx.tight_label(),if tight{"TIGHT ALWAYS"}else{"TIGHT NEVER"});
+        if tight{assert!((10..=25).contains(&tx.tight_polls),"gave up after about TIGHT_US / TIGHT_PACE_US polls: {}",tx.tight_polls);}
+        else{assert_eq!(tx.tight_polls,0);}
+        drop(service);clean();
+    });}
+    // Alternating: the partial minute never, then off, then on. The frame buffer fills (nobody reads), so the tight poll
+    // reads the release queue alone: data frames final on DMA and the RPQ, as on the Ryzen (RPQ_ALONE, no firmware report).
+    run(7,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(false,true);service.rpq_alone();assert!(service.step());
+        let mut labels=vec![];
+        for _ in 0..3{
+            let mut line=None;
+            for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+                if let Some(Event::Traffic{tx,..})=service.take_event(){line=Some(tx);break}}
+            let tx=line.expect("a minute line");labels.push(tx.tight_label());
+            let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let own_step=ipc::response(send).is_some();
+            assert!(service.step());assert!(ipc::response(send).is_some());
+            labels.push(if own_step{"ANSWERED IN ITS STEP"}else{"ANSWERED NEXT STEP"});
+        }
+        assert_eq!(labels,["TIGHT NEVER","ANSWERED NEXT STEP","THIS MINUTE TIGHT OFF","ANSWERED IN ITS STEP","THIS MINUTE TIGHT ON","ANSWERED NEXT STEP"]);
+        drop(service);clean();
+    });
+}
+
 // 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
 // then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
 #[test]
@@ -820,6 +870,9 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");
     // 213-DRV-0104: the two sends in time binned by their answer's time, every arrival after the first by its gap since
     // the answer before it (13 arrivals: ten late, one refused, two in time), and the busiest second.
+    // 213-DRV-0104: every ended send's submission to fetch and fetch to release, by size: twelve of 64 bytes.
+    let timed:Vec<(u32,u32)>=tx.fetch_us.iter().zip(tx.release_us.iter()).map(|(f,r)|(f.iter().sum(),r.iter().sum())).collect();
+    assert_eq!(timed,vec![(12,12),(0,0),(0,0)],"{tx:?}");
     let in_time:Vec<u32>=tx.answer_ms.iter().map(|c|c.iter().sum()).collect();
     assert_eq!((in_time,tx.gap_ms.iter().sum::<u32>()),(vec![2,0,0],12),"two of 64 bytes in time, 13 arrivals: {tx:?}");
     assert!(tx.answer_ms[0][..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
@@ -829,9 +882,12 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     // The frames for this station taken into the buffer (16, nobody reads them), at the model's rate 0 (CCK 1 Mb/s), the
     // first with the retry bit.
     assert_eq!((tx.rx_rate[0],tx.rx_rate.iter().sum::<u32>(),tx.rx_retry),(16,16,1),"{:?}",tx.rx_rate);
+    // 213-DRV-0091: the steps' waits and work, in the model's clock: its receive wait ends at once, with the 2 ms asked.
+    assert_eq!((tx.wait_over,tx.work_over,tx.work_longest_us),([0,0],[0,0],0),"{tx:?}");assert!(tx.wait_longest_us<=2_000,"{tx:?}");
     {use crate::btc_session::data_mode::{rx_rate_bin,size_class,ms_bin};
     assert_eq!([0,4,11,0x80,0x87,0x8f,0x90,0x100,0x180].map(rx_rate_bin),[0,4,11,12,19,27,28,28,28],"CCK, OFDM, HT MCS 0-15, other");
-    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
+    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);
+    assert_eq!([0,249,250,1999,2000,9999,10000,19999,20000,49999,50000].map(crate::btc_session::data_mode::us_bin),[0,0,1,7,8,15,16,16,17,17,18]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
     assert!(tx.peak_sends>=2&&tx.peak_sends<=13,"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
     assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
     let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};

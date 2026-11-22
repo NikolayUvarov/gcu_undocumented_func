@@ -268,6 +268,48 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
   - the bins of `rx_rate_bin`, `size_class` and `ms_bin` at their edges.
 - The 40 `rtw89_*_host.rs` files pass: 4888 cases. The release build builds.
 
+**2026-11-22, the final submission's fetch and release timed** (this branch; host cases, not run):
+- **Why:** boot 98's in-time answers have their mode at 4 to 6 ms for every size, and none under 2 ms, while a frame at 36 Mb/s is on the air in under one. Two more measures split that time.
+- **`tx::Queue`** keeps the pending submission's times on the bus clock: its submission, the first poll that finds its descriptor fetched, and the ingest of its release report. At a completion it keeps the final submission's two spans.
+- **Six minute lines**, two a size class (under 200 bytes, 200 to 1000, over 1000):
+
+  ```
+  [RTW89] TRAFFIC ON c: SUBMITTED TO FETCHED BY US, OVER 1000 B: … (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: FETCHED TO RELEASED BY US, OVER 1000 B: … (213-DRV-0104)
+  ```
+
+  - The bins are 250 µs to 2 ms, 1 ms to 10 ms, then to 20 ms, to 50 ms, and over.
+  - Both spans are as the polls see them, so they are quantized by the service's steps. With the tight poll below they are finer.
+- **Host case:** the minute sends case checks the twelve ended sends in both and the bins' edges. All 40 `rtw89_*_host.rs` files pass. The release build builds.
+
+**2026-11-22, boot 98's rate lines, and a tight poll while a send is pending** (this branch; host cases, not run):
+- **Boot 98** (release 202611221746, bench tree 1d3f1277b with 1127b9a95; cable reads at 17:54 and 18:00; the owner's pings at 82 to 141 s, his uploads at 141 to 412 s):
+  - **Our unicast sends:** mostly at 36 and 48 Mb/s, some at 24 and 54. 1.3 to 1.6 tries a frame. About 20 to 25% needed more than one try, almost all acknowledged in the end.
+  - **The access point's frames to us:** legacy OFDM only, 48 and 54 Mb/s, no HT. 17 to 24% carry the retry bit.
+  - **The in-time answer's time** has its mode at 4 to 6 ms for every size, nothing under 2 ms.
+  - **The gap from an answer to the next send:**
+    - In the ping minutes it peaks at 0 to 2 ms and at 10 to 12 ms. The second is wlan's loop: `recv_timeout(…, POLL_MS)`, POLL_MS 10 (wlan/src/main.rs:34, :905).
+    - In the upload minutes it peaks at 0 to 2 ms, and again past 30 ms, TCP's turn.
+  - **So in this hour a frame sent one at a time costs 4 to 6 ms of the driver's, more than its air time.** wlan's tick and TCP add their parts.
+- **Why 4 to 6 ms:** a send is begun in a step's dispatch. Its release is looked for in the next step's progress, after that step's `recv_timeout` of POLL_MS 2 ms (IPC timeouts end at the first 1 ms tick after the time asked on x86, docs/api). If not released by then, one more wait follows.
+- **`service::POLL_TIGHT_WHILE_PENDING`, a bench switch, committed false:**
+  - After a step that leaves a send's call open, the service polls at TIGHT_PACE_US (100 µs) for up to TIGHT_US (2 ms), then goes back to its loop. Each poll:
+    - reads the rings by the light poll (`poll_more`, the release queue and RXQ unless the frame buffer is full);
+    - takes the station's frames and wakes its waiters;
+    - settles the send by `advance_light`: the queue's progress without the data mode's liveness checks and reconcile, which the step made, but a recovery is still outlasted.
+  - Requests that come meanwhile wait at most those 2 ms for the next step's receive.
+  - **The pace:** there is no sleep below the scheduler's tick, and no yield in the ABI. IPC timeouts take whole milliseconds, 0 meaning without limit. So the pause is the device's `delay_us`, `io::short_delay`: a spin on the monotonic clock, at most 1 ms.
+  - 100 µs keeps a light poll (about 20 MMIO reads) under a tenth of the pace. The cost is CPU: up to 2 ms of spin a send whose release is slow, on CPU 4 beside the compositor.
+- **`service::POLL_TIGHT_ALTERNATES`, a bench mode, committed false:** the switch by the minute line's minutes, as SEND_BEHIND_LATE's: the partial minute never, then off, then on.
+  - The SENDS line ends `THIS MINUTE TIGHT ON|OFF` (or `TIGHT ALWAYS|NEVER`) with the minute's tight polls.
+  - **From outside:** let T1 be the boot's first `TRAFFIC ON c: n FRAMES` line's time (about 66 s). An uptime U, from the link shell's `time`, lies in minute k = 1 + ceil((U − T1) / 60). Minute 1 is never; even minutes are off and odd minutes from 3 are on.
+- **Host case** `service_polls_tight_while_a_send_is_pending`:
+  - a send answered in the step that took it with the switch, in the next without;
+  - with its release held, the poll gives up after 10 to 25 polls and the send is answered at its release;
+  - a frame that comes 600 register reads into the step is taken, and its waiter woken, in that step only while polling;
+  - alternating, the labels and the answers' step follow never, off, on (RPQ alone, as on the Ryzen).
+- The 40 `rtw89_*_host.rs` files pass: 4889 cases. The release build builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

@@ -513,6 +513,19 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
     (2) changes wlanhw's contract and wlan's handling of Busy, so it is NET's as well.
 - **The frame buffer:** until now nothing logged its full spells. The minute line now counts them and gives the longest. With the ring's polls every 20 ms or less, boot 82's 255 waiting needs RXQ left unread for about 0.4 s, which is the buffer full while wlan did not read. A wlan blocked in its synchronous sends is one way that happens.
 
+**2026-11-22, the service's steps timed** (branch `claude/213-DRV-0102-floor-and-answer`; host cases, not run):
+- **Why:** the RX ring's poll gaps over 5 ms (300 to 450 a minute, the longest 18 to 21 ms) still have no cause. The owner's `ps` on boot 97 shows `rtw89_wifi` on CPU 4 with `compositor` and `clipboard`, on a machine of 16 CPUs.
+- **A minute line:**
+
+  ```
+  [RTW89] TRAFFIC ON c: SERVICE STEPS: WAITS OVER 5 / 10 MS a / b, THE LONGEST w US; WORK OVER 5 / 10 MS c / d, THE LONGEST k US (213-DRV-0091)
+  ```
+
+  - A step's wait is its `recv_timeout` of POLL_MS (2 ms; IPC timeouts end at the first 1 ms tick after the time asked on x86, docs/api).
+  - A step's work is the rest of the step: the rings' polls, the checks, the dispatch.
+  - A wait far over 2 ms without a request is the task not run again on time: the scheduler, or another task on its CPU, which is KRN's. Work over it is the step's own.
+- **Host case:** the minute sends case checks both at zero over 5 ms in the model, whose receive wait ends at once.
+
 ## For a successor (state on 2026-11-22)
 
 **Branches and heads** (the WIFI agent's; worktrees under the session's scratchpad, `a-*`):

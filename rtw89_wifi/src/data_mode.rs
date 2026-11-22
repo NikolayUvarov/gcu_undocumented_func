@@ -276,7 +276,18 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     // 213-DRV-0104: the in-time answers above by the frame's size (SIZES: under 200 bytes, to 1000, over); sends to one
     // station ended, by the rate they went at (txdesc::LEGACY_RATES' order: sends, acknowledged, tries) and by their tries
     // (1 to 15); frames received for this station by the access point's rate (rx_rate_bin) and those with the retry bit.
-    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32}
+    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32,
+    // 213-DRV-0091: the service's steps: its waits for a request (POLL_MS asked) and its work after them, each over 5 and
+    // over 10 ms, and the longest (µs): a wait far over its time is the task not run again, work over it the step's own.
+    pub wait_over:[u32;2],pub wait_longest_us:u64,pub work_over:[u32;2],pub work_longest_us:u64,
+    // 213-DRV-0104: each ended send's final submission by size (size_class): µs from it to its DMA fetch seen, and from
+    // that to its release seen, in US_BINS (us_bin).
+    pub fetch_us:[[u32;US_BINS];3],pub release_us:[[u32;US_BINS];3],
+    // 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING (as `behind`), and the tight polls made.
+    pub tight:FloorKind,pub tight_fixed:bool,pub tight_polls:u32}
+/// 213-DRV-0104: µs bins: 250 µs each to 2 ms, 1 ms each to 10 ms, then to 20 ms, to 50 ms, and 50 ms or more.
+pub const US_BINS:usize=19;
+pub fn us_bin(us:u64)->usize{if us<2_000{(us/250)as usize}else if us<10_000{8+((us-2_000)/1_000)as usize}else if us<20_000{16}else if us<50_000{17}else{18}}
 /// 213-DRV-0104: a frame's size class for the in-time answers: under 200 bytes, 200 to 1000, over 1000.
 pub fn size_class(length:usize)->usize{if length<200{0}else if length<=1000{1}else{2}}
 /// 213-DRV-0104: the received rates binned: the descriptor's data rate as the hardware gives it (rtw89_hw_rate): CCK 0 to 3
@@ -293,6 +304,13 @@ impl TxMinute{
         match(self.behind,self.behind_fixed){
             (FloorKind::On,_)=>"THIS MINUTE BEHIND LATE ON",(FloorKind::Off,_)=>"THIS MINUTE BEHIND LATE OFF",
             (FloorKind::None,true)=>"BEHIND LATE ALWAYS",(FloorKind::None,false)=>"BEHIND LATE NEVER",
+        }
+    }
+    /// 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING, for its line.
+    pub fn tight_label(&self)->&'static str{
+        match(self.tight,self.tight_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE TIGHT ON",(FloorKind::Off,_)=>"THIS MINUTE TIGHT OFF",
+            (FloorKind::None,true)=>"TIGHT ALWAYS",(FloorKind::None,false)=>"TIGHT NEVER",
         }
     }
 }
@@ -678,6 +696,27 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn pending_packets(&self)->usize{self.session.pending_packets()}
     /// The registers the first shutdown found (SNAPSHOT), if it ran on an activated data mode.
     pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
+    /// 213-DRV-0104 (POLL_TIGHT_WHILE_PENDING): the pending send's progress without the liveness checks and the reconcile,
+    /// which the step's `advance` made: a recovery is still outlasted first. The rings are read by `poll_more` before it.
+    pub(crate) fn advance_light(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
+        Self::request(timeout_us)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.outlast_ser(deadline,true)?;if !self.queue.pending_request(){return Ok(None)}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let result=self.queue.advance(&mut window);self.session.last=window.last;
+            let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
+        result.map_err(|cause|self.runtime_failure(cause))
+    }
+    /// 213-DRV-0104: the bus clock, µs.
+    pub(crate) fn now_us(&mut self)->Option<u64>{self.session.now().ok()}
+    /// 213-DRV-0104: a pause of `us` on the bus (on the Ryzen io::short_delay: a spin on the clock, at most 1 ms).
+    pub(crate) fn pace(&mut self,us:u32)->Result<(),Failure>{
+        let result=(||{let deadline=self.deadline(us.saturating_add(1_000))?;
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let r=window.delay_us(us);self.session.last=window.last;r?;Ok(())})();
+        result.map_err(|cause:Cause|self.runtime_failure(cause))
+    }
+    /// 213-DRV-0104: the last ended send's final submission: µs to its fetch seen and to its release seen after that.
+    pub(crate) fn take_tx_timing(&mut self)->Option<(u64,u64)>{self.queue.take_timing()}
     /// What the pending send has seen (a timeout's diagnostic).
     pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
     /// More time for the pending send (service.rs's KEEP_LATE).

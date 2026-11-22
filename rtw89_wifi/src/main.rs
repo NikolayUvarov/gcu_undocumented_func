@@ -331,8 +331,17 @@ fn served(event: receive_service::Event) {
             for (class, bins) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.answer_ms.iter()) {
                 mind::println!("[RTW89] TRAFFIC ON {}: SENDS ANSWERED IN TIME BY MS (2 TO 30, 10 TO 90), {}: {} (213-DRV-0104)", channel, class, Spaced(bins));
             }
+            // 213-DRV-0104: an ended send's final submission: to its fetch seen, and from that to its release seen (µs bins:
+            // 250 to 2000, 1000 to 10000, then 20000, 50000, more).
+            for (class, (f, r)) in ["UNDER 200 B", "200 TO 1000 B", "OVER 1000 B"].iter().zip(tx.fetch_us.iter().zip(tx.release_us.iter())) {
+                mind::println!("[RTW89] TRAFFIC ON {}: SUBMITTED TO FETCHED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(f));
+                mind::println!("[RTW89] TRAFFIC ON {}: FETCHED TO RELEASED BY US, {}: {} (213-DRV-0104)", channel, class, Spaced(r));
+            }
             mind::println!("[RTW89] TRAFFIC ON {}: FROM AN ANSWER TO THE NEXT SEND BY MS (2 TO 30, 10 TO 90, MORE): {}; PEAK {} SENDS IN A SECOND (213-DRV-0104)",
                 channel, Spaced(&tx.gap_ms), tx.peak_sends);
+            // 213-DRV-0091: the service's steps: waits for a request (2 ms asked) and the work after them.
+            mind::println!("[RTW89] TRAFFIC ON {}: SERVICE STEPS: WAITS OVER 5 / 10 MS {} / {}, THE LONGEST {} US; WORK OVER 5 / 10 MS {} / {}, THE LONGEST {} US (213-DRV-0091)",
+                channel, tx.wait_over[0], tx.wait_over[1], tx.wait_longest_us, tx.work_over[0], tx.work_over[1], tx.work_longest_us);
             // 213-DRV-0104: sends to one station by the rate they went at and by tries, and what the access point sent us.
             const TX_RATES: [&str; 12] = ["1M", "2M", "5.5M", "11M", "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"];
             mind::println!("[RTW89] TRAFFIC ON {}: SENT TO ONE STATION BY RATE, SENDS/ACKED/TRIES, 1 TO 9 MB/S:{} (213-DRV-0104)", channel, ByRate(&TX_RATES[..6], &tx.by_rate[..6]));
@@ -343,8 +352,8 @@ fn served(event: receive_service::Event) {
                 channel, r.iter().sum::<u32>(), tx.rx_retry, Counted(&TX_RATES_RX, &r[..12]));
             mind::println!("[RTW89] TRAFFIC ON {}: RECEIVED FOR US BY HT RATE:{}; OTHER {} (213-DRV-0104)", channel, Counted(&MCS, &r[12..28]), r[28]);
             let behind = tx.behind_label();
-            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
-                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {}; {} ({} POLLS) (213-DRV-0104)",
+                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind, tx.tight_label(), tx.tight_polls);
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
             let [pd, cck, limit, edcca] = floor.registers;
