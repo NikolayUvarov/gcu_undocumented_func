@@ -1,6 +1,6 @@
 # 158-APP-0152 — A key in `camera` and `wm`'s camera that steps through the camera's modes
 
-**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written, 2026-11-22; the `vfs` suite's run and the Ryzen's cameras left) · **Blocked by:** — (`video.wit` 1.1's `modes` and `opened`, [158-DRV-0083](../issues-done/158-DRV-0083-a-cameras-modes-listed-and-chosen.done), in `main` since round 169) · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
+**Type:** tools (`camera`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written, 2026-11-22; the `vfs` suite's run and the Ryzen's cameras left) · **Blocked by:** — (`video.wit` 1.1's `modes` and `opened`, [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md), in `main` since round 169) · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.4
 
 **Asked by:** DRV, `APP/2026-11-21T1259Z-DRV-request-a-key-in-camera-that-steps-through-the-cameras-modes.md` on `internal-dev-messages`, at the maintainer's word of 2026-11-21: «переключение камеры должно быть доступно и из самого приложения, как устройства, так и её режимов». Numbered on 2026-11-21.
 
