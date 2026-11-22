@@ -32,7 +32,8 @@ Each step ends with something a person or a log can check, and none of it is pro
 - [x] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a
   model of the blocks (`tests/display_host.rs`, `display_light_host.rs`; on the Ryzen's tables, the watched run's 95
   writes in its order).
-- [ ] With KRN's part: MIND Core's screen on both monitors.
+- [ ] With KRN's part: MIND Core's screen on both monitors. Step 4 is its own task since 2026-11-22:
+  [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
 
 ## Progress (2026-11-21)
 
@@ -675,6 +676,29 @@ The maintainer chose to run stages 2 to 8, watched.
   - bit 24 of `DIG0_DIG_FE_CNTL` at the `DIG_START` pulse (1 at its first write, 0 at its second).
 - The model now answers as the hardware did: `DPCS_SYMCLK_CLOCK_ON` while the gate is off or the clock enabled, and
   `MPLLB_STATE` while a lane's `MPLL_EN` is set. The host cases run the Ryzen's tables from both states (fc8490ad4).
+
+**Table 12's cold path, and what a test of it would take (a decision of the maintainer's).** Every MIND Core start
+on this machine comes through Linux, so PHY A's mark is set and table 12 takes the short path. The long path, with its
+20 address and 17 data writes into PHY A, has not run on this hardware. Testing it would need, on purpose:
+1. **A start of MIND Core not through Linux.** From Linux, set `BootNext` to MIND Core's entry, as `boot_switch` does,
+   then power off instead of restarting. A person then switches the machine on. `BootNext` is kept in NVRAM across
+   the power-off.
+2. **What it may change:** whether a power-off clears PHY A's mark, and the rest of the display block's state, is
+   itself not known. Step 1's batches show the engine as found. Stage 2's line shows which path table 12 took (since
+   213-DRV-0092's first commit): `THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH` or `... THE LONG PATH: n
+   WRITES THROUGH ITS BUS`.
+3. **What to watch:**
+   - the long path's waits (SRAM init done, MPLLB's state, the lanes' acknowledgements), each bounded by the table's
+     500 ms;
+   - table 12's count: 530 steps and 111 writes on the model;
+   - HDMI-A-1 waking at stage 8;
+   - DP-2 through every stage.
+4. **What the undo takes back, and what not:**
+   - If a stage fails, every register returns to its value before step 3, PHY A's mark too (back to 0, so the next
+     set-up runs the long path again).
+   - The 17 data writes into PHY A's internal registers stay: its PLL and lane settings for 148.5 MHz TMDS. They stay
+     until PHY A is set up again, by the next long path, Linux's DMCUB, or a power-off.
+   - With no failure and no undo, the internal settings and the mark both stay until the next power-off.
 
 **This release at every boot.** 202611220438 runs the eight stages at each boot and leaves them; the owner session
 keeps it so today, each boot a repeat of the experiment.
