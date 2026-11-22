@@ -26,9 +26,10 @@ const SER_DBG_INFO:usize=0x8424;
 // CMAC table's window twice in 98 minutes once the firmware knew the link) reads again UNREADABLE_TRIES times,
 // UNREADABLE_GAP_US apart, and outlasts a firmware recovery that SER_DBG_INFO or the BB and the scheduler show meanwhile;
 // only a mismatch with a readable value, or no answer at all after it, stops the data mode.
+// The gap is at most 1 ms: io::short_delay refuses more, and 2 ms stopped the data mode 5 times (the Ryzen's boots 64-65).
 const UNREADABLE:u32=0xdead_beef;
-const UNREADABLE_TRIES:u32=8;
-const UNREADABLE_GAP_US:u32=2_000;
+const UNREADABLE_TRIES:u32=16;
+const UNREADABLE_GAP_US:u32=1_000;
 // 213-DRV-0091: the firmware's error status, taken as Linux's rtw89_mac_get_err_status takes it (mac.c): HALT_C2H_CTRL
 // nonzero, then HALT_C2H read and HALT_C2H_CTRL cleared. Read at each data-mode check; nothing is answered to the firmware.
 const HALT_C2H_CTRL:usize=0x164;

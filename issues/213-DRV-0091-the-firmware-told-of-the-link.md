@@ -241,6 +241,43 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - **The traffic also differed.** Boot 62 carried the night's Effector traffic, and most of the old driver's time was in short daytime runs.
   - **Still to read:** the rest of boot 59, boots 63 and 64, and the night's boots. They add old-driver time only from boot 59, so a fair comparison needs a night with the old driver too. No such night is planned.
 
+**2026-11-22, the night on the Ryzen: boots 63 to 65** (read from the log volume through the server, without a lease; channel 8, UZ, A0:36:BC:11:F8:88):
+- **The builds:**
+  - boot 63: 202611212213, step 1 as b3db40619, 22:18 to 22:37;
+  - boot 64: 202611212235, with c6202f1c8, 22:39 to 22:47;
+  - boot 65: 202611212244, with 4ae48ce88, from 22:48, 5.3 hours read.
+- **What the night did not have:** no hole, no RECEIVE STALLED, no `MEDIUM ERROR`, and no firmware error code. HALT_C2H_CTRL read 0 at every data-mode check, and all 315 minute lines of boot 65 read 0 L0, 0 L1, 0 L2 and 0 unknown.
+- **The data mode stopped once in boot 64 and four times in boot 65,** each time with `Register(Fault { kind: Clock, register: 0, value: 2000 })`.
+  - **The cause is this branch's own.** `read_again()` waited 2000 µs between reads, but the platform's `io::short_delay` refuses more than 1000 µs, and the value in the fault is that delay.
+  - **So the mending did nothing.** Every check that met DEADBEEF, unmended by the recovery path, stopped on its first wait. No `CHECK MET` line was reached.
+  - **Why the host cases passed:** the host model's delay had no limit.
+  - **Each stop cost the link 5.0 to 7.1 s.** netstack kept its address and connection, and TCP bytes came again after about 8.5 s. One restart, pid 51 at 11497.8 s, failed in the PCIe PHY stage (a Timeout at 0x10A0, value 29); the next started 0.35 s later.
+  - **The registers at the five stops:** HALT_C2H_CTRL and HALT_C2H read 0. SER_DBG_INFO read F0000002, F0000001, F0000008, 0, and 0 in boot 64.
+- **The firmware still recovers, without a code.**
+  - SER_DBG_INFO's count rose in three of boot 65's five runs: to 2, to 1, and from 1 to 8. That is about 10 recoveries in 5.3 hours.
+  - None left HALT_C2H_CTRL set at a check, and none was met as a recovery between operations.
+  - Each driver finds the halt C2H interrupt enabled by the firmware (HIMR0 0x00200000, B_AX_HALT_C2H_INT_EN) and masks it, unlike Linux, which keeps it.
+  - Whether the firmware posts its codes only while that bit is on is not known.
+- **The minutes, by run:**
+
+  | Run | Minutes | Beacons a minute, median (min to max) | Late sends a minute, median (max) | Sent / acked |
+  |---|---|---|---|---|
+  | Boot 63 | 19 | 583 (577–586) | 1 (6) | 7598 / 7570 |
+  | Boot 64, pid 49 | 6 | 582.5 (581–585) | 0.5 (2) | 4711 / 4702 |
+  | Boot 65, pid 21 | 66 | 583 (544–586) | 1 (26) | 9575 / 9435 |
+  | Boot 65, pid 49 | 35 | 583 (571–586) | 0 (6) | 5055 / 5024 |
+  | Boot 65, pid 50 | 89 | 583 (578–586) | 0 (3) | 12898 / 12838 |
+  | Boot 65, pid 52 | 74 | 584 (579–586) | 0 (4) | 10692 / 10637 |
+  | Boot 65, pid 57 | 51, running | 584 (552–586) | 0 (4) | 7944 / 7908 |
+
+  The inbox was never full.
+
+**2026-11-22, the wait mended** (host cases; not yet run on the Ryzen):
+- **The wait:** `read_again()` waits 1000 µs between reads, up to 16 reads in all, about the same 15 ms as before.
+- **The host model** (`tests/rtw89_pipeline_device.rs`) now refuses a delay over 1000 µs as `io::short_delay` does.
+  - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
+  - After the change, all 40 pass, and the release build builds.
+
 ## Related
 
 [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the holes, the beacons not on the host; this branch's base), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association).
