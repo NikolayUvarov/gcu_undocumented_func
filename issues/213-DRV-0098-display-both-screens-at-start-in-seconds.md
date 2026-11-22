@@ -148,7 +148,8 @@ the DPP's and HUBP's set-up after their clocks, the MPC, and the I2C engine's se
 - whether the hardware needs anything the survey's pauses gave beyond the `DIG_START` hold. The 10 us hold has not run
   on the hardware.
 
-**A proposal, not made** (the owner session's decision): stage 15's watch is 5 s of about 6 s.
+**A proposal, not taken** (the owner session decided that 300 and 30 stay; see "The watch, and a standing check planned"
+below): stage 15's watch is 5 s of about 6 s.
 - **What the runs show:** the one underflow seen (boot 74, before e20a0244f's changes) showed within 41 frames of the
   pattern going off. Four watches since then were clean all 300 frames (boots 75, 76, 79, 81).
 - **What a shorter watch would give:** one of 60 frames (1 s) would have caught boot 74's and would save 4 s.
@@ -176,12 +177,95 @@ The code keeps 300 and 30.
 - **The profile:** docs/profile/bootstrap.md's `display` row named seven batches and eight stages, and said BAR 0 is
   not read. It now says what the code does.
 
+## The watch, and a standing check planned (2026-11-22)
+
+**Decided by the owner session:** the watch stays 300 frames, and stage 9's count 30, as the code has them. The proposal
+comes back with the production series' numbers, and with a cheaper check that would last.
+
+**The series** (release of a71a47b83 on the Ryzen, `SURVEY_ORDER` false, boots 84 to 89, six starts through
+the Effector server; the owner session's logs). Every start:
+- offered the second screen 6163.2 to 6183.8 ms after `display`'s start, at 9.546 to 9.664 s of the boot
+  (boot 81, the survey's order: 137.6 s);
+- watched 300 frames clean: no underflow and no request timeout on either pipe;
+- had its longest gap between two reads at 129 to 130 us, at frames 27 to 32 of the 300;
+- counted the firmware's pixel clock at 268,459 to 268,510 kHz.
+
+| Boot | Offer after `display`'s start | At the boot's | Step 3 in all | Stage 9's count | The watch | Longest gap | Before frame | Pixel clock | Table 76 |
+|---|---|---|---|---|---|---|---|---|---|
+| 84 | 6163.2 ms | 9.597 s | 6029.2 ms | 502.6 ms | 4999.3 ms | 130 us | 27 | 268,459 kHz | 2276 steps |
+| 85 | 6167.1 ms | 9.599 s | 6030.2 ms | 506.0 ms | 4998.3 ms | 129 us | 32 | 268,510 kHz | 2276 steps |
+| 86 | 6166.3 ms | 9.664 s | 6033.5 ms | 511.5 ms | 4999.3 ms | 129 us | 28 | 268,506 kHz | 2276 steps |
+| 87 | 6170.7 ms | 9.546 s | 6029.2 ms | 508.6 ms | 4998.3 ms | 130 us | 32 | 268,509 kHz | 2289 steps |
+| 88 | 6165.6 ms | 9.638 s | 6028.2 ms | 504.8 ms | 4998.3 ms | 130 us | 28 | 268,463 kHz | 2263 steps |
+| 89 | 6183.8 ms | 9.606 s | 6045.2 ms | 513.9 ms | 4998.0 ms | 130 us | 32 | 268,508 kHz | 2289 steps |
+
+- **The tables:** every start made the model's writes (33, 5 and 23) and took table 12's short path. Their steps are not
+  the model's, nor boot 81's:
+  - table 12 took 321 steps, against 308;
+  - table 76 took 2263 to 2289, against 300.
+
+  Without the survey's 20 ms line after each of a table's writes, the VBIOS's own status loops poll longer before their
+  statuses show. They wait by their condition and make the same writes, about 1.4 ms in all for table 76.
+- **The longest gap has a name.** Placed by its frame, it fell in every start within the log's millisecond of `init`'s
+  end of boot. These lines are logged in one millisecond or two:
+  - `STARTED effector PID=42`;
+  - `THE POWER BUTTON SHUTS THE MACHINE DOWN (SCI 9, PM1 EVENTS AT 0x800)`;
+  - `PLATFORM PRIVILEGE DROPPED`;
+  - `READY`.
+
+  For example, at 5.011 s against 5.005 on boot 84, 5.096 against 5.097 on boot 85, and 5.105 against 5.110 to 5.111 on
+  boot 89. The watch begins about 4.5 s into the boot and reads without sleeping, so it meets that moment at its frames
+  27 to 32. Which of the four took the CPU for 130 us (the effector's start, the power button's SCI armed, the privilege
+  dropped) the log does not tell; it is `init`'s, and it is once a boot. 130 us is under 1 % of a frame (16.6 ms). A
+  frame passes unread only across a gap of a frame or more, so none did.
+
+**What the watch buys.** After it, nobody looks for an underflow at all. Its 300 frames check the first 5 s after the
+pattern goes off, and nothing after.
+- Across the survey's boots and this series, the only underflow seen came within 41 frames (boot 74, before e20a0244f).
+- What could bring one later is not looked for. Two candidates:
+  - DRAM leaving or entering a state under the watermarks the firmware set for one display (copied, not recomputed for
+    two);
+  - the compositor's load on the memory as the desktop changes.
+
+**A standing check, planned; no code yet.**
+- **Where:** in `display` after the offer.
+  - With `HOTPLUG` (213-DRV-0096), every 20th of its 50 ms polls, so once a second.
+  - Without it, a loop of its own once a second.
+- **What it reads:** four registers a second, against the values stage 9 took. These statuses are sticky until cleared,
+  and only `display` clears pipe 1's, so a new one shows at the next read:
+  - pipe 1's `HUBP1_DCHUBP_CNTL` (`HUBP_UNDERFLOW_STATUS`, `HUBP_TIMEOUT_STATUS`) and `ODM1_OPTC_INPUT_GLOBAL_CONTROL`
+    (`OPTC_UNDERFLOW_OCCURRED_STATUS`);
+  - the firmware's `HUBP0` and `ODM0` likewise.
+- **On a new status of pipe 1:** the watch's own undo.
+  1. Stage 15's writes are put back at once: the pattern on, and HUBP1 blanked as stage 13 left it.
+  2. `screen_gone`.
+  3. Stages 14 to 1 are undone.
+  4. The mark stays, so nothing is tried again this boot.
+  5. One line names the status, its register and the time since the offer.
+- **On a new status of the firmware's pipe:** the same, at once, as the watch does. DP-2 comes first.
+- **What it costs:** four reads a second, and no line unless it finds something. An hourly line saying it is on and has
+  found nothing would be a choice.
+- **What it would allow:** the watch need only show that the picture comes up clean before the offer, while the
+  standing check catches a later underflow within a second. Then the watch could shorten, for example to 60 frames
+  (1 s, which would have caught boot 74's), and the offer would come about 4 s sooner. That decision stays the owner
+  session's, after the check has run.
+- **Host cases it would need:**
+  - an underflow 10 s after the offer, undone within a second, the pattern first;
+  - one on the firmware's pipe;
+  - an hour of the model's time with none: no line and no write.
+- **Not covered by it:**
+  - an underflow on pipe 1 that the firmware's pipe shows first. That is caught too, as the firmware's.
+  - a picture that is wrong but does not underflow, which no status shows.
+
 ## Acceptance criteria
 
 - [x] Host cases: the production order makes the same writes as the survey's, in the same order. `display_light_host.rs`
   for steps 3 and 4 at 1920x1080 (DVI and HDMI) and in the EDID's mode, with every failure path and the Ryzen's tables;
   `display_ddc_host.rs` for step 2; `display_batches_host.rs` for what step 1 leaves the later steps.
-- [ ] On the Ryzen: the second screen offered within the measured time, logged with each part's share.
+- [x] On the Ryzen: the second screen offered within the measured time, logged with each part's share. Boots 84 to 89
+  (the release of a71a47b83, the production order) offered it 6163 to 6184 ms after `display`'s start, at 9.55 to 9.66 s
+  of the boot, each with `STEP 3'S TIMES` and the time from `display`'s start. This holds for that machine with its two
+  monitors, started through Linux (MC-12.1, 12.9).
 
 ## Related
 
