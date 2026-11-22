@@ -30,12 +30,12 @@ DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeon
 ## Acceptance criteria
 
 - [x] `tests/pci_control_host.rs`: a memory grant keeps `0006`, sets mastering where it was off, and keeps an I/O bit that was on.
-- [ ] Builds for x86 and aarch64. Every QEMU group passes in the gate: every PCI grant goes through the changed transition.
+- [x] Builds for x86 and aarch64. Every QEMU group passes in the gate: every PCI grant goes through the changed transition.
 - [ ] **On the Ryzen** (DRV, with the maintainer's stick):
   - init's line shows `COMMAND 0006 BEFORE THE GRANT, 0006 AFTER`;
   - the stub shows 108 KiB of registers, a 4096-byte mailbox, 20480 KiB of BAR 0, and a VFCT image for `1002:1638` with `55AA`;
   - DP-2 keeps its picture.
-- [ ] docs/api and docs/profile (bootstrap.md, README.md MC-1.5, tcb.md) say what changed.
+- [x] docs/api and docs/profile (bootstrap.md, README.md MC-1.5, tcb.md) say what changed.
 
 **Not covered:** whether BAR 0 from 16 MiB is scanned out by the engine. That waits on the survey's batch 6 under MIND Core (`DCN_VM_FB_LOCATION_*`). The kernel takes only the firmware's conventional memory into its frame pool (`kernel/src/frames.rs`), so the carve-out is never handed out if the firmware's memory map marks it as reserved. The Ryzen's map is not checked here.
 
@@ -51,6 +51,12 @@ DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeon
 **Left:**
 - the gate's groups;
 - DRV's run on the Ryzen, with the lines the acceptance criteria name.
+
+## Landed (2026-11-21)
+
+In main since round 168 (ee391287b7, `LANDING/2026-11-21T2340Z-KRN-landed-ee391287.md` on `internal-dev-messages`), with DRV's 213-DRV-0085, 0086 (`display` replaces the stub and keeps its lines) and 0087. The gate passed every group on both architectures: every PCI grant of every QEMU boot went through the changed transition. Round 167 was not landed, because APP's request failed the network group and was returned.
+
+**Left:** the Ryzen's run (DRV), with the lines the acceptance criteria name. A stick written from main carries it.
 
 ## Related
 

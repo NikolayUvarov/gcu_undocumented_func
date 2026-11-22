@@ -7,10 +7,12 @@
 // marks of who can reach the machine from outside, the link and the Effector agent (800-KRN-0156): drawn here, on the
 // framebuffer only, so no capture holds them and no program can hide them. It logs the screen, each screen put in
 // front and its first seconds of frames (213-KRN-0098), and whose screen is in front (750-KRN-0192).
+// A display driver may offer a second screen (display.wit 1.3, 213-KRN-0272): the first is mirrored into it, scaled to
+// fit and centred, with the same marks.
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
-use mind::display::{remote_center, remote_of, remote_pixel, Remote};
-use mind::idl::display::{self, Error, Mode, RemoteState, Request};
+use mind::display::{fit, remote_center, remote_of, remote_pixel, shown, source_of, Remote, BADGE_SCREEN};
+use mind::idl::display::{self, Error, Mode, PixelFormat, RemoteState, Request};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
@@ -77,6 +79,94 @@ fn remote(mark: Remote, state: RemoteState, width: usize, height: usize) -> impl
         .map(move |(x, y)| (x, y, color))
 }
 
+// A second screen a driver lent (213-KRN-0272): its mapping, its shape, where the first screen's picture lies on it,
+// and for each of the picture's columns and rows the first screen's column and row it shows.
+struct Second { map: Mapping, width: usize, height: usize, pitch: usize, format: u32, at: (usize, usize), size: (usize, usize), cols: Pages, rows: Pages }
+
+impl Second {
+    // A driver's offer checked against what it lent: the shape inside the mapping, a format drawn here.
+    fn new(info: &BootInfo, width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize) -> Result<Second, Error> {
+        let (width, height, pitch) = (width as usize, height as usize, pitch as usize);
+        if width == 0 || height == 0 || pitch % 4 != 0 || pitch < width * 4 { return Err(Error::BadScreen); }
+        let map = Mapping::new(pixels).map_err(|_| Error::NoMemory)?;
+        if map.len() < pitch * height { return Err(Error::BadScreen); }
+        let (x, y, w, h) = fit((info.width, info.height), (width, height));
+        let (Some(cols), Some(rows)) = (Pages::new(w * 4), Pages::new(h * 4)) else { return Err(Error::NoMemory) };
+        let second = Second { map, width, height, pitch: pitch / 4, format: if format == PixelFormat::Rgb { PIXEL_RGB } else { PIXEL_BGR }, at: (x, y), size: (w, h), cols, rows };
+        for c in 0..w { unsafe { core::ptr::write((second.cols.address() as *mut u32).add(c), source_of(c, w, info.width) as u32); } }
+        for r in 0..h { unsafe { core::ptr::write((second.rows.address() as *mut u32).add(r), source_of(r, h, info.height) as u32); } }
+        Ok(second)
+    }
+    fn col(&self, c: usize) -> usize { unsafe { core::ptr::read((self.cols.address() as *const u32).add(c)) as usize } }
+    fn row(&self, r: usize) -> usize { unsafe { core::ptr::read((self.rows.address() as *const u32).add(r)) as usize } }
+    fn put(&self, x: usize, y: usize, pixel: u32) {
+        let device = if self.format == PIXEL_BGR { pixel & 0x00FF_FFFF } else { pixel_to_device(pixel, self.format, [0; 3]) };
+        unsafe { core::ptr::write_volatile(self.map.as_ptr::<u32>().add((self.at.1 + y) * self.pitch + self.at.0 + x), device); }
+    }
+    // Everything: black around the picture, the picture from the shadow when it holds a frame.
+    #[inline(never)]
+    fn redraw(&self, info: &BootInfo, shadow: *const u32, valid: bool) {
+        let target = self.map.as_ptr::<u32>();
+        for y in 0..self.height { for x in 0..self.width { unsafe { core::ptr::write_volatile(target.add(y * self.pitch + x), 0); } } }
+        if !valid { return; }
+        for r in 0..self.size.1 {
+            let row = self.row(r) * info.stride;
+            for c in 0..self.size.0 { self.put(c, r, unsafe { core::ptr::read(shadow.add(row + self.col(c))) }); }
+        }
+    }
+    // The picture's pixels that show what changed: each first-screen row's changed columns, from `spans`.
+    #[inline(never)]
+    fn update(&self, info: &BootInfo, shadow: *const u32, spans: *const [u32; 2]) {
+        for r in 0..self.size.1 {
+            let sy = self.row(r);
+            let [first, last] = unsafe { core::ptr::read(spans.add(sy)) };
+            let Some((c0, c1)) = shown(first as usize, last as usize, self.size.0, info.width) else { continue };
+            for c in c0..=c1 { self.put(c, r, unsafe { core::ptr::read(shadow.add(sy * info.stride + self.col(c))) }); }
+        }
+    }
+    // A mark on the picture while `lit`, else what the shadow shows under it.
+    #[inline(never)]
+    fn mark(&self, info: &BootInfo, shadow: *const u32, valid: bool, lit: bool, shape: impl Iterator<Item = (usize, usize, u32)>) {
+        for (x, y, color) in shape {
+            let pixel = if lit { color } else if valid { unsafe { core::ptr::read(shadow.add(self.row(y) * info.stride + self.col(x))) } } else { 0 };
+            self.put(x, y, pixel);
+        }
+    }
+}
+
+// A driver's offer or its screen gone, answered after the second screen changed (213-KRN-0272).
+fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, shadow: *const u32, valid: bool, lines: &mut u32) {
+    if badge != BADGE_SCREEN {
+        say(lines, format_args!("[COMPOSITOR] SECOND SCREEN REFUSED: PID {} (BADGE {}) IS NO DISPLAY DRIVER (MC-3.11)", sender, badge));
+        if let Request::OfferScreen { pixels, .. } = request { let _ = mind::ipc::drop_cap(pixels); }
+        let _ = if matches!(request, Request::ScreenGone) { display::reply_screen_gone(call, Err(Error::Denied)) } else { display::reply_offer_screen(call, Err(Error::Denied)) };
+        return;
+    }
+    match request {
+        Request::OfferScreen { width, height, pitch, format, pixels } => {
+            drop(second.take()); // the screen before, unmapped first
+            let made = Second::new(info, width, height, pitch, format, pixels);
+            let _ = mind::ipc::drop_cap(pixels); // the mapping keeps the range
+            match &made {
+                Ok(s) => {
+                    s.redraw(info, shadow, valid);
+                    say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, {:?}, FROM PID {}: THE FIRST MIRRORED AT {}X{} FROM {},{}",
+                                            width, height, pitch, format, sender, s.size.0, s.size.1, s.at.0, s.at.1));
+                }
+                Err(error) => say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, FROM PID {} REFUSED: {:?}", width, height, pitch, sender, error)),
+            }
+            let answer = made.as_ref().map(|_| ()).map_err(|e| *e);
+            *second = made.ok();
+            let _ = display::reply_offer_screen(call, answer);
+        }
+        _ => {
+            let was = second.take().is_some();
+            say(lines, format_args!("[COMPOSITOR] SECOND SCREEN GONE (PID {}){}", sender, if was { "" } else { ": THERE WAS NONE" }));
+            let _ = display::reply_screen_gone(call, Ok(()));
+        }
+    }
+}
+
 // What a request lit: the capture dot, the camera mark or a remote mark.
 enum Lit { Capture, Camera, Remote(Remote, RemoteState) }
 
@@ -86,6 +176,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
     let lit = match request {
         Request::Capture => Some(Lit::Capture), Request::Camera => Some(Lit::Camera), Request::Mode => None,
         Request::Remote { state } => remote_of(badge).map(|mark| Lit::Remote(mark, state)),
+        Request::OfferScreen { .. } | Request::ScreenGone => None, // second_screen's
     };
     let _ = match request {
         Request::Camera => display::reply_camera(call),
@@ -103,6 +194,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
             };
             display::reply_capture(call, copy)
         }
+        Request::OfferScreen { .. } | Request::ScreenGone => Ok(()),
     };
     lit
 }
@@ -128,6 +220,8 @@ fn main(info: &'static BootInfo) {
     let mut busy = None::<usize>; // since when the screen changed while its task ran
     let (mut front, mut front_lines) = (0u64, 0u32); // the PID whose screen is in front (750-KRN-0192), and its lines logged
     let mut watch = Watch::default();
+    let mut second: Option<Second> = None; // a second screen a driver lent (213-KRN-0272)
+    let mut second_lines = 0u32;
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {
@@ -183,6 +277,7 @@ fn main(info: &'static BootInfo) {
                     written += 1;
                 }
             }
+            if let Some(screen2) = second.as_ref() { if valid { screen2.update(info, shadow, spans); } else { screen2.redraw(info, shadow, true); } }
             valid = true;
             let (now, took) = (mind::time::uptime_ms(), (mind::time::monotonic_ns() - start) / 1_000_000);
             if frame == Frame::NewSource {
@@ -207,23 +302,28 @@ fn main(info: &'static BootInfo) {
         if let Some(at) = captured {
             let capturing = mind::time::uptime_ms() - at < DOT_MS;
             mark(info, gop, shadow, valid, capturing, dot(info.width, info.height));
+            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, capturing, dot(s2.size.0, s2.size.1)); }
             if !capturing { captured = None; }
         }
         if let Some(at) = filmed {
             let streaming = mind::time::uptime_ms() - at < DOT_MS;
             mark(info, gop, shadow, valid, streaming, camera(info.width, info.height));
+            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, streaming, camera(s2.size.0, s2.size.1)); }
             if !streaming { filmed = None; }
         }
         for (slot, which) in [Remote::Link, Remote::Effector].into_iter().enumerate() {
             if let Some((at, state)) = remotes[slot] {
                 let shown = mind::time::uptime_ms() - at < REMOTE_MS;
                 mark(info, gop, shadow, valid, shown, remote(which, state, info.width, info.height));
+                if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, shown, remote(which, state, s2.size.0, s2.size.1)); }
                 if !shown { remotes[slot] = None; say(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: OFF", which)); }
             }
         }
         // Wait for the next frame, answering requests meanwhile (without a service endpoint: just wait).
         match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if frame == Frame::Busy { 1 } else { FRAME_MS }) {
             Ok(request) => match display::decode(&request, RECEIVED_CAP) {
+                Ok((decoded @ (Request::OfferScreen { .. } | Request::ScreenGone), call)) =>
+                    second_screen(info, decoded, call, request.badge, request.sender, &mut second, shadow, valid, &mut second_lines),
                 Ok((decoded, call)) => match serve(info, source.as_ref(), decoded, call, request.badge, request.sender, &mut remote_lines) {
                     Some(Lit::Capture) => captured = Some(mind::time::uptime_ms()),
                     Some(Lit::Camera) => filmed = Some(mind::time::uptime_ms()),
