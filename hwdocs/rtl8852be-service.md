@@ -35,6 +35,14 @@ coordinator and KRN endpoint/configuration grants remain separate prerequisites.
   finds the ring empty or, when the step's polls run out, until the next step.
   The service logs at most once a minute what became of the reports since the
   admission (`[RTW89] SIGNAL ON CHANNEL c SINCE THE ADMISSION: ...`).
+- Holes (213-DRV-0090): the data mode counts the joined BSS's beacons as the
+  ring gives them. A second without one, once one was heard, opens a hole and
+  its next beacon closes it. Both ends are logged (`[RTW89] HOLE n ...`) with the
+  counts since the other end, and, for the first twelve, with the registers of
+  `data_mode::PROBE_*` (MAC, BB, both RF paths, the coexistence's grants). Every
+  minute `[RTW89] TRAFFIC ON c: ...` gives the counts since the admission, and on
+  its first minute and every tenth the same registers for a good link. These
+  are diagnostics: no hole changes what the driver does.
 - `attach` and `kick` return invalid, as the existing BCM adapter does: this
   slice uses `receive` and implements no shared ring.
 

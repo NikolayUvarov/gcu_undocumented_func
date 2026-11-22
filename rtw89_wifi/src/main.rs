@@ -292,6 +292,31 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Signals { channel, kept, measured, late, unmatched } =>
             mind::println!("[RTW89] SIGNAL ON CHANNEL {} SINCE THE ADMISSION: ON {} OF {} FRAMES KEPT; {} REPORTS AFTER THE FRAME WAS HANDED ON, {} UNMATCHED (213-DRV-0087)",
                 channel, measured, kept, late, unmatched),
+        receive_service::Event::Traffic { channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, bssid: b, other_beacons, refused, sent, acked, late, holes, longest_ms, probe } => {
+            if let Some(r) = refused { for (n, (length, head)) in r.frames[..r.count].iter().enumerate() {
+                mind::println!("[RTW89] REFUSED FRAME {} OF THE FIRST {}: {} BYTES, {:02X?}", n + 1, r.count, length, head);
+            } }
+            mind::println!("[RTW89] TRAFFIC ON {}: {} FRAMES, {} KEPT, {} FILTERED, {} INVALID, {} INBOX FULL; {} PPDU, {} BEACONS; {} SENT, {} ACKED, {} LATE; {} HOLES, LONGEST {} MS",
+                channel, wifi, kept, filtered, invalid, pressure, ppdu, beacons, sent, acked, late, holes, longest_ms);
+            mind::println!("[RTW89] TRAFFIC ON {}: THE BEACONS ABOVE ARE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}'S; {} BEACONS OF OTHERS FILTERED OUT (213-DRV-0090)",
+                channel, b[0], b[1], b[2], b[3], b[4], b[5], other_beacons);
+            if let Some(probe) = probe { pieces("GOOD LINK", &probe); }
+        }
+        receive_service::Event::Hole { n, channel, bssid: b, by_beacons: true, ms, wifi, kept, ppdu, pressure, sent, acked, pending, probe } => {
+            mind::println!("[RTW89] HOLE {} ON {}: NO BEACON OF {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} FOR {} MS; SINCE IT {} FRAMES, {} KEPT, {} PPDU, {} INBOX FULL; {} SENT, {} ACKED{}",
+                n, channel, b[0], b[1], b[2], b[3], b[4], b[5], ms, wifi, kept, ppdu, pressure, sent, acked, if pending { ", ONE PENDING" } else { "" });
+            if let Some(probe) = probe { pieces("HOLE START", &probe); }
+        }
+        receive_service::Event::Hole { n, channel, by_beacons: false, ms, kept, ppdu, pressure, sent, acked, pending, probe, .. } => {
+            mind::println!("[RTW89] HOLE {} ON {}: NO WI-FI FRAME AT ALL FOR {} MS (NO BEACON OF THE BSS REACHES THE HOST); SINCE IT {} KEPT, {} PPDU, {} INBOX FULL; {} SENT, {} ACKED{}",
+                n, channel, ms, kept, ppdu, pressure, sent, acked, if pending { ", ONE PENDING" } else { "" });
+            if let Some(probe) = probe { pieces("HOLE START", &probe); }
+        }
+        receive_service::Event::HoleEnded { n, ms, wifi, kept, ppdu, pressure, sent, acked, probe } => {
+            mind::println!("[RTW89] HOLE {} ENDED: ITS BEACON AFTER {} MS; MEANWHILE {} FRAMES, {} KEPT, {} PPDU, {} INBOX FULL; {} SENT, {} ACKED (213-DRV-0090)",
+                n, ms, wifi, kept, ppdu, pressure, sent, acked);
+            if let Some(probe) = probe { pieces("HOLE END", &probe); }
+        }
         receive_service::Event::ListenHeard { channel, bssid: b, tune_ms, send_ms } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} HEARD {} MS AFTER THE TUNE, {} MS AFTER THE REFUSED SEND (213-DRV-0087)",
                 channel, b[0], b[1], b[2], b[3], b[4], b[5], tune_ms, send_ms),

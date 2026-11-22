@@ -78,6 +78,8 @@ fn ready(bus: &mut impl RegisterIo) -> io::Result<()> {
     }
     Err(Fault::new(FaultKind::Timeout, LTE_CTRL, 0))
 }
+/// The LTE window's SW_CFG_1, the grants the coexistence writes (213-DRV-0090's probe).
+pub(crate) fn lte_grants(bus: &mut impl RegisterIo) -> io::Result<u32> { lte_read(bus) }
 fn lte_read(bus: &mut impl RegisterIo) -> io::Result<u32> {
     ready(bus)?; bus.write32(LTE_CTRL, 0x800f0038)?;
     let value = io::read32(bus, LTE_RDATA)?;
