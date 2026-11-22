@@ -493,28 +493,94 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended`. The model holds sends' final reports back. Ten late frames get eight probes and one more in the minute, an in-time frame gets its probe once, and the minute line counts 10 late, 10 at the first try, a median hold over 90 ms and the frame buffer's full spell.
   - `calibration_results_are_judged_by_linuxs_criteria`: the DPK and IQK criteria at their edges.
   - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
-- **What a late answer does upstream** (from the code; nothing changed):
-  - **The driver** (service.rs):
-    - It takes one send at a time. Any send while one is pending is answered Busy at once.
-    - A send's deadline is 90 ms (COMMAND_US less FRAME_MARGIN_MS). At it, KEEP_LATE answers `Sent { acked: false, attempts }` with the tries seen so far.
-    - It keeps the frame pending, its release awaited up to LATE_MS (5 s) more, refusing every other send meanwhile.
-  - **`wlan`** (wlan/src/main.rs, `apply`):
-    - The send is a synchronous call, so wlan waits the 90 ms.
-    - A unicast data frame's answer goes to `station.sent(acked, attempts)`, and any error, Busy included, to `station.sent(false, 15)`.
-    - Nothing is sent again: the late frame does go out later, and a Busy one is dropped.
-  - **`dot11`** (dot11/src/station.rs:443, `sent`): a frame not acknowledged steps the rate down at once, and its tries count against that rate's success.
-  - **So a hold has three effects:**
-    - one false loss, with a step down in rate;
-    - every frame behind it refused and lost, each a step down with 15 tries counted;
-    - wlan blocked for the 90 ms.
+- **What a late answer does upstream.** From the code at 2e854da9c; `wlan` and `dot11` are main's at 1e9d8beb5. Nothing is changed. True of every boot at its own low rate of late frames:
+  1. **One send at a time.** A send while one is pending is answered Busy at once (rtw89_wifi/src/service.rs:536).
+  2. **The deadline.** A send's deadline is COMMAND_US less FRAME_MARGIN_MS, 100 − 10 = 90 ms (service.rs:537; the constants at 17 and 20).
+  3. **The late answer.** At the deadline, KEEP_LATE (service.rs:29) answers `Sent { acked: false, attempts }` with the tries seen so far (service.rs:265). It keeps the frame pending, its release awaited LATE_MS (5000 ms, service.rs:30) more (service.rs:262). Every send meanwhile is refused as in step 1.
+  4. **wlan waits for the answer.** `wlan`'s send is a synchronous call under its deadline (wlan/src/main.rs:468, `radio_call` at :60), so wlan is blocked for the 90 ms.
+  5. **wlan records the outcome.** A unicast data frame's answer goes to `station.sent(sent.acked, sent.attempts)` (wlan/src/main.rs:469). Any error, Busy included, goes to `station.sent(false, ATTEMPTS)` with ATTEMPTS 15 (wlan/src/main.rs:470 and :40). The frame is not sent again: a held frame does go out later, and a refused one is dropped.
+  6. **The rate steps down.** `dot11::Station::sent` (dot11/src/station.rs:443) steps the rate down at once for a frame not acknowledged (station.rs:449), and its tries count against that rate's success, which chooses the rate every RATE_WINDOW frames.
+  - **So one hold causes:**
+    - a false loss and a step down in rate;
+    - every frame sent behind it refused and lost, each another step down with 15 tries counted;
+    - wlan blocked for 90 ms.
 
-    TCP sees the lost frames, not the held one, unless its timer runs out before the hold ends. An upload in boot 82 more likely failed on these drops and the falling rate than on duplicates.
-  - **What I would try:**
+    TCP loses the refused frames. The held one reaches the peer once, unless TCP's timer runs out first. At boot 82's rate of holds, that is why the uploads failed outright.
+  - **What I would try, once the series has shown what holds the frames:**
     - (1) answer a late send at its release, up to a bound (about 1 s), with its true tries and outcome;
     - (2) queue sends behind a held one instead of refusing them.
 
-    (2) changes wlanhw's contract and wlan's handling of Busy, so it is NET's as well as ours.
+    (2) changes wlanhw's contract and wlan's handling of Busy, so it is NET's as well.
 - **The frame buffer:** until now nothing logged its full spells. The minute line now counts them and gives the longest. With the ring's polls every 20 ms or less, boot 82's 255 waiting needs RXQ left unread for about 0.4 s, which is the buffer full while wlan did not read. A wlan blocked in its synchronous sends is one way that happens.
+
+## For a successor (state on 2026-11-22)
+
+**Branches and heads** (the WIFI agent's; worktrees under the session's scratchpad, `a-*`):
+
+| Branch | Head | State |
+|---|---|---|
+| `claude/213-DRV-0087-rtl8852be-on-5-ghz` | ef2bb4f65 | In main (round 0748) |
+| `claude/213-DRV-0090-the-receiver-goes-deaf` | 96784295b | In main (round 0748) |
+| `claude/213-DRV-0091-the-firmware-told-it-is-connected` (step 1) | e4fbbd891 | In main (round 0748) |
+| `claude/213-DRV-0091-the-halt-interrupt` (the mended check, the error codes, HISR0, the PCI state, `HALT_INTERRUPT_AS_LINUX` false) | 5b105801a | In main (round 170). Superseded heads: c6202f1c8, 07e59deb9, 551b174ce |
+| `claude/213-DRV-0091-step-2-the-port` | 3c6a1de2b | Main 1e9d8beb5 merged in, so the port alone over main. Full suite green (261, 0 failed). In the boot image since boot 80. Waits for the starts series and a night that shows it does no harm |
+| `claude/213-DRV-0091-the-recoveries-placed` (on step 2) | 2e854da9c | The SER steps placed, the ring's polls and gaps, the held-frame probe, the minute's sends, the calibrations, `PORT_AS_LINUX`. In the bench tree (2fe8f4319, the release of 13:35 UTC). b7ade4b60 green (261, 0 failed); 2e854da9c's full run was in progress at this writing. Waits for the loaded hour and the series |
+| `claude/213-DRV-0091-halt-interrupt-on` (bench only, never to land) | a99e72427 | Flips `HALT_INTERRUPT_AS_LINUX` to true on 3c6a1de2b. Not run. The next one-change run after step 2's verdict |
+| `claude/550-DRV-0088-the-owners-rule` | 068c5e589 | Green 254 then. Waits for NET (wlanhw) |
+
+**Bench switches:**
+- **`mac::HALT_INTERRUPT_AS_LINUX`** (false): never run true. a99e72427 is the flip. On the Ryzen, `halt_interrupt_refusal` allows it (INTx on INTA, line 255, MSI off).
+- **`service::PORT_AS_LINUX`** (true): step 2's port. Every boot from 80 ran it true, and the starts series runs it true. False is the series to run if the held probes show the port's TBTT prohibit holding the frames.
+- The driver's older DEBUG constants (KEEP_LATE, OUTLAST_SER, OWN_DEADLINES) are as they were.
+
+**The collector and the tools** (wf-bench/ in the session's scratchpad):
+- **`collect-day.sh FIRST_BOOT READS`:**
+  - Every 30 minutes it fetches the current boot's file through the server (`hes-op.sh … collect_file log:/bootNNNN.log`, `max_bytes` 1500000) into handoff/wifi/day/.
+  - It skips a read while anyone but WIFI holds the machine.
+  - It exits at the first new CHECK MET, SER_DBG_INFO STEP, HISR0, error code, recovery, stop or hole line (seen.txt holds those already reported).
+- **Analysis scripts:**
+  - `day_report.py`: a boot's drivers, SER_DBG_INFO, meetings and line kinds;
+  - `windows.py`: the ten-minute windows against the count's rises;
+  - `traffic_minutes.py`: beacons and late sends a minute;
+  - `ser_per_driver.py`;
+  - `probe_values.py`: a probe's pieces joined, the values that differ between boots;
+  - `starts_table.py`: one row a start for the series. The series' logs come into handoff/wifi/starts/.
+- **The rtw89 host files:**
+  - `wf-bench/hosttests.sh`, its path and output folder changed with sed for each worktree, builds each `tests/rtw89_*_host.rs` with `rustc --edition=2021 --test`, the service file with `--cfg rtw89_service`, and runs it.
+  - The release build is `cd rtw89_wifi && CARGO_TARGET_DIR=… cargo build --release`.
+  - The full suite runs under `flock /tmp/claude-1000/heavy.lock` with `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd bash scripts/host_tests.sh`. A fresh worktree runs `./02_build.sh` first.
+  - APP's `improve` case failed now and then until its fix in round 170.
+
+**What is shown:**
+- **The mended check works on the Ryzen:** CHECK MET lines in boots 74, 76 and 81, with no stop. The 2 ms wait of c6202f1c8 was refused by `io::short_delay` and stopped the data mode five times in boots 64 and 65.
+- **The firmware's recoveries are silent:**
+  - no HALT_C2H code and no HISR0 halt bit in boots 65 to 83;
+  - SER_DBG_INFO counts them;
+  - about 2 an hour idle, about 14 an hour in the windows of USB or audio load (boots 74 to 79).
+- **The error masks match Linux's.**
+- **The PCI interrupt state:** INTx on INTA, line 255, MSI present and off.
+- **Step 2 sets the port** (C400 1E81C, INFRA). No rate difference is shown.
+- **Late frames are held in the MAC, then sent once and acknowledged:** boot 82 at 22%, every other boot at 2.3% or less. That makes one bad start in 34 of boots 55 to 83.
+
+**What is open:**
+- **What holds the frames.** The series and the held probe will tell, TBTT prohibit first.
+- **The poll cadence:** 18 to 21 ms longest gaps and about 400 gaps over 5 ms a minute. The same in a good boot and a bad one, so not the cause of the late sends. It is not mended before the loaded hour shows whether RXQ's backlog grows.
+- **Whether a recovery follows our own task's starvation.** The loaded hour waits for the cable and the console.
+- **Unexplained readings:**
+  - boot 81's meeting with no SER step;
+  - boot 74's rise of 30 in its first ten minutes;
+  - boot 82's RXQ backlog of 255 in its first minute.
+- **5 GHz** (213-DRV-0087): the first join waits for NET's first-join wait and for 550-DRV-0088 (the owner's rule), which waits for NET's wlanhw.
+- **The answer path for late sends** (above) is NET's contract question, carried by the owner after the series.
+
+**Traps:**
+- **A probe's value can be cut in two.** A probe is printed in pieces of a fixed width, and a register's value may straddle two pieces. Join the pieces' text exactly before comparing (`probe_values.py`); read piece by piece, 0x4688 and 0xC70 once looked different.
+- **The minute's own printing lands in the next minute.** A minute's polls are taken when its TRAFFIC event is built, before its lines are printed. So the printing falls into the next minute, and a longest gap caused by it would show "ago" of about 60 s.
+- **CHECK MET's "before" is stale.** Its SER_DBG_INFO "before" is the session's last-seen value, not a read just before. The SER_DBG_INFO STEP line has the step.
+- **`io::short_delay` refuses more than 1 ms.** The host model now refuses it too. The model's bus clock is not the IPC clock, so gaps and phases in host cases are the model's.
+- **A server read during another agent's usb_host replace latches the Effector agent** (its journal on the stick) until the machine restarts. Read outside others' leases.
+- **A boot that sends badly cannot upload its log** (collect_file `upload`, boot 82). The log is then read from the stick under Linux.
+- **The late frame's `ANSWERED NOT ACKNOWLEDGED` is not the access point's.** It is our 90 ms answer. The LATE FRAME WAS RELEASED line that follows has the outcome.
 
 ## Related
 
