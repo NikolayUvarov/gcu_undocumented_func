@@ -13,6 +13,10 @@ fn command<B:btc_session::DeviceIo>(data:&mut DataSession<'_,'_,'_,'_,'_,'_,B>){
     data.command(h2c::Command{category:2,class:10,function:2},&[0;20],h2c::Acks{received:true,done:true},100_000).unwrap();
 }
 fn run(fault:u8,configure:bool,inbox:bool,check:impl FnOnce(&mut DataSession<'_,'_,'_,'_,'_,'_,Device>,&Rc<RefCell<Control>>)){
+    run_at(2437,fault,configure,inbox,check)
+}
+// The same admission on the channel at `center_mhz` (213-DRV-0087: 5500 is channel 100).
+fn run_at(center_mhz:u16,fault:u8,configure:bool,inbox:bool,check:impl FnOnce(&mut DataSession<'_,'_,'_,'_,'_,'_,Device>,&Rc<RefCell<Control>>)){
     download::tests::with_synthetic_firmware(|verified|{
         let mut raw=model::Device::new(2);let board=model::read_board(&mut raw);let mut region=model::Region::new();let txmem=Region::new();
         let(mut queue,mut rings)=region.pair(&mut raw);let mut tx=unsafe{tx::Queue::new(&mut raw,txmem.base,tx::DMA_BYTES,0x1000000).unwrap()};
@@ -29,7 +33,7 @@ fn run(fault:u8,configure:bool,inbox:bool,check:impl FnOnce(&mut DataSession<'_,
             let mut session=if inbox{Session::new_with_inbox(&mut d,&mut queue,&mut rings,&receiving,ready,&mut scratch,&mut bank).unwrap()}
                 else{Session::new(&mut d,&mut queue,&mut rings,&receiving,ready,&mut scratch).unwrap()};
             let mut phy=Phy::new(&mut session,board.identity);let initial=initial_phy::prepare(&mut phy,&board,&caps).unwrap();
-            let resolved=Resolved::resolve(&board,channel::Rule{country:*b"US",version:1,center_mhz:2437,
+            let resolved=Resolved::resolve(&board,channel::Rule{country:*b"US",version:1,center_mhz,
                 access:channel::Access::InitiateRadiation,eirp_half_dbm:40,conducted_half_dbm:34},
                 PlatformInput::Limits(Constraints{per_ntx:[30,24],per_path:[30,30]})).unwrap();
             let mut tuned=channel::run(&mut phy,&board,&initial.prefix,&initial.paths,&tables,resolved.policy()).unwrap();

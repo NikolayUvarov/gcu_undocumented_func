@@ -123,3 +123,17 @@ upstream whitespace in the database and ISC notice is retained for hash
 identity rather than normalized. No new full gate, physical radio, native
 country consumption, persistence, UI or hardware-switching evidence is claimed
 by this slice.
+
+## 5 GHz at 20 MHz (213-DRV-0087)
+
+`country::Limits::accept` takes the 28 channels of Linux's `rtw89_channels_5ghz` (36 to 177) beside 1 to 13. A 5 GHz
+channel's rule is the one catalogue rule that holds its whole 20 MHz (centre ±10 MHz); two such rules, or none, leave it
+out. DFS and NO-IR make it listen-only: the driver sends there only to an access point whose beacon it received on it
+since the tune, never a probe request, and its calibration's own bursts wait for that too. A WMM rule (the driver does
+not set the channel-access limits it asks for), NO-INDOOR or NO-OUTDOOR (the environment is unknown), NO-OFDM and
+point-to-point rules leave the channel out. The station's EIRP is capped by the rule's, as on 2.4 GHz, and a country's
+5 GHz power group is `COUNTRY_REGD`'s second column.
+
+What that gives on the catalogue pinned here: RU none (NO-OUTDOOR); UZ 36-48 to send on, 52-64 listen-only, nothing
+above 5330 MHz; `00` 36-165 listen-only; US 36-48 and 149-165 to send on, 52-144 listen-only; DE 149-173 to send on
+(25 mW), 36-140 left out by its ETSI WMM rule. Host cases in `tests/rtw89_country_host.rs`.

@@ -19,6 +19,11 @@ class Tables(unittest.TestCase):
         self.assertEqual(extract.signed_bytes(','.join(['-2']*30)),[-2]*30)
         for raw in [','.join(['0']*29), ','.join(['128']*30), ','.join(['0']*30)+', tail', '0,'*29+'-129']:
             with self.subTest(raw=raw), self.assertRaises(ValueError): extract.signed_bytes(raw)
+    def test_5_ghz_thermal_rows_are_three_of_thirty(self):
+        row = '{'+', '.join(['1']*30)+'}'
+        self.assertEqual(extract.signed_rows('\n\t'+row+',\n\t'+row+',\n\t'+row+',\n'), [[1]*30]*3)
+        for raw in [row+','+row, ','.join([row]*4), row+','+row+','+row+', 7', '{1,2}'+','+row+','+row]:
+            with self.subTest(raw=raw[:20]), self.assertRaises(ValueError): extract.signed_rows(raw)
     def test_duplicate_initializers_are_rejected(self):
         with self.assertRaises(ValueError): extract.one('a{x} a{y}',r'a\{(.*?)\}')
     def test_each_source_is_pinned_before_data_is_used(self):

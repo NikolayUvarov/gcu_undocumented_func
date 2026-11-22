@@ -62,11 +62,13 @@ pub(crate) struct Context{
     #[allow(dead_code)] connection:Connection,
     // The connected station's channel once the role, policy and AFH for it were sent (213-DRV-0052).
     station:Option<u8>,
+    // The band calibrated or connected on is 5 GHz (213-DRV-0087): no BTG, no AFH, no S1 standby there.
+    five:bool,
 }
 impl Context{
     fn new(profile:Profile,attempt:u64,session:u64)->Self{let mut shadow=WlanShadow::new();shadow.initialize();Self{
         attempt,session,profile,shadow,policy:Policy::ResetDefaults,reports:0,bt:ObservedBt::new(),published:None,btg:false,rx_gain:false,bt_lna:0,
-        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh,station:None}}
+        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh,station:None,five:false}}
     pub(crate) fn observe_score(&mut self,raw:u32){self.dirty|=self.bt.update_score(raw);}
     pub(crate) fn observe(&mut self,bytes:&[u8])->Result<bool,Error>{
         let mut scoreboard=false;
@@ -114,12 +116,14 @@ impl Context{
         }}Ok(())
     }
     fn common<T:Transport>(&mut self,s:&mut T,initial:bool,deadline:u64)->Result<(),Error>{
-        let bt=self.bt.state();let btg=bt.enabled&&bt.patched;
+        // _set_btg_ctrl: BTG for a shared antenna with Bluetooth patched and on, unless Wi-Fi is on 5 GHz.
+        let bt=self.bt.state();let btg=bt.enabled&&bt.patched&&!self.five;
         if self.btg!=btg{s.registers(deadline,|b|btc_control::btg(b,btg))?;self.btg=btg;}
         if initial{s.registers(deadline,|b|btc_control::preagc_off(b))?;}
         let profiles=(self.bt.info[2]&0xf0).count_ones()as u8;
         if self.afh_profiles!=Some(profiles){
-            let afh=self.station.map_or(self.profile.afh_no_link(),|channel|self.profile.afh_station(channel));
+            // _set_bt_afh_info: none for a 5 GHz link.
+            let afh=self.station.filter(|&c|c<=14).map_or(self.profile.afh_no_link(),|channel|self.profile.afh_station(channel));
             self.send(s,afh,deadline)?;self.afh_profiles=Some(profiles);
         }
         // High LNA (bit 13) for a linked station with BTG (`_set_bt_rx_agc`), written only while Bluetooth's own bit
@@ -145,6 +149,7 @@ impl Context{
     // policy for an idle Wi-Fi beside Bluetooth (OFF_BWB1), AFH around the channel, and path B's standby.
     // Without policy()'s drain: the data mode's rings need not run empty under continuous traffic.
     fn connect<T:Transport>(&mut self,s:&mut T,channel:u8,deadline:u64)->Result<(),Error>{
+        if channel>14{return self.connect_5g(s,channel,deadline)}
         self.send(s,self.profile.driver_station(channel),deadline)?;
         self.shadow.clear(1<<9);
         if let Some(message)=self.profile.policy(self.policy,Policy::Station){
@@ -154,6 +159,21 @@ impl Context{
         self.send(s,self.profile.afh_station(channel),deadline)?;
         self.afh_profiles=Some((self.bt.info[2]&0xf0).count_ones()as u8);
         if self.bt.state().enabled{s.registers(deadline,|b|s1_standby(b,true))?;}
+        self.station=Some(channel);self.dirty=true;Ok(())
+    }
+    // 213-DRV-0087: _action_wl_5g for a station connected on 5 GHz: the role (link mode 5G), the antenna W5G, the policy
+    // OFF_EQ0, AFH off; no S1 standby (`_set_rf_trx_para` keeps it off for a 5G link).
+    fn connect_5g<T:Transport>(&mut self,s:&mut T,channel:u8,deadline:u64)->Result<(),Error>{
+        self.five=true;
+        self.send(s,self.profile.driver_station(channel),deadline)?;
+        self.shadow.clear(1<<9);
+        s.registers(deadline,|b|btc_control::antenna_runtime(b,Antenna::Wlan5g,100_000).map(|_|()))?;
+        if let Some(message)=self.profile.policy(self.policy,Policy::Station5g){
+            self.send(s,message,deadline)?;self.observed_tdma=None;self.observed_slots=None;
+        }
+        self.policy=Policy::Station5g;
+        self.send(s,self.profile.afh_no_link(),deadline)?;
+        self.afh_profiles=Some((self.bt.info[2]&0xf0).count_ones()as u8);
         self.station=Some(channel);self.dirty=true;Ok(())
     }
     fn drain<T:Transport>(&mut self,s:&mut T,deadline:u64)->Result<(),Error>{
@@ -387,9 +407,11 @@ impl<B:DeviceIo> Session<'_,'_,'_,B>{
     pub(crate) fn observe_events(&mut self,timeout_us:u32)->Result<(),Error>{
         self.connection_call(timeout_us,|_|Ok(()),|c,s,deadline|c.events(s,deadline))
     }
+    /// The band about to be calibrated (213-DRV-0087): host state for BTG's rule; no command is sent.
+    pub(crate) fn coexistence_band(&mut self,five:bool){if let Some(c)=self.btc.as_mut(){c.five=five;}}
     /// Initial slot zero only; completion is command DMA/required receipt, not firmware-applied RF or TX permission.
     pub(crate) fn notify_mcc(&mut self,channel:u8,timeout_us:u32)->Result<(),Error>{
-        if !(1..=13).contains(&channel){return Err(Error::Profile)}
+        if crate::band::band(channel).is_none(){return Err(Error::Profile)}
         self.connection_call(timeout_us,|c|{
             if c.connection!=Connection::Ended{return Err(Error::Order)}c.connection=Connection::Reported;Ok(())
         },|c,s,deadline|{

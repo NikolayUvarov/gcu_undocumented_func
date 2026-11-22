@@ -101,7 +101,8 @@ def main(path):
     print("-- command tables (index, name, offset, size, format.content, workspace/parameter bytes)")
     for i, name, o, size, f, c in table_list(b, cmd, COMMANDS):
         attr = u16(b, o + 4)
-        print("  %2d %-28s %#06x %5d %d.%d ws %d ps %d" % (i, name, o, size, f, c, (attr & 0xFF) * 4, ((attr >> 8) & 0x7F) * 4))
+        # The header's work space is in dwords, its parameter space in bytes (atom.c shifts a nested call by it / 4).
+        print("  %2d %-28s %#06x %5d %d.%d ws %d ps %d" % (i, name, o, size, f, c, (attr & 0xFF) * 4, (attr >> 8) & 0x7F))
     if "displayobjectinfo" in tables:
         o = tables["displayobjectinfo"][0]
         n = b[o + 6]

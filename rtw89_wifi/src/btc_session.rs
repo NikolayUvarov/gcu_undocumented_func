@@ -327,5 +327,11 @@ impl<B:DeviceIo> crate::rxdck::RxdckIo for Session<'_,'_,'_,B> {
 }
 
 #[cfg(test)]
+impl<'a,'command,'receive,B> Session<'a,'command,'receive,B>{
+    /// The modelled device under a session, for cases that inject what the air would bring.
+    pub(crate) fn device_for_test(&mut self)->&mut B{self.bus}
+}
+
+#[cfg(test)]
 #[path="../../tests/rtw89_btc_session_cases.rs"]
 mod tests;

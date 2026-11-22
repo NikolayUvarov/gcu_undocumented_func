@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright(c) 2019-2020 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
-//! Pure pinned default-table decoding; none of these values authorizes a channel or transmission.
+//! Pure pinned default-table decoding, 2.4 and 5 GHz; none of these values authorizes a channel or transmission.
 
 use crate::board::Board;
 use crate::power_tables as tables;
@@ -104,10 +104,13 @@ pub fn default_ru_2g(ru_index: u8, streams: u8, group: Group, channel: u8) -> Re
 
 /// Return quarter-dBm by-rate data, including the source's distinct five rate-offset slots.
 pub fn default_byrate_2g(streams: u8, rate_section: u8, index: u8) -> Result<Entry, Error> {
+    Ok(entry(tables::BYRATE_2G, byrate_index(streams, rate_section, index)?))
+}
+fn byrate_index(streams: u8, rate_section: u8, index: u8) -> Result<u16, Error> {
     let counts = [4, 8, 12, 4, 5];
     if !(1..=2).contains(&streams) || rate_section > 4 || index >= counts[rate_section as usize]
         || (matches!(rate_section, 0 | 1 | 4) && streams != 1) { return Err(Error::Index); }
-    Ok(entry(tables::BYRATE_2G, ((streams as u16 - 1) * 5 + rate_section as u16) * 12 + index as u16))
+    Ok(((streams as u16 - 1) * 5 + rate_section as u16) * 12 + index as u16)
 }
 
 pub fn default_shape_2g(rate_section: u8, group: Group) -> Result<Entry, Error> {
@@ -116,6 +119,42 @@ pub fn default_shape_2g(rate_section: u8, group: Group) -> Result<Entry, Error> 
 }
 
 pub fn default_ru_shape_2g(group: Group) -> Entry { entry(tables::SHAPE_RU_2G, group.0 as u16) }
+
+/// Linux's `rtw89_channel_to_idx` on 5 GHz: the 53 slots of the 5 GHz tables, two per channel number.
+fn channel_index_5g(channel: u8) -> Result<u16, Error> {
+    if !crate::band::CHANNELS_5G.contains(&channel) { return Err(Error::Index); }
+    Ok(match channel { 36..=64 => (channel as u16 - 36) / 2, 100..=144 => (channel as u16 - 100) / 2 + 15, _ => (channel as u16 - 149) / 2 + 38 })
+}
+
+/// The 5 GHz limits of all four bandwidths (213-DRV-0087), with the world group's fallback for an unset slot.
+pub fn default_limit_5g(bandwidth_index: u8, streams: u8, rate_section: u8, beamformed: bool,
+                        group: Group, channel: u8) -> Result<DefaultLimit, Error> {
+    if bandwidth_index > 3 || !(1..=2).contains(&streams) || rate_section > 2 { return Err(Error::Index); }
+    let ch = channel_index_5g(channel)?;
+    let base = (((bandwidth_index as u16 * 2 + streams as u16 - 1) * 3 + rate_section as u16) * 2
+        + beamformed as u16) * 16 * 53;
+    Ok(fallback(entry(tables::LIMIT_5G, base + group.0 as u16 * 53 + ch), entry(tables::LIMIT_5G, base + ch)))
+}
+
+pub fn default_ru_5g(ru_index: u8, streams: u8, group: Group, channel: u8) -> Result<DefaultLimit, Error> {
+    if ru_index > 2 || !(1..=2).contains(&streams) { return Err(Error::Index); }
+    let ch = channel_index_5g(channel)?;
+    let base = (ru_index as u16 * 2 + streams as u16 - 1) * 16 * 53;
+    Ok(fallback(entry(tables::RU_5G, base + group.0 as u16 * 53 + ch), entry(tables::RU_5G, base + ch)))
+}
+
+/// The 5 GHz by-rate data; CCK has none there, and Linux reads the 2 GHz table's for it (`rtw89_phy_read_txpwr_byrate`).
+pub fn default_byrate_5g(streams: u8, rate_section: u8, index: u8) -> Result<Entry, Error> {
+    let at = byrate_index(streams, rate_section, index)?;
+    Ok(entry(if rate_section == 0 { tables::BYRATE_2G } else { tables::BYRATE_5G }, at))
+}
+
+pub fn default_shape_5g(rate_section: u8, group: Group) -> Result<Entry, Error> {
+    if rate_section > 1 { return Err(Error::Index); }
+    Ok(entry(tables::SHAPE_5G, rate_section as u16 * 16 + group.0 as u16))
+}
+
+pub fn default_ru_shape_5g(group: Group) -> Entry { entry(tables::SHAPE_RU_5G, group.0 as u16) }
 
 /// Arithmetic right shift preserves the source's downward rounding for negative quarter-dBm values.
 pub const fn rf_to_mac(quarter_dbm: i8) -> i8 { quarter_dbm >> 1 }
