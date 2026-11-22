@@ -264,7 +264,19 @@ pub struct Phase{pub clock_us:Option<u64>,pub tsf_us:Option<u64>,pub interval_us
 /// those never, and their median hold; the times the service's frame buffer was full and the longest.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_try:u32,pub not_acked:u32,pub median_hold_ms:u64,
-    pub full_times:u32,pub full_longest_ms:u64}
+    pub full_times:u32,pub full_longest_ms:u64,
+    // 213-DRV-0104: sends answered at their deadline, refused busy and parked; parked frames released and of them
+    // acknowledged; what the minute held when SEND_BEHIND_LATE alternates (None: it does not), and the switch otherwise.
+    pub answered_late:u32,pub busy:u32,pub parked:u32,pub parked_released:u32,pub parked_acked:u32,pub behind:FloorKind,pub behind_fixed:bool}
+impl TxMinute{
+    /// 213-DRV-0104: what the minute held of SEND_BEHIND_LATE, for its line.
+    pub fn behind_label(&self)->&'static str{
+        match(self.behind,self.behind_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE BEHIND LATE ON",(FloorKind::Off,_)=>"THIS MINUTE BEHIND LATE OFF",
+            (FloorKind::None,true)=>"BEHIND LATE ALWAYS",(FloorKind::None,false)=>"BEHIND LATE NEVER",
+        }
+    }
+}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}

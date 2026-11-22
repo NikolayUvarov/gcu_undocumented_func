@@ -326,6 +326,10 @@ fn served(event: receive_service::Event) {
                 channel, q.longest_gap_us, q.most_waiting, p.longest_gap_us, p.most_waiting, rx::DESCRIPTORS);
             mind::println!("[RTW89] TRAFFIC ON {}: LATE FRAMES RELEASED {}: {} ACKNOWLEDGED AT THE FIRST TRY, {} NEVER; THEIR MEDIAN HOLD {} MS; THE FRAME BUFFER FULL {} TIMES, THE LONGEST {} MS (213-DRV-0091)",
                 channel, tx.late, tx.first_try, tx.not_acked, tx.median_hold_ms, tx.full_times, tx.full_longest_ms);
+            // 213-DRV-0104: the minute's sends answered late, refused busy and parked, and what this minute held.
+            let behind = tx.behind_label();
+            mind::println!("[RTW89] TRAFFIC ON {}: SENDS {} ANSWERED LATE, {} REFUSED BUSY, {} PARKED; PARKED RELEASED {}, {} ACKNOWLEDGED; {} (213-DRV-0104)",
+                channel, tx.answered_late, tx.busy, tx.parked, tx.parked_released, tx.parked_acked, behind);
             mind::println!("[RTW89] TRAFFIC ON {}: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK {:?}; BY THE TSF {:?} (213-DRV-0091)",
                 channel, tx.clock, tx.tsf);
             let [pd, cck, limit, edcca] = floor.registers;

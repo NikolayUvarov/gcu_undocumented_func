@@ -26,6 +26,13 @@ DRV asked NET for three steps, cheapest first:
 
 This issue is the driver's side of each, and what the driver can mend alone now.
 
+**The measure this task is judged by: the upload rate through the Effector server.** Boot 93 (2026-11-22), from the agent's own lines, from the gateway's `open-file … admitted` to the agent's `COMPLETED` or `FAILED`:
+- one read failed after 14.3 s (`POST /api/commands/file: Transport`);
+- the next took 424,855 bytes in 13.8 s, about 31 KB/s;
+- an earlier one took 77,671 bytes in 2.2 s, about 35 KB/s.
+
+Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
+
 ## What Linux does (pinned source at 05f7e89)
 
 - **Many frames in flight.**
@@ -158,6 +165,24 @@ This issue is the driver's side of each, and what the driver can mend alone now.
   - Nothing of it ran on the Ryzen.
   - The hardware's order of releases for two frames of one channel, one held, is taken from the ring's order and Linux's handling, not measured.
   - Whether it beats today's refusals is the bench's question.
+
+**2026-11-22, the minute's sends and SEND_BEHIND_LATE_ALTERNATES** (this branch; host cases, not run):
+- **A new minute line:**
+
+  ```
+  [RTW89] TRAFFIC ON c: SENDS a ANSWERED LATE, b REFUSED BUSY, p PARKED; PARKED RELEASED r, q ACKNOWLEDGED; THIS MINUTE BEHIND LATE ON|OFF (213-DRV-0104)
+  ```
+
+  - It counts the sends answered at their deadline, those answered `busy` (the refusal behind a late one, a deferral that failed, or a begin the queue refused busy), the parks, and the parked frames released and acknowledged.
+  - Without the alternation the last field reads `BEHIND LATE ALWAYS` or `BEHIND LATE NEVER`.
+- **`service::SEND_BEHIND_LATE_ALTERNATES`, a bench mode, committed false:**
+  - With it true, SEND_BEHIND_LATE follows the minute line's minutes: the partial first minute as committed (never), then off, then on, turn and turn about.
+  - A switch is made at the first poll after the minute's line with no send pending or parked, so a frame held across the boundary keeps the old kind until its release.
+  - Each minute's line names what it held.
+- **Host cases:**
+  - `service_alternates_sending_behind_a_late_frame_by_the_minute`: the partial minute never; off refuses the send behind a late one; on parks; a frame made late two seconds before the boundary keeps "on" until its release; then off. Each line's counts are checked.
+  - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended` now also counts a refusal and ten late answers.
+  - The 40 `rtw89_*_host.rs` files pass: 4887 cases, 0 failed. The release build builds.
 
 ## Related
 

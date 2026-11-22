@@ -192,7 +192,11 @@ One change, one measurement:
   - It is one machine, one access point (−61 dBm, channel 8), one afternoon, one boot, and minutes of about 145 sends.
   - Nothing of the CCK floor or EDCCA's 66: neither was in force.
   - Whether 0x4B64 and 0x4B74 take writes.
-- **A reading beside it:** the read at 3191 s uploaded 425 KB in about 24 s, about 17 KB/s, against Linux's 480 to 826 KB/s on this channel. That is one upload, under the answer path of 213-DRV-0104.
+- **A reading beside it**, from the Effector agent's own lines (the gateway's `open-file … admitted` to the agent's `COMPLETED` or `FAILED`):
+  - The read admitted at 3152.0 s failed at 3166.3 s (`POST /api/commands/file: Transport`, `collect_file: io`).
+  - The next, admitted at 3177.4 s, completed at 3191.2 s: 424,855 bytes in 13.8 s, about 31 KB/s.
+  - The read at 136.2 s took 77,671 bytes in 2.2 s, about 35 KB/s.
+  - Linux does 480 to 826 KB/s on this channel. These are two uploads and a failure, under the answer path of 213-DRV-0104.
 - **Next:** the same paired minutes on the boot with a95ed0064, where the ON minutes hold EDCCA's 66 and the CCK fields as far as they take.
 
 ## For a successor (state on 2026-11-22, 14:40 UTC)

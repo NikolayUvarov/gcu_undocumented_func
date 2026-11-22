@@ -37,6 +37,9 @@ fn late_answer(attempts:u8)->wlanhw::Sent{match LATE_ANSWER{LateAnswer::NotAckno
 // 213-DRV-0104, a bench switch: true puts the next send on the ring behind a late one, which is parked (its release
 // awaited by its sequence, not resubmitted), instead of refusing every send busy until that release; one parked at a time.
 const SEND_BEHIND_LATE:bool=false;
+// 213-DRV-0104, a bench mode: true alternates SEND_BEHIND_LATE by the minute line's minutes, the first whole one off, then
+// on, turn and turn about; a switch waits for a poll with no send pending or parked. Each minute's line says what it held.
+const SEND_BEHIND_LATE_ALTERNATES:bool=false;
 const WAIT_MS:u64=1000;
 const WAITERS:usize=4;
 const FRAMES:usize=16;
@@ -96,7 +99,9 @@ struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,mi
     full_since:Option<u64>}
 impl Default for TxWatch{fn default()->Self{Self{probes:0,minute_probed:false,not_held:false,held:None,minute:Default::default(),holds:[0;32],
     holds_n:0,full_since:None}}}
-impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_ms=self.minute.full_longest_ms.max(ms);}}
+impl TxWatch{fn full_longest_ms_max(&mut self,ms:u64){self.minute.full_longest_ms=self.minute.full_longest_ms.max(ms);}
+    // 213-DRV-0104: a send answered busy, counted for the minute line.
+    fn busy(&mut self){self.minute.busy=self.minute.busy.saturating_add(1);}}
 struct Waiter{call:wire::Call,deadline:u64}
 struct Frames{bytes:[[u8;FRAME_BYTES];FRAMES],lengths:[usize;FRAMES],head:usize,count:usize}
 impl Frames{
@@ -115,6 +120,8 @@ pub(crate) struct Service<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     // `late`: KEEP_LATE; `lates`: the sends that outran their time so far; `parked`: a late send parked on the ring
     // (SEND_BEHIND_LATE, `behind`), its release awaited.
     late:bool,lates:u32,parked:Option<Pending>,behind:bool,
+    // SEND_BEHIND_LATE_ALTERNATES: whether it alternates, what this minute holds, and whether a switch is due.
+    behind_alternates:bool,behind_kind:data_mode::FloorKind,behind_switch_due:bool,
     // DEBUG (2026-11-08): the SNAPSHOT registers at the start, and when each first changed (ms from the start, its value,
     // whether a send was pending), read once a step.
     first:data_mode::Snapshot,changes:Changes,start_ms:u64,
@@ -180,7 +187,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if RECEIVE.into_iter().any(|slot|dev::cap_info(slot).0!=mind::abi::CAP_KIND_NONE){return Err(sys::Error::NoSlot)}
         let first=owner.registers();let start_ms=time::monotonic_ns()/1_000_000;
         Ok(Self{owner:Some(owner),pending:None,waiters:[const{None};WAITERS],frames:Frames::new(),last_ms:start_ms,failure:None,
-            country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,parked:None,behind:SEND_BEHIND_LATE,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
+            country:None,refused:false,event:None,strict:!KEEP_SENDING,late:KEEP_LATE,lates:0,parked:None,behind:SEND_BEHIND_LATE,
+            behind_alternates:SEND_BEHIND_LATE_ALTERNATES,behind_kind:data_mode::FloorKind::None,behind_switch_due:false,first,changes:Changes([None;data_mode::SNAPSHOT.len()]),start_ms,
             heard:(0,start_ms),quiet:(0,0),unacked:(0,0,false),checked:None,listen:None,kept:0,signals_at:(start_ms,Default::default()),
             beacons:(0,start_ms,Marks::default()),heard_bss:false,frames_seen:(0,start_ms,Marks::default()),hole:None,holes:(0,0),sent:(0,0),minutes:0,later:None,
             linked:None,link_change:None,links:0,port_linked:false,port_due:None,tx_watch:TxWatch::default(),floor:FloorState::default()})
@@ -218,6 +226,9 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
     /// Whether the next send goes on the ring behind a late one (SEND_BEHIND_LATE).
     #[cfg(test)]
     pub(crate) fn send_behind_late(mut self,on:bool)->Self{self.behind=on;self}
+    /// Whether SEND_BEHIND_LATE alternates by the minute (SEND_BEHIND_LATE_ALTERNATES).
+    #[cfg(test)]
+    pub(crate) fn send_behind_late_alternates(mut self,on:bool)->Self{self.behind_alternates=on;self}
     /// The data queues' frames final on DMA and the RPQ (tx.rs RPQ_ALONE), as on the Ryzen.
     #[cfg(test)]
     pub(crate) fn rpq_alone(&mut self){self.data().rpq_alone()}
@@ -295,6 +306,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let unicast=pending.unicast;
             let _=wlanhw::reply_send(call,Ok(&late_answer(attempts)));
             self.data().extend_send(LATE_MS*1000);self.lates=self.lates.saturating_add(1);
+            self.tx_watch.minute.answered_late=self.tx_watch.minute.answered_late.saturating_add(1);
             if self.event.is_none(){self.event=Some(Event::LateFrame{count:self.lates,finished:seen.finished,fetched:seen.fetched,
                 released:seen.released,length:seen.length,age_us:seen.age_us})}
             self.ended(unicast,false,now);
@@ -338,6 +350,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         // A release the drain took is acted on in this step, not the next one after its receive wait.
         if self.pending.is_some(){self.finish_send()?}
         if self.parked.is_some(){self.finish_parked()?}
+        self.switch_behind();
         self.tell_link()?;self.set_floor();
         self.listened(now)?;self.holes(now);self.signals(now);
         let waiting=self.frames.count as u32;
@@ -368,8 +381,18 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
         if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
         let parked=self.parked.take().unwrap();let now=time::monotonic_ns()/1_000_000;
+        let m=&mut self.tx_watch.minute;m.parked_released=m.parked_released.saturating_add(1);if done.acked{m.parked_acked=m.parked_acked.saturating_add(1);}
         self.release_phase();self.late_released(parked.began,done.acked,attempts,now);Ok(())
     }
+    // 213-DRV-0104, SEND_BEHIND_LATE_ALTERNATES: off for the first whole minute, then on, and so on; at a poll with no send
+    // pending or parked once the minute's line is taken.
+    fn switch_behind(&mut self){
+        use data_mode::FloorKind;
+        if !self.behind_alternates||!self.behind_switch_due||self.pending.is_some()||self.parked.is_some(){return}
+        self.behind_kind=if self.behind_kind==FloorKind::Off{FloorKind::On}else{FloorKind::Off};self.behind_switch_due=false;
+    }
+    // Whether a send is put behind a late one now.
+    fn behind_now(&self)->bool{if self.behind_alternates{self.behind_kind==data_mode::FloorKind::On}else{self.behind}}
     // 213-DRV-0091: the release's phase in the beacon interval, by our clock and by the TSF, into the minute's bins.
     fn release_phase(&mut self)->Phase{
         let at=self.phase();
@@ -498,7 +521,11 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
         if let Some(since)=w.full_since{w.full_longest_ms_max(now.saturating_sub(since));}
         let holds=&mut w.holds[..w.holds_n];holds.sort_unstable();
         w.minute.median_hold_ms=holds.get(holds.len()/2).map_or(0,|h|u64::from(*h));w.holds_n=0;
-        core::mem::take(&mut w.minute)
+        let(kind,fixed)=(self.behind_kind,self.behind&&!self.behind_alternates);
+        let mut minute=core::mem::take(&mut self.tx_watch.minute);minute.behind=kind;minute.behind_fixed=fixed;
+        // The next minute holds the other kind, switched at the next poll with nothing pending or parked.
+        if self.behind_alternates{self.behind_switch_due=true;}
+        minute
     }
     // A send answered: counted for a stall's line, and a unicast one not acknowledged into the run UNHEARD watches.
     fn ended(&mut self,unicast:bool,acked:bool,now:u64){
@@ -647,13 +674,13 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                 // 213-DRV-0104: a late send, answered, is parked so that this one goes behind it (SEND_BEHIND_LATE).
                 if self.pending.is_some(){
                     let late=self.pending.as_ref().is_some_and(|p|p.call.is_none());
-                    if !(self.behind&&late&&self.parked.is_none()&&self.data().park().is_ok()){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
-                    self.parked=self.pending.take();
+                    if !(self.behind_now()&&late&&self.parked.is_none()&&self.data().park().is_ok()){self.tx_watch.busy();let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
+                    self.parked=self.pending.take();self.tx_watch.minute.parked=self.tx_watch.minute.parked.saturating_add(1);
                 }
                 let Some(deadline)=now.checked_add(u64::from(COMMAND_US/1000)-FRAME_MARGIN_MS)else{
                     let _=wlanhw::reply_send(call,Err(wlanhw::Error::Failed));self.fail(Fatal::Clock);return};
                 let mut call=call;
-                if call.defer().is_err(){let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
+                if call.defer().is_err(){self.tx_watch.busy();let _=wlanhw::reply_send(call,Err(wlanhw::Error::Busy));return}
                 let grace_us=self.data().grace_us();let unicast=frame.get(4).is_some_and(|byte|byte&1==0);
                 let tries=if attempts<=15{attempts.min(SEND_TRIES)}else{attempts};
                 match self.data().begin(frame,rate,tries,COMMAND_US){
@@ -664,7 +691,7 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
                         let phase=self.phase();
                         self.pending=Some(Pending{call:Some(call),slot,deadline,grace_us,unicast,began:now,phase})
                     },
-                    Err(failure)=>{let _=wlanhw::reply_send(call,Err(error(&failure)));
+                    Err(failure)=>{if error(&failure)==wlanhw::Error::Busy{self.tx_watch.busy();}let _=wlanhw::reply_send(call,Err(error(&failure)));
                         if failure.shutdown.is_some(){self.fail(Fatal::Radio(failure))}},
                 }
             },
