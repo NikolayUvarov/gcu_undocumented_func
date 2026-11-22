@@ -820,6 +820,9 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");
     // 213-DRV-0104: the two sends in time binned by their answer's time, every arrival after the first by its gap since
     // the answer before it (13 arrivals: ten late, one refused, two in time), and the busiest second.
+    // 213-DRV-0104: every ended send's submission to fetch and fetch to release, by size: twelve of 64 bytes.
+    let timed:Vec<(u32,u32)>=tx.fetch_us.iter().zip(tx.release_us.iter()).map(|(f,r)|(f.iter().sum(),r.iter().sum())).collect();
+    assert_eq!(timed,vec![(12,12),(0,0),(0,0)],"{tx:?}");
     let in_time:Vec<u32>=tx.answer_ms.iter().map(|c|c.iter().sum()).collect();
     assert_eq!((in_time,tx.gap_ms.iter().sum::<u32>()),(vec![2,0,0],12),"two of 64 bytes in time, 13 arrivals: {tx:?}");
     assert!(tx.answer_ms[0][..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
@@ -833,7 +836,8 @@ fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,tru
     assert_eq!((tx.wait_over,tx.work_over,tx.work_longest_us),([0,0],[0,0],0),"{tx:?}");assert!(tx.wait_longest_us<=2_000,"{tx:?}");
     {use crate::btc_session::data_mode::{rx_rate_bin,size_class,ms_bin};
     assert_eq!([0,4,11,0x80,0x87,0x8f,0x90,0x100,0x180].map(rx_rate_bin),[0,4,11,12,19,27,28,28,28],"CCK, OFDM, HT MCS 0-15, other");
-    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
+    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);
+    assert_eq!([0,249,250,1999,2000,9999,10000,19999,20000,49999,50000].map(crate::btc_session::data_mode::us_bin),[0,0,1,7,8,15,16,16,17,17,18]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
     assert!(tx.peak_sends>=2&&tx.peak_sends<=13,"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
     assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
     let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};

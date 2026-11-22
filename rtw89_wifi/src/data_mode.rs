@@ -279,7 +279,13 @@ pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_t
     pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32,
     // 213-DRV-0091: the service's steps: its waits for a request (POLL_MS asked) and its work after them, each over 5 and
     // over 10 ms, and the longest (µs): a wait far over its time is the task not run again, work over it the step's own.
-    pub wait_over:[u32;2],pub wait_longest_us:u64,pub work_over:[u32;2],pub work_longest_us:u64}
+    pub wait_over:[u32;2],pub wait_longest_us:u64,pub work_over:[u32;2],pub work_longest_us:u64,
+    // 213-DRV-0104: each ended send's final submission by size (size_class): µs from it to its DMA fetch seen, and from
+    // that to its release seen, in US_BINS (us_bin).
+    pub fetch_us:[[u32;US_BINS];3],pub release_us:[[u32;US_BINS];3]}
+/// 213-DRV-0104: µs bins: 250 µs each to 2 ms, 1 ms each to 10 ms, then to 20 ms, to 50 ms, and 50 ms or more.
+pub const US_BINS:usize=19;
+pub fn us_bin(us:u64)->usize{if us<2_000{(us/250)as usize}else if us<10_000{8+((us-2_000)/1_000)as usize}else if us<20_000{16}else if us<50_000{17}else{18}}
 /// 213-DRV-0104: a frame's size class for the in-time answers: under 200 bytes, 200 to 1000, over 1000.
 pub fn size_class(length:usize)->usize{if length<200{0}else if length<=1000{1}else{2}}
 /// 213-DRV-0104: the received rates binned: the descriptor's data rate as the hardware gives it (rtw89_hw_rate): CCK 0 to 3
@@ -681,6 +687,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn pending_packets(&self)->usize{self.session.pending_packets()}
     /// The registers the first shutdown found (SNAPSHOT), if it ran on an activated data mode.
     pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
+    /// 213-DRV-0104: the last ended send's final submission: µs to its fetch seen and to its release seen after that.
+    pub(crate) fn take_tx_timing(&mut self)->Option<(u64,u64)>{self.queue.take_timing()}
     /// What the pending send has seen (a timeout's diagnostic).
     pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
     /// More time for the pending send (service.rs's KEEP_LATE).

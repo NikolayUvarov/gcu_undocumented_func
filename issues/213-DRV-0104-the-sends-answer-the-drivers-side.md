@@ -268,6 +268,20 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
   - the bins of `rx_rate_bin`, `size_class` and `ms_bin` at their edges.
 - The 40 `rtw89_*_host.rs` files pass: 4888 cases. The release build builds.
 
+**2026-11-22, the final submission's fetch and release timed** (this branch; host cases, not run):
+- **Why:** boot 98's in-time answers have their mode at 4 to 6 ms for every size, and none under 2 ms, while a frame at 36 Mb/s is on the air in under one. Two more measures split that time.
+- **`tx::Queue`** keeps the pending submission's times on the bus clock: its submission, the first poll that finds its descriptor fetched, and the ingest of its release report. At a completion it keeps the final submission's two spans.
+- **Six minute lines**, two a size class (under 200 bytes, 200 to 1000, over 1000):
+
+  ```
+  [RTW89] TRAFFIC ON c: SUBMITTED TO FETCHED BY US, OVER 1000 B: … (213-DRV-0104)
+  [RTW89] TRAFFIC ON c: FETCHED TO RELEASED BY US, OVER 1000 B: … (213-DRV-0104)
+  ```
+
+  - The bins are 250 µs to 2 ms, 1 ms to 10 ms, then to 20 ms, to 50 ms, and over.
+  - Both spans are as the polls see them, so they are quantized by the service's steps. With the tight poll below they are finer.
+- **Host case:** the minute sends case checks the twelve ended sends in both and the bins' edges. All 40 `rtw89_*_host.rs` files pass. The release build builds.
+
 ## Related
 
 [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

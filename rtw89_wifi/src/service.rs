@@ -401,6 +401,12 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             let tx::AttemptCount::Known(attempts)=done.attempts else{return Err(Fatal::UnknownAttempts)};
             if !(1..=15).contains(&attempts){return Err(Fatal::UnknownAttempts)}
             let pending=self.pending.take().unwrap();let now=time::monotonic_ns()/1_000_000;
+            // 213-DRV-0104: where the final submission's time went, by the frame's size.
+            if let Some((fetch,release))=self.data().take_tx_timing(){
+                let(c,m)=(data_mode::size_class(pending.length),&mut self.tx_watch.minute);
+                let(f,r)=(data_mode::us_bin(fetch),data_mode::us_bin(release));
+                m.fetch_us[c][f]=m.fetch_us[c][f].saturating_add(1);m.release_us[c][r]=m.release_us[c][r].saturating_add(1);
+            }
             let at=self.release_phase();
             if pending.call.is_some()&&self.tx_watch.probes>0&&!self.tx_watch.not_held{
                 self.tx_watch.not_held=true;let registers=self.data().held();

@@ -64,7 +64,10 @@ const DROP_UNACKED:bool=true;
 pub(crate) struct Queue<'a>{
     base:NonNull<u8>,physical:u64,session:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
     serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,last_firmware:Option<txdesc::FirmwareReport>,
-    rpq_alone:bool,drop_unacked:bool,parked:Option<Parked>,_exclusive:PhantomData<&'a mut[u8]>,
+    rpq_alone:bool,drop_unacked:bool,parked:Option<Parked>,
+    // 213-DRV-0104: the pending submission's times (submitted, its fetch seen, its release seen; the bus clock, µs), and
+    // the last completed frame's (submission to fetch, fetch to release).
+    timing:(u64,Option<u64>,Option<u64>),last_timing:Option<(u64,u64)>,_exclusive:PhantomData<&'a mut[u8]>,
 }
 impl<'a> Queue<'a>{
     /// # Safety
@@ -81,12 +84,20 @@ impl<'a> Queue<'a>{
         let session=io::dma_session()?;
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
         Ok(Self{base,physical,session,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
-            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),drop_unacked:DROP_UNACKED&&!cfg!(test),parked:None,_exclusive:PhantomData})
+            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),drop_unacked:DROP_UNACKED&&!cfg!(test),parked:None,timing:(0,None,None),last_timing:None,_exclusive:PhantomData})
     }
     pub(crate) fn state(&self)->State{self.state}
     pub(crate) fn session(&self)->u64{self.session}
     pub(crate) fn physical(&self)->u64{self.physical}
     pub(crate) fn pending_request(&self)->bool{self.request.is_some()}
+    /// 213-DRV-0104: the last completed frame's final submission: µs from it to its fetch seen, and from that to its release
+    /// seen (0 when the release was seen first), taken.
+    pub(crate) fn take_timing(&mut self)->Option<(u64,u64)>{self.last_timing.take()}
+    // The final submission's times at its completion, `now` the clock then.
+    fn timed(&mut self,now:u64){
+        let(submitted,fetched,reported)=self.timing;let fetched=fetched.unwrap_or(now);
+        self.last_timing=Some((fetched.saturating_sub(submitted),reported.unwrap_or(now).saturating_sub(fetched)));
+    }
     /// 213-DRV-0104: a frame is parked, its release awaited.
     pub(crate) fn parked(&self)->bool{self.parked.is_some()}
     /// 213-DRV-0104: the pending frame parked on the ring, so that the next can be begun behind it: its release is awaited
@@ -229,6 +240,7 @@ impl<'a> Queue<'a>{
         }
         self.time(bus)?;fence(Ordering::Release);
         self.pending=Some(Pending{queue:q,sequence,descriptor:self.issued[q],report:None,firmware:None,last_counter:0});self.serial=next;self.issued[q]=issued;
+        self.timing=(bus.now_us(),None,None);
         bus.write16(INDEX[q],(issued%DESCRIPTORS as u64)as u16)?;self.time(bus)?;Ok(())
     }
     fn reports(&mut self,bytes:&[u8])->Result<()>{
@@ -253,6 +265,7 @@ impl<'a> Queue<'a>{
         self.time(bus)?;self.reclaim(bus)?;self.time(bus)?;
         let pending=self.pending.ok_or(Error::State)?;
         if self.completed[pending.queue]<=pending.descriptor{return Ok(None);}
+        let now=bus.now_us();if self.timing.1.is_none(){self.timing.1=Some(now);}
         let Some(status)=pending.report else{return Ok(None);};
         let request=self.request.as_mut().ok_or(Error::State)?;
         if matches!(status,Status::Lifetime|Status::MacIdDrop){
@@ -260,7 +273,7 @@ impl<'a> Queue<'a>{
             request.completed=request.completed.checked_add(1).ok_or(Error::Count)?;self.pending=None;
             let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?.max(1).min(request.limit);
             let completion=Completion{status,acked:false,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
-            self.time(bus)?;self.request=None;return Ok(Some(completion));
+            self.time(bus)?;self.request=None;self.timed(now);return Ok(Some(completion));
         }
         let tries=if !self.rpq_alone||pending.queue==MGQ{
             let Some(firmware)=pending.firmware else{return Ok(None);};
@@ -274,7 +287,7 @@ impl<'a> Queue<'a>{
             let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?;
             if attempts==0||attempts>request.limit{return Err(Error::Count);}
             let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
-            self.time(bus)?;self.request=None;return Ok(Some(completion));
+            self.time(bus)?;self.request=None;self.timed(now);return Ok(Some(completion));
         }
         self.submit(bus)?;Ok(None)
     }
@@ -321,7 +334,9 @@ impl<'a> Queue<'a>{
     /// Retain Other records for their owner. Ingesting a report alone cannot complete or submit an MPDU.
     pub(crate) fn ingest(&mut self,now:u64,channel:rx::Channel,outcome:rx::Outcome,buffer:&[u8])->Result<Receive> {
         if self.state!=State::Running||self.request.is_none()&&self.parked.is_none(){return Err(Error::State)}
-        let result=(if self.request.is_some(){self.polling_at(now)}else{Ok(())}).and_then(|()|self.ingest_inner(channel,outcome,buffer));self.observe(result)
+        let result=(if self.request.is_some(){self.polling_at(now)}else{Ok(())}).and_then(|()|self.ingest_inner(channel,outcome,buffer));
+        if self.pending.is_some_and(|p|p.report.is_some())&&self.timing.2.is_none(){self.timing.2=Some(now);}
+        self.observe(result)
     }
     /// Revalidate actual TX registers and advance DMA/status ownership without touching either receive ring.
     pub(crate) fn advance(&mut self,bus:&mut impl Bus)->Result<Option<Completion>> {
