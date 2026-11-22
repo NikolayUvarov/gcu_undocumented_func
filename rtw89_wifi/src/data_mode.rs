@@ -103,7 +103,8 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64}
+pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
+    pub signals:crate::ppdu::Signals}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
@@ -335,7 +336,10 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}
     /// The station's filter, None if a failed change left none (the next operation then refuses).
     pub(crate) fn filter(&self)->Option<station::Filter>{self.prepared.station.current_filter()}
-    pub(crate) fn counts(&self)->Counts{Counts{btc_events:self.counts.btc_events.saturating_add(self.session.counts.btc_events),ppdu_reports:self.session.counts.ppdu_reports,..self.counts}}
+    pub(crate) fn counts(&self)->Counts{Counts{btc_events:self.counts.btc_events.saturating_add(self.session.counts.btc_events),ppdu_reports:self.session.counts.ppdu_reports,
+        signals:self.session.signals(),..self.counts}}
+    /// The oldest inbox record is a frame whose PPDU status report may still follow (213-DRV-0087).
+    pub(crate) fn awaits_signal(&self)->bool{self.session.awaits_signal()}
     pub(crate) fn packet(&self)->Option<inbox::Record<'_>>{self.session.packet()}
     pub(crate) fn consume_packet(&mut self){self.session.consume_packet()}
     pub(crate) fn terminal_packet(&self)->Option<inbox::Record<'_>>{self.session.terminal_packet()}
