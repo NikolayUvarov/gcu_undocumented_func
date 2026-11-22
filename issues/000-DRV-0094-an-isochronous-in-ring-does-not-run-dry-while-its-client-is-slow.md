@@ -72,7 +72,8 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
 - **Step 3, written** (not run on the Ryzen yet):
   - `usb_host` reads each controller's Isochronous Scheduling Threshold (HCSPARAMS2's IST: microframes, or frames with bit 3) and says it at its start (`ISOCHRONOUS SCHEDULING THRESHOLD n MICROFRAMES: …`).
   - A TD's frame must then be at least IST + 1 microframe ahead, in whole frames, as Linux's `xhci_get_isoc_frame_id` schedules. A stream's first TD, and the first after a dry ring, goes one frame further. Before, it went 64 microframes ahead (`FIRST_AHEAD`, a guess), and a TD continued down to 16 ahead.
-  - On QEMU (IST 7 frames) that is 64 and 72. On the Ryzen it is to be read.
+  - On QEMU (IST 7 frames) that is 64 and 72.
+  - **On the Ryzen** (release of 2026-11-22 13:35 UTC with 43686b6a2's `usb_host`; boots 84 to 86, `S/handoff/wifi/starts/`): both AMD xHCIs say `ISOCHRONOUS SCHEDULING THRESHOLD 1 MICROFRAMES: A TD AT LEAST 8 AHEAD, A STREAM'S FIRST 16`. A dry ring's restart now costs 2 ms, where it cost 8. Both cameras were found in each of the three starts, and their `usb_host` lines differ only in the order of parallel services' lines.
 - **Runs C and D on the Ryzen, 2026-11-22.**
   - The setup: release 202611220957; the board behind the Genesys hub; `audiostub duplex 300 0`, each with one log read over the cable at its middle; nobody else on the cable.
   - The raw lines are in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`; the bench log has each run's times.
@@ -142,7 +143,6 @@ The CAM agent worked here for the DRV owner session, on 158-DRV-0082 to 0084, 00
 - QEMU's IST is 56 microframes.
 
 **What is open**
-- Step 3's IST on the Ryzen: said at the 13:35 boot.
 - 000-LNK-0050's timed reads after the pieces, and run D again with playback watched. These wait for the cable (COM22 lost on LEG9 at about 11:23 UTC) and the board (gone from the Ryzen at 11:16:42).
 - This issue's criterion 3.
 - 000-DRV-0081's close order.
