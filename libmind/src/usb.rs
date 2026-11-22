@@ -103,7 +103,9 @@ impl Interface {
 
 /// A class driver's connection to `usb_host`. The buffer is a lease (revoked on re-attach and on drop); after the host
 /// restarts every handle is gone, so the client claims its interfaces again.
-pub struct Host { endpoint: Endpoint, buffer: Pages, lease: usize, attached: bool }
+/// `attaches`: how often it attached, once a host instance: a client that holds handles sees an instance end by it
+/// (158-DRV-0082).
+pub struct Host { endpoint: Endpoint, buffer: Pages, lease: usize, attached: bool, attaches: u32 }
 
 impl Host {
     pub fn new(endpoint: Endpoint) -> Result<Self> { Self::with_buffer(endpoint, BUFFER) }
@@ -111,9 +113,11 @@ impl Host {
     pub fn with_buffer(endpoint: Endpoint, bytes: usize) -> Result<Self> {
         let buffer = Pages::new(bytes.max(BUFFER)).ok_or(Error::NoMemory)?;
         let lease = buffer.share()?;
-        Ok(Self { endpoint, buffer, lease, attached: false })
+        Ok(Self { endpoint, buffer, lease, attached: false, attaches: 0 })
     }
     pub fn buffer(&self) -> &[u8] { self.buffer.as_slice() }
+    /// How often it attached to a host instance: handles claimed under an earlier count are gone.
+    pub fn attaches(&self) -> u32 { self.attaches }
     pub fn buffer_mut(&mut self) -> &mut [u8] { self.buffer.as_mut_slice() }
 
     // A lost host instance (ERR_PEER) or one without our buffer (not-found) needs the buffer again.
@@ -127,7 +131,7 @@ impl Host {
         if !self.attached {
             let _ = ipc::revoke(self.lease);
             usb::attach(self.endpoint, self.lease)?;
-            self.attached = true;
+            (self.attached, self.attaches) = (true, self.attaches.wrapping_add(1));
         }
         let result = usb::claim(self.endpoint);
         // Invalid: a new host instance without our buffer; attach again next time.

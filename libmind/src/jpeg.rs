@@ -3,7 +3,9 @@
 //! (integers: fast under emulation too), and the standard Huffman tables (written into every image, so any decoder
 //! reads it). A restart marker ends every row of 16×16 blocks: each row's data stands alone, so a frame like the one
 //! before it encodes only the rows that changed and takes the others from `Rows`. Pixels are `0x00RRGGBB`, as the
-//! screen and its captures hold them. No system calls: tests/jpeg_host.rs decodes what it writes.
+//! screen and its captures hold them. No system calls: tests/jpeg_host.rs decodes what it writes. The DCT and the quality
+//! scaling are rewritten after the Independent JPEG Group's libjpeg 6b (`jfdctint.c`, `jcparam.c`): this software is based
+//! in part on the work of the Independent JPEG Group (THIRD_PARTY.md, LICENSES/IJG.txt).
 use alloc::vec::Vec;
 
 /// The order in which a block's coefficients are written: natural index of each zigzag position.
