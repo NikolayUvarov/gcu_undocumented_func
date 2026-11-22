@@ -76,25 +76,67 @@ its clear bit, as the hardware does, and gives the ODM's live bit a window of it
   300 and with that of 60.
 - the watch is 300 frames unless the build gives 60, never longer than 300, and main.rs's refusal is in place.
 
-**Not shown:** anything of it on the hardware, and the cost of four reads a second there.
+**Boot 93 (2026-11-22, release 202611221429, the bench tree 82e458e2f with ba592c2b8; `STANDING_CHECK` true,
+`SHORT_WATCH` and `HOTPLUG` false): the standing check's first 50 minutes, nothing found.** From the owner session's log
+of that boot, which runs to 3164.9 s:
+- **The offer:** `THE SECOND SCREEN OFFERED 6181.2 MS AFTER DISPLAY'S START`. The compositor took it at 9.553 s of the
+  boot.
+- **The watch:** 300 frames clean, as in boots 84 to 91, but its longest gap was 2176 us, before frame 95 (boots 84 to
+  91: 129 to 130 us, at frames 27 to 32).
+  - Placed by its frame, it fell at about 6.10 s of the boot. That is where the Wi-Fi driver of that image logs the end
+    of its scan, `[RTW89] SCAN: 21 PASSIVE TUNES, THE LONGEST 3249 US`, at 6.113 s, and `wlan` starts to join.
+  - The image carried a Wi-Fi fix. Which task held the CPU the log does not tell.
+  - 2.2 ms is an eighth of a frame, so no frame passed unread.
+- **The check:**
+  - At 9.616 s: `THE STANDING CHECK: BOTH PIPES' UNDERFLOW STATUSES READ EVERY 1000 MS WHILE THE SECOND PICTURE IS UP;
+    THE WATCH 300 FRAMES`.
+  - Then five times `S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1014 MS BETWEEN TWO; NOTHING NEW ON EITHER
+    PIPE` (at 609.9 s, and with 1021 MS at 1210.2, 1810.4, 2410.6 and 3010.9 s). That is 3000 checks in 50 minutes, the
+    longest time between two 21 ms over its second, and no underflow and no request timeout on either pipe.
+  - The last 2.5 minutes to the log's end are inside the next ten, so no line is due there.
+- **The window manager:** the maintainer started it at 2486.9 s (`[WINDOWS] MANAGER PID 49 ATTACHED`, `SCREEN OF PID 49
+  IN FRONT`). The ten minutes that ended at 3010.9 s were checked with `wm` in front and found nothing.
 
-## For a successor (state on 2026-11-22, evening)
+**With `HOTPLUG` on** (the boot of 0096's run, 2026-11-22 from 15:40 UTC, the same `display` code): the first line read
+`S15 STANDING CHECK: 585 CHECKS IN 10 MIN, THE LONGEST 1061 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE`.
+- The check then rides `HOTPLUG`'s 50 ms polls and comes at the first poll past its second, up to one poll late. So
+  there are fewer than 600 checks in ten minutes, and the longest time between two is a second and a poll.
+- As planned.
+
+**Not shown by it:**
+- the check finding anything on the hardware, and so its undo after the offer and `screen_gone` there;
+- the watch of 60 (`SHORT_WATCH`);
+- the check with `HOTPLUG`;
+- what the four reads a second cost;
+- what the maintainer saw on either screen.
+
+This is that boot, on that machine with its two monitors (MC-12.1, 12.9).
+
+
+## For a successor (state on 2026-11-22, 15:45 UTC)
 
 This replaces the section of the same name in 213-DRV-0095, which describes the state before 0098.
 
-**The branches,** DRV's, each in its own worktree of the owner session's:
+**The branches,** DRV's:
 
-| Branch | Head | What | Lands |
+| Branch | Head | What | Where it is |
 |---|---|---|---|
-| `claude/213-DRV-0095-display-the-monitors-own-mode` | 1e148b81f | the EDID's mode (0095), on 0092's | in the integrator's candidate |
-| `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | after 0095; request posted |
-| `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | d5585699d | `HOTPLUG` (code 5e63d41b4, on a71a47b83; then text) | after 0098 and its hardware run |
-| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, on 5e63d41b4) | after 0096 and its run |
+| `claude/213-DRV-0095-display-the-monitors-own-mode` | 1e148b81f | the EDID's mode (0095), on 0092's | in `main` since round 172 (7346ab3d5, 2026-11-22 15:19 UTC) |
+| `claude/213-DRV-0098-display-both-screens-in-seconds` | 598045d8f | the production order (code e458838ac, a71a47b83; the rest text) | landing request posted for 598045d8f; waits for the next round |
+| `claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged` | d5585699d | `HOTPLUG` (code 5e63d41b4, on a71a47b83; then text) | after 0098 and its hardware run with the maintainer |
+| `claude/213-DRV-0103-display-a-standing-underflow-check` | this branch's head | `STANDING_CHECK`, `SHORT_WATCH` (code ba592c2b8, on 5e63d41b4) | after 0096; boot 93 is its first run |
+
+LEG9 restarted at 15:21 UTC and wiped everything under `/tmp`: the worktrees and the scratch scripts. Nothing that had
+been pushed was lost.
+- **To work on a branch again:** `git -C <main checkout> worktree add --detach <path> origin/<branch>`, commit there,
+  then `git push origin HEAD:refs/heads/<branch>`.
 
 **The switches in `display/src/main.rs`.** All are committed off, so the committed `display` maps, reads and writes
 nothing.
-- **From 0086 to 0095** (0095's section): `BATCHES_ALLOWED` (11 for all), `STAGES_ALLOWED` (16 for all), `EDID_ALLOWED`
-  (needs 11 batches), `HDMI_SIGNALLING`, `MODE_FROM_EDID` (needs `EDID_ALLOWED`) and `UNDO_AFTER_STAGES`.
+- **From 0086 to 0095** (0095's section):
+  - `BATCHES_ALLOWED` (11 for all) and `STAGES_ALLOWED` (16 for all);
+  - `EDID_ALLOWED` (needs 11 batches), `HDMI_SIGNALLING`, `MODE_FROM_EDID` (needs `EDID_ALLOWED`);
+  - `UNDO_AFTER_STAGES`.
 - **`SURVEY_ORDER`** (0098): true gives the survey's order of boots 70 to 81; false, the committed value, gives the
   production order.
 - **`HOTPLUG`** (0096): HPD 1 followed after the stages.
@@ -109,31 +151,40 @@ nothing.
   - `EDID_ALLOWED`, `HDMI_SIGNALLING` and `MODE_FROM_EDID` true;
   - `UNDO_AFTER_STAGES` and `SURVEY_ORDER` false.
 
-  The release after them adds `STANDING_CHECK` true, with `SHORT_WATCH` and `HOTPLUG` false.
+  Boot 93's release added `STANDING_CHECK` true, with `SHORT_WATCH` and `HOTPLUG` false.
 
 **The host cases:**
 - **The suites:** `tests/display_{host,atom,batches,ddc,hpd,light,picture,screen}_host.rs`, 110 cases on this
   branch's code.
-- **With `MIND_AMD_VBIOS`** naming the Ryzen's VBIOS image (never in the repository; the owner session keeps a copy),
-  they also run the Ryzen's own tables.
+- **With the Ryzen's tables:** with `MIND_AMD_VBIOS` naming the Ryzen's VBIOS image, they also run the Ryzen's own
+  tables.
+  - The copy the owner session kept was under `/tmp` and went with the restart.
+  - The image must never enter the repository, a commit, an issue or a message.
+  - **Getting it back:** it is the image inside the ACPI VFCT table: offset 52 names its header, the header's bytes 24
+    to 27 its length, and the image follows the header's 28 bytes, as `atom::vfct_image` reads it.
+  - **Where to look for that table:** the Ryzen's `init` copies the ACPI tables to `log:acpi/` at every boot (`ACPI
+    TABLES: 26 IN log:acpi/`). Fetching it from there is the owner session's (the Effector server or the cable).
 - **The full suite:** `scripts/host_tests.sh` runs them all. On LEG9 its ssh tests need
-  `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd`.
+  `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd`, which the owner session puts back after a restart. Heavy
+  runs on LEG9 take `/tmp/claude-1000/heavy.lock` with `flock`.
 
 **The hardware evidence:**
 - **The survey's order:** boots 70 to 81 (0092, 0095).
-- **The production order:** boots 84 to 89 and 91, release of a71a47b83, 6.16 to 6.18 s from `display`'s start to
-  the offer, every watch clean (0098's table). The owner session keeps the whole boot logs under its handoff
-  directory, `mon/prod/`. A second series of the same `display` code (a Wi-Fi fix in the image) began at 14:25 UTC
-  into the same place.
+- **The production order:** boots 84 to 89 and 91, the release of a71a47b83, 6.16 to 6.18 s from `display`'s start to
+  the offer, every watch clean (0098's table).
+- **The standing check:** boot 93 (above), 50 minutes, nothing found.
+- **The logs:** the owner session's copies under `/tmp` were wiped with the restart, but for boot 93's, which the owner
+  session kept under its handoff directory. The boots' own logs stay on the Ryzen's log volume (`BOOTNNNN.LOG`).
 
 **What waits:**
 - **For the maintainer:**
   - 0096's run at the monitor, with the questions on standby in its issue;
   - his decision on 0099's proposal;
   - 0097's cold path, which is his decision;
-  - his look at the 3440x1440 picture (0095's criterion 4).
+  - his look at the 3440x1440 picture (0095's criterion 4), now with `wm` in front.
 - **For the owner session:**
-  - this task's bench run, then `SHORT_WATCH`'s value;
+  - `SHORT_WATCH`'s value for the bench, after boot 93;
+  - the VBIOS image fetched again for the display suites' Ryzen cases;
   - closing 0098 once it has landed.
 
 ## Acceptance criteria
@@ -143,7 +194,8 @@ nothing.
   counted by its latched status; an underflow one frame after the watch ends caught within a second; the watch 300
   unless 60 is given with the check.
 - [ ] On the Ryzen: the check running after the offer, its ten-minute line seen, nothing found, with the watch of 300;
-  then the owner session's choice of the bench's watch.
+  then the owner session's choice of the bench's watch. The first part was seen on boot 93: 50 minutes, five lines,
+  nothing found. The choice is still to come.
 
 ## Related
 
