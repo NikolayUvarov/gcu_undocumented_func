@@ -50,14 +50,47 @@ pub struct Reference {
     /// REFCYC_PER_LINE_DELIVERY_L, REFCYC_PER_REQ_DELIVERY, and the PITCH field.
     pub ref_to_pix: u32, pub per_htotal: u32, pub refcyc_h_blank_end: u32, pub dlg_v_blank_end: u32, pub line_delivery: u32,
     pub req_delivery: u32, pub pitch_field: u32,
+    /// The prefetch's line and request delivery (their ratio to the above is kept for pipe 1).
+    pub line_delivery_pre: u32, pub req_delivery_pre: u32,
+    /// The frame buffer's GPU address (DCN_VM_FB_LOCATION_BASE), for the surface's.
+    pub fb_base: u64,
+    /// Whether pipe 1's MPCC and its OPP's output mux are free (0xF).
+    pub mpc_free: bool,
+    /// The firmware's HUBP's HUBP_VREADY_AT_OR_AFTER_VSYNC (its DCHUBP_CNTL, batch 4).
+    pub vready: u32,
+    /// The firmware's pipe's registers stage 12 to 14 copy, in `COPIED`'s order.
+    pub copies: [u32; COPIED.len()],
 }
 
+/// What pipe 1 takes from the firmware's pipe as it is: the same format, colour stages, scaler mode, requestor, VM
+/// aperture, prefetch, QoS and cursor settings serve a linear 32-bit surface at 1:1 (213-DRV-0092). MPCC_CONTROL is
+/// the firmware's MPCC's, the HUBP's of its own index.
+pub const COPIED: [R; 38] = {
+    use R::*;
+    [CnvcSurfacePixelFormat, CnvcFormatControl, CmControl, CmIcscControl, CmGamutRemapControl, CmDgamControl, CmBlndgamControl,
+     DsclSclMode, DsclControl, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio, DsclLbDataFormat,
+     HubpSurfaceConfig, HubpTilingConfig, HubpReqSizeConfig, HubpReqSizeConfigC, HubpreqExpansionMode, HubpretControl,
+     HubpreqSurfaceControl, HubpreqFlipControl, HubpreqVmidSettings0, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh,
+     HubpreqVmMxL1TlbCntl, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0, HubpreqVblankParameters1,
+     HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqTtuQosWm, HubpreqGlobalTtuCntl,
+     HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqDstYDeltaDrqLimit, MpccControl]
+};
+fn copied(r: &Reference, reg: R) -> u32 { COPIED.iter().position(|&c| c == reg).map_or(0, |i| r.copies[i]) }
+
 /// The reference from step 1's values, once all its batches were read and they name one firmware's pipe.
-pub fn reference(s: &Store, f: &Firmware) -> Option<Reference> {
+pub fn reference(s: &Store, f: &Firmware, c: &Choice) -> Option<Reference> {
     if s.batches() < crate::batches::BATCHES { return None; }
     let pipe = (0..4u8).find(|&n| f.hubps[n as usize])?;
     let t = f.otg;
+    let mut copies = [0u32; COPIED.len()];
+    for (slot, r) in copies.iter_mut().zip(COPIED) { *slot = s.get(r, pipe)?; }
+    let (q, o) = (c.pipe.otg, c.pipe.opp);
+    let mpc_free = s.field(R::MpccTopSel, q, MPCC_SEL)? == 0xF && s.field(R::MpcOutMux, o, MPCC_SEL)? == 0xF;
     Some(Reference {
+        line_delivery_pre: s.field(R::HubpreqPerLineDeliveryPre, pipe, REFCYC_PER_LINE_DELIVERY_L)?,
+        req_delivery_pre: s.field(R::HubpreqSurf0TtuCntl1, pipe, REFCYC_PER_REQ_DELIVERY)?,
+        fb_base: (s.field(R::DcnVmFbLocationBase, 0, VM_16MIB)? as u64) << 24,
+        mpc_free, copies, vready: s.field(R::HubpCntl, pipe, HUBP_VREADY_AT_OR_AFTER_VSYNC)?,
         pipe, otg: t,
         h_total: s.field(R::OtgHTotal, t, COUNTER_LOW)?, v_total: s.field(R::OtgVTotal, t, COUNTER_LOW)?,
         h_blank_end: s.field(R::OtgHBlankStartEnd, t, COUNTER_HIGH)?, v_blank_end: s.field(R::OtgVBlankStartEnd, t, COUNTER_HIGH)?,
@@ -79,7 +112,29 @@ pub struct Derived {
     pub firmware_pixel_khz: u32, pub reference_khz: u32,
     pub ref_to_pix: u32, pub per_htotal: u32, pub refcyc_h_blank_end: u32, pub dlg_v_blank_end: u32, pub line_delivery: u32,
     pub req_delivery: u32,
+    /// MIN_DST_Y_NEXT_START (the blank's first line, two bits of fraction), the prefetch's delivery.
+    pub min_dst_y_next_start: u32, pub line_delivery_pre: u32, pub req_delivery_pre: u32,
+    /// The underflow statuses as stage 9 found them: HUBP and ODM of the firmware's pipe, then of pipe 1.
+    pub underflow: [u32; 4],
 }
+
+/// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
+pub const SURFACE_OFFSET: u64 = 0x0100_0000;
+
+/// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
+/// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row. Half of
+/// display's stack (linker.ld) bounds it, so that the frames' own locals keep the rest: on 2026-11-22 the 64 KiB a task
+/// has by default faulted at its guard page as step 3 began (boot 69, release 202611220523).
+pub const STEP3_STACK_BYTES: usize = core::mem::size_of::<Interpreter>() + core::mem::size_of::<Journal>()
+    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::WIDTH;
+/// The stack display asks for (linker.ld's PT_GNU_STACK).
+pub const STACK_BYTES: usize = 0x40000;
+const _: () = assert!(2 * STEP3_STACK_BYTES <= STACK_BYTES, "steps 3 and 4 need more stack than display asks for");
+
+/// The mark a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its interrupt off): a start
+/// of display again in the same boot finds it and runs no stage. A machine boot clears OTG1's registers (step 1 read
+/// them all 0 after every boot, though Linux had driven OTG1 before it), PHY A's not.
+pub const RESTART_MARK: u32 = 0x5A5A;
 
 /// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
 pub const MEASURED_FRAMES: u32 = 30;
@@ -228,11 +283,11 @@ pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x
 
 /// What step 3 may write: the chosen pipe's and output's blocks, never one of the firmware's.
 #[derive(Clone, Copy, Debug)]
-pub struct Guard { allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize }
+pub struct Guard { allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4] }
 
 impl Guard {
     pub fn new(firmware: &Firmware, choice: &Choice) -> Result<Guard, Refusal> {
-        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0 };
+        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4] };
         let mut deny = |a: u32, b: u32| { if g.denies < 32 { g.deny[g.denies] = (a, b); g.denies += 1; } };
         blocks(firmware.otg, firmware.opp, firmware.dig_fe, firmware.phy, &mut deny);
         for n in 0..4u32 {
@@ -245,8 +300,20 @@ impl Guard {
         let (Pipe { otg, opp, dig_fe }, phy) = (choice.pipe, choice.output.phy);
         let mut allow = |a: u32, b: u32| { if g.allows < 16 { g.allow[g.allows] = (a, b); g.allows += 1; } };
         blocks(otg, opp, dig_fe, phy, &mut allow);
-        let overlap = g.allow[..g.allows].iter().any(|&(a, b)| g.deny[..g.denies].iter().any(|&(c, d)| a < d && c < b));
+        // Step 4's (from stage 11): pipe 1's HUBP, DPP and MPCC, and its OPP's output mux (the index of its OTG).
+        let (q, o) = (otg as u32, opp as u32);
+        g.late = [(seg2(0x5E5 + 0xDC * q), seg2(0x5E5 + 0xDC * (q + 1))), (seg2(0xCC5 + 0x16B * q), seg2(0xCC5 + 0x16B * (q + 1))),
+                  (seg2(0x1271 + 0x1B * q), seg2(0x1271 + 0x1B * (q + 1))), (seg2(0x1385 + 4 * o), seg2(0x1386 + 4 * o))];
+        let overlap = g.allow[..g.allows].iter().chain(g.late.iter()).any(|&(a, b)| g.deny[..g.denies].iter().any(|&(c, d)| a < d && c < b));
         if overlap { Err(Refusal::Overlap) } else { Ok(g) }
+    }
+
+    /// A write to `reg` in stage `n`: as `check`, and from stage 11 pipe 1's HUBP, DPP, MPCC and output mux too.
+    pub fn check_at(&self, reg: Reg, n: u8) -> Result<Writable, Refused> {
+        match self.check(reg) {
+            Err(Refused::OffRoute(o)) if n >= dcn::PIPE_WRITES_FROM && self.late.iter().any(|&(a, b)| (a..b).contains(&o)) => Ok(Writable(reg)),
+            other => other,
+        }
     }
 
     /// A write to `reg`: the firmware's blocks first, then the route's.
@@ -425,23 +492,46 @@ impl Light {
         }
     }
 
-    fn plan_lines(&self, n: u8, verb: &str, out: &mut dyn Out) {
-        for step in self.stage(n) {
-            match step {
-                Step::Update { reg, mask, value } => out.line(format_args!("S{} {} WRITE {}: BITS {:08X} = {:08X}", n, verb, Name(reg), mask, value)),
-                Step::Wait { reg, mask, value, timeout_us } => out.line(format_args!("S{} {} WAIT FOR {}: BITS {:08X} = {:08X}, AT MOST {} US", n, verb, Name(reg), mask, value, timeout_us)),
-                Step::Call(t) => {
-                    let (p, len) = t.parameters();
-                    out.line(format_args!("S{} {} RUN TABLE {} ({}) WITH {} BYTES: {}", n, verb, t.index(), table_name(t.index()), len, Bytes(&p[..len])));
-                }
-                Step::Frames { otg, frames, timeout_us } => out.line(format_args!("S{} {} WATCH OTG{}'S FRAME COUNT MOVE {} TIMES WITHIN {} MS", n, verb, otg, frames, timeout_us / 1000)),
-                Step::Reference => out.line(format_args!("S{} {} COUNT {} FRAMES OF THE FIRMWARE'S OTG{} (AT MOST {} MS) AND DERIVE PIPE {}'S DLG AND TTU FROM PIPE {}'S; NOTHING WRITTEN",
-                    n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
-                    self.reference.map_or(0, |r| r.pipe))),
-                Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
-                    n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
-                Step::Begin(_) => {}
+    fn step_line(&self, n: u8, verb: &str, step: Step, out: &mut dyn Out) {
+        match step {
+            Step::Update { reg, mask, value } => out.line(format_args!("S{} {} WRITE {}: BITS {:08X} = {:08X}", n, verb, Name(reg), mask, value)),
+            Step::Wait { reg, mask, value, timeout_us } => out.line(format_args!("S{} {} WAIT FOR {}: BITS {:08X} = {:08X}, AT MOST {} US", n, verb, Name(reg), mask, value, timeout_us)),
+            Step::Call(t) => {
+                let (p, len) = t.parameters();
+                out.line(format_args!("S{} {} RUN TABLE {} ({}) WITH {} BYTES: {}", n, verb, t.index(), table_name(t.index()), len, Bytes(&p[..len])));
             }
+            Step::Frames { otg, frames, timeout_us } => out.line(format_args!("S{} {} WATCH OTG{}'S FRAME COUNT MOVE {} TIMES WITHIN {} MS", n, verb, otg, frames, timeout_us / 1000)),
+            Step::Reference => out.line(format_args!("S{} {} COUNT {} FRAMES OF THE FIRMWARE'S OTG{} (AT MOST {} MS) AND DERIVE PIPE {}'S DLG AND TTU FROM PIPE {}'S; NOTHING WRITTEN",
+                n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
+                self.reference.map_or(0, |r| r.pipe))),
+            Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
+                n, verb, picture::WIDTH, picture::HEIGHT, picture::PITCH, self.build)),
+            Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
+            Step::Late | Step::Begin(_) => {}
+        }
+    }
+
+    fn plan_lines(&self, n: u8, verb: &str, late: Option<&Plan>, out: &mut dyn Out) {
+        let built = self.stage(n).any(|s| matches!(s, Step::Late));
+        match (built, late) {
+            (true, Some(p)) => {
+                for step in dcn::steps_in(p, n) { self.step_line(n, verb, step, out); }
+                if n == 13 {
+                    out.line(format_args!("S{} PITCH FIELD {} ({} PIXELS LESS ONE, AS DISPLAY CORE WRITES IT); THE FIRMWARE'S HUBP{} HOLDS {}",
+                        n, picture::PITCH - 1, picture::PITCH, self.reference.map_or(0, |r| r.pipe), self.reference.map_or(0, |r| r.pitch_field)));
+                }
+            }
+            (true, None) => {
+                let (q, o, f) = (self.choice.pipe.otg, self.choice.pipe.opp, self.reference.map_or(0, |r| r.pipe));
+                match n {
+                    11 => out.line(format_args!("S{} {} TURN ON DPP{}'S AND HUBP{}'S CLOCKS (ITS WRITES SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q)),
+                    12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
+                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, picture::PITCH - 1)),
+                    14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
+                    _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF; NO NEW UNDERFLOW ON EITHER PIPE (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o)),
+                }
+            }
+            _ => for step in self.stage(n) { self.step_line(n, verb, step, out); },
         }
         if self.stage(n).any(|s| matches!(s, Step::Call(_))) {
             out.line(format_args!("S{} ITS TABLES' WRITES ARE LOGGED AS MADE; EACH RUN STOPS AT {} STEPS OR {} MS", n, atom::MAX_STEPS, TABLE_TIME_LIMIT_US / 1000));
@@ -458,7 +548,7 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
     light.intro(0, expected, out);
     for n in 1..=STAGES {
         out.line(format_args!("S{} {}: NOT RUN (THIS BUILD MAY RUN 0); WOULD:", n, STAGE_NAMES[n as usize - 1]));
-        light.plan_lines(n, "WOULD", out);
+        light.plan_lines(n, "WOULD", None, out);
     }
     out.line(format_args!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", STAGES));
 }
@@ -470,8 +560,14 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
 pub enum Failure {
     Unreadable(u32),
     Refused(Refused),
+    /// display started again in this boot: step 3's OTG holds the mark of a start before.
+    StartedAgain,
     /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
     NoReference,
+    /// Stages 11 to 15 could not be built from the reference (pipe 1's MPCC busy, or the plan).
+    PipeNotFree,
+    /// An underflow, new since stage 9, at this HUBP's or ODM's register.
+    Underflow { offset: u32, value: u32 },
     /// Stage 10: the surface is not mapped, or a sample read back differs from what was drawn.
     NoSurface,
     SurfaceDiffers { x: u32, y: u32 },
@@ -490,8 +586,11 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Failure::Unreadable(o) => write!(f, "{:05X} COULD NOT BE READ", o),
+            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT"),
             Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
             Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
+            Failure::PipeNotFree => f.write_str("PIPE 1'S MPCC OR ITS OPP'S OUTPUT MUX IS IN USE, OR ITS PLAN DOES NOT FIT"),
+            Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
@@ -560,11 +659,14 @@ fn call<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
 
 fn read(e: &mut impl Bus, reg: Reg) -> Result<u32, Failure> { e.read(reg).ok_or(Failure::Unreadable(reg.offset())) }
 
-fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, derived: &mut Option<Derived>, out: &mut dyn Out) -> Result<(), Failure> {
-    for step in light.stage(n) {
+fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, n: u8, derived: &mut Option<Derived>,
+                    late: Option<&Plan>, out: &mut dyn Out) -> Result<(), Failure> {
+    let built = light.stage(n).any(|s| matches!(s, Step::Late));
+    let steps = match (built, late) { (true, Some(p)) => dcn::steps_in(p, n), (true, None) => return Err(Failure::NoReference), _ => dcn::steps_in(&light.plan, n) };
+    for step in steps {
         match step {
             Step::Update { reg, mask, value } => {
-                let w = light.guard.check(reg).map_err(Failure::Refused)?;
+                let w = light.guard.check_at(reg, n).map_err(Failure::Refused)?;
                 let old = read(e, reg)?;
                 let new = (old & !mask) | value;
                 if !journal.push(w, old, n) { return Err(Failure::JournalFull); }
@@ -598,7 +700,19 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
             }
             Step::Reference => *derived = Some(reference_stage(light, e, n, out)?),
             Step::Draw => draw_stage(light, e, n, out)?,
-            Step::Begin(_) => {}
+            Step::NoUnderflow => {
+                let (Some(r), Some(d)) = (light.reference, derived.as_ref()) else { return Err(Failure::NoReference) };
+                let q = light.choice.pipe.otg;
+                let regs = [(R::HubpCntl, r.pipe, HUBP_UNDERFLOW_STATUS), (R::OptcInputGlobalControl, r.otg, OPTC_UNDERFLOW_OCCURRED_STATUS),
+                            (R::HubpCntl, q, HUBP_UNDERFLOW_STATUS), (R::OptcInputGlobalControl, q, OPTC_UNDERFLOW_OCCURRED_STATUS)];
+                for (i, (reg, inst, field)) in regs.into_iter().enumerate() {
+                    let x = reg.at(inst).ok_or(Failure::NoReference)?;
+                    let v = read(e, x)?;
+                    if field.get(v) & !field.get(d.underflow[i]) != 0 { return Err(Failure::Underflow { offset: x.offset(), value: v }); }
+                }
+                out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
+            }
+            Step::Late | Step::Begin(_) => {}
         }
     }
     Ok(())
@@ -657,7 +771,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let millihertz = frames as u64 * 1_000_000_000 / us;
     out.line(format_args!("S{} OTG{} COUNTED {} FRAMES IN {} US: {}.{:03} HZ, ITS PIXEL CLOCK {} KHZ; THE REFERENCE CLOCK {} KHZ",
         n, r.otg, frames, us, millihertz / 1000, millihertz % 1000, pixel_khz, reference_khz));
-    // The formulas (Display Core's dml20_rq_dlg_get_dlg_params, as recalled) on the firmware's own pipe.
+    // The formulas (Display Core's dml21_rq_dlg_get_dlg_params, display_rq_dlg_calc_21.c, Linux v7.0) on the firmware's own pipe.
     let at = |ratio: u32, x: u64| ((ratio as u64 * x) >> 19) as u32;
     let (per0, hbe0, line0) = (at(r.ref_to_pix, h0 * 256), at(r.ref_to_pix, r.h_blank_end as u64), at(r.ref_to_pix, r.width as u64));
     out.line(format_args!("S{} PIPE {} BY FORMULA: PER HTOTAL {} (SET {}), H_BLANK_END {} (SET {}), LINE {} (SET {}), V_BLANK_END {} (DLG {})",
@@ -671,15 +785,90 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let round = |a: u64, b: u64| (a + b / 2) / b.max(1);
     let requests0 = if r.req_delivery > 0 { round(r.line_delivery as u64 * 1024, r.req_delivery as u64) } else { 0 };
     let requests1 = round(requests0 * light.timing.h_active as u64, r.width.max(1) as u64).max(1);
+    let req1 = (line1 as u64 * 1024 / requests1) as u32;
+    // The prefetch's delivery in the same proportion to the line's as the firmware's.
+    let scaled = |x: u32, num: u32, den: u32| if den == 0 { x } else { (x as u64 * num as u64 / den as u64) as u32 };
+    // The underflow statuses now, so that stage 15 fails on a new one only.
+    let q = light.choice.pipe.otg;
+    let status = |e: &mut E, reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference).and_then(|x| read(e, x));
+    let underflow = [status(e, R::HubpCntl, r.pipe)?, status(e, R::OptcInputGlobalControl, r.otg)?, status(e, R::HubpCntl, q)?,
+                     status(e, R::OptcInputGlobalControl, q)?];
     let d = Derived {
         firmware_pixel_khz: pixel_khz, reference_khz, ref_to_pix: ratio1 as u32, per_htotal: ((ratio1 * h1 * 256) >> 19) as u32,
         refcyc_h_blank_end: ((ratio1 * otg.h_blank_end as u64) >> 19) as u32, dlg_v_blank_end: otg.v_blank_end, line_delivery: line1,
-        req_delivery: (line1 as u64 * 1024 / requests1) as u32,
+        req_delivery: req1, min_dst_y_next_start: otg.v_blank_start * 4,
+        line_delivery_pre: scaled(line1, r.line_delivery_pre, r.line_delivery), req_delivery_pre: scaled(req1, r.req_delivery_pre, r.req_delivery),
+        underflow,
     };
     out.line(format_args!("S{} PIPE {} FOR {}x{} AT {} KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} ({} REQUESTS A LINE)",
         n, light.choice.pipe.otg, light.timing.h_active, light.timing.v_active, pix1, crate::batches::Ratio19(Some(d.ref_to_pix)),
         d.per_htotal, d.refcyc_h_blank_end, d.dlg_v_blank_end, d.line_delivery, d.req_delivery, requests1));
+    out.line(format_args!("S{} PIPE {}: NEXT START {} (V_BLANK_START {} x 4), PREFETCH LINE {} REQ {}; UNDERFLOW STATUSES {:08X} {:08X} {:08X} {:08X}",
+        n, q, d.min_dst_y_next_start, otg.v_blank_start, d.line_delivery_pre, d.req_delivery_pre, underflow[0], underflow[1], underflow[2], underflow[3]));
     Ok(d)
+}
+
+/// Stages 11 to 15 for pipe 1, from the reference and what stage 9 derived, in Display Core's order (dcn20_program_pipe,
+/// dcn20_update_dchubp_dpp, hubp21_setup, mpc1_insert_plane, hubp2_set_blank; Linux v7.0): its clocks; its DPP as the
+/// firmware's with a 1920x1080 recout; its HUBP, still blanked, on the surface with the firmware's requestor and
+/// prefetch and the derived DLG and TTU; its MPCC to its OPP; then unblanked and the pattern off.
+pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Failure> {
+    use R::*;
+    if !r.mpc_free { return Err(Failure::PipeNotFree); }
+    let (q, o) = (light.choice.pipe.otg, light.choice.pipe.opp);
+    let (w, h) = (light.timing.h_active as u32, light.timing.v_active as u32);
+    let at = |reg: R, i: u8| reg.at(i).ok_or(Failure::PipeNotFree);
+    let mut p = Plan::default();
+    let put = |p: &mut Plan, reg: R, i: u8, fields: &[(dcn::Field, u32)]| -> Result<(), Failure> { p.update(at(reg, i)?, fields).map_err(|_| Failure::PipeNotFree) };
+    let mark = |p: &mut Plan, n: u8| p.push(Step::Begin(n)).map_err(|_| Failure::PipeNotFree);
+    mark(&mut p, 11)?;
+    put(&mut p, DppControl, q, &[(DPP_CLOCK_ENABLE, 1)])?;
+    put(&mut p, HubpClkCntl, q, &[(HUBP_CLOCK_ENABLE, 1)])?;
+    mark(&mut p, 12)?;
+    for reg in [CnvcSurfacePixelFormat, CnvcFormatControl, CmControl, CmIcscControl, CmGamutRemapControl, CmDgamControl, CmBlndgamControl,
+                DsclSclMode, DsclControl, DsclTapControl, DsclHorzScaleRatio, DsclVertScaleRatio, DsclLbDataFormat] {
+        put(&mut p, reg, q, &[(WHOLE, copied(r, reg))])?;
+    }
+    put(&mut p, DsclRecoutStart, q, &[(WHOLE, 0)])?;
+    put(&mut p, DsclRecoutSize, q, &[(WHOLE, h << 16 | w)])?;
+    put(&mut p, DsclMpcSize, q, &[(WHOLE, h << 16 | w)])?;
+    mark(&mut p, 13)?;
+    for reg in [HubpSurfaceConfig, HubpTilingConfig, HubpReqSizeConfig, HubpReqSizeConfigC, HubpreqExpansionMode, HubpretControl,
+                HubpreqSurfaceControl, HubpreqFlipControl, HubpreqVmidSettings0, HubpreqVmSystemApertureLow, HubpreqVmSystemApertureHigh,
+                HubpreqVmMxL1TlbCntl, HubpreqDstAfterScaler, HubpreqPrefetchSettings, HubpreqVblankParameters0, HubpreqVblankParameters1,
+                HubpreqVblankParameters2, HubpreqVblankParameters3, HubpreqVblankParameters4, HubpreqTtuQosWm, HubpreqGlobalTtuCntl,
+                HubpreqCur0TtuCntl0, HubpreqCur0TtuCntl1, HubpreqDstYDeltaDrqLimit] {
+        put(&mut p, reg, q, &[(WHOLE, copied(r, reg))])?;
+    }
+    let surface = r.fb_base + SURFACE_OFFSET;
+    put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, picture::PITCH as u32 - 1)])?;
+    put(&mut p, HubpreqPrimarySurfaceAddressHigh, q, &[(WHOLE, (surface >> 32) as u32)])?;
+    put(&mut p, HubpreqPrimarySurfaceAddress, q, &[(WHOLE, surface as u32)])?;
+    put(&mut p, HubpPriViewportStart, q, &[(WHOLE, 0)])?;
+    put(&mut p, HubpPriViewportDimension, q, &[(WHOLE, h << 16 | w)])?;
+    put(&mut p, HubpreqBlankOffset0, q, &[(REFCYC_H_BLANK_END, d.refcyc_h_blank_end), (DLG_V_BLANK_END, d.dlg_v_blank_end)])?;
+    put(&mut p, HubpreqBlankOffset1, q, &[(WHOLE, d.min_dst_y_next_start)])?;
+    put(&mut p, HubpreqDstDimensions, q, &[(WHOLE, d.per_htotal)])?;
+    put(&mut p, HubpreqRefFreqToPixFreq, q, &[(WHOLE, d.ref_to_pix)])?;
+    put(&mut p, HubpreqPerLineDelivery, q, &[(WHOLE, d.line_delivery)])?;
+    put(&mut p, HubpreqPerLineDeliveryPre, q, &[(WHOLE, d.line_delivery_pre)])?;
+    put(&mut p, HubpreqSurf0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, d.req_delivery)])?;
+    put(&mut p, HubpreqSurf0TtuCntl1, q, &[(REFCYC_PER_REQ_DELIVERY, d.req_delivery_pre)])?;
+    put(&mut p, HubpCntl, q, &[(HUBP_VREADY_AT_OR_AFTER_VSYNC, r.vready)])?;
+    mark(&mut p, 14)?;
+    put(&mut p, MpccBotSel, q, &[(WHOLE, 0xF)])?;
+    put(&mut p, MpccControl, q, &[(WHOLE, copied(r, MpccControl))])?;
+    put(&mut p, MpccTopSel, q, &[(WHOLE, q as u32)])?;
+    put(&mut p, MpccOppId, q, &[(WHOLE, o as u32)])?;
+    put(&mut p, MpcOutMux, o, &[(MPCC_SEL, q as u32)])?;
+    mark(&mut p, 15)?;
+    put(&mut p, HubpCntl, q, &[(HUBP_BLANK_EN, 0), (HUBP_TTU_DISABLE, 0)])?;
+    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PipeNotFree)?;
+    p.push(Step::NoUnderflow).map_err(|_| Failure::PipeNotFree)?;
+    put(&mut p, DpgControl, o, &[(DPG_EN, 0)])?;
+    p.push(Step::Frames { otg: light.choice.pipe.otg, frames: 3, timeout_us: 200_000 }).map_err(|_| Failure::PipeNotFree)?;
+    p.push(Step::NoUnderflow).map_err(|_| Failure::PipeNotFree)?;
+    Ok(p)
 }
 
 /// The samples stage 10 reads back: the corners, the border's middle, the cross, both diagonals and the first letter.
@@ -768,32 +957,50 @@ fn run_with<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journ
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
+    // Once a boot: a start of display again in this boot (init restarts a program that faults) finds the mark and runs no
+    // stage; else the mark is left before stage 1, and never undone.
+    if allowed > 0 {
+        let Some(mark) = R::OtgVerticalInterrupt2Position.at(light.choice.pipe.otg) else { return Outcome::Failed { stage: 0, why: Failure::StartedAgain } };
+        let was = match read(e, mark) { Ok(v) => v, Err(why) => { out.line(format_args!("STEP 3 NOT RUN: ITS MARK: {}", why)); return Outcome::Failed { stage: 0, why }; } };
+        if was & 0x7FFF == RESTART_MARK {
+            out.line(format_args!("STEP 3 NOT RUN: {} ({} HOLDS {:04X})", Failure::StartedAgain, Name(mark), was));
+            return Outcome::Failed { stage: 0, why: Failure::StartedAgain };
+        }
+        let Ok(w) = light.guard.check(mark) else { return Outcome::Failed { stage: 0, why: Failure::StartedAgain } };
+        e.write(w, RESTART_MARK);
+        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT",
+            Name(mark), RESTART_MARK, was));
+    }
     let attached = match light.attached.read(e) {
         Ok(v) => v,
         Err(why) => { out.line(format_args!("STEP 3 NOT RUN: THE ATTACHED HUBPS: {}", why)); return Outcome::Failed { stage: 0, why }; }
     };
     let mut derived: Option<Derived> = None;
+    let mut late: Option<Plan> = None;
     for n in 1..=STAGES {
         let name = STAGE_NAMES[n as usize - 1];
         if n > allowed {
             out.line(format_args!("S{} {}: NOT RUN (THIS BUILD MAY RUN {}); WOULD:", n, name, allowed));
-            light.plan_lines(n, "WOULD", out);
+            light.plan_lines(n, "WOULD", late.as_ref(), out);
             continue;
         }
         out.line(format_args!("S{} {}: STAGE {} OF {} NEXT; ITS WRITES:", n, name, n, STAGES));
-        light.plan_lines(n, "WILL", out);
+        light.plan_lines(n, "WILL", late.as_ref(), out);
         out.pause(PAUSE_BEFORE_STAGE_MS);
-        let result = stage(light, e, interp, journal, n, &mut derived, out).and_then(|()| {
+        let result = stage(light, e, interp, journal, n, &mut derived, late.as_ref(), out).and_then(|()| {
             let now = light.watch.read(e)?;
             if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
-            if n < ATTACHED_FROM || light.attached.is_empty() { return Ok(()); }
+            // Stage 9 done: stages 11 to 15 built from its reference.
+            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); }
+            // The attached HUBP is guarded until step 4 takes it, from stage 11.
+            if n < ATTACHED_FROM || n >= dcn::PIPE_WRITES_FROM || light.attached.is_empty() { return Ok(()); }
             let now = light.attached.read(e)?;
             match light.attached.changed(&attached, &now) { Some((reg, before, after)) => Err(Failure::AttachedChanged { offset: reg.offset(), before, after }), None => Ok(()) }
         });
         match result {
             Ok(()) => {
                 out.line(format_args!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, name, light.watch.len()));
-                if n >= ATTACHED_FROM && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
+                if (ATTACHED_FROM..dcn::PIPE_WRITES_FROM).contains(&n) && !light.attached.is_empty() { out.line(format_args!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED ({} REGISTERS)", n, light.attached.len())); }
             }
             Err(why) => {
                 out.line(format_args!("S{} {} FAILED: {}; UNDOING STAGES {} TO 1", n, name, why, n));

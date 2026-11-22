@@ -19,7 +19,7 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// How many of step 1's ten batches this build may read. 0 maps no register and reads none: it logs each batch and the
 /// registers it would read. Raised one run at a time, on the DRV owner session's word (213-DRV-0086).
 const BATCHES_ALLOWED: u8 = 0;
-/// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 on step 4's (213-DRV-0092). 0 makes no
+/// How many of the stages this build may run: 1 to 8 step 3's (first light), 9 to 15 step 4's (213-DRV-0092). 0 makes no
 /// writer: it logs each stage with every write it would make. Raised one run at a time, on the DRV owner session's word,
 /// and only with BATCHES_ALLOWED at 10 (all of step 1).
 const STAGES_ALLOWED: u8 = 0;
@@ -94,7 +94,7 @@ fn step3(store: &batches::Store, mmio: Option<Mmio>, vfct: Option<&[u8]>) -> usi
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
     let plan = match light::Light::new(found.0, found.1, timing) {
-        Ok(plan) => plan.with_reference(light::reference(store, &found.0)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
+        Ok(plan) => plan.with_reference(light::reference(store, &found.0, &found.1)).with_build(option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN")),
         Err(why) => { mind::println!("[DISPLAY] STEP 3 NOT RUN: {}", why); return 0; }
     };
     if STAGES_ALLOWED == 0 { light::describe(&plan, expected, &mut Log); return 0; }

@@ -64,6 +64,54 @@ the request.
 - **The mirror first:** the compositor copies the same changed pixels into both screens. An extended screen comes
   later, and needs APP's `wm` too.
 
+## Progress (2026-11-22)
+
+**Stages 9 and 10** (dbc8f6e3e), with step 1's batches 9 and 10 (reads only, 43 and 68 registers, all inside the
+window). They read the firmware's pipe as batches 2 and 4 name it:
+- its HUBP's request, DLG, TTU, viewport, VM aperture, flip and VMID registers, and its OTG's start-up parameters;
+- its DPP;
+- what every pipe shares: the MPC tree, DCHUBBUB's four watermark sets, DCCG's DPP clock DTOs.
+
+Step 3 now needs all ten batches.
+- **Stage 9** counts 30 of the firmware OTG's frames for its pixel clock, and with `REF_FREQ_TO_PIX_FREQ` the reference
+  clock.
+  - It logs the DLG formulas against what the firmware set, then pipe 1's values for 1080p60.
+  - The formulas are Display Core's own (`display_rq_dlg_calc_21.c`, Linux v7.0, fetched with the HUBP, DPP, MPC and DCCG
+    sources into the scratchpad, not the repository): REF/PIX, PER_HTOTAL, H_BLANK_END, V_BLANK_END, MIN_DST_Y_NEXT_START,
+    line and request delivery, 64 pixels a request for a linear 32-bit surface.
+  - It also notes the underflow statuses of both pipes.
+- **Stage 10** draws the picture into slot 5 and reads nine samples back. The picture is a 12-pixel border, both
+  diagonals, a centre cross, and `MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD <commit>` in block letters (`picture.rs`).
+  - The release's version cannot be drawn: it is given out at release time, after the build. The build's commit
+    (`MIND_BUILD_COMMIT`, 02_build.sh) is drawn instead.
+- **Stage 2** says which path table 12 took: `THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE
+  THROUGH ITS BUS`, or `... THE LONG PATH: n WRITES THROUGH ITS BUS (m INTO THE PHY)`.
+
+**Stages 11 to 15** (1e2855c60, switched off). They are built when stage 9 has run, in Display Core's order, and each is
+logged in full before its first write:
+
+| Stage | What it writes |
+|---|---|
+| 11 | DPP1's and HUBP1's clock enables |
+| 12 | DPP1's format, colour stages and scaler as the firmware DPP's; recout and MPC size 1920x1080 |
+| 13 | HUBP1, still blanked: the surface at FB base + 0x1000000, pitch field 1919, viewport 1920x1080, the requestor, VM aperture, prefetch, QoS and cursor settings as the firmware HUBP's; DLG and TTU from stage 9; VREADY as the firmware's. The log gives the pitch field written and the firmware's |
+| 14 | MPCC1 from DPP1 to OPP1 (bottom none, the firmware MPCC's blending); `MPC_OUT1_MUX` to MPCC1 |
+| 15 | HUBP1 unblanked; three frames; no new underflow on either pipe; the pattern off; three frames; no new underflow |
+
+- **The guard** lets pipe 1's HUBP, DPP, MPCC and output mux through only from stage 11. First light's stages and their
+  tables cannot reach them, and pipe 0's blocks stay refused.
+- **Not written, as decided:**
+  - pipe 1's DPP clock DTO: left disabled, so pipe 1 runs at the full global DPP clock, as batch 10 shows it;
+  - `hubp21_init`'s chicken bit for flips between DPTE and meta (no VM, no meta here);
+  - DSCL's own blank timing, which Linux's bypass path leaves alone too.
+- **Copied rather than computed:** the prefetch, VM-row, QoS and cursor values. They were set for the firmware's larger
+  mode, which leaves pipe 1 more time, not less. A mistake shows as an underflow, which fails stage 15 and undoes it.
+- **Host cases** (`display_light_host.rs`, 25; `display_picture_host.rs`, 4; batches, 11):
+  - all fifteen stages on the model, with the registers written and copied, and the guard by stage;
+  - the undo of all fifteen;
+  - an underflow at stage 15, a busy MPCC, stage 9 without a reference, stage 10 without a surface;
+  - the picture's glyphs and layout, and the 45-degree lean an off-by-one pitch gives.
+
 ## Acceptance criteria
 
 - [ ] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
