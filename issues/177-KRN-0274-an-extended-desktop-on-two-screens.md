@@ -7,7 +7,7 @@
 The maintainer asked on 2026-11-22 for the desktop to extend over both monitors, the second placed relative to the first (`KRN/2026-11-22T0829Z-DRV-the-maintainer-saw-the-mirror-and-asks-for-stretch-fit-and-an-extended-desktop.md` on `internal-dev-messages`).
 
 Today the second screen only mirrors the first:
-- [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md) made the mirror;
+- [213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done) made the mirror;
 - [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md) lets it keep the first screen's shape or stretch.
 
 [177](177-display-output.md)'s step 2 plans this layout: `data/displays.txt` places each monitor, and one desktop spans them. Its step 1 (every screen the firmware lit, in `BootInfo`) is not done, but the Ryzen's second screen comes another way: from a driver, through `display.wit`. This task is step 2 for such a screen.
@@ -41,4 +41,4 @@ The compositor copies one screen per task, the one in front, of the boot screen'
 
 ## Related
 
-[177](177-display-output.md), [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.md), [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), [213](213-amd-ryzen-pc.md).
+[177](177-display-output.md), [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), [213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done), [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), [213](213-amd-ryzen-pc.md).

@@ -97,7 +97,7 @@ This is evidence for that machine, those monitors and that release (MC-12.1).
 - in the gate: every group on both architectures.
 
 **Asked next by the maintainer, and split off:**
-- the picture stretched or kept in shape: 213-KRN-0273, on `claude/213-KRN-0273-the-second-screen-stretched`, requested for round 171;
+- the picture stretched or kept in shape: [213-KRN-0273](../issues/213-KRN-0273-the-second-screen-stretched.md);
 - the desktop extended over both monitors: 177-KRN-0274's plan, on the same branch.
 
 No frame signal is asked for while no tearing is seen.
