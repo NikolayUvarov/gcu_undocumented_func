@@ -162,6 +162,39 @@ One change, one measurement:
   - The release build builds.
   - Not run on the Ryzen.
 
+**2026-11-22, boot 93's paired minutes: the OFDM floor alone** (release 202611221429, 65870f63f with both switches true; one boot from 14:34 to 15:40 UTC):
+- **The logs:**
+  - Read whole through the server at 15:27 UTC, to 3164.9 s.
+  - Its tail after that over the cable at 15:40 UTC, to 3966 s. Joined: S/handoff/wifi/boot0093-whole.log.
+  - 66 minute lines: 33 OFF and 32 ON after the partial first.
+  - Every ON minute held the OFDM floor alone (above).
+- **Counted by scripts** (/home/un/.local/share/mind-bench/wifi/: `paired.py`, `paired_ci.py`, `paired_bins.py`; their output in S/handoff/wifi/paired-boot93-whole*.txt):
+  - Each ON minute is set against the mean of its two OFF neighbours: 32 triples.
+  - 27 have no Effector operation in any of their three minutes. Server reads: 138 s, 3166 s (failed, `io`) and 3191 s (a 425 KB upload, 570 sends in that ON minute).
+- **The figures.** ON less OFF, the mean with a t-based 95% interval; all 32 triples, then the 27 clean ones:
+
+  | Figure | All 32 | Clean 27 | OFF level |
+  |---|---|---|---|
+  | Late frames per send | −0.004 [−0.018, +0.009] | −0.004 [−0.020, +0.012] | 0.079 |
+  | Sends acknowledged in time | +0.005 [−0.008, +0.018] | +0.004 [−0.011, +0.020] | 0.916 |
+  | Late frames' median hold | −1 ms [−17, +15] | 0 ms [−18, +19] | 160 ms |
+  | Late frames acknowledged at the first try | +0.04 [−0.03, +0.12] | +0.04 [−0.05, +0.13] | 0.68 |
+  | PPDU a minute | −568 [−923, −213] | −529 [−925, −134] | 25.4k |
+  | End bins (no RPL: other stations' OFDM) | −392 [−508, −276], lower in 30 of 32 | −418 [−550, −286], lower in 25 of 27 | about 5.8k |
+  | Middle bins (CCK and OFDM to us) | −176 [−497, +145] | −111 [−448, +226] | about 19.5k |
+
+  - Pooled: OFF 384 late of 4885 sends (0.079); ON 368 of 5109 (0.072). The clean minutes: 347 of 4501 against 343 of 4327.
+  - The faint share (−85 to −99 dBm) was 0.0001 in both kinds of minute.
+- **What it shows:**
+  - The OFDM floor is in force: it reads back, and the PHY reports about 400 fewer of other stations' OFDM PPDUs a minute, some 7% of them.
+  - In this boot it did not change the late frames, their holds or their first tries within the intervals above. An effect larger than about a fifth of the late frames' level would probably have shown.
+- **What it does not show (MC-12.2):**
+  - It is one machine, one access point (−61 dBm, channel 8), one afternoon, one boot, and minutes of about 145 sends.
+  - Nothing of the CCK floor or EDCCA's 66: neither was in force.
+  - Whether 0x4B64 and 0x4B74 take writes.
+- **A reading beside it:** the read at 3191 s uploaded 425 KB in about 24 s, about 17 KB/s, against Linux's 480 to 826 KB/s on this channel. That is one upload, under the answer path of 213-DRV-0104.
+- **Next:** the same paired minutes on the boot with a95ed0064, where the ON minutes hold EDCCA's 66 and the CCK fields as far as they take.
+
 ## For a successor (state on 2026-11-22, 14:40 UTC)
 
 Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s section "For a successor (state on 2026-11-22)": the branches, the bench switches, the collector, the traps, and the answer path's six steps with their files and lines. What follows is what the afternoon added.
