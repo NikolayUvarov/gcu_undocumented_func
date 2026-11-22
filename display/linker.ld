@@ -4,6 +4,7 @@ PHDRS {
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
+    stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
     . = 0;
@@ -21,5 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
+    /* display's stack, PT_GNU_STACK's size (262-KRN-0164): 256 KiB, as step 3's frames hold the VBIOS interpreter, the
+       undo's journal and the stages' plans (light::STEP3_STACK_BYTES), past the 64 KiB a task has without it. */
+    .stack (NOLOAD) : { . = . + 0x40000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }
