@@ -155,7 +155,7 @@ struct Engine {
     // The timing generators' frame counts follow the clock at this period (0: one more at each read).
     frame_us: u64,
     // Step 4's surface, made at its first row; none when `no_surface`.
-    surface: Vec<u32>, no_surface: bool,
+    surface: Vec<u32>, no_surface: bool, pitch: usize,
     // The compositor's answers to stage 16's offer and to screen_gone (display.wit 1.3); none: it takes them.
     refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
 }
@@ -170,13 +170,15 @@ impl Screens for Engine {
     }
 }
 impl Canvas for Engine {
-    fn row(&mut self, y: usize, pixels: &[u32]) -> bool {
-        if self.no_surface || y >= picture::HEIGHT { return false; }
-        if self.surface.is_empty() { self.surface = vec![0; picture::PITCH * picture::HEIGHT]; }
-        self.surface[y * picture::PITCH..][..pixels.len()].copy_from_slice(pixels);
+    // Slot 5's 20 MiB, made at the first row.
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+        if self.no_surface || pixels.len() > pitch || (y + 1) * pitch * 4 > light::SURFACE_BYTES { return false; }
+        if self.surface.is_empty() { self.surface = vec![0; light::SURFACE_BYTES / 4]; }
+        self.surface[y * pitch..][..pixels.len()].copy_from_slice(pixels);
+        self.pitch = pitch;
         true
     }
-    fn sample(&mut self, x: usize, y: usize) -> Option<u32> { self.surface.get(y * picture::PITCH + x).copied() }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { self.surface.get(y * pitch + x).copied() }
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
@@ -520,9 +522,9 @@ fn stages_9_and_10_measure_the_firmwares_clock_derive_pipe_1_and_draw_the_pictur
         assert!(log.iter().any(|x| x.starts_with(&format!("S{} THE ATTACHED HUBPS UNCHANGED, BLANKED", n))));
     }
     // Stage 10: the picture in the surface, read back where stage 10 reads it and elsewhere.
-    let lines = picture::Lines { build: "TESTBUILD" };
+    let lines = picture::Lines::new("TESTBUILD", picture::Size::FIRST);
     for y in (0..picture::HEIGHT).step_by(7) {
-        for x in (0..picture::WIDTH).step_by(5) { assert_eq!(e.sample(x, y), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
+        for x in (0..picture::WIDTH).step_by(5) { assert_eq!(e.sample(x, y, picture::PITCH), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
     }
     assert!(log.iter().any(|x| x == "S10 DRAWN: 1920x1080 AT SLOT 5'S START, PITCH 1920 PIXELS (7680 BYTES); 9 SAMPLES READ BACK AS DRAWN"));
     assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 1920X1080 / BUILD TESTBUILD"));
@@ -1236,6 +1238,112 @@ fn stage_8_failing_at_each_of_its_waits_is_undone_whole() {
 // Every write of the watched run on the Ryzen (2026-11-22, release 202611220438, boot 66) in its order: (stage, table
 // (0 for the plan's own), byte offset, value), from its log.
 const WATCHED_RUN: [(u8, u8, u32, u32); 95] = [(1, 0, 0x13E7C, 0x00000003), (1, 0, 0x14318, 0x00000003), (2, 12, 0x1783C, 0xB008003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x1783C, 0xB038003E), (2, 12, 0x17844, 0x3F00003E), (2, 12, 0x17840, 0x1E14003E), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x1782C, 0x000105A0), (2, 12, 0x17830, 0x00000021), (2, 12, 0x17834, 0x00000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x17838, 0x11000000), (2, 12, 0x1781C, 0xE0000001), (2, 12, 0x17820, 0x00000000), (2, 12, 0x17824, 0x00000000), (2, 12, 0x17828, 0x00000000), (2, 12, 0x17818, 0x001D3337), (2, 12, 0x17818, 0x001D3377), (2, 12, 0x17818, 0x001D3777), (2, 12, 0x17818, 0x001D7777), (2, 12, 0x1780C, 0x12121212), (2, 12, 0x1780C, 0x22222222), (2, 12, 0x00580, 0x00000001), (2, 12, 0x177A0, 0x00000007), (2, 12, 0x177C4, 0x001173F0), (2, 12, 0x177C0, 0x00D01000), (2, 12, 0x177C0, 0x00D03000), (2, 12, 0x177C0, 0x00D07000), (2, 12, 0x177C0, 0x00D0F000), (2, 12, 0x177DC, 0x00000300), (2, 12, 0x00400, 0x00000000), (2, 12, 0x0051C, 0x00000000), (2, 12, 0x00510, 0x0000C000), (2, 12, 0x00400, 0x00000101), (2, 0, 0x00400, 0x00000101), (3, 0, 0x14204, 0x80000300), (3, 0, 0x141A8, 0x00000897), (3, 0, 0x141B0, 0x002C0000), (3, 0, 0x141AC, 0x00C00840), (3, 0, 0x141B4, 0x00000000), (3, 0, 0x141BC, 0x00000464), (3, 0, 0x141C0, 0x00000464), (3, 0, 0x141C4, 0x00000464), (3, 0, 0x141DC, 0x00050000), (3, 0, 0x141D8, 0x00290461), (3, 0, 0x141E0, 0x00000000), (3, 0, 0x14210, 0x00000000), (3, 0, 0x0E7A4, 0x00000000), (3, 0, 0x14204, 0x80000300), (3, 0, 0x1431C, 0x00000024), (3, 0, 0x14320, 0x00010000), (3, 0, 0x14324, 0x00000001), (3, 0, 0x0E7A4, 0x04610000), (3, 0, 0x13E70, 0x00000000), (3, 0, 0x141B8, 0x00000000), (4, 0, 0x13698, 0x00000001), (4, 0, 0x135C0, 0x07800438), (4, 0, 0x135D0, 0x00000000), (4, 0, 0x135B8, 0x00661001), (5, 0, 0x13E6C, 0x0000F100), (5, 0, 0x0E7A4, 0x84610000), (5, 0, 0x14204, 0x80000301), (6, 4, 0x15668, 0x00000000), (6, 4, 0x154AC, 0x0000001F), (6, 4, 0x154A0, 0x00000000), (6, 4, 0x154A0, 0x00000400), (6, 4, 0x154A0, 0x00000000), (6, 0, 0x154A0, 0x00000001), (7, 0, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x155BC, 0x00020100), (8, 76, 0x174B8, 0x01000302), (8, 76, 0x174B4, 0x00000100), (8, 76, 0x1780C, 0x03030303), (8, 76, 0x1780C, 0x22222222), (8, 76, 0x1783C, 0xB038A034), (8, 76, 0x17840, 0x1E14A034), (8, 76, 0x17844, 0x3F00A034), (8, 76, 0x17848, 0x7434A034), (8, 76, 0x155C0, 0x00000101), (8, 76, 0x15684, 0x0000010F), (8, 76, 0x174B8, 0x11000302), (8, 76, 0x177C0, 0x00D0F000), (8, 76, 0x177C0, 0x00D1F000), (8, 76, 0x177A4, 0x0001C000), (8, 76, 0x1780C, 0x00000000), (8, 76, 0x1780C, 0x04040404), (8, 76, 0x17818, 0x001D4444), (8, 76, 0x1780C, 0x14141414), (8, 76, 0x1780C, 0x24242424), (8, 76, 0x1780C, 0x0C0C0C0C), (8, 0, 0x154A0, 0x01000401), (8, 0, 0x154A0, 0x00000001)];
+
+#[test]
+fn hdmi_signalling_at_1080p_lights_hdmi_a_1_with_the_same_clock_and_is_undone_whole() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, timing::CEA_1080P60, dcn::Signal::Hdmi).unwrap();
+    let mut e = engine();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(10)..]);
+    assert!(log.iter().any(|x| x.ends_with("MODE 1920x1080 AT 148.5 MHZ IN HDMI SIGNALLING (CTA VIC 16)")), "{:#?}", &log[..6]);
+    let g = |r: R| e.regs.get(&reg(r, 0)).copied().unwrap_or(0);
+    assert_eq!((g(R::HdmiControl) & 0x3100_001F, g(R::HdmiVbiPacketControl) & 0x1031, g(R::HdmiGc) & 1), (0x19, 0x31, 0));
+    assert_eq!((g(R::AfmtGenericHdr), g(R::AfmtGeneric0), g(R::AfmtGeneric1)), (0x000D_0282, 0x0828_101F, 16));
+    assert_eq!((g(R::HdmiGenericPacketControl0) & 3, g(R::HdmiGenericPacketControl1) & 0xFFFF), (3, 2));
+    // Every HDMI write logged in stage 6, after table 4 and before stage 7.
+    let s6 = log.iter().position(|x| x.starts_with("S6 WROTE DIG0_HDMI_CONTROL")).unwrap();
+    let s7 = log.iter().position(|x| x.starts_with("S7 BACK END: STAGE 7")).unwrap();
+    assert!(log[..s6].iter().any(|x| x.starts_with("S6 TABLE 4 DONE")) && s6 < s7);
+    assert_eq!(log[s6..s7].iter().filter(|x| x.starts_with("S6 WROTE ")).count(), 18);
+    // The same writes as DVI's but for stage 6's and the tables' mode.
+    let mut dvi = engine();
+    run_light(&Light::new(f, c, timing::CEA_1080P60).unwrap(), &good(), &mut dvi, 8, false);
+    let hdmi_only: Vec<(u32, u32)> = writes(&e).into_iter().filter(|w| !writes(&dvi).iter().any(|d| d.0 == w.0)).collect();
+    assert_eq!(hdmi_only.len(), 18, "{:X?}", hdmi_only);
+    // Undone whole.
+    let mut e = engine();
+    assert_eq!(run_light(&l, &good(), &mut e, 8, true).0, Outcome::Undone { done: 8 });
+    restored_but(&e, &before, &[]);
+    // The Ryzen's own tables on its warm state: tables 4 and 76 in HDMI mode, the PHY's short path, nothing through its bus.
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("hdmi_signalling_at_1080p... (the Ryzen's tables) SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut e = warm();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &bytes, &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(10)..]);
+    // In HDMI mode at the same clock: table 12 two steps more (310, DVI's 308), tables 4 and 76 their HDMI paths, the same
+    // writes in number.
+    for x in ["S2 TABLE 12 DONE: 310 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+              "S8 TABLE 76 DONE: 289 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES", "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"] {
+        assert!(log.iter().any(|l| l == x), "no {:?} in {:#?}", x, log.iter().filter(|l| l.contains("TABLE") && l.contains("DONE") || l.starts_with("S2 THE")).collect::<Vec<_>>());
+    }
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA));
+    let mut e = warm();
+    assert_eq!(run_light(&l, &bytes, &mut e, 8, true).0, Outcome::Undone { done: 8 });
+    restored_but(&e, &before, &[]);
+}
+
+// The Ryzen's monitor's own mode (213-DRV-0095, boot 78's EDID): 3440x1440 at 60 Hz, 324 MHz in 3600x1500.
+const WIDE: timing::Timing = timing::Timing { pixel_khz: 324_000, h_active: 3440, h_front: 48, h_sync: 32, h_back: 80, v_active: 1440, v_front: 3,
+    v_sync: 5, v_back: 52, h_sync_positive: true, v_sync_positive: false, interlaced: false };
+
+#[test]
+fn the_monitors_own_mode_in_hdmi_runs_all_sixteen_stages_at_3440x1440_and_is_undone_whole() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    assert_eq!(l.surface, picture::Size { width: 3440, height: 1440, pitch: 3456 });
+    let mut e = engine();
+    e.frame_us = 16_674;
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &good(), &mut e, 16, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    let has = |p: &str| assert!(log.iter().any(|x| x.contains(p)), "no {:?} in {:#?}", p, log.iter().filter(|x| x.starts_with("S9 ") || x.starts_with("S0 ")).collect::<Vec<_>>());
+    has("MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)");
+    // Stage 9 for 324 MHz at the 48 MHz reference, 54 requests a line; stage 13 at pitch 3456.
+    has("S9 PIPE 1 FOR 3440x1440 AT 324000 KHZ: REF/PIX 0.1481, PER HTOTAL 136533, H_BLANK_END 16, V_BLANK_END 57, LINE 509, REQ 9664 (54 REQUESTS A LINE)");
+    has("S9 PIPE 1'S SYNC FOR ITS PLANE: VSTARTUP 52 (STAGE 3'S), VUPDATE OFFSET 900 WIDTH ");
+    has("HIGH WATERMARK 2133 (4 LINES;");
+    let g = |r: R, i: u8| e.regs.get(&reg(r, i)).copied().unwrap_or(0);
+    assert_eq!((g(R::HubpreqSurfacePitch, 1), g(R::HubpPriViewportDimension, 1), g(R::DsclRecoutSize, 1), g(R::DsclMpcSize, 1)),
+               (3455, 1440 << 16 | 3440, 1440 << 16 | 3440, 1440 << 16 | 3440));
+    assert_eq!(g(R::DpgDimensions, 1), 3440 << 16 | 1440);
+    // Stage 10 at that size, read back; stage 16 offers its shape.
+    assert!(log.iter().any(|x| x == "S10 DRAWN: 3440x1440 AT SLOT 5'S START, PITCH 3456 PIXELS (13824 BYTES); 9 SAMPLES READ BACK AS DRAWN"));
+    assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 3440X1440 / BUILD TESTBUILD"));
+    let lines = picture::Lines::new("TESTBUILD", l.surface);
+    for (x, y) in [(0, 0), (3439, 1439), (1720, 100), (1000, 700)] { assert_eq!(e.surface.get(y * 3456 + x).copied(), Some(picture::pixel(&lines, x, y)), "{},{}", x, y); }
+    assert!(e.ev.contains(&Ev::Offer(3440, 1440, 13_824)));
+    // HDMI signalling: no VIC, no aspect code in the AVI infoframe; the watch clean.
+    assert_eq!((g(R::AfmtGeneric0, 0), g(R::AfmtGeneric1, 0)), (0x0808_104F, 0));
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    // Undone whole.
+    let mut e = engine();
+    e.frame_us = 16_674;
+    assert_eq!(run_light(&l, &good(), &mut e, 16, true).0, Outcome::Undone { done: 16 });
+    restored_but(&e, &before, &[]);
+    // A mode whose surface does not fit slot 5 is refused before any stage.
+    let big = timing::Timing { pixel_khz: 297_000, h_active: 3840, h_front: 176, h_sync: 88, h_back: 296, v_active: 2160, v_front: 8, v_sync: 10, v_back: 72,
+        h_sync_positive: true, v_sync_positive: true, interlaced: false };
+    assert_eq!(Light::new_with(f, c, big, dcn::Signal::Hdmi).err(), Some(light::Refusal::Surface { bytes: 3840 * 2160 * 4 }));
+    // The Ryzen's tables at 324 MHz in HDMI, on its warm state: the PHY's short path, tables 4 and 76 in HDMI mode.
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_monitors_own_mode... (the Ryzen's tables) SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let mut e = warm();
+    let (outcome, log) = run_light(&l, &bytes, &mut e, 8, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 });
+    for x in ["S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 33 WRITES", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+              "S8 TABLE 76 DONE: 300 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES", "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS"] {
+        assert!(log.iter().any(|l| l == x), "no {:?} in {:#?}", x, log.iter().filter(|l| l.contains("TABLE") && l.contains("DONE")).collect::<Vec<_>>());
+    }
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_CR_ADDR || w.0 == PHY_A_CR_DATA));
+    // Its four clock-dependent RDPCS values for 324 MHz, as the probe of 2026-11-22 found them.
+    let w = writes(&e);
+    for (o, v) in [(0x1783C, 0xB028_003E), (0x1782C, 0x0001_0660), (0x17830, 0x0000_0011), (0x1781C, 0x8000_0001)] {
+        assert!(w.contains(&(o, v)), "{:05X} = {:08X}", o, v);
+    }
+}
 
 #[test]
 fn the_ryzens_tables_on_its_warm_state_take_the_watched_runs_path() {
