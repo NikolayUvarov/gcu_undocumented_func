@@ -75,7 +75,7 @@ Made in `kernel/src/pci_control.rs` (`Mode::Memory`), `kernel/src/pci.rs`, `kern
 
 The carve-out question in "Not covered" is answered by DRV's run 7 in 213-DRV-0086. The firmware's map marks 0x8_0E30_0000 to 0x8_2FFF_FFFF as reserved, and the frame pool takes only conventional memory, so the frame pool never hands out the carve-out.
 
-The compositor's part is [213-KRN-0272](../issues/213-KRN-0272-a-second-screen-for-the-compositor.md).
+The compositor's part is [213-KRN-0272](213-KRN-0272-a-second-screen-for-the-compositor.done).
 
 This is evidence for that machine with those builds (MC-12.1).
 

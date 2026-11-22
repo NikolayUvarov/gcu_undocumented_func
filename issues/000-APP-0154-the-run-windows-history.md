@@ -1,6 +1,6 @@
 # 000-APP-0154 — `wm`'s Run window (Alt+R) keeps a history of what was entered
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's word, 2026-11-21, passed on by DRV) · **Status:** in progress (done in QEMU on x86, 2026-11-21; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's word, 2026-11-21, passed on by DRV) · **Status:** in progress (done in QEMU on x86, in `main` since round 169, 2026-11-22; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
 
 **Recorded by:** the tools track, 2026-11-21, from DRV's message `APP/2026-11-21T1325Z-DRV-request-wms-run-window-keeps-a-history-of-what-was-entered.md` on `internal-dev-messages`. It passes on the maintainer's word after `camera -c 0` and `camera -c 1` were started through Alt+R on the Ryzen: «окно Alt+R (запуска программ) должно поддерживать историю введённых команд, поставь задачу треку APP».
 

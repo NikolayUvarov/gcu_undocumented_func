@@ -22,6 +22,60 @@ const SER_GRACE_US:u64=20_000;
 // it ran out in whichever register they read (the Ryzen, 2026-11-08). False: the frame's deadline caps them.
 const OWN_DEADLINES:bool=true;
 const SER_DBG_INFO:usize=0x8424;
+// 213-DRV-0091: a station register check that met an unreadable CMAC domain (DEADBEEF, as the Ryzen's boot 62 read the
+// CMAC table's window twice in 98 minutes once the firmware knew the link) reads again UNREADABLE_TRIES times,
+// UNREADABLE_GAP_US apart, and outlasts a firmware recovery that SER_DBG_INFO or the BB and the scheduler show meanwhile;
+// only a mismatch with a readable value, or no answer at all after it, stops the data mode.
+// The gap is at most 1 ms: io::short_delay refuses more, and 2 ms stopped the data mode 5 times (the Ryzen's boots 64-65).
+const UNREADABLE:u32=0xdead_beef;
+const UNREADABLE_TRIES:u32=16;
+const UNREADABLE_GAP_US:u32=1_000;
+// 213-DRV-0091: the firmware's error status, taken as Linux's rtw89_mac_get_err_status takes it (mac.c): HALT_C2H_CTRL
+// nonzero, then HALT_C2H read and HALT_C2H_CTRL cleared. Read at each data-mode check; nothing is answered to the firmware.
+const HALT_C2H_CTRL:usize=0x164;
+const HALT_C2H:usize=0x16c;
+const FIRMWARE_ERRORS_KEPT:usize=4;
+// 213-DRV-0091: HISR0's halt bits (pci.h), read at each check as rtw89_pci_recognize_intrs reads them and cleared by writing
+// them back; this driver masks HIMR0, so the status shows whether the firmware raises them at all. Nothing is answered.
+const HISR0:usize=0x1a4;
+const HISR0_HALT_C2H:u32=1<<21;
+const HISR0_WDT_TIMEOUT:u32=1<<22;
+/// A firmware error code's level, as ser.c's rtw89_ser_notify reads it (213-DRV-0091).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub enum Level{L0,L1,L2,#[default]Unknown}
+/// HALT_C2H's code after mac.c's scenario mapping, by mac.h's mac_ax_err_info name, with its level and ser.c's event.
+pub fn firmware_error(raw:u32)->(u32,&'static str,Level,&'static str){
+    let code=match raw>>28{1=>0x5000,2=>0x3000,3=>0x4000,_=>raw};
+    let(name,level,event)=match code{
+        0x0001=>("L0_ERR_CMAC0",Level::L0,"SER_EV_L0_RESET"),
+        0x0002=>("L0_ERR_CMAC1",Level::L0,"SER_EV_L0_RESET"),
+        0x0003=>("L0_RESET_DONE",Level::L0,"SER_EV_L0_RESET"),
+        0x0010=>("L0_PROMOTE_TO_L1",Level::L1,"SER_EV_L1_RESET (M1)"),
+        0x0999=>("L1_PREERR_DMAC",Level::L1,"SER_EV_L1_RESET_PREPARE (PRE-M0)"),
+        0x1000=>("L1_ERR_DMAC",Level::L1,"SER_EV_L1_RESET (M1)"),
+        0x1001=>("L1_RESET_DISABLE_DMAC_DONE",Level::L1,"SER_EV_DO_RECOVERY (M3)"),
+        0x1002=>("L1_RESET_RECOVERY_DONE",Level::L1,"SER_EV_MAC_RESET_DONE (M5)"),
+        0x1010=>("L1_PROMOTE_TO_L2",Level::L2,"SER_EV_L2_RESET"),
+        0x1011=>("L1_RCVY_STOP_DONE",Level::L1,"NONE"),
+        0x2400=>("L2_RESET_DONE",Level::L2,"SER_EV_L2_RESET"),
+        0x2599=>("L2_ERR_WDT_TIMEOUT_INT",Level::L2,"SER_EV_L2_RESET"),
+        0x3000=>("CPU_EXCEPTION",Level::L2,"SER_EV_L2_RESET"),
+        0x4000=>("ASSERTION",Level::L2,"SER_EV_L2_RESET"),
+        0x5000=>("RXI300",Level::L2,"SER_EV_L2_RESET"),
+        0x2000..=0x5001=>("L2_ERR",Level::L2,"SER_EV_L2_RESET"),
+        _=>("UNKNOWN",Level::Unknown,"NONE"),
+    };(code,name,level,event)
+}
+/// The firmware's n-th error code, as read (213-DRV-0091): HALT_C2H_CTRL and HALT_C2H, SER_DBG_INFO then, and the code by
+/// mac.h's name with its level and ser.c's event.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct FirmwareError{pub count:u32,pub ctrl:u32,pub raw:u32,pub ser:u32,pub code:u32,pub name:&'static str,pub level:Level,pub event:&'static str}
+/// The firmware's error codes by level since the data mode began (213-DRV-0091).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Errors{pub l0:u32,pub l1:u32,pub l2:u32,pub unknown:u32,pub hisr_halt:u32,pub hisr_wdt:u32}
+/// The n-th check that found HISR0's halt bits set (213-DRV-0091): HISR0, HALT_C2H_CTRL and SER_DBG_INFO then.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct HaltStatus{pub count:u32,pub hisr:u32,pub ctrl:u32,pub ser:u32,pub intx:Option<bool>}
 const CMAC_ERR_ISR:usize=0xc164;
 const LIVE_US:u32=10_000;
 pub(crate) const SCHEDULER:u16=0x010f;
@@ -71,7 +125,8 @@ impl core::fmt::Debug for Snapshot{
 /// window's indirect read, as the coexistence reconcile makes it:
 /// - MAC: SYS_FUNC_EN in 0x0, the coexistence control byte in 0x73, the scoreboard; HALT_H2C/C2H and their controls,
 ///   WCPU_FW_CTRL; the RXQ and RPQ rings' indexes (host in bits 0-11, hardware in 16-27: equal, nothing was fed);
-///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_ISR; MACID pause and sleep, CTN_TXEN (transmit paused); port 0's PORT_CFG
+///   SER_DBG_INFO, DLE_EMPTY0/1, DMAC_ERR_IMR and _ISR (and CMAC_ERR_IMR, RX_ERR_FLAG_IMR below: what the MAC raises to
+///   the firmware, 213-DRV-0091); MACID pause and sleep, CTN_TXEN (transmit paused); port 0's PORT_CFG
 ///   (net type, BSSID fit, TSF update); CMAC_ERR_ISR, RX_ERR_FLAG, RX_FLTR_OPT, the CTRL/MGNT/DATA type filters (two
 ///   bits a subtype: 1 to the host, 2 to the WLAN CPU) and BCN_PSR_RPT; the pollution 0xC67C; Linux's coexistence
 ///   monitor set for the 8852B
@@ -81,9 +136,9 @@ impl core::fmt::Debug for Snapshot{
 ///   TX collision (0xC70); CCK (0x700) and the CCK path (0x2344), as the channel stage sets them.
 /// - RF of both paths: mode (0x00), channel (0x18), VCO (0xB2) and the synthesizer's lock (0xC5 bit 15).
 /// - The LTE window's SW_CFG_1: the grants the coexistence writes. All ones: not read.
-pub const PROBE_MAC:[usize;38]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8524,
-    0x9eb0,0xc2c0,0xc348,0xc400,0xc164,0xc800,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,0xda20,
-    0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
+pub const PROBE_MAC:[usize;41]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8520,0x8524,
+    0x9eb0,0xc2c0,0xc348,0xc400,0xc160,0xc164,0xc800,0xc804,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,
+    0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
 pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
     0xc70,0x700,0x2344];
 pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
@@ -96,6 +151,11 @@ impl core::fmt::Debug for Probe{
         for(path,values)in self.rf.iter().enumerate(){for(at,value)in PROBE_RF.iter().zip(values){write!(f,"{}{:X}={:X} ",['A','B'][path],at,value)?;}}
         write!(f,"LTE38={:X}",self.grants)
     }
+}
+
+// The station check's fault when it read an unreadable CMAC domain (213-DRV-0091).
+fn unreadable(result:&Result<(),Cause>)->Option<Fault>{
+    match result{Err(Cause::Station(failure)) if failure.cause.value==UNREADABLE=>Some(failure.cause),_=>None}
 }
 
 /// Actual station context is consumed; the calibrated policy and board remain immutably borrowed throughout data mode.
@@ -127,7 +187,16 @@ pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>,stopped:bool,
     cleanup_allowed:bool,last_shutdown:Option<Shutdown>,counts:Counts,tx_deadline:Option<u64>,snapshot:Option<Snapshot>,
     ser_seen:u32,recoveries:u32,recovery:Option<Recovery>,grace_us:u64,
+    // 213-DRV-0091: the station checks that met an unreadable CMAC domain and went on, and the last, for the service's line.
+    unreadables:u32,unreadable:Option<Unreadable>,
+    // 213-DRV-0091: the firmware's error codes read and not yet taken, oldest first.
+    firmware_errors:[FirmwareError;FIRMWARE_ERRORS_KEPT],firmware_pending:usize,halts:u32,halt_status:Option<HaltStatus>,
 }
+/// A station register check that met an unreadable CMAC domain and went on (213-DRV-0091): the n-th, the register and
+/// the value it read first, the reads until it answered and over how long, SER_DBG_INFO before and after, and whether a
+/// firmware recovery was outlasted meanwhile.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Unreadable{pub count:u32,pub register:usize,pub value:u32,pub reads:u32,pub waited_us:u64,pub ser_before:u32,pub ser_after:u32,pub recovered:bool}
 pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     pub owner:DataSession<'q,'memory,'p,'a,'command,'receive,B>,pub failure:Failure,
 }
@@ -135,7 +204,7 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
@@ -178,7 +247,8 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn activate(session:Session<'a,'command,'receive,B>,queue:&'q mut tx::Queue<'memory>,prepared:PreparedActivation<'p>)
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
-            ser_seen:0,recoveries:0,recovery:None,grace_us:0};
+            ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None,
+            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0,halts:0,halt_status:None};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
         own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
     }
@@ -289,15 +359,81 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     fn live(&mut self,deadline:u64)->Result<u64,Cause>{
         if self.stopped||!self.identity()||!matches!(self.session.mode,Mode::Data(_)){return Err(Cause::State)}
         if let Some(error)=self.session.failed{return Err(Cause::Session(error))}
+        self.firmware_status(deadline)?;
         let mut deadline=self.outlast_ser(deadline,false)?;
         let mut result=self.checks(deadline).and_then(|()|self.permits(deadline));
+        // 213-DRV-0091: a station check that met an unreadable CMAC domain, and what it was then.
+        let first=unreadable(&result);let(ser_before,start,recoveries)=(self.ser_seen,self.session.now()?,self.recoveries);
         // OUTLAST_SER: a recovery that began during the checks or the permits' (the Ryzen, 2026-11-08: the scheduler read
         // zero there after 42 minutes) is outlasted, and they are made once more.
         if result.is_err()&&OUTLAST_SER{
             let before=self.recoveries;let after=self.outlast_ser(deadline,false)?;
             if self.recoveries!=before{deadline=after;result=self.checks(deadline).and_then(|()|self.permits(deadline));}
         }
+        // An unreadable domain is read again; whichever way it answers, the meeting is counted.
+        if let Some(first)=first{
+            // The checks made so far: the first, and once more if a recovery was outlasted above.
+            let mut reads=if self.recoveries!=recoveries{2}else{1};
+            if unreadable(&result).is_some(){(deadline,reads)=self.read_again(deadline,reads)?;}else{result?;}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let ser_after=io::read32(&mut window,SER_DBG_INFO);self.session.last=window.last;
+            self.unreadables=self.unreadables.saturating_add(1);
+            self.unreadable=Some(Unreadable{count:self.unreadables,register:first.register,value:first.value,reads,
+                waited_us:self.session.now()?.saturating_sub(start),ser_before,ser_after:ser_after.map_err(Cause::Register)?,
+                recovered:self.recoveries!=recoveries});
+            result=Ok(());
+        }
         result?;self.session.left(deadline)?;Ok(deadline)
+    }
+    // 213-DRV-0091: the checks made again while they meet an unreadable CMAC domain, UNREADABLE_GAP_US apart, a firmware
+    // recovery that SER_DBG_INFO shows meanwhile outlasted first. A readable mismatch, or no answer after
+    // UNREADABLE_TRIES, ends as the check's failure. Returns the deadline and the checks made in all.
+    fn read_again(&mut self,deadline:u64,made:u32)->Result<(u64,u32),Cause>{
+        let mut deadline=deadline;let mut reads=made;
+        loop{
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let ser=window.delay_us(UNREADABLE_GAP_US).and_then(|()|io::read32(&mut window,SER_DBG_INFO));
+            self.session.last=window.last;
+            if ser.map_err(Cause::Register)?!=self.ser_seen{deadline=self.outlast_ser(deadline,false)?;}
+            reads+=1;
+            match self.checks(deadline).and_then(|()|self.permits(deadline)){
+                Ok(())=>return Ok((deadline,reads)),
+                Err(Cause::Station(failure)) if failure.cause.value==UNREADABLE&&reads<UNREADABLE_TRIES=>continue,
+                Err(cause)=>return Err(cause),
+            }
+        }
+    }
+    // 213-DRV-0091: the firmware's error status, as mac.c's rtw89_mac_get_err_status takes it, counted and kept for the line.
+    fn firmware_status(&mut self,deadline:u64)->Result<(),Cause>{
+        let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+        let read=(||->io::Result<(u32,u32,Option<u32>,u32,Option<bool>)>{
+            // All ones is a device that does not answer, which the checks report.
+            let isr=io::read32(&mut window,HISR0)?;let halt=if isr==u32::MAX{0}else{isr&(HISR0_HALT_C2H|HISR0_WDT_TIMEOUT)};
+            // PCI Status bit 3 before the bits are cleared: whether the device asserts INTx for them.
+            let intx=if halt!=0{window.bus.pci_status().ok().map(|status|status&8!=0)}else{None};
+            if halt!=0{window.write32(HISR0,halt)?;}
+            let ctrl=io::read32(&mut window,HALT_C2H_CTRL)?;let set=ctrl!=0&&ctrl!=u32::MAX;
+            let raw=if set{let raw=io::read32(&mut window,HALT_C2H)?;window.write32(HALT_C2H_CTRL,0)?;Some(raw)}else{None};
+            let ser=if set||halt!=0{io::read32(&mut window,SER_DBG_INFO)?}else{0};
+            Ok((if halt!=0{isr}else{0},ctrl,raw,ser,intx))
+        })();
+        self.session.last=window.last;
+        let(isr,ctrl,raw,ser,intx)=read.map_err(Cause::Register)?;
+        if isr!=0{
+            let e=&mut self.counts.errors;
+            if isr&HISR0_HALT_C2H!=0{e.hisr_halt=e.hisr_halt.saturating_add(1)}
+            if isr&HISR0_WDT_TIMEOUT!=0{e.hisr_wdt=e.hisr_wdt.saturating_add(1)}
+            self.halts=self.halts.saturating_add(1);self.halt_status=Some(HaltStatus{count:self.halts,hisr:isr,ctrl,ser,intx});
+        }
+        let Some(raw)=raw else{return Ok(())};
+        let(code,name,level,event)=firmware_error(raw);let e=&mut self.counts.errors;
+        match level{Level::L0=>e.l0=e.l0.saturating_add(1),Level::L1=>e.l1=e.l1.saturating_add(1),Level::L2=>e.l2=e.l2.saturating_add(1),
+            Level::Unknown=>e.unknown=e.unknown.saturating_add(1)}
+        let count=e.l0.saturating_add(e.l1).saturating_add(e.l2).saturating_add(e.unknown);
+        // Kept until taken; beyond FIRMWARE_ERRORS_KEPT only counted, the line's n showing the gap.
+        if self.firmware_pending<FIRMWARE_ERRORS_KEPT{
+            self.firmware_errors[self.firmware_pending]=FirmwareError{count,ctrl,raw,ser,code,name,level,event};self.firmware_pending+=1;}
+        Ok(())
     }
     fn permits(&mut self,deadline:u64)->Result<(),Cause>{let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;Ok(())}
     fn checks(&mut self,deadline:u64)->Result<(),Cause>{
@@ -397,6 +533,15 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn grace_us(&self)->u64{self.grace_us}
     /// The firmware recovery outlasted since the last call, if any (OUTLAST_SER).
     pub(crate) fn take_recovery(&mut self)->Option<Recovery>{self.recovery.take()}
+    /// The last station check that met an unreadable CMAC domain and went on (213-DRV-0091), once.
+    pub(crate) fn take_unreadable(&mut self)->Option<Unreadable>{self.unreadable.take()}
+    /// The last check that found HISR0's halt bits set, not yet taken (213-DRV-0091).
+    pub(crate) fn take_halt_status(&mut self)->Option<HaltStatus>{self.halt_status.take()}
+    /// The oldest firmware error code read and not yet taken (213-DRV-0091).
+    pub(crate) fn take_firmware_error(&mut self)->Option<FirmwareError>{
+        if self.firmware_pending==0{return None}
+        let first=self.firmware_errors[0];self.firmware_errors.copy_within(1..,0);self.firmware_pending-=1;Some(first)
+    }
     /// The SNAPSHOT registers now, read only.
     pub(crate) fn registers(&mut self)->Snapshot{
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
