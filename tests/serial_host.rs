@@ -9,6 +9,8 @@ mod ch340;
 #[path = "../uart_serial/src/ns16550.rs"]
 #[allow(dead_code)]
 mod ns16550;
+#[path = "../usb_serial/src/pieces.rs"]
+mod pieces;
 
 /// The rate a divisor gives, decoded the other way: 3 MHz over the integer part and eighths.
 fn rate_of(value: u16, index: u16) -> u32 {
@@ -130,4 +132,21 @@ fn the_16550_divisor_of_its_1_8432_mhz_clock() {
         let (got, actual) = ns16550::divisor(baud).unwrap();
         assert!((actual as i64 - baud as i64).abs() * 100 <= baud as i64 * 3, "{baud}: {got} {actual}");
     }
+}
+
+#[test]
+fn a_write_goes_in_pieces_of_at_most_256_bytes_in_order() {
+    // 000-LNK-0050: usb_host serves its other clients between two pieces.
+    for length in [0usize, 1, 31, 32, 255, 256, 257, 511, 512, 4095, 4096] {
+        let all: Vec<(usize, usize)> = pieces::pieces(length, pieces::PIECE).collect();
+        assert_eq!(all.len(), length.div_ceil(256), "{length}");
+        let mut next = 0;
+        for &(at, n) in &all {
+            assert_eq!(at, next, "{length}: in order, none skipped");
+            assert!(n >= 1 && n <= 256, "{length}: a piece of {n}");
+            next += n;
+        }
+        assert_eq!(next, length);
+    }
+    assert_eq!(pieces::pieces(5, 0).collect::<Vec<_>>(), [(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)], "at least a byte a piece");
 }

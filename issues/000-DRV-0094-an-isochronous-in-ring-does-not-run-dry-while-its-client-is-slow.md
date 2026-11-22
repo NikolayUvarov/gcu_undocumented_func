@@ -1,6 +1,6 @@
 # 000-DRV-0094 — `usb_host`: an isochronous IN ring does not run dry while its client is slow
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: step 1 written and run on the Ryzen; steps 2 and 3 to come) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: steps 1 and 2 written and run on the Ryzen; step 3 written; step 4 as 000-LNK-0050, written) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -27,10 +27,15 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
 2. **`usb_host` puts an IN stream's finished TDs back on the ring by itself**, as the bulk streams do (158-DRV-0082). It keeps their packets in a bounded spill until the client takes them, so a slow client loses packets only once the spill is full, and the endpoint keeps being asked.
 3. **The restart after a dry ring no further ahead than the controller needs.** Is 64 microframes the minimum on this xHCI, or a safe guess? The xHCI's Isochronous Scheduling Threshold (HCSPARAMS2 IST) bounds it; the Ryzen's value is to be read and kept to.
 
+4. **An OUT stream's ring kept full while `usb_host` waits for another transfer** (found by run D). The owner session's decision, 2026-11-22:
+   - **Now:** the cable's converter, whose writes were the waits, writes in pieces of 256 bytes (000-LNK-0050). `usb_host` then serves `audio_gw`'s puts between two.
+   - **Later, as its own task:** `usb_host` starts bulk transfers and answers from its loop instead of waiting on them (000-DRV-0101).
+   - **Not done:** OUT packets held ahead in `usb_host`, since that delays playback by the queue.
+
 ## Acceptance criteria
 
 - [x] Step 1 on the Ryzen: a duplex run as run A (`audiostub duplex 900 0`, the board behind the Genesys hub), in which every dry ring is said with its time, its length and the wait it fell in. The STM-Speaker agent holds each pause against its own counters, so the run's start and end go to it.
-- [ ] Steps 2 and 3, in QEMU's `usbaudio` suite (its `iso` suite is the hybrid ISO's boot, not isochronous streams).
+- [ ] Steps 2 to 4, in QEMU's `usbaudio` suite (its `iso` suite is the hybrid ISO's boot, not isochronous streams).
 - [ ] The same 15-minute run with 0 TIMES DRY on both IN endpoints (DCI 3 and 5), with nobody else on the cable. That holds for that machine, that board and that release (MC-12.1).
 
 ## Progress (2026-11-22)
@@ -56,6 +61,29 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
   - That fits the guess that the cable's transfers starved the rings, but does not show it: no dry ring fell in a transfer's wait.
   - A run with a log read in its middle would name the transfer.
 - **Criterion 3 is not met:** DCI 5 ran dry once at the close, and steps 2 and 3 are not written. All of this holds for that machine, that board and that release (MC-12.1).
+
+- **Step 2, written:**
+  - An isochronous IN stream has a spill of 64 KiB, more than half a second of the speakerphone's capture. Its finished TDs go into it as a bulk stream's do, and back on the ring at once.
+  - `usb_host` does this every STREAM_MS, and now also every millisecond while it waits for a transfer of another device (`completion_for`). So a client that comes late, or a transfer of the cable's converter, no longer leaves the ring empty. The same holds for the cameras' bulk rings (158-DRV-0082).
+  - Empty packets are left out of the spill, as the take leaves them out. A full spill leaves the packets on their TDs, so the ring can still run dry then, and says so.
+  - The end line adds the spill's most and how often it was full.
+  - Command waits are left as they were: a command may change the slot's endpoints.
+  - QEMU's `usb-audio` has no IN endpoint, so the QEMU suites do not reach this path. The Ryzen run is its evidence.
+- **Step 3, written** (not run on the Ryzen yet):
+  - `usb_host` reads each controller's Isochronous Scheduling Threshold (HCSPARAMS2's IST: microframes, or frames with bit 3) and says it at its start (`ISOCHRONOUS SCHEDULING THRESHOLD n MICROFRAMES: …`).
+  - A TD's frame must then be at least IST + 1 microframe ahead, in whole frames, as Linux's `xhci_get_isoc_frame_id` schedules. A stream's first TD, and the first after a dry ring, goes one frame further. Before, it went 64 microframes ahead (`FIRST_AHEAD`, a guess), and a TD continued down to 16 ahead.
+  - On QEMU (IST 7 frames) that is 64 and 72. On the Ryzen it is to be read.
+- **Runs C and D on the Ryzen, 2026-11-22.**
+  - The setup: release 202611220957; the board behind the Genesys hub; `audiostub duplex 300 0`, each with one log read over the cable at its middle; nobody else on the cable.
+  - The raw lines are in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`; the bench log has each run's times.
+  - **C, step 1's `usb_host`** (duplex 10:23:42–10:28:45 UTC, the read 10:26:30–36):
+    - all 64 dry rings fell inside the read, each `WAITING ON SLOT 3 ENDPOINT 4 FOR 30.7–45.4 MS`, the cable converter's (CH340) bulk OUT carrying the log;
+    - capture 25, feedback 22, playback 20 (3 at the close);
+    - so `usb_host` waits 30–45 ms on each of the converter's writes, serves no take meanwhile, and each ring's 32 ms of TDs runs out.
+  - **D, step 2's `usb_host`** (10:30:12–10:35:14, the read 10:32:57–10:33:06):
+    - capture 0 times dry (its spill at most 4508 bytes, never full) and feedback 0 times dry, its close too;
+    - playback, an OUT ring, still ran dry 12 times in the read, all waiting on the converter, and once at the close. That is step 4.
+  - It holds for that machine, that board and that release (MC-12.1).
 
 ## Related
 
