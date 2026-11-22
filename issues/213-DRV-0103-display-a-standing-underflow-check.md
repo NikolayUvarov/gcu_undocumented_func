@@ -103,6 +103,21 @@ of that boot, which runs to 3164.9 s:
   there are fewer than 600 checks in ten minutes, and the longest time between two is a second and a poll.
 - As planned.
 
+**Boot 94** (0096's run with the maintainer, `HOTPLUG` and `STANDING_CHECK` on): two take-backs and relights inside one
+ten minutes. Its line at 1210.482 s read `567 CHECKS IN 10 MIN, THE LONGEST 12270 MS BETWEEN TWO; NOTHING NEW ON EITHER
+PIPE`.
+- The 12.27 s was the dark span from the cable's take-back (1044.7 s) to the first check after the relight (about
+  1056.4 s). The check does not run while there is no picture, and the account did not start afresh.
+- So the line could no longer show a check that silently stopped, which was its purpose.
+- **Since then:**
+  - `Standing::dark` is called at each take-back. No time between two checks spans a dark span.
+  - The line says the dark spans apart: `... THE LONGEST n MS BETWEEN TWO WHILE LIT; DARK d TIMES, s S IN ALL; NOTHING
+    NEW ON EITHER PIPE`.
+  - A ten minutes with no dark span keeps the line as before.
+  - Host case: an unplug and a plug inside one ten minutes give the lit time's longest (1000 ms) and `DARK 1 TIMES`, and
+    the ten minutes after give the old line.
+  - The running bench keeps the old line until the next display change.
+
 **Not shown by it:**
 - the check finding anything on the hardware, and so its undo after the offer and `screen_gone` there;
 - the watch of 60 (`SHORT_WATCH`);

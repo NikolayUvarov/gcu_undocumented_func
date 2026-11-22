@@ -1500,13 +1500,16 @@ pub fn take_back<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
     same == Some(true)
 }
 
-/// The standing check's account (213-DRV-0103): the checks made since it last said so, the longest time between two, and
-/// when it said so.
+/// The standing check's account (213-DRV-0103): the checks made since it last said so, the longest time between two
+/// while the output was lit, how often and how long it was dark since (an unplug's take-back to the relight: no picture
+/// to check), and when it said so.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Standing { pub checks: u64, pub longest_us: u64, last_us: Option<u64>, said_us: u64 }
+pub struct Standing { pub checks: u64, pub longest_us: u64, pub dark: u32, pub dark_us: u64, last_us: Option<u64>, dark_since: Option<u64>, said_us: u64 }
 
 impl Standing {
     pub fn new(now_us: u64) -> Standing { Standing { said_us: now_us, ..Standing::default() } }
+    /// The output went dark (an unplug's take-back): no time between two checks spans it; it is counted apart.
+    pub fn dark(&mut self, now_us: u64) { (self.last_us, self.dark_since, self.dark) = (None, Some(now_us), self.dark + 1); }
 }
 
 /// The standing check after the offer (213-DRV-0103): the firmware's HUBP and ODM statuses, then pipe 1's, against what
@@ -1528,12 +1531,18 @@ pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, ac
         if timeout { return Err(Failure::RequestTimeout { offset: reg.offset(), value: v }); }
     }
     let now = e.now_us();
+    if let Some(since) = account.dark_since.take() { account.dark_us += now.saturating_sub(since); }
     if let Some(last) = account.last_us { account.longest_us = account.longest_us.max(now.saturating_sub(last)); }
     (account.last_us, account.checks) = (Some(now), account.checks + 1);
     if now.saturating_sub(account.said_us) >= STANDING_SAID_US {
-        out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE",
-            account.checks, now.saturating_sub(account.said_us) / 60_000_000, account.longest_us / 1000));
-        (account.checks, account.longest_us, account.said_us) = (0, 0, now);
+        let minutes = now.saturating_sub(account.said_us) / 60_000_000;
+        match account.dark {
+            0 => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE",
+                account.checks, minutes, account.longest_us / 1000)),
+            d => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO WHILE LIT; DARK {} TIMES, {} S IN ALL; NOTHING NEW ON EITHER PIPE",
+                account.checks, minutes, account.longest_us / 1000, d, account.dark_us / 1_000_000)),
+        }
+        (account.checks, account.longest_us, account.dark, account.dark_us, account.said_us) = (0, 0, 0, 0, now);
     }
     Ok(())
 }

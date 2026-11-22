@@ -2070,3 +2070,34 @@ fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
     assert!(main.contains("const _: () = assert!(!SHORT_WATCH || STANDING_CHECK"));
     assert!(main.contains("const STANDING_CHECK: bool = false;") && main.contains("const SHORT_WATCH: bool = false;"));
 }
+
+#[test]
+fn an_unplug_and_a_plug_inside_ten_minutes_count_apart_from_the_time_between_two_checks() {
+    // Checks once a second while lit; an unplug's take-back at 100 s, dark for 12 s, then the stages run again (on the
+    // model's clock, some 6 s) and the checks go on: the line's longest time is the lit one's, the dark counted once.
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, _) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let start = e.clock;
+    let mut account = light::Standing::new(start);
+    let mut out = Log(vec![]);
+    let check = |e: &mut Engine, lit: &Lit, account: &mut light::Standing, out: &mut Log| { e.clock += light::STANDING_US; light::standing_check(&lit.l, e, &lit.journal, account, out).unwrap(); };
+    for _ in 0..100 { check(&mut e, &lit, &mut account, &mut out); }
+    assert!(take_back(&mut lit, &mut e, 16).0);
+    account.dark(e.clock);
+    e.clock += 12_000_000;
+    let (outcome, _) = light::run_timed(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, false, &mut Log(vec![]));
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let relit = e.clock;
+    while e.clock < start + light::STANDING_SAID_US { check(&mut e, &lit, &mut account, &mut out); }
+    let dark_s = (relit + light::STANDING_US - (start + 100 * light::STANDING_US)) / 1_000_000;
+    assert_eq!(out.0.len(), 1, "{:#?}", out.0);
+    let line = &out.0[0];
+    assert!(line.starts_with("S15 STANDING CHECK: ") && line.contains(" CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO WHILE LIT; DARK 1 TIMES, ")
+        && line.ends_with(&format!(", {} S IN ALL; NOTHING NEW ON EITHER PIPE", dark_s)), "{} (dark {} s)", line, dark_s);
+    assert!(dark_s >= 18, "the 12 s and the run again: {} s", dark_s);
+    // The next ten minutes, all lit: the line as before, the dark not carried over.
+    for _ in 0..600 { check(&mut e, &lit, &mut account, &mut out); }
+    assert_eq!(out.0.last().unwrap(), "S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE");
+}
