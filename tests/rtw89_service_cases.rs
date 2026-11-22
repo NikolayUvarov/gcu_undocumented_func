@@ -676,6 +676,36 @@ fn service_alternates_the_detection_floor_by_the_minute(){run(0,true,true,|data,
     drop(service);clean();
 });}
 
+// 213-DRV-0102: every field of the floor is written and read back on its own. Two registers that keep their value whatever
+// is written (the Ryzen's 0x4B64 and 0x4B74, boot 93) are named as read as before the write, and EDCCA's level after them is
+// still written: boot 93's ON minutes stopped at 0x4B64 and never wrote 0x4B74 or 0x4884.
+#[test]
+fn service_writes_every_floor_field_and_names_those_not_read_back(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::for_rssi};
+    ipc::reset();c.borrow_mut().write_ignored=vec![0x14b64,0x14b74];
+    let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let linux=for_rssi(-63);let on=minutes[2];assert!(on.on(),"{on:?}");
+    assert_eq!((on.registers[0]>>6&31,on.registers[0]>>30&1),(u32::from(linux.ofdm_pd),1),"the OFDM floor: {:X?}",on.registers);
+    assert_eq!((on.registers[1],on.registers[2]),(found[1],found[2]),"0x4B64 and 0x4B74 keep what they held");
+    assert_eq!((on.registers[3]>>24,on.registers[3]&0xffff),(u32::from(linux.edcca),u32::from(linux.edcca)*0x101),"EDCCA written after them");
+    assert_eq!((on.written,on.switch_failures),(crate::btc_session::data_mode::FloorWrite{unread:0b0110,unchanged:0b0110},0),"named, not a failed switch");
+    for off in [minutes[1],minutes[3]]{assert!(off.off());assert_eq!((off.written,off.switch_failures),(Default::default(),0));}
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
+    drop(service);clean();
+});}
+
 // 213-DRV-0091: a late frame the MAC holds is probed while it holds it: the first HELD_PROBES of a run, then one a minute;
 // a frame released in time after the first is probed once beside them. The minute line counts the late frames released,
 // those acknowledged at the first try and their median hold, and the frame buffer's full spells.

@@ -77,10 +77,11 @@ use data_mode::Phase;
 const FLOOR_BEACONS:u32=8;
 // When it alternates: Linux's values and those found before the first write, what this minute holds, whether the switch
 // at the minute's boundary is still to be made (a send pending postpones it to the next poll), and switches that failed.
+// `written`: what this minute's writes did not read back (every field is written, each read back on its own).
 struct FloorState{enabled:bool,alternates:bool,due:bool,set:bool,refused:bool,linux:Option<detection_floor::Floor>,found:Option<[u32;4]>,
-    kind:data_mode::FloorKind,switch_due:bool,failures:u32}
+    kind:data_mode::FloorKind,switch_due:bool,failures:u32,written:data_mode::FloorWrite}
 impl Default for FloorState{fn default()->Self{Self{enabled:detection_floor::DETECTION_FLOOR_AS_LINUX,alternates:detection_floor::DETECTION_FLOOR_ALTERNATES,
-    due:false,set:false,refused:false,linux:None,found:None,kind:data_mode::FloorKind::None,switch_due:false,failures:0}}}
+    due:false,set:false,refused:false,linux:None,found:None,kind:data_mode::FloorKind::None,switch_due:false,failures:0,written:Default::default()}}}
 fn bin(us:Option<u64>)->Option<usize>{us.map(|us|((us/10_000)as usize).min(10))}
 struct TxWatch{probes:u32,minute_probed:bool,not_held:bool,held:Option<Event>,minute:data_mode::TxMinute,holds:[u16;32],holds_n:usize,
     full_since:Option<u64>}
@@ -413,14 +414,14 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             self.floor.due=false;
             if let(Some(linux),Some(found))=(self.floor.linux,self.floor.found){
                 let fields=if self.floor.kind==data_mode::FloorKind::On{detection_floor::fields(&linux)}else{detection_floor::restore(&linux,&found)};
-                if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}return
+                let result=self.data().write_floor(&fields);self.floor_written(result);return
             }
             let found=self.data().floor_registers();self.floor.found=Some(found);self.floor.linux=Some(floor);
             self.floor_event(Event::FloorAlternates{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,found});
             return
         }
-        let written=self.data().write_floor(&detection_floor::fields(&floor)).is_ok();
-        self.floor.due=false;self.floor.set=written;
+        let result=self.data().write_floor(&detection_floor::fields(&floor));let written=result.is_ok_and(|w|w.unread==0);
+        self.floor.due=false;self.floor.set=result.is_ok();self.floor_written(result);
         let registers=self.data().floor_registers();
         self.floor_event(Event::FloorSet{channel,dbm,measured:c.bss_measured,ofdm_pd:floor.ofdm_pd,cck_pd:floor.cck_pd,edcca:floor.edcca,written,registers});
     }
@@ -435,16 +436,23 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             _=>None,
         };
         if let Some(fields)=fields{
-            if self.data().write_floor(&fields).is_err(){self.floor.failures=self.floor.failures.saturating_add(1);}else if next==FloorKind::On{self.floor.set=true;}
+            let result=self.data().write_floor(&fields);if result.is_ok()&&next==FloorKind::On{self.floor.set=true;}self.floor_written(result);
         }
         self.floor.kind=next;self.floor.switch_due=false;
+    }
+    // A write's registers not read back are the minute's to say; an access fault is counted.
+    fn floor_written(&mut self,result:Result<data_mode::FloorWrite,crate::io::Fault>){
+        match result{
+            Ok(w)=>{let s=&mut self.floor.written;s.unread|=w.unread;s.unchanged|=w.unchanged;}
+            Err(_)=>{self.floor.failures=self.floor.failures.saturating_add(1);}
+        }
     }
     fn floor_event(&mut self,event:Event){if self.event.is_none(){self.event=Some(event)}else{self.later=Some(event)}}
     // 213-DRV-0102: the minute's PPDU reports by signal, taken, and the floor's registers now.
     fn floor_minute(&mut self)->data_mode::FloorMinute{
         let(ppdu_rssi,unparsed)=self.data().take_ppdu_rssi();let c=self.data().counts();
         let minute=data_mode::FloorMinute{ppdu_rssi,unparsed,registers:self.data().floor_registers(),bss_dbm:c.bss_dbm(),measured:c.bss_measured,
-            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures)};
+            set:self.floor.set,kind:self.floor.kind,switch_failures:core::mem::take(&mut self.floor.failures),written:core::mem::take(&mut self.floor.written)};
         // The next minute holds the other kind, switched at the next poll with no send pending.
         if self.floor.alternates&&self.floor.linux.is_some(){self.floor.switch_due=true;}
         minute

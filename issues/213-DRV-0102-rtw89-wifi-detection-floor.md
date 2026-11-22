@@ -122,6 +122,46 @@ One change, one measurement:
 
   The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
+**2026-11-22, boot 93: what its ON minutes held, and every field written now** (this branch; host cases, not run):
+- **The record corrected.** Boot 93's 25 ON minutes did not hold Linux's floor. They held the OFDM floor alone:
+  - 0x4860 read EC8DFA54: PD 9 and spatial reuse, as written.
+  - `write_floor` wrote the five fields in order and returned at the first that did not read back. That was 0x4B64[31:24], the third: it read 0 after the write.
+  - So 0x4B74's limit enable and 0x4884's EDCCA level were never written. 0x4884 stayed 38384242: the PPDU level 56 (−72 dBm), against Linux's 66 (−62 dBm).
+  - Every ON line's `A SWITCH NOT AS WRITTEN` came from that one field.
+  - The OFF minutes' restores read back, since they write 0 where 0 was read.
+- **0x4B64 and 0x4B74 on this chip, open:**
+  - The address, page and mask are Linux's for the 8852B (rtw8852b.c:221 to 224, reg.h:8821 to 8826).
+  - Linux writes them on this cut: `support_cckpd` is false only for an 8852B at CHIP_CAV (core.c:6110). The Ryzen reads CUT 1, which is CHIP_CBV (core.h:169, 170).
+  - Linux's write is a plain masked write at 0x10000 + the address for PHY 0 (`rtw89_phy_write32_idx`, phy.c:1939), as ours is. Linux never reads them back.
+  - The chip's own BB table (rtw8852b_table.c, cut 1, RFE 1) writes 0x4000 to 0x4AF0 and the CCK page 0x2300 to 0x23B4, and nothing in 0x4B00 to 0x4BFF.
+  - Both read 0 at admission, at the link, at the port step, in all 53 probe readings of boot 93 and in every minute line. 0x4B64 read 0 right after the write, so it is not the firmware putting it back.
+  - So either they are write-only (the value takes and reads as 0), or there is nothing at those addresses on this chip, and Linux's own CCK floor is a write to nothing. The source cannot tell which, and nothing on the hardware has shown it.
+  - **The test that would tell** (proposed, not run, and not to be run for now): ON minutes with the CCK bound for −70 dBm and its limit on.
+    - The −70 to −84 dBm bins hold about 7.8k reports a minute, other stations' CCK.
+    - Write-only registers in force would empty them. Absent ones would leave them.
+    - The access point's beacons, at −61 dBm, stay above that bound.
+  - **Why it is left:**
+    - At Linux's own bound (−83 dBm) the histogram has almost nothing to cut: 3 to 4 reports a minute below −85 dBm.
+    - So which of the two it is does not bear on the late frames.
+- **The change:**
+  - `data_mode::write_floor` writes every field and reads each back on its own. It returns the registers not read back as written and, of those, the ones that read as before the write (`FloorWrite`). Only an access fault ends the writes.
+  - The minute's floor line says `A WRITE FAULTED` for such a fault. It used to say `A SWITCH NOT AS WRITTEN` for any field.
+  - A register not read back gets a line of its own, so it does not read as a failed switch:
+
+    ```
+    [RTW89] TRAFFIC ON c: DETECTION FLOOR: EVERY FIELD WRITTEN; READ AS BEFORE THE WRITE: 4B64 4B74; READ OTHERWISE: NONE (213-DRV-0102)
+    ```
+
+  - The ON minutes now hold the OFDM floor and EDCCA's 66 on all three fields, and the CCK bound and its enable as far as those registers take them.
+- **Host case** `service_writes_every_floor_field_and_names_those_not_read_back`:
+  - In the model, 0x4B64 and 0x4B74 keep their value whatever is written (`write_ignored`).
+  - The ON minute holds Linux's OFDM floor and EDCCA level, names 0x4B64 and 0x4B74 as read as before the write, and counts no failed switch.
+  - The OFF minutes name nothing and restore the values found exactly.
+- **Tested:**
+  - The 40 `rtw89_*_host.rs` files pass: 4853 cases, 0 failed. The service file has 363.
+  - The release build builds.
+  - Not run on the Ryzen.
+
 ## For a successor (state on 2026-11-22, 14:40 UTC)
 
 Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s section "For a successor (state on 2026-11-22)": the branches, the bench switches, the collector, the traps, and the answer path's six steps with their files and lines. What follows is what the afternoon added.

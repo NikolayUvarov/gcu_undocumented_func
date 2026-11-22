@@ -11,6 +11,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
     // Whole receive buffers, after `incoming`: frames with their PPDU count and rate, and captured reports (213-DRV-0087).
     pub buffers:Vec<Vec<u8>>,
+    // 213-DRV-0102: registers that keep their value whatever is written (the Ryzen's 0x4B64 and 0x4B74, boot 93).
+    pub write_ignored:Vec<usize>,
     // 213-DRV-0091: the next reads of the indirect window that answer DEADBEEF, and whether the first of them begins a
     // firmware recovery as `ser` does (the Ryzen's boot 62).
     pub window_dead:usize,pub window_dead_ser:bool,
@@ -98,6 +100,7 @@ impl Device{
         }
     }
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
+        if self.control.borrow().write_ignored.contains(&at){return Ok(())}
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
         let filter_fault=self.control.borrow().filter_fault;
         if self.active&&(at==0x160||at==0x168){self.control.borrow_mut().halt_h2c_writes+=1;}

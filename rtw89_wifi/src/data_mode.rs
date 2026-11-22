@@ -223,7 +223,13 @@ impl Counts{pub(crate) fn bss_dbm(&self)->Option<i8>{(self.bss_measured!=0).then
 /// 213-DRV-0102: a minute's PPDU reports by signal (5 dB bins from -20 dBm down) and the detection floor's registers.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool,
-    pub kind:FloorKind,pub switch_failures:u32}
+    pub kind:FloorKind,pub switch_failures:u32,pub written:FloorWrite}
+/// 213-DRV-0102: the detection floor's registers, in detection_floor::REGISTERS' order.
+pub(crate) const FLOOR_REGISTERS:[usize;4]=[0x4860,0x4b64,0x4b74,0x4884];
+/// 213-DRV-0102: a floor's write: the registers (bits in FLOOR_REGISTERS' order) not read back as written, and of those
+/// the ones that read as before the write.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct FloorWrite{pub unread:u8,pub unchanged:u8}
 /// 213-DRV-0102: what a minute held when the floor alternates (DETECTION_FLOOR_ALTERNATES): not yet alternating, the
 /// values found, or Linux's.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
@@ -643,14 +649,22 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     /// 213-DRV-0102: the detection floor's four BB registers (detection_floor::REGISTERS order).
     pub(crate) fn floor_registers(&mut self)->[u32;4]{
         let bus=&mut *self.session.bus;
-        [0x4860,0x4b64,0x4b74,0x4884].map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))
+        FLOOR_REGISTERS.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))
     }
-    /// 213-DRV-0102: fields of the detection floor written: (register, mask, value), each read back.
-    pub(crate) fn write_floor(&mut self,fields:&[(usize,u32,u32)])->io::Result<()>{
-        let bus=&mut *self.session.bus;
-        for &(at,mask,value) in fields{io::modify32(bus,0x10000+at,mask,value&mask)?;
-            if io::read32(bus,0x10000+at)?&mask!=value&mask{return Err(Fault::new(FaultKind::PowerState,0x10000+at,value))}}
-        Ok(())
+    /// 213-DRV-0102: fields of the detection floor written: (register, mask, value), every one, each read back on its own.
+    /// The registers (bits in FLOOR_REGISTERS' order) whose field reads otherwise, and of those the ones that read as
+    /// before the write; only an access fault ends the writes (boot 93: one field that did not read back left the rest).
+    pub(crate) fn write_floor(&mut self,fields:&[(usize,u32,u32)])->io::Result<FloorWrite>{
+        let bus=&mut *self.session.bus;let mut done=FloorWrite::default();
+        for &(at,mask,value) in fields{
+            let before=io::read32(bus,0x10000+at)?;bus.write32(0x10000+at,(before&!mask)|(value&mask))?;
+            let after=io::read32(bus,0x10000+at)?;
+            if after&mask!=value&mask{
+                let bit=FLOOR_REGISTERS.iter().position(|r|*r==at).map_or(0,|i|1u8<<i);
+                done.unread|=bit;if after&mask==before&mask{done.unchanged|=bit;}
+            }
+        }
+        Ok(done)
     }
     /// 213-DRV-0102: the minute's PPDU reports by signal, taken: the next minute's start at zero.
     pub(crate) fn take_ppdu_rssi(&mut self)->([u32;17],u32){
