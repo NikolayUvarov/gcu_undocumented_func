@@ -72,6 +72,16 @@
   - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
 - **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
 
+**On the Ryzen** (release 202611221738, boot 97 from 17:42:50 UTC, the bench tree with 3ad6e4d76; read over the cable by the owner session and CAM):
+- The first transfer answered from the loop came at 3.533 s: `SLOT 3 ENDPOINT 81, 65536 BYTES, 3 MS`, a 64 KiB read of the stick.
+- The tally, minute by minute, at uptime 60, 120 and 180 s: 157, 413 and 2914 deferred, every one answered, 0 not found, 0 timed out, 0 stopped, 0 waited on, the longest 6, 14 and 17 ms.
+  - The third minute holds eight timed log reads over the cable, about 600 KB through the CH340's pieces.
+- The stick, the CH340 and both cameras were found. There was no stop-list line (`usb_storage`'s no-answer, `vfs_server`'s drive not answering, the converter gone, an endpoint reset, a controller error, the Effector journal) to uptime 162 s.
+- **Not shown:**
+  - a ring kept full by it: no speakerphone was on the machine and no camera streamed, so no isochronous or bulk-stream ring existed;
+  - the link's throughput against before: the young boot's log gave reads of 76 KB, about 30 KB/s, not the earlier 137.8 KB.
+- It holds for that machine and that release (MC-12.1).
+
 ## Related
 
 [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md), [000-LNK-0050](000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.md), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
