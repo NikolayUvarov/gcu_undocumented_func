@@ -73,7 +73,8 @@ pub enum Event {
     /// tenth (service.rs's PROBE_MINUTES), for a good link's.
     Traffic { channel: u8, wifi: u64, kept: u64, filtered: u64, invalid: u64, pressure: u64, ppdu: u64, beacons: u64,
         bssid: [u8; 6], other_beacons: u64, refused: Option<data_mode::Refused>, sent: u64,
-        acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe>, errors: data_mode::Errors },
+        acked: u64, late: u32, holes: u32, longest_ms: u64, probe: Option<data_mode::Probe>, errors: data_mode::Errors,
+        polls: [crate::rx::Polls; 2] },
     /// The `n`-th hole (213-DRV-0090): no beacon of the joined `bssid` for `ms` (`by_beacons`), or, while none of its beacons
     /// reaches the host, no Wi-Fi frame at all; since its last one, the Wi-Fi frames, those kept, the PPDU reports and the
     /// frames dropped with the inbox full, the sends answered and acknowledged, and whether one is pending; the registers,
@@ -91,6 +92,9 @@ pub enum Event {
     /// with HALT_C2H_CTRL and SER_DBG_INFO then, and PCI Status bit 3 (INTx asserted) if read; the bits cleared as Linux's
     /// rtw89_pci_recognize_intrs does.
     HaltStatus { count: u32, hisr: u32, ctrl: u32, ser: u32, intx: Option<bool> },
+    /// The n-th step of SER_DBG_INFO a check saw (213-DRV-0091): from and to, the time since the check before, and RXQ's and
+    /// RPQ's polls so far that minute (the longest gap between two, the most descriptors waiting at one).
+    SerStep { count: u32, from: u32, to: u32, since_us: u64, polls: [crate::rx::Polls; 2] },
     /// The firmware told of the station's link (213-DRV-0091): connected to `bssid` as `aid` (join info and address CAM as
     /// INFRA), or no link again (None); `was`, the AID before; the registers just before and after, the first two times.
     Linked { channel: u8, bssid: [u8; 6], aid: Option<u16>, was: Option<u16>, before: Option<data_mode::Probe>, after: Option<data_mode::Probe> },

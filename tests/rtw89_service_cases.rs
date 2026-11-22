@@ -594,6 +594,37 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
     let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0,intx:None};drop(service);clean();
 });}
 
+// 213-DRV-0091: every step of SER_DBG_INFO is placed at the check that sees it, with the time since the check before and
+// the ring's polls so far; the minute line gives RXQ's and RPQ's longest gap between two polls and the most waiting at one.
+#[test]
+fn service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    assert!(service.take_ser_step().is_none(),"no step, none placed");
+    // Three frames wait at one poll.
+    {let mut c=c.borrow_mut();for _ in 0..3{c.incoming.push(packet());}}ipc::advance(20);assert!(service.step());
+    // A silent recovery: SER_DBG_INFO steps from 0 to 1; the next check places it.
+    {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=Some(2);}
+    let mut step=None;
+    for _ in 0..10{ipc::advance(20);assert!(service.step());step=step.or(service.take_ser_step());if step.is_some(){break}}
+    let Some(s)=step else{panic!("no step placed")};
+    assert_eq!((s.count,s.from,s.to),(1,0,1));assert!(s.since_us>0&&s.since_us<1_000_000,"{s:?}");
+    assert!(s.polls[0].most_waiting>=3,"{s:?}");
+    // The minute line takes the polls; the next minute's start again.
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{polls:[q,_],..})=traffic else{panic!("no traffic line")};
+    // The model's bus clock moves by its own delays, not by the service's minute: the gap is the model's.
+    assert!(q.most_waiting>=3&&q.longest_gap_us>0,"{q:?}");
+    let mut next=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){next=Some(e);break}}
+    let Some(Event::Traffic{polls:[q,_],..})=next else{panic!("no second traffic line")};
+    assert!(q.most_waiting<=1,"the second minute's own: {q:?}");
+    let _=Event::SerStep{count:0,from:0,to:0,since_us:0,polls:Default::default()};drop(service);clean();
+});}
+
 // 213-DRV-0091: a station check that meets an unreadable CMAC window (DEADBEEF, the Ryzen's boot 62 twice in 98 minutes)
 // reads again and goes on, logged; a firmware recovery that begins with it is outlasted first; one that never answers,
 // or answers with a mismatch, still stops the data mode.

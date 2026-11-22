@@ -123,6 +123,24 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 - **Sends that outran their time:** this evening the old driver had almost none too (9 in boot 60's 15 minutes of a 30 MB download). The lower count of 20:13–20:16 was the hour, not the change; nothing is claimed about them.
 - **Tonight's test:** the boot image's driver runs through the night, with Effector's traffic. Its boot logs are read for the beacons, late sends, holes, stalls and anything new from the firmware now that it knows the link.
 
+**2026-11-21, step 2 written** (branch `claude/213-DRV-0091-step-2-the-port`; host cases; not yet run on the Ryzen):
+- **`station.rs`, `port_link(bus, linked)`:** Linux's `rtw89_mac_port_update` (mac.c) for a port whose function is on:
+  - `rtw89_mac_port_cfg_func_sw` turns PORT_FUNC_EN and BRK_SETUP off, sets TSFTR_RST and writes BCN_CNT_TMR 0;
+  - then PORT_CFG's link fields for INFRA: NET_TYPE 2 (`rtw89_mac_port_cfg_net_type`), TBTT_PROHIB_EN and BRK_SETUP (`…_bcn_prct`), RX_BSSID_FIT_EN (`…_rx_sw`) and TSF_UDT_EN (`…_rx_sync_by_nettype`), or none of them for NO_LINK;
+  - PORT_FUNC_EN on (`…_func_en`), 20 µs (`BCN_ERLY_SET_DLY`), the beacon-early time 160 (`…_bcn_early`) and BCN_PSR_RPT's BSSID index 0 (`…_bcn_psr_rpt`).
+- **The beacon timing the station stage already writes** (setup, hold, mask area, the interval at 100 TU, TBTT early, HIQ, MBSSID) is the same for INFRA and NO_LINK in Linux, and is not written again. Linux's interval is the BSS's `beacon_int`; this driver keeps Linux's default `BCN_INTERVAL` 100. The bench access point's own interval is not read yet.
+- **Linux's wait of a beacon interval and a millisecond before turning the port off** (`msleep(beacon_int + 1)`) is the data service's: `PORT_WAIT_MS` 101 after the link's H2Cs, then the port update as its own operation when no send is pending. On a new filter, the NO_LINK port follows the NO_LINK H2Cs at once.
+- **The station's register checks** (`verify`, run at every data-mode check) expect PORT_CFG to read `0x1281C` under mask 0x13E1F once linked, and 4 otherwise.
+- **Line:** `[RTW89] PORT 0 SET FOR INFRA|NO LINK ON CHANNEL c (…; 213-DRV-0091)`, with the registers after it (`PORT AFTER n`) the first times.
+- **Host case:** `service_the_link_sets_port_0_for_infra_after_a_beacon_interval`:
+  - the H2Cs first, with the port untouched;
+  - nothing at 50 ms;
+  - at 110 ms PORT_CFG reads `1281C`;
+  - steps with traffic run on under the new expectation;
+  - the deauthentication brings it back to 4.
+
+  The 40 `rtw89_*_host.rs` files pass. Its hardware run comes after step 1's night, measured as step 1 was.
+
 **2026-11-22, boot 62: the data mode stopped twice on an unreadable CMAC register** (98 minutes, the boot image's driver):
 - **The stops:** at 1003.959 s and 3248.465 s. Each was `Station(CheckFailure { cause: Fault { kind: PowerState, register: 0x40018, value: DEADBEEF } })`: the station check read the CMAC window and got DEADBEEF. A fresh driver started each time.
 - **The registers at the stops:**
@@ -278,6 +296,22 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
   - After the change, all 40 pass, and the release build builds.
 
+**2026-11-22, 04:57–05:07 UTC, step 2's first run on the Ryzen, back to back** (release 202611220438, boot 66, its driver 07e59deb9). Step 2 is 611499237, which is 07e59deb9 plus the port alone, put in by `replace`. Channel 8, UZ, three 6 MB downloads each, by the sender's figures:
+
+| Driver | 6 MB downloads | The stack's KiB/s | BSS beacons a minute | Sends outrun a minute | Holes, stops |
+|---|---|---|---|---|---|
+| Step 2 (replace) | 306, 186, 193 KB/s | 260, 157, 167 | 581, 579, 577 | 0, 5, 20 | none |
+| 07e59deb9 (boot image) | 247, 265, 346 KB/s | 214, 245, 249 | 579, 582 | 2, 2 | none |
+| Step 2 (replace again) | 347, 340, 312 KB/s | 260, 252, 248 | 576, 577 | 0, 2 | none |
+
+- **The port:**
+  - `PORT 0 SET FOR INFRA ON CHANNEL 8` came 0.10 s after `THE FIRMWARE TOLD: CONNECTED`, each time.
+  - PORT_CFG (0xC400) read C004 before and after the link's H2Cs, and 1E81C after the port step. Under the check's mask 0x13E1F that is 1281C, the INFRA expectation.
+- **The error masks in data mode** (the probe now reads them): DMAC_ERR_IMR 0x8520 and CMAC_ERR_IMR 0xC160 read FFFFFFFF, as written. RX_ERR_FLAG_IMR 0xC804, which neither this driver nor Linux writes, reads 00202800.
+- **The rate:** no difference is shown. The spread within the step 2 sets (186 to 347) is larger than between the drivers. Step 2's first set had 20 late sends in its third minute; its second set had 2.
+- **The cameras' usb_host replaces** (04:51:25 and 04:55:41, just before this run) left no line from the driver beyond its minute lines.
+- **Left running:** the boot image's driver, 07e59deb9.
+
 **2026-11-22, why the driver masks HIMR0's halt bit, and HISR0 read under the mask** (branch `claude/213-DRV-0091-the-halt-status`, on 07e59deb9; host cases, not yet run on the Ryzen):
 - **Who masks the bit, and why.** `mac::mask_host` came with 71589b8b9 (213-DRV-0032, 2026-11-04, "the bounded diagnostic passes on the Ryzen").
   - Its message: "the three host interrupt masks cleared, before the MAC preparation and after the download (the firmware enables HIMR0's halt interrupt), as disable_intr does".
@@ -355,6 +389,39 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 - **Not yet shown:**
   - This is one meeting only.
   - The count's rise of 30 between 66 and 666 s of this boot, during the display's stage runs, is not explained. In boot 65 it rose by 1 or 2 at a time.
+
+**2026-11-22, the recoveries under load, and an instrument to place them** (reading of boots 74 to 79, then branch `claude/213-DRV-0091-the-recoveries-placed`, on step 2's 3c6a1de2b; host cases, not run):
+- **The count's rises against what ran** (each ten-minute window between GOOD LINK probes, `wf-bench/windows.py`; the loads from the bench log):
+  - Without boot 74's first ten minutes (+30, during the display's stages 1 to 15 and the start of a duplex audio run), the windows with USB or audio load gave +14 in about 60 minutes. The idle windows gave +5 in about 140, about 2 an hour, as boot 65's night did.
+  - The load is not the whole story. A window with the audio run on gave 0, and an idle one gave +2.
+- **What the minute lines say about our own task's starvation: nothing either way.**
+  - In every window, including those with rises, the driver's minute lines kept their 60 s within 2 to 20 ms, the inbox was never full, and the frames kept stayed at 1000 to 1200 a minute.
+  - Sampled once a minute, that cannot show a stall of tens of ms between two polls of the ring.
+- **The change:**
+  - **Every step of SER_DBG_INFO placed.** Each data-mode check reads SER_DBG_INFO, one register. When it moves:
+
+    ```
+    [RTW89] SER_DBG_INFO STEP n: a -> b, SEEN t US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP g US, MOST WAITING w; RPQ … (213-DRV-0091)
+    ```
+
+    The step lies between the two checks.
+  - **The ring's polls.** `rx::Rings::receive` keeps, for RXQ and RPQ:
+    - the longest time between two of its polls;
+    - the most descriptors waiting at one poll, the hardware index ahead of the host's, out of 256.
+
+    The minute line gives them and starts them again:
+
+    ```
+    [RTW89] TRAFFIC ON c: RX POLLS: RXQ LONGEST GAP g US, MOST WAITING w; RPQ LONGEST GAP g US, MOST WAITING w; OF 256 (213-DRV-0091)
+    ```
+
+- **What it tells.** If our task is starved, a step should follow a long gap or a ring near full. If not, steps come with short gaps and a low backlog. The runs planned are an hour under load (duplex audio, with two-camera video if the console allows) and an idle hour, on the same build.
+- **Host case:** `service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls`. It covers:
+  - three frames waiting at one poll;
+  - a silent recovery's step from 0 to 1, placed with its time since the check before and the polls so far;
+  - the minute line's polls, and the next minute's starting again.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
 
 ## Related
 

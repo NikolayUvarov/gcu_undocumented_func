@@ -73,6 +73,10 @@ pub(crate) struct FirmwareError{pub count:u32,pub ctrl:u32,pub raw:u32,pub ser:u
 /// The firmware's error codes by level since the data mode began (213-DRV-0091).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Errors{pub l0:u32,pub l1:u32,pub l2:u32,pub unknown:u32,pub hisr_halt:u32,pub hisr_wdt:u32}
+/// The n-th step of SER_DBG_INFO a data-mode check saw (213-DRV-0091): from and to, the time since the check before, and
+/// RXQ's and RPQ's polls so far this minute.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct SerStep{pub count:u32,pub from:u32,pub to:u32,pub since_us:u64,pub polls:[crate::rx::Polls;2]}
 /// The n-th check that found HISR0's halt bits set (213-DRV-0091): HISR0, HALT_C2H_CTRL and SER_DBG_INFO then.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct HaltStatus{pub count:u32,pub hisr:u32,pub ctrl:u32,pub ser:u32,pub intx:Option<bool>}
@@ -191,6 +195,8 @@ pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     unreadables:u32,unreadable:Option<Unreadable>,
     // 213-DRV-0091: the firmware's error codes read and not yet taken, oldest first.
     firmware_errors:[FirmwareError;FIRMWARE_ERRORS_KEPT],firmware_pending:usize,halts:u32,halt_status:Option<HaltStatus>,
+    // 213-DRV-0091: SER_DBG_INFO as the last check read it and when, its steps so far, and the last not yet taken.
+    ser_now:u32,ser_checked:u64,ser_steps:u32,ser_step:Option<SerStep>,
 }
 /// A station register check that met an unreadable CMAC domain and went on (213-DRV-0091): the n-th, the register and
 /// the value it read first, the reads until it answered and over how long, SER_DBG_INFO before and after, and whether a
@@ -248,9 +254,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
             ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None,
-            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0,halts:0,halt_status:None};
+            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0,halts:0,halt_status:None,
+            ser_now:0,ser_checked:0,ser_steps:0,ser_step:None};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
-        own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
+        own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);own.ser_now=own.ser_seen;
+        own.ser_checked=own.session.bus.now_us();Ok(own)
     }
     fn identity(&self)->bool{
         let p=&self.prepared;
@@ -414,11 +422,19 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             if halt!=0{window.write32(HISR0,halt)?;}
             let ctrl=io::read32(&mut window,HALT_C2H_CTRL)?;let set=ctrl!=0&&ctrl!=u32::MAX;
             let raw=if set{let raw=io::read32(&mut window,HALT_C2H)?;window.write32(HALT_C2H_CTRL,0)?;Some(raw)}else{None};
-            let ser=if set||halt!=0{io::read32(&mut window,SER_DBG_INFO)?}else{0};
+            // Read at every check (213-DRV-0091): a silent recovery is placed at the check that sees its step.
+            let ser=io::read32(&mut window,SER_DBG_INFO)?;
             Ok((if halt!=0{isr}else{0},ctrl,raw,ser,intx))
         })();
         self.session.last=window.last;
         let(isr,ctrl,raw,ser,intx)=read.map_err(Cause::Register)?;
+        let now=window.last;
+        if ser!=self.ser_now&&ser!=u32::MAX{
+            self.ser_steps=self.ser_steps.saturating_add(1);
+            self.ser_step=Some(SerStep{count:self.ser_steps,from:self.ser_now,to:ser,since_us:now.saturating_sub(self.ser_checked),polls:self.session.rings.polls()});
+            self.ser_now=ser;
+        }
+        self.ser_checked=now;
         if isr!=0{
             let e=&mut self.counts.errors;
             if isr&HISR0_HALT_C2H!=0{e.hisr_halt=e.hisr_halt.saturating_add(1)}
@@ -537,6 +553,10 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn take_unreadable(&mut self)->Option<Unreadable>{self.unreadable.take()}
     /// The last check that found HISR0's halt bits set, not yet taken (213-DRV-0091).
     pub(crate) fn take_halt_status(&mut self)->Option<HaltStatus>{self.halt_status.take()}
+    /// The last step of SER_DBG_INFO a check saw, not yet taken (213-DRV-0091).
+    pub(crate) fn take_ser_step(&mut self)->Option<SerStep>{self.ser_step.take()}
+    /// RXQ's and RPQ's polls since the last minute line, taken (213-DRV-0091).
+    pub(crate) fn take_polls(&mut self)->[crate::rx::Polls;2]{self.session.rings.take_polls()}
     /// The oldest firmware error code read and not yet taken (213-DRV-0091).
     pub(crate) fn take_firmware_error(&mut self)->Option<FirmwareError>{
         if self.firmware_pending==0{return None}
