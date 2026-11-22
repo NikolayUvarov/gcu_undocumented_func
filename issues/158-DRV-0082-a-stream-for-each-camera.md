@@ -1,6 +1,6 @@
 # 158-DRV-0082 — `video_gw`: a stream for each camera, so two cameras show at once
 
-**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-21: a stream for each camera, and `usb_host` keeping each bulk camera polled (`usb.wit` 1.6); the two cameras streamed at once on the Ryzen to two test programs; the maintainer's look at two windows and the gate wait) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`video_gw`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: a stream for each camera, `usb_host` keeping each bulk camera polled (`usb.wit` 1.6), opens and reads that wait deferred; the maintainer's look at two windows on the Ryzen successful; the five minutes with frame counts, a real switch and the gate to come) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -136,6 +136,34 @@
 - **Through `camera -c`** when the tree has it (the bench diff's checks: a recording of one, a still of the other, the first busy); until then the suite says it skipped that part.
 - **What the gate cannot show:** two real streams starving each other. QEMU 8.2 has no USB camera device (`-device help` lists none), and the patterns move no USB transfer. Only the Ryzen's two cameras show it.
 
+
+**The maintainer's look, 2026-11-22** (the Ryzen at its keyboard, release 202611212244 with 5145dab32's `usb_host` and `video_gw` as the boot image's services, the two cameras `0471:A6CA` and `0471:A6CD`; the steps the owner session passed to him from CAM's check). His words: «1, 2. всё так; 3. всё так; 4. всё так; 5. выход из камеры работает. Проверку считаю успешной.» That is, by his own look:
+1. **Two windows:** `wm camera -c 0, camera -c 1` showed both cameras at once, both moving.
+2. **The next-camera key:** `n` in one window, while the other window kept moving with no pause. Camera 1 being held by the other window, the program closed its camera, was refused the other and opened its own again (the deferred re-open); the freeze he had seen on 2026-11-21 is gone.
+3. **MJPEG:** camera 0 at `-z 1280x720 -r 25`, which the gateway streams as MJPEG (YUY2 gives 10 a second at that size).
+4. **Both cameras in MJPEG at once:** both at 1280×720.
+5. **Leaving:** Esc or `q` ends a camera.
+
+This holds for that machine, those cameras and that release (MC-12.1).
+
+**What it meets of the criteria:**
+- **The second (on the Ryzen):** not ticked. He saw both pictures move, but the five minutes with frame counts recorded were not done at his look. The runs under CAM's lease give frame counts over 20 to 60 s.
+- **The third (a switch while the other window stays live):** not ticked. The other window stayed live, but with both cameras held there was nothing to switch to: `n` came back to its own camera. A real switch needs a free camera, or a third source beside the two windows.
+- **The first (`cameras` in the gate):** waits for the landing round.
+
+- **Tested for landing, 2026-11-21/22:**
+  - **5046dfbc6** (the branch with `main` 3c5ef74ca, in the landing queue since 22:06 UTC):
+    - LEG9: the full `host_tests.sh` (254 groups, 6427 tests) and the QEMU suites `cameras` (with `camera -c`), `usb`, `ehci`, `iso`, `usbaudio`, `link`, `bench`, `wm`, `vfs`, `boot` and the USB image's boot;
+    - the aarch64 part on x32-128 through Effector (Ubuntu 22.04, QEMU 8.2.2 from qemu.org, AAVMF 2022.02, TCG): all 19 groups.
+  - **f3898fde6** (5145dab32 with `main` a9d6433db):
+    - LEG9: the full `host_tests.sh` went through whole on its second run (254 groups, 6442 tests). The first stopped at `improve`'s `every_command_against_a_hub`, a chance failure in `main` (APP's 100003-APP-0156 mends it). The QEMU suites `cameras`, `usb`, `ehci`, `usbaudio`, `bench` and `wm` passed;
+    - the aarch64 part on x32-128: running when this was written (its figures go into the landing request).
+- **The boot image's own services on the Ryzen** (release 202611212244, 5145dab32's `usb_host` and `video_gw`; 2026-11-22 02:34-02:36 UTC, nothing replaced):
+  - camera 1 at 320×240 for 40 s beside camera 0 stepping through its modes: every re-open deferred, 0.28 to 0.45 s, camera 1's reads at most 265 ms apart (396 answered);
+  - both cameras in MJPEG 1280×720 at once: 147 and 222 frames decoded, reads at most about 0.4 s apart.
+- **A limit that stays:** a YUY2 stream of 640×480 or more beside a second camera can break every frame at about 133 KB. That is `usb_host`'s queue of 32 pages (128 KiB), which a camera's burst fills within a few milliseconds of a pump gap. It happened with 640×480 after an MJPEG mode, and with 1280×720 once. MJPEG frames of the same sizes (0.1 to 0.25 MB) stream beside another camera, and the default 320×240 does.
+  - **More pages** need more of `usb_host`'s DMA memory, which `init` grants (KRN).
+  - **Or the gateway** may choose MJPEG for large sizes when another stream runs.
 
 ## Related
 
