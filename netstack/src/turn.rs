@@ -38,10 +38,12 @@ impl Account {
 pub struct Turn<const CARDS: usize> {
     next: usize, left: usize, end_ms: u64, active: Option<Visit>, accounts: [Account; CARDS],
     last_ms: u64, clock_failed: bool,
+    /// Visits each card was passed over for, its CARD_MS in WINDOW_MS spent (801-NET-0093).
+    pub passed: [u64; CARDS],
 }
 impl<const CARDS: usize> Turn<CARDS> {
     pub const fn new() -> Self {
-        Self { next: 0, left: 0, end_ms: 0, active: None, accounts: [Account::new(); CARDS], last_ms: 0, clock_failed: false }
+        Self { next: 0, left: 0, end_ms: 0, active: None, accounts: [Account::new(); CARDS], last_ms: 0, clock_failed: false, passed: [0; CARDS] }
     }
     pub fn begin(&mut self, now_ms: u64) {
         if !self.advance(now_ms) { return; }
@@ -73,7 +75,7 @@ impl<const CARDS: usize> Turn<CARDS> {
             self.next = (self.next + 1) % CARDS;
             self.left -= 1;
             let remaining_ms = (self.accounts[index].remaining(now_ms) as u64).min(turn_left) as u32;
-            if remaining_ms == 0 { continue; }
+            if remaining_ms == 0 { self.passed[index] += 1; continue; }
             let visit = Visit { index, started_ms: now_ms, remaining_ms };
             self.active = Some(visit);
             return Some(visit);
