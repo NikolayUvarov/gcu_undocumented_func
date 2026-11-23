@@ -37,6 +37,23 @@ const BUSY_MS: u64 = 50;
 const BUSY_POLL_MS: u32 = 1;
 // Radio frames a `receive` with an empty queue takes first, until one is for the stack (801-NET-0094).
 const RECEIVE_FIRST: usize = 4;
+// Frames the radio answered busy, and those behind them, kept in order and offered again (801-NET-0095): at most
+// HELD_FRAMES, each for HOLD_MS, then dropped without a word to the rate, as no try was made on the air.
+const HELD_FRAMES: usize = 16;
+const HOLD_MS: u64 = 1000;
+
+// `dropped`: frames held past HOLD_MS or past HELD_FRAMES; `said`: how many of them the log named, at most once a minute.
+struct Backlog { frames: Vec<u8>, slots: [(usize, u8, bool, u64); HELD_FRAMES], head: usize, count: usize, dropped: u64, said: u64, said_ms: u64 }
+impl Backlog {
+    fn push(&mut self, frame: &[u8], rate: u8, unicast: bool, now: u64) {
+        if self.count == HELD_FRAMES { self.dropped += 1; return; }
+        let at = (self.head + self.count) % HELD_FRAMES;
+        self.frames[at * FRAME_MAX..at * FRAME_MAX + frame.len()].copy_from_slice(frame);
+        self.slots[at] = (frame.len(), rate, unicast, now);
+        self.count += 1;
+    }
+    fn pop(&mut self) { self.head = (self.head + 1) % HELD_FRAMES; self.count -= 1; }
+}
 // Received Ethernet frames kept for the stack and parked `wait` calls.
 const QUEUE: usize = 32;
 const WAITERS: usize = 4;
@@ -161,6 +178,7 @@ enum Try { Scanning(u32), Joining([u8; 32], usize, u32) }
 
 struct Wlan {
     station: Station,
+    backlog: Backlog,
     // When a frame last went to the radio or came from it (801-NET-0094).
     busy_ms: u64,
     deadline: Deadline,
@@ -473,14 +491,46 @@ impl Wlan {
         if out.send.is_some() || out.deliver.is_some() { self.busy_ms = mind::time::uptime_ms() as u64; }
         if let Some((len, rate)) = out.send {
             let unicast_data = self.tx[0] & 0x0C == 0x08 && self.tx[4] & 1 == 0;
-            match radio_call(self.deadline, || wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
-                Ok(Ok(sent)) => { if unicast_data { self.station.sent(sent.acked, sent.attempts); } }
-                _ => if unicast_data { self.station.sent(false, ATTEMPTS) },
+            let mut frame = [0u8; FRAME_MAX];
+            frame[..len].copy_from_slice(&self.tx[..len]);
+            // Behind frames held back, in order: one sent ahead of them would carry a later packet number.
+            if self.backlog.count > 0 || !self.transmit(&frame[..len], rate, unicast_data) {
+                self.backlog.push(&frame[..len], rate, unicast_data, mind::time::uptime_ms() as u64);
             }
+            self.flush();
         }
         if let Some(len) = out.deliver {
             self.counters.received += 1;
             if !self.queue.push(&self.rx[..len]) { self.counters.dropped += 1; }
+        }
+    }
+
+    // One frame to the radio: false when it answered busy (its queue full, nothing tried on the air); else its outcome
+    // counted for the rate of a unicast data frame.
+    fn transmit(&mut self, frame: &[u8], rate: u8, unicast_data: bool) -> bool {
+        match radio_call(self.deadline, || wlanhw::send(RADIO, frame, rate, ATTEMPTS)) {
+            Ok(Ok(sent)) => { if unicast_data { self.station.sent_rate(rate, sent.acked, sent.attempts); } true }
+            Ok(Err(wlanhw::Error::Busy)) => false,
+            _ => { if unicast_data { self.station.sent_rate(rate, false, ATTEMPTS); } true }
+        }
+    }
+
+    // The frames held back, oldest first, until the radio is busy again (801-NET-0095); one past HOLD_MS is dropped.
+    fn flush(&mut self) {
+        if self.restarted.is_some() || FRESH.load(Ordering::Relaxed) != 0 { return; }
+        while self.backlog.count > 0 {
+            let (len, rate, unicast_data, since) = self.backlog.slots[self.backlog.head];
+            if (mind::time::uptime_ms() as u64).saturating_sub(since) > HOLD_MS { self.backlog.pop(); self.backlog.dropped += 1; continue; }
+            let mut frame = [0u8; FRAME_MAX];
+            frame[..len].copy_from_slice(&self.backlog.frames[self.backlog.head * FRAME_MAX..self.backlog.head * FRAME_MAX + len]);
+            if !self.transmit(&frame[..len], rate, unicast_data) { break; }
+            self.backlog.pop();
+            self.busy_ms = mind::time::uptime_ms() as u64;
+        }
+        let (now, b) = (mind::time::uptime_ms() as u64, &mut self.backlog);
+        if b.dropped != b.said && (b.said_ms == 0 || now.saturating_sub(b.said_ms) >= 60_000) {
+            mind::println!("[WLAN] {} FRAMES THE RADIO HELD BACK AS BUSY DROPPED UNSENT IN ALL ({} MORE): PAST {} MS, OR BEHIND {} WAITING", b.dropped, b.dropped - b.said, HOLD_MS, HELD_FRAMES);
+            (b.said, b.said_ms) = (b.dropped, now);
         }
     }
 
@@ -508,6 +558,7 @@ impl Wlan {
 
     // Yield between radio frames; the time slice never shortens a started frame's radio/key-store calls.
     fn pump(&mut self) {
+        if self.backlog.count > 0 { self.flush(); }
         service_turn::receive_batch(self, || mind::time::monotonic_ns() / 1_000_000, |wlan| wlan.pump_frame());
         // Do not advance the station and produce another action when no aggregate radio time remains.
         if self.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_none() { return; }
@@ -882,7 +933,8 @@ fn main(_info: &'static BootInfo) {
     mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
     // Without a radio's client (started by hand, not by init with a radio) there is nothing to drive.
     if mind::dev::cap_info(RADIO.0).0 != mind::abi::CAP_KIND_ENDPOINT { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
-    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), busy_ms: 0, deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
+    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), busy_ms: 0,
+                          backlog: Backlog { frames: alloc::vec![0; HELD_FRAMES * FRAME_MAX], slots: [(0, 0, false, 0); HELD_FRAMES], head: 0, count: 0, dropped: 0, said: 0, said_ms: 0 }, deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
@@ -914,7 +966,7 @@ fn main(_info: &'static BootInfo) {
                 _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE (NO DEVICE, OR NOT A WLANHW {}.X RADIO)", wlanhw::VERSION.0); mind::process::exit_with(1) }
             }
         }
-        let busy = now.saturating_sub(wlan.busy_ms) < BUSY_MS;
+        let busy = now.saturating_sub(wlan.busy_ms) < BUSY_MS || wlan.backlog.count > 0;
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if busy { BUSY_POLL_MS } else { POLL_MS });
         // Dispatch accepted calls before bulk work; a long handler cannot renew the shared two-second deadline.
         service_turn::run(&mut wlan, received, |wlan, received| {

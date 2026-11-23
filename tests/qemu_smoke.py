@@ -13729,6 +13729,7 @@ def net_suite(args, disk):
         vm.close()
     late_attach_check(args)
     slow_radio_check(args)
+    busy_radio_check(args)
     world_country_check(args)
     fresh_radio_check(args)
     browse_check(args)
@@ -14156,6 +14157,35 @@ def fresh_radio_check(args):
     print(f"PASS: a fresh radio already on the station's channel (801-NET-0085): the station, held by a CPU budget while init "
           f"started the radio again, knew it by the PID that answered ({reason[1]}), gave it the country again and joined "
           f"MIND-TEST again by itself", flush=True)
+
+
+def busy_radio_check(args):
+    """801-NET-0095: wlansim built with `busy` answers every unicast data frame busy at its first offer, as a radio whose
+    queue is full. wlan keeps such a frame and those behind it in order and offers them again, with no loss counted
+    for the rate: the handshake completes, DHCP leases, and every ping to the gateway is answered; nothing is dropped."""
+    if not args.busy_radio_elf or not raw_tools():
+        print("SKIP: the busy radio needs wlansim built with `busy` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-busy-radio-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.busy_radio_elf},
+                                    extra={"netpolicy.txt": b"console 10.0.4.1 icmp\n", "data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
+        try:
+            require(vm.service_logs("wlansim", "[WLANSIM] EVERY UNICAST"), "[WLANSIM] EVERY UNICAST DATA FRAME ANSWERED BUSY AT ITS FIRST OFFER")
+            require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ")
+            joined = front_command(vm, "wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90)
+            require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
+            out = vm.command("ping 10.0.4.1")
+            require(out, "PING: 3 SENT, 3 RECEIVED")
+            radio = vm.command(f"logs {vm.services()['wlansim']}", raw=True) + vm.command("dmesg -s wlansim", raw=True)
+            busy = max((int(n) for n in re.findall(r"\[WLANSIM\] (\d+) SENDS ANSWERED BUSY", radio)), default=0)
+            assert busy >= 1, radio[-1500:]
+            assert "DROPPED UNSENT" not in vm.command("dmesg -s wlan", raw=True)
+        finally:
+            vm.close()
+    print(f"PASS: a radio that answers busy: each unicast data frame refused at its first offer went at its next (at least {busy} "
+          "busy answers); the handshake completed, DHCP leased, every ping answered, nothing dropped", flush=True)
 
 
 def slow_radio_check(args):
@@ -20366,6 +20396,8 @@ def main():
     world = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-nocountry-target/x86_64-unknown-none/release/wlansim"
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     tuned = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-selftuned-target/x86_64-unknown-none/release/wlansim"
+    busy = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-busy-target/x86_64-unknown-none/release/wlansim"
+    args.busy_radio_elf = str(busy) if args.arch == "x86_64" and busy.exists() else None
     args.self_tuned_radio_elf = str(tuned) if args.arch == "x86_64" and tuned.exists() else None
     # keystore's build that takes no TPM in the boot's first minute (801-NET-0087): x86 only.
     late_keys = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-keystore-late-target/x86_64-unknown-none/release/keystore"

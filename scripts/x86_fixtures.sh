@@ -25,6 +25,7 @@ done
 (cd tests/wlansim && cargo build --release --features no-country --target-dir "$OUT/mind-wlansim-nocountry-target") # 550-NET-0035
 (cd keystore && cargo build --release --features late-tpm-test --target-dir "$OUT/mind-keystore-late-target") # a TPM that answers late (801-NET-0087)
 (cd tests/wlansim && cargo build --release --features self-tuned --target-dir "$OUT/mind-wlansim-selftuned-target") # 801-NET-0085
+(cd tests/wlansim && cargo build --release --features busy --target-dir "$OUT/mind-wlansim-busy-target") # 801-NET-0095
 for variant in panic:panic abi:abi loader-abi:loader-abi trial:trial x2apic:x2apic bar-move:bar xsave-pad:xsave-pad protection:protection tsc-skew:tsc-skew watchdog:watchdog watchdog-late:watchdog-late; do
     (cd kernel && cargo build --release --features "${variant%%:*}-test" --target-dir "$OUT/mind-${variant#*:}-target")
 done
