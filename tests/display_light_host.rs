@@ -11,14 +11,17 @@
 #[path = "../display/src/atom.rs"] mod atom;
 #[path = "../display/src/light.rs"] mod light;
 #[path = "../display/src/picture.rs"] mod picture;
+#[path = "../display/src/hpd.rs"] mod hpd;
 
 use batches::{Bus, Out, Store};
 use dcn::{Reg, Step, R};
 // Step 3's stages (first light); step 4's come after them (213-DRV-0092).
 const STAGES: u8 = dcn::FIRST_LIGHT;
 use light::{assess, Canvas, Choice, Clock, Failure, Light, Outcome, Poke, Refusal, Refused, ScreenRefused, Screens, Writable, EXPECTED, HDMI_A_1};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 fn seg(s: usize, dword: u32) -> u32 { (dcn::SEGMENT[s] + dword) * 4 }
 fn reg(r: R, i: u8) -> u32 { r.at(i).unwrap().offset() }
@@ -158,7 +161,13 @@ struct Engine {
     surface: Vec<u32>, no_surface: bool, pitch: usize,
     // The compositor's answers to stage 16's offer and to screen_gone (display.wit 1.3); none: it takes them.
     refuse_offer: Option<ScreenRefused>, refuse_gone: Option<ScreenRefused>,
+    // Time the log spent (the survey's pacing, `Paced`), added to the clock at the next access (213-DRV-0098).
+    pace: Option<Rc<Cell<u64>>>,
+    // Live bits, not latched: at the first offset, the second's bits read as set from the third microsecond to the fourth
+    // (OPTC_UNDERFLOW_OCCURRED_CURRENT beside the latched OCCURRED_STATUS, 213-DRV-0103).
+    window: Vec<(u32, u32, u64, u64)>,
 }
+impl Engine { fn catch_up(&mut self) { if let Some(p) = &self.pace { self.clock += p.replace(0); } } }
 impl Screens for Engine {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> {
         self.ev.push(Ev::Offer(width, height, pitch));
@@ -182,6 +191,7 @@ impl Canvas for Engine {
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
+        self.catch_up();
         self.clock += 10;
         if let Some((left, len)) = self.stalled { if left == 0 { self.clock += len; self.stalled = None; } else { self.stalled = Some((left - 1, len)); } }
         if let Some(n) = self.armed { if n == 0 { self.armed = None; return None; } self.armed = Some(n - 1); }
@@ -195,6 +205,7 @@ impl Bus for Engine {
         for &(at, bits) in &self.set { if at == o { v |= bits; } }
         for &(at, ack) in &self.follow { if at == o { v = (v & !ack) | ((v & (ack >> 1)) << 1); } }
         for &(at, bits, from) in &self.timed { if at == o && self.clock >= from { v |= bits; } }
+        for &(at, bits, from, to) in &self.window { if at == o && (from..to).contains(&self.clock) { v |= bits; } }
         for &(at, bits, src, mask) in &self.derived {
             if at == o { let s = if src == o { *self.regs.get(&o).unwrap_or(&0) } else { *self.regs.get(&src).unwrap_or(&0) }; v = if s & mask != 0 { v | bits } else { v & !bits }; }
         }
@@ -203,6 +214,7 @@ impl Bus for Engine {
 }
 impl Poke for Engine {
     fn write(&mut self, w: Writable, v: u32) {
+        self.catch_up();
         let o = w.reg().offset();
         self.ev.push(Ev::Write(o, v));
         // The status bits that follow their requests: clocks on, the generator running.
@@ -221,8 +233,8 @@ impl Poke for Engine {
     }
 }
 impl Clock for Engine {
-    fn now_us(&mut self) -> u64 { self.clock }
-    fn delay_us(&mut self, us: u32) { self.clock += us as u64; }
+    fn now_us(&mut self) -> u64 { self.catch_up(); self.clock }
+    fn delay_us(&mut self, us: u32) { self.catch_up(); self.clock += us as u64; }
 }
 
 struct Log(Vec<String>);
@@ -941,14 +953,14 @@ fn stage_16_refused_or_without_a_client_stops_with_the_picture_on_the_second_out
 }
 
 #[test]
-fn step_3_runs_once_a_boot_by_the_mark_it_leaves_in_its_otg() {
+fn step_3_runs_once_while_lit_by_the_mark_it_leaves_in_its_otg() {
     let mark = reg(R::OtgVerticalInterrupt2Position, 1);
     // The first start leaves the mark before stage 1 and keeps it through the undo.
     let mut e = engine();
     let (outcome, log) = run(&good(), &mut e, 1);
     assert_eq!(outcome, Outcome::Stopped { done: 1 });
     assert_eq!(writes(&e)[0], (mark, light::RESTART_MARK));
-    assert!(log.iter().any(|x| x == "S0 MARKED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 = 5A5A (WAS 00000000): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT"), "{:#?}", log);
+    assert!(log.iter().any(|x| x == "S0 MARKED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 = 5A5A (WAS 00000000): A START OF DISPLAY AGAIN RUNS NO STAGE; A MACHINE BOOT OR AN UNPLUG CLEARS IT"), "{:#?}", log);
     let mut undone = engine();
     let img = good();
     let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
@@ -962,7 +974,7 @@ fn step_3_runs_once_a_boot_by_the_mark_it_leaves_in_its_otg() {
     let (outcome, log) = run(&good(), &mut again, STAGES);
     assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
     assert!(writes(&again).is_empty());
-    assert!(log.iter().any(|x| x == "STEP 3 NOT RUN: DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT (OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 HOLDS 5A5A)"), "{:#?}", log);
+    assert!(log.iter().any(|x| x == "STEP 3 NOT RUN: DISPLAY HAS STARTED STEP 3 ALREADY (THE MARK IN ITS OTG): THE STAGES RUN ONCE UNTIL AN UNPLUG TAKES THEM BACK (OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 HOLDS 5A5A)"), "{:#?}", log);
     // A build that may run no stage leaves no mark.
     let mut none = engine();
     run(&good(), &mut none, 0);
@@ -1430,4 +1442,741 @@ fn the_ryzens_own_tables_through_step_3() {
     let table_data = log.iter().filter(|x| x.starts_with("S2 T12 WROTE AT 177D4")).count();
     assert_eq!(writes(&e).iter().filter(|w| w.0 == PHY_A_CR_DATA).count(), table_data, "the undo wrote into PHY A");
     for x in log.iter().filter(|x| x.starts_with('U') && !x.contains(" RESTORED ") && !x.contains(" WROTE ")) { eprintln!("{}", x); }
+}
+
+// --- the production order (213-DRV-0098) ---
+
+// The survey's log as display paces it on the hardware: 20 ms after each line (LINE_PACE_MS) and each pause its length,
+// on the model's clock.
+struct Paced { lines: Vec<String>, clock: Rc<Cell<u64>> }
+impl Out for Paced {
+    fn line(&mut self, a: fmt::Arguments) { self.lines.push(a.to_string()); self.clock.set(self.clock.get() + 20_000); }
+    fn pause(&mut self, ms: u32) { self.clock.set(self.clock.get() + ms as u64 * 1000); }
+}
+
+// What the device saw, in order: every write, the offer and screen_gone.
+fn device(e: &Engine) -> Vec<Ev> { e.ev.iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect() }
+
+struct Ran { outcome: Outcome, times: light::Times, device: Vec<Ev>, log: Vec<String>, engine: Engine }
+
+// Steps 3 and 4 on a fresh model in each order: the survey's through `Paced` (its lines and pauses on the clock), the
+// production one through `batches::Held` over `Paced` (only what it logs is paced), as main.rs makes them.
+fn both_orders(l: &Light, img: &[u8], make: &dyn Fn() -> Engine, allowed: u8, undo: bool) -> (Ran, Ran) {
+    let go = |production: bool| {
+        let mut e = make();
+        let pace = Rc::new(Cell::new(0));
+        e.pace = Some(pace.clone());
+        let mut interp = atom::Interpreter::new(atom::Image::new(img).unwrap());
+        let mut journal = light::Journal::default();
+        let paced = Paced { lines: vec![], clock: pace };
+        let (outcome, times, log) = if production {
+            let mut buf = vec![0u8; batches::HELD_BYTES];
+            let mut held = batches::Held::new(paced, &mut buf);
+            let (o, t) = light::run_timed(l, &mut e, &mut interp, &mut journal, allowed, undo, &mut held);
+            (o, t, held.inner.lines)
+        } else {
+            let mut paced = paced;
+            let (o, t) = light::run_timed(l, &mut e, &mut interp, &mut journal, allowed, undo, &mut paced);
+            (o, t, paced.lines)
+        };
+        Ran { outcome, times, device: device(&e), log, engine: e }
+    };
+    (go(false), go(true))
+}
+
+fn same_device(survey: &Ran, production: &Ran, case: &str) {
+    assert_eq!(survey.outcome, production.outcome, "{}", case);
+    assert_eq!(survey.device.len(), production.device.len(), "{}: {} and {} writes", case, survey.device.len(), production.device.len());
+    for (i, (a, b)) in survey.device.iter().zip(&production.device).enumerate() { assert_eq!(a, b, "{}: event {}", case, i); }
+}
+
+// Both outputs' frames on the model, 60.2 Hz: a whole number of stage 9's polls (100 us and a 10 us read), so that its
+// count of 30 frames, and with it pipe 1's DLG and sync, comes out the same whatever phase of a frame it starts in. On
+// the hardware that count is a measure each run (268,495 kHz at boot 71, 268,522 at boot 81), so the values stages 13
+// and 14 write from it can differ in their last digit between two boots in either order.
+const DP2: u64 = 16_610;
+
+// A line with its numbers masked: the times in a line differ between the orders, the words do not.
+fn words(x: &str) -> String {
+    let mut out = String::new();
+    for ch in x.chars() { if ch.is_ascii_digit() { if !out.ends_with('#') { out.push('#'); } } else { out.push(ch); } }
+    out
+}
+
+#[test]
+fn the_production_order_makes_the_surveys_writes_in_the_same_order_at_1080p_and_in_the_edids_mode() {
+    let (f, c) = EXPECTED;
+    let modes = [("1920x1080 DVI", timing::CEA_1080P60, dcn::Signal::Dvi), ("1920x1080 HDMI", timing::CEA_1080P60, dcn::Signal::Hdmi),
+                 ("the EDID's 3440x1440 HDMI", WIDE, dcn::Signal::Hdmi)];
+    let paced = || { let mut e = engine(); e.frame_us = DP2; e };
+    for (name, mode, signal) in modes {
+        let l = Light::new_with(f, c, mode, signal).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+        // All sixteen stages, left in place and undone.
+        for undo in [false, true] {
+            let (s, p) = both_orders(&l, &good(), &paced, 16, undo);
+            assert_eq!(s.outcome, if undo { Outcome::Undone { done: 16 } } else { Outcome::Stopped { done: 16 } }, "{} {:#?}", name, &s.log[s.log.len().saturating_sub(8)..]);
+            same_device(&s, &p, &format!("{}, undo {}", name, undo));
+            assert!(s.device.iter().filter(|x| matches!(x, Ev::Write(..))).count() > 100, "{}", s.device.len());
+        }
+        // Each build of fewer stages.
+        for allowed in [1, 2, 5, 8, 9, 10, 13, 15] {
+            let (s, p) = both_orders(&l, &good(), &paced, allowed, false);
+            assert_eq!(s.outcome, Outcome::Stopped { done: allowed });
+            same_device(&s, &p, &format!("{}, {} stages", name, allowed));
+        }
+    }
+    // The survey's pauses and lines took the clock on by tens of seconds; the production order by under a second besides
+    // stage 9's count and stage 15's watch.
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let (s, p) = both_orders(&l, &good(), &paced, 16, false);
+    assert!(s.times.total_us > 60_000_000, "{:?}", s.times);
+    assert!(p.times.total_us < p.times.count_us + p.times.watch_us + 1_000_000, "{:?}", p.times);
+}
+
+#[test]
+fn the_production_order_fails_and_undoes_as_the_survey_does() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let cntl1 = reg(R::HubpCntl, 1);
+    let cases: Vec<(&str, Box<dyn Fn() -> Engine>, Outcome)> = vec![
+        ("stage 5's frames never move", Box::new(|| { let mut e = engine(); e.frames_move = false; e }), Outcome::Failed { stage: 5, why: Failure::NoFrames(0) }),
+        ("a status that never clears: stage 6's generic packet conflict", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.set.push((reg(R::AfmtVbiPacketControl, 0), 1 << 16)); e }),
+            Outcome::Failed { stage: 6, why: Failure::Timeout(0) }),
+        ("HUBP1 underflowing once its surface is set", Box::new(move || { let mut e = engine(); e.frame_us = DP2; e.derived.push((cntl1, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0)); e }),
+            Outcome::Failed { stage: 15, why: Failure::Underflow { offset: cntl1, value: 0 } }),
+        ("a one-off underflow 17 frames into the watch", Box::new(move || { let mut e = engine(); e.frame_us = DP2; e.arm.push((reg(R::DpgControl, 1), 1, cntl1, 1 << 28, 17 * DP2 + 8_000)); e }),
+            Outcome::Failed { stage: 15, why: Failure::Underflow { offset: cntl1, value: 0 } }),
+        ("the compositor refusing the offer", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.refuse_offer = Some(ScreenRefused::Denied); e }),
+            Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(ScreenRefused::Denied) }),
+        ("the firmware's pipe changed after stage 7", Box::new(|| { let mut e = engine(); e.frame_us = DP2; e.hook = Some((reg(R::DigBeCntl, 0), reg(R::OtgHTotal, 0), 0x777)); e }),
+            Outcome::Failed { stage: 7, why: Failure::FirmwareChanged { offset: reg(R::OtgHTotal, 0), before: 0, after: 0 } }),
+    ];
+    for (name, make, want) in &cases {
+        for undo in [false, true] {
+            let (s, p) = both_orders(&l, &good(), &**make, 16, undo);
+            let kind = |o: &Outcome| match o { Outcome::Failed { stage, why } => (0, *stage, core::mem::discriminant(why)), Outcome::NotReady { stage, why, .. } => (1, *stage, core::mem::discriminant(why)),
+                                                Outcome::Stopped { done } | Outcome::Undone { done } => (2, *done, core::mem::discriminant(&Failure::JournalFull)) };
+            if !matches!(want, Outcome::Stopped { .. }) { assert_eq!(kind(&s.outcome), kind(want), "{}: {:?}", name, s.outcome); }
+            same_device(&s, &p, &format!("{}, undo {}", name, undo));
+        }
+    }
+    // A stage without its reference: stage 9 not ready, first light in place, in either order.
+    let l9 = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+    let (s, p) = both_orders(&l9, &good(), &|| { let mut e = engine(); e.frame_us = DP2; e }, 16, false);
+    assert_eq!(s.outcome, Outcome::NotReady { done: 8, stage: 9, why: Failure::NoReference });
+    same_device(&s, &p, "no reference");
+}
+
+#[test]
+fn the_production_orders_log_is_a_line_a_stage_with_its_time_and_the_detail_only_of_a_part_that_fails() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let paced = || { let mut e = engine(); e.frame_us = DP2; e };
+    let (s, p) = both_orders(&l, &good(), &paced, 16, false);
+    // The pipes and the mode, a line a stage, step 3's times and its end: 21 lines, none of a write or a plan.
+    for x in &p.log { eprintln!("production, 3440x1440 on the model: {}", x); }
+    assert_eq!(p.log.len(), 3 + 16 + 2, "{:#?}", p.log);
+    assert!(p.log[0].starts_with("STEP 3: FIRST LIGHT ON HDMI-A-1 IN 8 STAGES") && p.log[2].ends_with("MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)"), "{:#?}", &p.log[..3]);
+    for n in 1..=16u8 {
+        let line = &p.log[2 + n as usize];
+        assert!(line.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS); ", n, dcn::STAGE_NAMES[n as usize - 1])) && line.contains(" MS"), "{}", line);
+        assert!(line.len() <= 180, "{} bytes: {}", line.len(), line);
+        // The same line ends the stage in the survey's log, its time the survey's own.
+        let head = line.split("); ").next().unwrap();
+        assert!(s.log.iter().any(|x| x.starts_with(head)), "{}", head);
+    }
+    assert!(!p.log.iter().any(|x| x.contains(" WROTE ") || x.contains(" WILL ") || x.contains("RUNNING TABLE")));
+    let line = |n: u8| p.log[2 + n as usize].as_str();
+    assert!(line(2).contains(", 1 WRITES, TABLE 12 ") && line(2).contains("(3 STEPS, 2 WRITES), THE PHY SET UP ALREADY: THE SHORT PATH"), "{}", line(2));
+    assert!(line(5).contains(", 3 WRITES, 2 WAITS "), "{}", line(5));
+    assert!(line(9).contains(", OTG0 AT 26") && line(9).ends_with("KHZ, THE REFERENCE 48000 KHZ"), "{}", line(9));
+    assert!(line(10).ends_with(", 3440x1440 DRAWN AND READ BACK"), "{}", line(10));
+    assert!(line(13).ends_with(", THE PITCH READ BACK AS WRITTEN"), "{}", line(13));
+    assert!(line(15).contains(", WATCHED 300 FRAMES IN ") && line(15).contains(" MS CLEAN, LONGEST GAP ") && line(15).contains(" US AT FRAME "), "{}", line(15));
+    // The gap and its frame as the survey's detail gives them.
+    let gap = number_after(&s.log, "S15 WATCHED 300 FRAMES", "THE LONGEST GAP BETWEEN READS ");
+    let at = number_after(&s.log, "S15 WATCHED 300 FRAMES", "US, BEFORE FRAME ");
+    let (pgap, pat) = (number_after(&p.log, "S15 UNBLANK DONE", "LONGEST GAP "), number_after(&p.log, "S15 UNBLANK DONE", "US AT FRAME "));
+    assert!(pat >= 1 && pat <= 300 && at >= 1 && at <= 300 && pgap > 0 && gap > 0, "{} {} {} {}", gap, at, pgap, pat);
+    assert!(line(16).ends_with(", OFFERED 3440x1440 PITCH 13824"), "{}", line(16));
+    assert!(p.log[19].starts_with("STEP 3'S TIMES (MS): IN ALL ") && p.log[20].starts_with("STEP 3 STOPPED AFTER STAGE 16 OF 16 AS THIS BUILD ALLOWS"), "{:#?}", &p.log[19..]);
+    // The times: the watch 300 of HDMI-A-1's frames (from a read inside the first), stage 9's count 30 of DP-2's from
+    // an edge, the offer after both.
+    let t = p.times;
+    assert!((299 * DP2..301 * DP2).contains(&t.watch_us), "{:?}", t);
+    assert!((30 * DP2..32 * DP2).contains(&t.count_us), "{:?}", t);
+    assert!(t.stages_us[14] >= t.watch_us && t.stages_us[8] >= t.count_us && t.stages_us.iter().sum::<u64>() <= t.total_us);
+    assert!(t.offered_us.is_some_and(|o| o >= t.stages_us[..15].iter().sum::<u64>() && o <= t.total_us), "{:?}", t);
+    // A stage that fails: its detail as the survey logs it, before its failure; none of the stages before it.
+    let cntl1 = reg(R::HubpCntl, 1);
+    let underflow = || { let mut e = engine(); e.frame_us = DP2; e.derived.push((cntl1, 1 << 28, reg(R::HubpreqSurfacePitch, 1), !0)); e };
+    let (s, p) = both_orders(&l, &good(), &underflow, 16, false);
+    let failed = p.log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).expect("the failure");
+    let begin = p.log.iter().position(|x| x == "S15 UNBLANK: STAGE 15 OF 16 NEXT; ITS WRITES:").expect("stage 15's detail");
+    let survey_begin = s.log.iter().position(|x| x == "S15 UNBLANK: STAGE 15 OF 16 NEXT; ITS WRITES:").unwrap();
+    let survey_failed = s.log.iter().position(|x| x.starts_with("S15 UNBLANK FAILED: AN UNDERFLOW AT 0EE3C")).unwrap();
+    let masked = |l: &[String]| l.iter().map(|x| words(x)).collect::<Vec<_>>();
+    assert!(begin < failed);
+    assert_eq!(masked(&p.log[begin..failed]), masked(&s.log[survey_begin..survey_failed]), "stage 15's detail, as the survey's but for its times");
+    assert!(p.log[begin..failed].iter().any(|x| x.starts_with("S15 WROTE HUBP1_DCHUBP_CNTL AT 0EE3C = ")));
+    assert!(p.log[begin..failed].iter().any(|x| x.starts_with("U15 RESTORED HUBP1_DCHUBP_CNTL AT 0EE3C = ") && x.ends_with(" AT ONCE")));
+    assert!(!p.log[..begin].iter().any(|x| x.contains(" WROTE ")), "{:#?}", &p.log[..begin]);
+    // The undo after it in full, as the survey's.
+    assert_eq!(masked(&p.log[failed..]), masked(&s.log[survey_failed..]));
+    assert!(p.log.last().unwrap().starts_with("STEP 3 FAILED AT STAGE 15 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED"));
+    // A stage not ready: its detail, then the stop.
+    let refused = || { let mut e = engine(); e.frame_us = DP2; e.refuse_offer = Some(ScreenRefused::Unavailable); e };
+    let (_, p) = both_orders(&l, &good(), &refused, 16, false);
+    let not_ready = p.log.iter().position(|x| x.starts_with("S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN")).unwrap();
+    assert!(p.log[not_ready - 1].starts_with("S16 UNDO: "), "{:#?}", &p.log[not_ready - 3..]);
+    // Every line fits a log record.
+    for x in &p.log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+}
+
+#[test]
+fn the_production_orders_held_detail_keeps_the_latest_lines_of_a_part() {
+    // A buffer for a few lines: the oldest let go and counted, the rest logged in order when the part fails.
+    let mut buf = [0u8; 64];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    held.note(format_args!("A NOTE"));
+    for i in 0..10 { held.line(format_args!("DETAIL {:02}", i)); }
+    assert_eq!(held.inner.0, ["A NOTE"]);
+    held.failed();
+    held.line(format_args!("AFTER"));
+    let kept: Vec<&str> = held.inner.0.iter().map(|x| x.as_str()).collect();
+    assert_eq!(kept, ["A NOTE", "4 EARLIER LINES OF THIS PART'S DETAIL WERE NOT KEPT", "DETAIL 04", "DETAIL 05", "DETAIL 06", "DETAIL 07", "DETAIL 08", "DETAIL 09", "AFTER"]);
+    // A new part: held again, nothing logged; its pauses are none.
+    held.part();
+    held.line(format_args!("NEXT"));
+    held.pause(1000);
+    assert_eq!(held.inner.0.len(), 9);
+    // A line longer than a record is cut at 255 bytes.
+    let mut big = vec![0u8; 4096];
+    let mut held = batches::Held::new(Log(vec![]), &mut big);
+    held.line(format_args!("{}", "X".repeat(300)));
+    held.failed();
+    assert_eq!(held.inner.0[0].len(), 255);
+}
+
+#[test]
+fn the_ryzens_tables_make_the_same_writes_in_either_order() {
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_ryzens_tables_make_the_same_writes_in_either_order SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    let (f, c) = EXPECTED;
+    // On the warm state the Ryzen showed (the short path) and from a cold PHY A (the long one), in each mode.
+    let warm16 = || { let mut e = warm(); e.frame_us = DP2; e };
+    let cold16 = || { let mut e = answered(); e.frame_us = DP2; e };
+    for (name, mode, signal) in [("1080p DVI", timing::CEA_1080P60, dcn::Signal::Dvi), ("1080p HDMI", timing::CEA_1080P60, dcn::Signal::Hdmi), ("3440x1440 HDMI", WIDE, dcn::Signal::Hdmi)] {
+        let l = Light::new_with(f, c, mode, signal).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+        for (state, make) in [("warm", &warm16 as &dyn Fn() -> Engine), ("cold", &cold16)] {
+            for undo in [false, true] {
+                let (s, p) = both_orders(&l, &bytes, make, 16, undo);
+                assert_eq!(s.outcome, if undo { Outcome::Undone { done: 16 } } else { Outcome::Stopped { done: 16 } }, "{} {} {:#?}", name, state, &s.log[s.log.len().saturating_sub(8)..]);
+                same_device(&s, &p, &format!("{} {}, undo {}", name, state, undo));
+                let path = if state == "warm" { "THE PHY SET UP ALREADY: THE SHORT PATH" } else { "THE LONG PATH: 37 WRITES THROUGH THE PHY'S BUS" };
+                assert!(p.log.iter().any(|x| x.starts_with("S2 PIXEL CLOCK DONE") && x.ends_with(path)), "{} {}: {:#?}", name, state, p.log.iter().find(|x| x.starts_with("S2 ")));
+            }
+        }
+    }
+}
+
+// --- the second output plugged and unplugged (213-DRV-0096) ---
+
+// Every register written is as before step 3, the mark of stages in place too, but for the status bits the model sets.
+fn as_before(e: &Engine, before: &HashMap<u32, u32>, except: &[u32]) {
+    for (o, _) in writes(e) {
+        if except.contains(&o) { continue; }
+        let status = e.set.iter().chain(e.follow.iter()).filter(|(at, _)| *at == o).fold(0, |m, (_, bits)| m | bits);
+        let value = |m: &HashMap<u32, u32>| m.get(&o).copied().unwrap_or(0) & !status;
+        assert_eq!(value(&e.regs), value(before), "{:05X} not as before step 3", o);
+    }
+}
+
+// Steps 3 and 4 on the model kept for an unplug: the plan, the interpreter and the journal.
+struct Lit<'a> { l: Light, interp: atom::Interpreter<'a>, journal: Box<light::Journal> }
+fn light_up<'a>(l: Light, img: &'a [u8], e: &mut Engine, allowed: u8) -> (Outcome, Lit<'a>, Vec<String>) {
+    let mut lit = Lit { l, interp: atom::Interpreter::new(atom::Image::new(img).unwrap()), journal: Box::new(light::Journal::default()) };
+    let mut log = Log(vec![]);
+    let (o, _) = light::run_timed(&lit.l, e, &mut lit.interp, &mut lit.journal, allowed, false, &mut log);
+    (o, lit, log.0)
+}
+fn take_back(lit: &mut Lit, e: &mut Engine, done: u8) -> (bool, Vec<String>) {
+    let mut log = Log(vec![]);
+    let same = light::take_back(&lit.l, e, &mut lit.interp, &mut lit.journal, done, &mut log);
+    (same, log.0)
+}
+
+fn wide() -> Light {
+    let (f, c) = EXPECTED;
+    Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD")
+}
+
+#[test]
+fn an_unplug_after_stage_16_lets_the_screen_go_first_then_puts_every_register_back_the_mark_too() {
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let before = e.regs.clone();
+    let (outcome, mut lit, _) = light_up(wide(), &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let first = device(&e);
+    let made = e.ev.len();
+    let (same, log) = take_back(&mut lit, &mut e, 16);
+    assert!(same, "{:#?}", log);
+    // screen_gone before anything else the device sees, once; then stages 15 to 1 undone.
+    let after: Vec<Ev> = e.ev[made..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(after.first(), Some(&Ev::Gone));
+    assert_eq!(after.iter().filter(|x| **x == Ev::Gone).count(), 1);
+    assert!(log.iter().any(|x| x == "U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO"));
+    let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
+    assert_eq!(undone, (1..=16).rev().collect::<Vec<u8>>());
+    // Every register as before step 3, the mark cleared to its value before; the journal empty for the next run.
+    as_before(&e, &before, &[]);
+    assert_eq!(e.regs[&reg(R::OtgVerticalInterrupt2Position, 1)], 0);
+    assert!(lit.journal.is_empty());
+    assert!(log.iter().any(|x| x == "U0 RESTORED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION AT 14298 = 00000000: THE MARK OF STAGES IN PLACE CLEARED"), "{:#?}", log);
+    assert!(log[0].starts_with("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES 16 TO 1 ("));
+    assert!(log.last().unwrap().starts_with("STEP 3 TAKEN BACK IN ") && log.last().unwrap().ends_with(" MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE UNCHANGED"), "{}", log.last().unwrap());
+    // A monitor plugged in again: the stages run once more on the same hardware, the same writes and the same offer as the
+    // first time (the model's frame a whole number of stage 9's polls, so its count is the same too).
+    let from = e.ev.len();
+    let mut log = Log(vec![]);
+    let (outcome, _) = light::run_timed(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, false, &mut log);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log.0[log.0.len().saturating_sub(6)..]);
+    let again: Vec<Ev> = e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(again, first);
+    // And unplugged again: as before step 3 once more.
+    assert!(take_back(&mut lit, &mut e, 16).0);
+    as_before(&e, &before, &[]);
+}
+
+#[test]
+fn a_start_of_display_again_while_lit_runs_no_stage_and_after_an_unplug_runs_them_all() {
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (_, mut lit, _) = light_up(wide(), &img, &mut e, 16);
+    // display started again (init restarts a program that faults) while the stages are in place: no stage, no write.
+    let made = writes(&e).len();
+    let (outcome, _, _) = light_up(wide(), &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+    assert_eq!(writes(&e).len(), made);
+    // After an unplug took them back, a start runs them all.
+    take_back(&mut lit, &mut e, 16);
+    let (outcome, _, _) = light_up(wide(), &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+}
+
+#[test]
+fn an_unplug_after_fewer_stages_takes_back_those_that_ran_and_lets_no_screen_go() {
+    let img = good();
+    // A build of 8 (first light), and stage 16 refused by the compositor (stages 1 to 15 in place).
+    for (allowed, refuse, done) in [(8u8, None, 8u8), (16, Some(ScreenRefused::Unavailable), 15)] {
+        let mut e = engine();
+        e.frame_us = DP2;
+        e.refuse_offer = refuse;
+        let before = e.regs.clone();
+        let (outcome, mut lit, _) = light_up(wide(), &img, &mut e, allowed);
+        assert_eq!(hpd::state_after(Some(outcome)), hpd::State::Lit, "{:?}", outcome);
+        let (same, log) = take_back(&mut lit, &mut e, done);
+        assert!(same, "{:#?}", log);
+        assert!(!e.ev.contains(&Ev::Gone), "screen_gone without an offer taken");
+        as_before(&e, &before, &[]);
+    }
+}
+
+#[test]
+fn the_ryzens_tables_taken_back_for_an_unplug_and_run_again() {
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { eprintln!("the_ryzens_tables_taken_back_for_an_unplug_and_run_again SKIPPED: MIND_AMD_VBIOS is not set"); return };
+    let bytes = std::fs::read(&path).unwrap();
+    // Warm (the short path): taken back whole, the off calls run to their end, then the same writes again.
+    let mut e = warm();
+    e.frame_us = DP2;
+    let before = e.regs.clone();
+    let (outcome, mut lit, _) = light_up(wide(), &bytes, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let first = device(&e);
+    let made = e.ev.len();
+    let (same, log) = take_back(&mut lit, &mut e, 16);
+    assert!(same);
+    for t in ["U2 TABLE 12 DONE", "U8 TABLE 76 DONE"] { assert!(log.iter().any(|x| x.starts_with(t)), "{}: {:#?}", t, log.iter().filter(|x| x.contains("TABLE")).collect::<Vec<_>>()); }
+    as_before(&e, &before, &[]);
+    let from = e.ev.len();
+    let mut out = Log(vec![]);
+    let (outcome, _) = light::run_timed(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, false, &mut out);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let again: Vec<Ev> = e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(again, first);
+    assert!(e.ev[made..from].contains(&Ev::Gone));
+    // Cold (the long path): taken back but PHY A's control register bus, which the undo leaves by design.
+    let mut e = answered();
+    e.frame_us = DP2;
+    let before = e.regs.clone();
+    let (outcome, mut lit, _) = light_up(wide(), &bytes, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    assert!(take_back(&mut lit, &mut e, 16).0);
+    as_before(&e, &before, &[PHY_A_CR_ADDR, PHY_A_CR_DATA]);
+}
+
+// Table 76 waits for a PHY A status the model shows while the stages run: its DISABLE stops by the time limit once it is gone.
+fn waiting_76() -> Vec<u8> {
+    tables([mov(seg(1, 0xA0), 1), mov(PHY_A_CNTL0, 0x0020_0001), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), wait_bit(PHY_A_CNTL0, 28, 8), vec![EOT]].concat())
+}
+
+#[test]
+fn an_unplug_whose_undo_goes_wrong_logs_the_held_detail_in_the_production_order_and_one_that_goes_right_two_lines() {
+    let (good, waiting) = (good(), waiting_76());
+    // What goes wrong: nothing; stage 8's off call stopping; screen_gone not taken; the firmware's pipe changed by the hardware.
+    for case in 0..4 {
+        let mut e = engine();
+        e.frame_us = DP2;
+        e.set.push((PHY_A_CNTL0, 1 << 28));
+        let before = e.regs.clone();
+        let (outcome, mut lit, _) = light_up(wide(), if case == 1 { &waiting } else { &good }, &mut e, 16);
+        assert_eq!(outcome, Outcome::Stopped { done: 16 }, "case {}", case);
+        e.set.clear();
+        if case == 2 { e.refuse_gone = Some(ScreenRefused::NoScreen); }
+        let firmwares = watched(&lit.l)[0];
+        if case == 3 { e.hook = Some((seg(2, 0x20B0), firmwares, 0xBAD)); }
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let same = light::take_back(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, &mut held);
+        let log = held.inner.0;
+        let last = log.last().unwrap().clone();
+        assert!(log[0].starts_with("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES 16 TO 1 ("), "case {}: {}", case, log[0]);
+        assert!(last.starts_with("STEP 3 TAKEN BACK IN "), "case {}: {}", case, last);
+        let at = |p: &str| log.iter().position(|x| x.starts_with(p));
+        match case {
+            // Gone right: the two notes only, as on boot 94.
+            0 => { assert!(same); assert_eq!(log.len(), 2, "{:#?}", log); assert!(last.ends_with(" MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE UNCHANGED"), "{}", last); }
+            // A stage's undo gone wrong: the detail held before it, its own lines, every line after it, then the last line saying so.
+            1 | 2 => {
+                assert!(same, "{:#?}", log);
+                let (wrong, first) = if case == 1 { ("U8 TABLE 76 STOPPED (", "U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO") } else { ("U16 SCREEN_GONE NOT TAKEN: NO SCREEN; THE UNDO GOES ON", "U16 ") };
+                let w = at(wrong).unwrap_or_else(|| panic!("case {}: {:#?}", case, log));
+                assert!(at(first).unwrap() <= w);
+                assert!(log[w..].iter().any(|x| x.starts_with("U1 OTG CLOCKS UNDONE")), "case {}: {:#?}", case, &log[w..]);
+                assert!(at("U0 RESTORED OTG1_OTG_VERTICAL_INTERRUPT2_POSITION").unwrap() > w);
+                assert!(last.ends_with("THE FIRMWARE'S PIPE UNCHANGED; 1 STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE"), "case {}: {}", case, last);
+                // Every journaled write put back all the same (PHY A's status bit, read into the journal, aside).
+                as_before(&e, &before, &[PHY_A_CNTL0]);
+                assert_eq!(e.regs[&PHY_A_CNTL0] & !(1 << 28), before.get(&PHY_A_CNTL0).copied().unwrap_or(0));
+            }
+            // The firmware's pipe changed: the whole take-back's detail logged before the last line.
+            _ => {
+                assert!(!same);
+                assert!(at("U16 SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO").is_some() && at("U1 OTG CLOCKS UNDONE").is_some(), "{:#?}", log);
+                assert!(last.ends_with("THE FIRMWARE'S PIPE CHANGED"), "{}", last);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_builds_own_undo_after_the_stages_logs_an_off_call_that_stops_in_the_production_order() {
+    let img = waiting_76();
+    let mut e = engine();
+    e.frame_us = DP2;
+    // The status shown for the first 300 ms: past stage 8, which ends within stage 5's two frames and some tables' steps,
+    // and gone before the build's undo, which comes after stage 9's count of 30 frames and stage 15's watch.
+    e.window.push((PHY_A_CNTL0, 1 << 28, 0, 300_000));
+    let before = e.regs.clone();
+    let mut interp = atom::Interpreter::new(atom::Image::new(&img).unwrap());
+    let mut journal = Box::new(light::Journal::default());
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    let (outcome, _) = light::run_timed(&wide(), &mut e, &mut interp, &mut journal, 16, true, &mut held);
+    let log = held.inner.0;
+    assert_eq!(outcome, Outcome::Undone { done: 16 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    let w = log.iter().position(|x| x.starts_with("U8 TABLE 76 STOPPED (")).unwrap_or_else(|| panic!("{:#?}", log));
+    assert!(log[..w].iter().any(|x| x.starts_with("STEP 3 RAN 16 OF 16 STAGES (")), "the held detail before it");
+    assert!(log[w..].iter().any(|x| x.starts_with("U1 OTG CLOCKS UNDONE")));
+    assert!(log.last().unwrap().ends_with("THE FIRMWARE'S PIPE UNCHANGED; 1 STAGES' UNDOS WENT WRONG, THEIR DETAIL ABOVE"), "{}", log.last().unwrap());
+    // Every journaled write put back but the mark, which this undo keeps (PHY A's status bit, read into the journal, aside).
+    as_before(&e, &before, &[PHY_A_CNTL0, reg(R::OtgVerticalInterrupt2Position, 1)]);
+    assert_eq!(e.regs[&PHY_A_CNTL0] & !(1 << 28), before.get(&PHY_A_CNTL0).copied().unwrap_or(0));
+}
+
+// The model as step 1 finds the Ryzen: everything steps 3 and 4 take from it (pipe 0's reference as boot 70 read it),
+// HPD 1 sensing HDMI-A-1's monitor and enabled.
+fn plugged() -> Engine {
+    let mut e = engine();
+    e.frame_us = DP2;
+    let mut put = |r: R, i: u8, v: u32| { e.regs.insert(reg(r, i), v); };
+    put(R::HpdIntStatus, 0, 0b10);
+    put(R::HpdControl, 0, 1 << 28);
+    put(R::OptcDataSourceSelect, 0, 0);
+    put(R::HubpCntl, 0, 0x000F_0002);
+    for n in 1..4u8 { put(R::HubpCntl, n, 0x000F_000B | (n as u32) << 4); }
+    for d in 0..4u8 { put(R::DigFeCntl, d, 7); }
+    put(R::DigFeCntl, 4, 1 << 24);
+    put(R::DigBeCntl, 4, (1 << 4) << 8);
+    put(R::DigBeEnCntl, 4, 0x101);
+    put(R::DmcubCntl, 0, 1 << 17);
+    for (r, v) in [(R::OtgHTotal, 2719), (R::OtgVTotal, 1645), (R::OtgHBlankStartEnd, 112 << 16 | 2672), (R::OtgVBlankStartEnd, 43 << 16 | 1643),
+        (R::HubpPriViewportDimension, 1600 << 16 | 2560), (R::HubpreqRefFreqToPixFreq, 0x14E5E), (R::HubpreqDstDimensions, 0x1E641),
+        (R::HubpreqBlankOffset0, 0x13 << 16 | 0x35), (R::HubpreqSurf0TtuCntl0, 8 << 24), (R::HubpreqSurfacePitch, 2560), (R::DcnVmFbLocationBase, 0xF400),
+        (R::OtgVstartupParam, 0xD), (R::OtgVupdateParam, 0x0140_02A8), (R::OtgVreadyParam, 0x12C), (R::DchubbubGlobalTimerCntl, 0x1001)] {
+        put(r, 0, v);
+    }
+    for n in 0..4u8 { put(R::MpccTopSel, n, n as u32); put(R::MpccBotSel, n, 0xF); put(R::MpccOppId, n, n as u32); put(R::MpcOutMux, n, n as u32); }
+    e
+}
+
+// Steps 1 to 4 as display runs them, in the production order: step 1's values, the plan from them, the stages.
+fn start_on<'a>(e: &mut Engine, img: &'a [u8]) -> (Outcome, Lit<'a>) {
+    let mut store = Store::default();
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    batches::read_into(e, batches::BATCHES, batches::Order::Production, &mut held, &mut store);
+    let l = light::prepare(&store, WIDE, dcn::Signal::Hdmi, "TESTBUILD").expect("step 3 refused");
+    assert!(l.reference.is_some());
+    let mut lit = Lit { l, interp: atom::Interpreter::new(atom::Image::new(img).unwrap()), journal: Box::new(light::Journal::default()) };
+    let (o, _) = light::run_timed(&lit.l, e, &mut lit.interp, &mut lit.journal, 16, false, &mut held);
+    (o, lit)
+}
+
+// HPD 1 sensing `sense` for `ms`, display polling it every POLL_MS on the model's clock and doing what it asks.
+fn poll_hpd<'a>(e: &mut Engine, f: &mut hpd::Follow, lit: &mut Option<Lit<'a>>, img: &'a [u8], sense: bool, ms: u64) -> Vec<hpd::Action> {
+    let hpd1 = reg(R::HpdIntStatus, 0);
+    e.regs.insert(hpd1, (sense as u32) << 1);
+    let mut acted = vec![];
+    let end = e.clock + ms * 1000;
+    while e.clock < end {
+        e.clock += hpd::POLL_MS as u64 * 1000;
+        let now = e.clock;
+        let sense = Bus::read(e, Reg::new(hpd1).unwrap()).unwrap() & 2 != 0;
+        match f.feed(sense, now) {
+            hpd::Action::TakeBack => { assert!(take_back(lit.as_mut().unwrap(), e, 16).0); f.set(hpd::State::Dark); acted.push(hpd::Action::TakeBack); }
+            hpd::Action::LightUp => { let (o, l) = start_on(e, img); f.set(hpd::state_after(Some(o))); *lit = Some(l); acted.push(hpd::Action::LightUp); }
+            hpd::Action::None => {}
+        }
+    }
+    acted
+}
+
+#[test]
+fn hpd_followed_on_the_model_an_unplug_takes_back_a_plug_runs_steps_1_to_4_again_a_bounce_neither() {
+    let img = good();
+    let mut e = plugged();
+    let before = e.regs.clone();
+    let (outcome, lit) = start_on(&mut e, &img);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let first = device(&e);
+    let mut lit = Some(lit);
+    let mut f = hpd::Follow::new(hpd::state_after(Some(outcome)), true);
+    // A bounce of 300 ms: neither; the screen stays offered.
+    assert!(poll_hpd(&mut e, &mut f, &mut lit, &img, false, 300).is_empty());
+    assert!(poll_hpd(&mut e, &mut f, &mut lit, &img, true, 1000).is_empty());
+    assert!(!e.ev.contains(&Ev::Gone));
+    // Unplugged for two seconds: taken back once, screen_gone first, every register as before.
+    assert_eq!(poll_hpd(&mut e, &mut f, &mut lit, &img, false, 2000), [hpd::Action::TakeBack]);
+    assert_eq!(e.ev.iter().filter(|x| **x == Ev::Gone).count(), 1);
+    as_before(&e, &before, &[]);
+    // A bounce while dark: nothing lights it.
+    let quiet = e.ev.len();
+    assert!(poll_hpd(&mut e, &mut f, &mut lit, &img, true, 300).is_empty());
+    assert!(poll_hpd(&mut e, &mut f, &mut lit, &img, false, 1000).is_empty());
+    assert_eq!(e.ev.len(), quiet);
+    // Plugged in for eight seconds: steps 1 to 4 run again, the same writes and offer as at start.
+    let from = e.ev.len();
+    assert_eq!(poll_hpd(&mut e, &mut f, &mut lit, &img, true, 8000), [hpd::Action::LightUp]);
+    let again: Vec<Ev> = e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(again, first);
+    assert_eq!(f.state(), hpd::State::Lit);
+}
+
+// --- the standing check (213-DRV-0103) ---
+
+// All sixteen stages at 3440x1440 on `e`, with a watch of `frames`: the run kept for the check, and the clock at the offer.
+fn lit_on<'a>(e: &mut Engine, img: &'a [u8], frames: u32) -> (Lit<'a>, u64) {
+    let (outcome, lit, log) = light_up(wide().with_watch(frames), img, e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(6)..]);
+    let offered = e.clock;
+    (lit, offered)
+}
+
+// The check once a second for `seconds` (display's loop, on the model's clock): the lines it logged, and the second
+// and failure of the first finding, which it then undoes as display does.
+fn standing_for(e: &mut Engine, lit: &mut Lit, offered: u64, seconds: u64) -> (Vec<String>, Option<(u64, Failure)>) {
+    let mut log = Log(vec![]);
+    let mut account = light::Standing::new(e.clock);
+    for second in 1..=seconds {
+        e.clock += light::STANDING_US;
+        if let Err(why) = light::standing_check(&lit.l, e, &lit.journal, &mut account, &mut log) {
+            let since = e.clock - offered;
+            assert!(light::standing_undo(&lit.l, e, &mut lit.interp, &mut lit.journal, 16, why, since, &mut log));
+            return (log.0, Some((second, why)));
+        }
+    }
+    (log.0, None)
+}
+
+#[test]
+fn the_standing_check_finds_nothing_for_an_hour_says_so_every_ten_minutes_and_writes_nothing() {
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let made = writes(&e).len();
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 3600);
+    assert_eq!(found, None);
+    assert_eq!(writes(&e).len(), made, "the check wrote");
+    assert!(!e.ev.contains(&Ev::Gone));
+    assert_eq!(log, vec!["S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE".to_string(); 6]);
+    // A check kept from running for three seconds shows in the next line's longest time.
+    let mut account = light::Standing::new(e.clock);
+    let mut out = Log(vec![]);
+    for k in 1..=600u64 {
+        e.clock += if k == 300 { 3 * light::STANDING_US } else { light::STANDING_US };
+        light::standing_check(&lit.l, &mut e, &lit.journal, &mut account, &mut out).unwrap();
+    }
+    // 598 checks fill the ten minutes with the three seconds lost.
+    assert_eq!(out.0, ["S15 STANDING CHECK: 598 CHECKS IN 10 MIN, THE LONGEST 3000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE"]);
+}
+
+#[test]
+fn an_underflow_10_s_after_the_offer_is_caught_within_a_second_and_undone_as_the_watch_undoes_the_mark_kept() {
+    let img = good();
+    let (cntl1, dpg1, mark) = (reg(R::HubpCntl, 1), reg(R::DpgControl, 1), reg(R::OtgVerticalInterrupt2Position, 1));
+    let mut e = engine();
+    e.frame_us = DP2;
+    e.regs.insert(cntl1, 0x000F_001B); // HUBP1 blanked, as step 1 read it on the Ryzen
+    let before = e.regs.clone();
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    // HUBP1's underflow status latched 10.4 s after the offer, as the hardware latches it until its clear bit.
+    e.timed.push((cntl1, 1 << 28, offered + 10_400_000));
+    let made = e.ev.len();
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 60);
+    let (second, why) = found.expect("not caught");
+    assert_eq!(second, 11, "caught at the first check after it");
+    assert!(matches!(why, Failure::Underflow { offset, .. } if offset == cntl1), "{:?}", why);
+    // The watch's own undo: the pattern on and HUBP1 blanked first, then screen_gone, then 14 to 1.
+    let after: Vec<Ev> = e.ev[made..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Gone)).cloned().collect();
+    assert!(matches!(after[0], Ev::Write(o, v) if o == dpg1 && v & 1 == 1), "{:?}", &after[..3]);
+    assert!(matches!(after[1], Ev::Write(o, v) if o == cntl1 && v & 1 == 1), "{:?}", &after[..3]);
+    assert_eq!(after[2], Ev::Gone);
+    let line = log.iter().find(|x| x.starts_with("S15 STANDING CHECK: AN UNDERFLOW AT 0EE3C")).expect("its line");
+    assert!(line.contains(" 11 S AFTER THE OFFER; STAGE 15'S WRITES WERE PUT BACK AT ONCE, BEFORE THIS LINE; UNDOING 16 (SCREEN_GONE) AND STAGES 14 TO 1"), "{}", line);
+    assert_eq!(log.last().unwrap(), "STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT");
+    let undone: Vec<u8> = log.iter().filter_map(|x| x.strip_prefix('U').and_then(|r| r.split(' ').next()).filter(|_| x.contains(" UNDONE: ")).and_then(|n| n.parse().ok())).collect();
+    // Stage 15 at once, then 16 (screen_gone), then 14 to 1.
+    assert_eq!(undone, [15u8, 16].into_iter().chain((1..=14).rev()).collect::<Vec<u8>>());
+    // Every register as before step 3 but the mark, which stays: a start again runs no stage.
+    restored_but(&e, &before, &[]);
+    assert_eq!(e.regs[&mark], light::RESTART_MARK);
+    let (outcome, _, _) = light_up(wide(), &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+    for x in &log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+}
+
+#[test]
+fn the_firmwares_underflow_and_a_request_timeout_are_caught_alike() {
+    let img = good();
+    let (cntl0, cntl1) = (reg(R::HubpCntl, 0), reg(R::HubpCntl, 1));
+    for (at, bits, want) in [(cntl0, 1u32 << 28, format!("AN UNDERFLOW AT {:05X}", cntl0)), (cntl1, 2 << 20, format!("A REQUEST TIMEOUT AT {:05X}", cntl1))] {
+        let mut e = engine();
+        e.frame_us = DP2;
+        let before = e.regs.clone();
+        let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+        e.timed.push((at, bits, offered + 3_500_000));
+        let (log, found) = standing_for(&mut e, &mut lit, offered, 10);
+        assert_eq!(found.map(|f| f.0), Some(4), "{:#?}", log);
+        assert!(log.iter().any(|x| x.starts_with(&format!("S15 STANDING CHECK: {}", want))), "{} {:#?}", want, log);
+        assert_eq!(e.ev.iter().filter(|x| **x == Ev::Gone).count(), 1);
+        restored_but(&e, &before, &[at]);
+    }
+}
+
+#[test]
+fn an_odm_underflow_that_is_over_within_the_second_is_still_caught_by_its_latched_status() {
+    // OPTC_UNDERFLOW_OCCURRED_STATUS (bit 10) is latched until OPTC_UNDERFLOW_CLEAR (bit 12); _OCCURRED_CURRENT (bit 13)
+    // is live (dcn_2_1_0_sh_mask.h; Display Core reads the status, then clears it). An underflow of 100 ms between two
+    // checks: the live bit is back to 0 at the check, the latched one is not.
+    let img = good();
+    let odm1 = reg(R::OptcInputGlobalControl, 1);
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, offered) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let t = offered + 5_200_000;
+    e.timed.push((odm1, 1 << 10, t));
+    e.window.push((odm1, 1 << 13, t, t + 100_000));
+    let checked_at = offered + 6_000_000;
+    let (log, found) = standing_for(&mut e, &mut lit, offered, 10);
+    assert_eq!(found.map(|f| f.0), Some(6));
+    assert!(matches!(found.unwrap().1, Failure::Underflow { offset, value } if offset == odm1 && value & 1 << 10 != 0 && value & 1 << 13 == 0), "{:?}", found);
+    assert!(checked_at > t + 100_000, "the live bit was over before the check");
+    assert!(log.iter().any(|x| x.starts_with(&format!("S15 STANDING CHECK: AN UNDERFLOW AT {:05X}", odm1))), "{:#?}", log);
+}
+
+#[test]
+fn an_underflow_one_frame_after_the_watch_ends_is_caught_within_a_second_with_either_watch() {
+    let img = good();
+    let (cntl1, dpg1) = (reg(R::HubpCntl, 1), reg(R::DpgControl, 1));
+    for frames in [light::WATCH_FRAMES, light::SHORT_WATCH_FRAMES] {
+        let mut e = engine();
+        e.frame_us = DP2;
+        let before = e.regs.clone();
+        // Latched one frame after the watch's last, counted from the pattern going off.
+        e.arm.push((dpg1, 1, cntl1, 1 << 28, (frames as u64 + 1) * DP2));
+        let (outcome, mut lit, log) = light_up(wide().with_watch(frames), &img, &mut e, 16);
+        assert_eq!(outcome, Outcome::Stopped { done: 16 }, "the watch of {} saw it: {:#?}", frames, &log[log.len().saturating_sub(6)..]);
+        assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK DONE") && x.contains(&format!("WATCHED {} FRAMES IN ", frames))), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+        let offered = e.clock;
+        let (_, found) = standing_for(&mut e, &mut lit, offered, 5);
+        assert_eq!(found.map(|f| f.0), Some(1), "watch {}", frames);
+        restored_but(&e, &before, &[cntl1]);
+    }
+}
+
+#[test]
+fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
+    let (f, c) = EXPECTED;
+    let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+    assert_eq!((l.watch_frames, light::WATCH_FRAMES, light::SHORT_WATCH_FRAMES), (300, 300, 60));
+    assert_eq!(l.with_watch(1000).watch_frames, 300, "never longer than the watch was");
+    let short = wide().with_watch(light::SHORT_WATCH_FRAMES);
+    let mut e = engine();
+    e.frame_us = DP2;
+    let img = good();
+    let (outcome, _, log) = light_up(short, &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let watched = log.iter().find(|x| x.starts_with("S15 WATCHED ")).unwrap();
+    assert!(watched.starts_with("S15 WATCHED 60 FRAMES OF OTG1 IN "), "{}", watched);
+    assert_eq!(log.iter().filter(|x| x.starts_with("S15 FRAMES ")).count(), 1, "one line of 60 marks");
+    // The build refuses a short watch without the check: main.rs's const assertion, which no host case can build.
+    let main = include_str!("../display/src/main.rs");
+    assert!(main.contains("const _: () = assert!(!SHORT_WATCH || STANDING_CHECK"));
+    assert!(main.contains("const STANDING_CHECK: bool = false;") && main.contains("const SHORT_WATCH: bool = false;"));
+}
+
+#[test]
+fn an_unplug_and_a_plug_inside_ten_minutes_count_apart_from_the_time_between_two_checks() {
+    // Checks once a second while lit; an unplug's take-back at 100 s, dark for 12 s, then the stages run again (on the
+    // model's clock, some 6 s) and the checks go on: the line's longest time is the lit one's, the dark counted once.
+    let img = good();
+    let mut e = engine();
+    e.frame_us = DP2;
+    let (mut lit, _) = lit_on(&mut e, &img, light::WATCH_FRAMES);
+    let start = e.clock;
+    let mut account = light::Standing::new(start);
+    let mut out = Log(vec![]);
+    let check = |e: &mut Engine, lit: &Lit, account: &mut light::Standing, out: &mut Log| { e.clock += light::STANDING_US; light::standing_check(&lit.l, e, &lit.journal, account, out).unwrap(); };
+    for _ in 0..100 { check(&mut e, &lit, &mut account, &mut out); }
+    assert!(take_back(&mut lit, &mut e, 16).0);
+    account.dark(e.clock);
+    e.clock += 12_000_000;
+    let (outcome, _) = light::run_timed(&lit.l, &mut e, &mut lit.interp, &mut lit.journal, 16, false, &mut Log(vec![]));
+    assert_eq!(outcome, Outcome::Stopped { done: 16 });
+    let relit = e.clock;
+    while e.clock < start + light::STANDING_SAID_US { check(&mut e, &lit, &mut account, &mut out); }
+    let dark_s = (relit + light::STANDING_US - (start + 100 * light::STANDING_US)) / 1_000_000;
+    assert_eq!(out.0.len(), 1, "{:#?}", out.0);
+    let line = &out.0[0];
+    assert!(line.starts_with("S15 STANDING CHECK: ") && line.contains(" CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO WHILE LIT; DARK 1 TIMES, ")
+        && line.ends_with(&format!(", {} S IN ALL; NOTHING NEW ON EITHER PIPE", dark_s)), "{} (dark {} s)", line, dark_s);
+    assert!(dark_s >= 18, "the 12 s and the run again: {} s", dark_s);
+    // The next ten minutes, all lit: the line as before, the dark not carried over.
+    for _ in 0..600 { check(&mut e, &lit, &mut account, &mut out); }
+    assert_eq!(out.0.last().unwrap(), "S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE");
 }

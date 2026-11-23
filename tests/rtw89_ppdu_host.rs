@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #[path = "../rtw89_wifi/src/ppdu.rs"] mod ppdu;
 #[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
-use ppdu::{parse, weakness, Report};
+use ppdu::{parse, weakness, Conversion, Report};
 
 #[path = "rtw89_ppdu_captures.rs"] mod captures;
 use captures::*;
@@ -18,11 +18,16 @@ fn signal(hex: &str) -> Option<Report> { let (d, p) = split(hex); parse(d, &p) }
 
 #[test]
 fn reports_captured_on_the_ryzen_give_linux_s_signal() {
-    assert_eq!(signal(FIVE), Some(Report { count: 1, rate: 4, signal_dbm: -63 }), "5 GHz: no RPL conversion for a break");
-    assert_eq!(signal(CCK), Some(Report { count: 4, rate: 0, signal_dbm: -65 }), "2.4 GHz CCK: paths 88 moved by +2");
+    assert_eq!(signal(FIVE), Some(Report { count: 1, rate: 4, signal_dbm: -63, header_dbm: -63, conversion: Conversion::Header }),
+        "5 GHz: no RPL conversion for a break");
+    assert_eq!(signal(CCK), Some(Report { count: 4, rate: 0, signal_dbm: -65, header_dbm: -66,
+        conversion: Conversion::Rpl { header_over: -2, ofdm: false } }), "2.4 GHz CCK: paths 88 moved by +2");
     assert_eq!(signal(BREAK).unwrap().signal_dbm, -64);
     assert_eq!(signal(DATA).unwrap().signal_dbm, -61, "paths 104/108 moved by RPL 97 less the average 106");
     assert_eq!(signal(OTHER).unwrap().signal_dbm, -75);
+    assert_eq!(signal(DATA).unwrap().conversion, Conversion::Rpl { header_over: 9, ofdm: true }, "the average 106 over the RPL 97");
+    assert_eq!((signal(BREAK).unwrap().conversion, signal(OTHER).unwrap().conversion),
+        (Conversion::Header, Conversion::Rpl { header_over: -6, ofdm: false }));
     // Linux on the same spot: its beacons' average at -63 dBm on 2.4 GHz and -67 dBm on 5 GHz (other hours).
     assert_eq!((weakness(-63), weakness(-110), weakness(0), weakness(17)), (63, 110, 1, 1));
 }
@@ -43,6 +48,19 @@ fn untrusted_report_bytes_are_bounded_and_refused_whole() {
     // An IE of no length (type 23) ends the IE walk unparsed: the header's paths stand, as Linux's failed parse leaves them.
     let (d, mut p) = split(CCK); p[32 + 8] = (p[32 + 8] & 0xe0) | 23;
     assert_eq!(parse(d, &p).unwrap().signal_dbm, -66);
+}
+
+// 213-DRV-0102: an OFDM report not to this radio has no RPL (Linux reads IE 1's only to_self, core.c:2006); Linux
+// moves its paths by 0 less the average all the same, so its signal wraps; the header's stronger path is kept beside it.
+#[test]
+fn an_ofdm_report_not_to_this_radio_keeps_the_headers_signal_beside_linuxs() {
+    let (d, p) = split(DATA);
+    let other = parse([d[0], d[1], d[2] & !1], &p).unwrap();
+    // Paths 104 and 108 less the average 106: 254 and 2 as bytes, the stronger 254, +17 dBm; the header's 108 is -56.
+    assert_eq!((other.signal_dbm, other.header_dbm, other.conversion), (17, -56, Conversion::NoRpl));
+    assert_eq!(parse(d, &p).unwrap().header_dbm, -56, "the same header to this radio");
+    // Below OFDM 6 Mb/s IE 1 gives no RPL either, as Linux returns before it reads one.
+    assert_eq!(parse([d[0], d[1] & !(0x1ff << 16) | 3 << 16, d[2]], &p).unwrap().conversion, Conversion::NoRpl);
 }
 
 // A report goes on the frame kept just before it, by its count and rate, and on no other (Matcher).

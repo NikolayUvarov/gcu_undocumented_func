@@ -37,6 +37,28 @@ pub fn text(fit: Fit) -> String {
     format!("# The screens (177): how the first is shown on the second, keep (its own shape) or stretch (filling it); screen second sets it\nsecond {}\n", fit.name())
 }
 
+/// The most of the file the shell reads, and so rewrites.
+pub const MAX: usize = 8192;
+
+/// The file's text with the fit set to `fit`: the `second keep|stretch` lines `read` takes made one, or one added; every
+/// other line kept as it was, the layout's and other tracks' (177, 213-DRV-0099). An empty file becomes `text`.
+pub fn updated(old: &str, fit: Fit) -> String {
+    if old.trim().is_empty() { return text(fit); }
+    let mut out = String::new();
+    let mut set = false;
+    for line in old.lines() {
+        let words: alloc::vec::Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        if matches!(words.as_slice(), ["second", word] if Fit::from_name(word).is_some()) {
+            if !set { out.push_str(&format!("second {}\n", fit.name())); set = true; }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !set { out.push_str(&format!("second {}\n", fit.name())); }
+    out
+}
+
 /// The fit the file keeps; None when it names none. A line it does not know is left for the layout to come (177).
 pub fn read(text: &str) -> Option<Fit> {
     text.lines().filter_map(|line| {

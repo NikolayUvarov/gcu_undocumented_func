@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
+[features]
+# Every bulk transfer answered from the loop, for QEMU's suites (000-DRV-0101).
+defer-every-bulk = []
+
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
 
