@@ -1,7 +1,9 @@
-//! A bulk IN stream's spill (158-DRV-0082): the transfers usb_host took off the ring before its client asked for them,
-//! kept in order as the client gets them (two length bytes, bit 15 for an error, then the bytes), up to a bound. With it
-//! the ring's TDs go back to the controller at usb_host's own pace (every STREAM_MS), not the client's: a camera's
-//! burst of a frame no longer waits on the gateway once its 32 pages are full. No system calls: tests/usb_spill_host.rs.
+//! An IN stream's spill (158-DRV-0082 for bulk, 000-DRV-0094 for isochronous): the transfers usb_host took off the ring
+//! before its client asked for them, kept in order as the client gets them (two length bytes, bit 15 for an error, then
+//! the bytes), up to a bound. With it the ring's TDs go back to the controller at usb_host's own pace (every STREAM_MS,
+//! and while it waits for another transfer), not the client's: a camera's burst of a frame no longer waits on the
+//! gateway once its 32 pages are full, and a speakerphone's ring no longer runs dry while its client is late. No system
+//! calls: tests/usb_spill_host.rs.
 use alloc::collections::VecDeque;
 
 pub struct Spill { bytes: VecDeque<u8>, limit: usize, transfers: usize, pub most: usize, pub refused: u64 }

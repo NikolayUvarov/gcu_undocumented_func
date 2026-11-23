@@ -4,8 +4,10 @@
 // badge in SLOT_DEV0 claims only the chips mind::usb::SERIAL_DEVICES names), served as idl/serial.wit to the one client
 // init lends SLOT_SERVICE to: the FTDI FT232R and the WCH CH340. The converter's bulk IN endpoint is polled by usb_host a packet at a time (usb.wit 1.3) and collected every 2 ms into a
 // 64 KiB queue; bytes the client leaves longer are counted as lost. A converter pulled out is claimed again when back.
+// A write goes in pieces of 256 bytes at most (000-LNK-0050).
 mod ch340;
 mod ftdi;
+mod pieces;
 
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::idl::{serial, wire};
@@ -134,11 +136,15 @@ impl Port {
     fn write(&mut self, data: &[u8]) -> Result<(), serial::Error> {
         if data.is_empty() { return Err(serial::Error::Invalid); }
         self.host.buffer_mut()[OUT..OUT + data.len()].copy_from_slice(data);
-        match self.host.bulk(self.handle, self.out, OUT, data.len()) {
-            Ok(n) if n == data.len() => Ok(()),
-            Ok(_) => Err(serial::Error::Failed),
-            Err(_) => Err(serial::Error::NoDevice),
+        // In pieces, so usb_host serves its other clients between them (000-LNK-0050).
+        for (at, length) in pieces::pieces(data.len(), pieces::PIECE) {
+            match self.host.bulk(self.handle, self.out, OUT + at, length) {
+                Ok(n) if n == length => {}
+                Ok(_) => return Err(serial::Error::Failed),
+                Err(_) => return Err(serial::Error::NoDevice),
+            }
         }
+        Ok(())
     }
 }
 
