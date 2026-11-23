@@ -172,11 +172,12 @@ pub const SURFACE_BYTES: usize = 0x0140_0000;
 
 /// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
 /// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row, and the
-/// times and a stage's tally (213-DRV-0098; the production order's held lines are on the heap). Half of display's stack
+/// times and a stage's tally (213-DRV-0098; the production order's held lines are on the heap), and a plug's step 1 values
+/// besides the first start's (213-DRV-0096). Half of display's stack
 /// (linker.ld) bounds it, so that the frames' own locals keep the rest: on 2026-11-22 the 64 KiB a task has by default
 /// faulted at its guard page as step 3 began (boot 69, release 202611220523).
 pub const STEP3_STACK_BYTES: usize = core::mem::size_of::<Interpreter>() + core::mem::size_of::<Journal>()
-    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + core::mem::size_of::<Store>() + 4 * picture::MAX_WIDTH
+    + 3 * core::mem::size_of::<Light>() + 3 * core::mem::size_of::<Plan>() + 2 * core::mem::size_of::<Store>() + 4 * picture::MAX_WIDTH
     + 2 * core::mem::size_of::<Times>() + 2 * core::mem::size_of::<Tally>();
 /// The stack display asks for (linker.ld's PT_GNU_STACK).
 pub const STACK_BYTES: usize = 0x40000;
@@ -221,9 +222,11 @@ pub fn mode_from_edid(edid: Option<&crate::edid::Edid>, fallback: Timing, signal
     (p, Signal::Hdmi, ModeFrom::Edid)
 }
 
-/// The mark a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its interrupt off): a start
-/// of display again in the same boot finds it and runs no stage. A machine boot clears OTG1's registers (step 1 read
-/// them all 0 after every boot, though Linux had driven OTG1 before it), PHY A's not.
+/// The mark of stages in place, which a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its
+/// interrupt off): a start of display again finds it and runs no stage. A failure's undo leaves it, so a failed stage
+/// is not tried again; an unplug's taking back clears it (213-DRV-0096), so that a monitor plugged in lights the output
+/// again. A machine boot clears OTG1's registers (step 1 read them all 0 after every boot, though Linux had driven OTG1
+/// before it), PHY A's not.
 pub const RESTART_MARK: u32 = 0x5A5A;
 
 /// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
@@ -252,6 +255,13 @@ pub const EXPECTED: (Firmware, Choice) = (
     Firmware { otg: 0, opp: 0, dig_fe: 4, phy: 4, hubps: [true, false, false, false] },
     Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1, attached: [false, true, false, false] },
 );
+
+/// Step 3 ready for its run from step 1's values, as display starts it and as a monitor plugged in starts it again
+/// (213-DRV-0096): the pipes `assess` finds, the plan for `timing` in `signal`, step 4's reference and the build.
+pub fn prepare(s: &Store, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> {
+    let (f, c) = assess(s)?;
+    Ok(Light::new_with(f, c, timing, signal)?.with_reference(reference(s, &f, &c)).with_build(build))
+}
 
 /// Why step 3 does not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -496,10 +506,16 @@ impl Watch {
 
 // --- the journal ---
 
-/// Every write step 3 made, with the value before it and its stage, for the undo.
-pub struct Journal { items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize }
-impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0 } } }
+/// Every write step 3 made, with the value before it and its stage, for the undo; and for an unplug's taking back
+/// (213-DRV-0096) the mark with its value before, and the firmware's pipe as step 3 began.
+pub struct Journal { items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize, mark: Option<(Writable, u32)>, baseline: Option<[u32; WATCH]> }
+impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None } } }
 impl Journal {
+    /// Nothing journaled, for a run of the stages again.
+    pub fn clear(&mut self) {
+        for item in self.items[..self.len].iter_mut() { *item = None; }
+        (self.len, self.mark, self.baseline) = (0, None, None);
+    }
     fn push(&mut self, w: Writable, old: u32, stage: u8) -> bool {
         if self.len == JOURNAL { return false; }
         self.items[self.len] = Some((w, old, stage));
@@ -680,7 +696,7 @@ pub fn describe(light: &Light, expected: bool, out: &mut dyn Out) {
 pub enum Failure {
     Unreadable(u32),
     Refused(Refused),
-    /// display started again in this boot: step 3's OTG holds the mark of a start before.
+    /// display started again with the stages in place: step 3's OTG holds the mark of a start before.
     StartedAgain,
     /// Stage 9 without step 1's batches 9 and 10 (no reference), or its measure of the firmware's frames failed.
     NoReference,
@@ -722,7 +738,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Failure::Unreadable(o) => write!(f, "{:05X} COULD NOT BE READ", o),
-            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY IN THIS BOOT (THE MARK IN ITS OTG): THE STAGES RUN ONCE A BOOT"),
+            Failure::StartedAgain => f.write_str("DISPLAY HAS STARTED STEP 3 ALREADY (THE MARK IN ITS OTG): THE STAGES RUN ONCE UNTIL AN UNPLUG TAKES THEM BACK"),
             Failure::NoReference => f.write_str("NO REFERENCE: STEP 1'S BATCHES 9 AND 10 NOT READ, OR THE FIRMWARE'S FRAMES NOT COUNTED"),
             Failure::NoSurface => f.write_str("SLOT 5'S SURFACE IS NOT MAPPED"),
             Failure::MpccInUse { mpcc, opp_id, firmware_mux, firmware_bot } => write!(f,
@@ -1340,8 +1356,9 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         Ok(v) => v,
         Err(why) => { out.note(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return (Outcome::Failed { stage: 0, why }, times); }
     };
-    // Once a boot: a start of display again in this boot (init restarts a program that faults) finds the mark and runs no
-    // stage; else the mark is left before stage 1, and never undone.
+    journal.baseline = Some(baseline);
+    // Once while lit: a start of display again (init restarts a program that faults) finds the mark and runs no stage;
+    // else the mark is left before stage 1, and only an unplug's taking back clears it.
     if allowed > 0 {
         let Some(mark) = R::OtgVerticalInterrupt2Position.at(light.choice.pipe.otg) else { return (Outcome::Failed { stage: 0, why: Failure::StartedAgain }, times) };
         let was = match read(e, mark) { Ok(v) => v, Err(why) => { out.note(format_args!("STEP 3 NOT RUN: ITS MARK: {}", why)); return (Outcome::Failed { stage: 0, why }, times); } };
@@ -1351,7 +1368,8 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         }
         let Ok(w) = light.guard.check(mark) else { return (Outcome::Failed { stage: 0, why: Failure::StartedAgain }, times) };
         e.write(w, RESTART_MARK);
-        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN IN THIS BOOT RUNS NO STAGE; A MACHINE BOOT CLEARS IT",
+        journal.mark = Some((w, was));
+        out.line(format_args!("S0 MARKED {} = {:04X} (WAS {:08X}): A START OF DISPLAY AGAIN RUNS NO STAGE; A MACHINE BOOT OR AN UNPLUG CLEARS IT",
             Name(mark), RESTART_MARK, was));
     }
     let attached = match light.attached.read(e) {
@@ -1445,4 +1463,24 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
     }
     out.note(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
     (Outcome::Stopped { done: allowed }, times)
+}
+
+/// Steps 3 and 4 taken back for an unplug (213-DRV-0096): stages `done` to 1 undone, last first, as a failure's undo
+/// takes them back (stage 16's first lets the compositor go: screen_gone), then the mark put back as it was before step 3,
+/// so that a monitor plugged in runs the stages again, and the journal emptied for that run. Whether the firmware's pipe
+/// reads as it did when step 3 began.
+pub fn take_back<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, done: u8, out: &mut dyn Out) -> bool {
+    out.part();
+    let (start, done) = (e.now_us(), done.min(STAGES));
+    out.note(format_args!("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES {} TO 1 ({} WRITES)", done, journal.len));
+    for m in (1..=done).rev() { undo(light, e, interp, journal, m, false, out); }
+    if let Some((w, was)) = journal.mark.take() {
+        e.write(w, was);
+        out.line(format_args!("U0 RESTORED {} = {:08X}: THE MARK OF STAGES IN PLACE CLEARED", Name(w.reg()), was));
+    }
+    let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
+    journal.clear();
+    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}", Ms(e.now_us().saturating_sub(start)),
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+    same == Some(true)
 }
