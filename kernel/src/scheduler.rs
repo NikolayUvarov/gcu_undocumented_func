@@ -354,7 +354,7 @@ impl Scheduler {
         let line = alloc::format!(
             "MIND CORE KERNEL: TIMED WAITS IN MINUTE {}: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING\n",
             l.minute, l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held);
-        // Kept, and in init's log too: after boot nothing reads the kept lines, and init's reach the system log.
+        // Kept, and in init's log too, which the shell's `logs 1` drains: after boot nothing reads the kept lines.
         crate::klog::keep(&line);
         if let Some(init) = self.tasks.iter_mut().flatten().find(|t| t.pid == 1) { for byte in line.bytes() { init.log.push(byte); } }
     }
@@ -423,7 +423,8 @@ impl Scheduler {
             for task in self.tasks.iter_mut().flatten() {
                 let State::Sleeping(deadline) = task.state else { continue };
                 task.state.wake(ns);
-                if task.state == State::Ready { self.readied.mark(task.cpu); task.due_ms = now.max(1); task.found_ms = now; } else { self.next_wake = self.next_wake.min(deadline); }
+                // due_ms: the end in milliseconds' terms, now less how far past it the clock is (000-KRN-0276).
+                if task.state == State::Ready { self.readied.mark(task.cpu); task.due_ms = now.saturating_sub(ns.saturating_sub(deadline) / 1_000_000).max(1); task.found_ms = now; } else { self.next_wake = self.next_wake.min(deadline); }
             }
         }
         if now >= self.next_expiry { self.expire(now); }
