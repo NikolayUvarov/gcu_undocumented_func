@@ -20,7 +20,7 @@ DRV timed the Ryzen's sends (`NET/2026-11-22T1800Z-DRV-where-the-uplinks-time-go
 ## Acceptance criteria
 
 - [x] `wlan` builds for x86 and aarch64.
-- [ ] QEMU: the `net` suite with `wlansim` passes (join, DHCP, traffic over `wlan`).
+- [x] QEMU: the `net` suite with `wlansim` passes (join, DHCP, traffic over `wlan`): QEMU x86, 4 CPUs, locally (2026-11-23), on a tree with 000-KRN-0276, 0277, 213-KRN-0278 and 801-NET-0093. `wlansim` is not the Ryzen's radio: this says nothing of the gap DRV measured (MC-12.1).
 - [ ] **On the Ryzen** (DRV, MC-12.1): the 10 to 12 ms peak of the gap between sends shrinks, and uploads are no slower.
 
 ## Related

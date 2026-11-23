@@ -17,6 +17,8 @@ slow = []
 no-country = []
 # Test only (801-NET-0085): a fresh radio already on the access point's channel, as a driver that tuned itself.
 self-tuned = []
+# Test only (801-NET-0095): every unicast data frame answered busy at its first offer, as a radio whose queue is full.
+busy = []
 
 [profile.release]
 panic = "abort"
