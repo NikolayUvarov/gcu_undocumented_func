@@ -73,6 +73,10 @@ pub(crate) struct FirmwareError{pub count:u32,pub ctrl:u32,pub raw:u32,pub ser:u
 /// The firmware's error codes by level since the data mode began (213-DRV-0091).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Errors{pub l0:u32,pub l1:u32,pub l2:u32,pub unknown:u32,pub hisr_halt:u32,pub hisr_wdt:u32}
+/// The n-th step of SER_DBG_INFO a data-mode check saw (213-DRV-0091): from and to, the time since the check before, and
+/// RXQ's and RPQ's polls so far this minute.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub(crate) struct SerStep{pub count:u32,pub from:u32,pub to:u32,pub since_us:u64,pub polls:[crate::rx::Polls;2]}
 /// The n-th check that found HISR0's halt bits set (213-DRV-0091): HISR0, HALT_C2H_CTRL and SER_DBG_INFO then.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct HaltStatus{pub count:u32,pub hisr:u32,pub ctrl:u32,pub ser:u32,pub intx:Option<bool>}
@@ -139,7 +143,7 @@ impl core::fmt::Debug for Snapshot{
 pub const PROBE_MAC:[usize;41]=[0,0x70,0xac,0x160,0x164,0x168,0x16c,0x1e0,0x1050,0x1054,0x8424,0x8430,0x8434,0x8520,0x8524,
     0x9eb0,0xc2c0,0xc348,0xc400,0xc160,0xc164,0xc800,0xc804,0xce20,0xce24,0xce28,0xce2c,0xce84,0xc67c,0xcef4,0xd200,0xd220,0xda10,
     0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0xda4c,fwcmd::DMA_STOP];
-pub const PROBE_BB:[usize;16]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
+pub const PROBE_BB:[usize;17]=[0x980,0x4738,0x4688,0x4694,0x4860,0x4b64,0x4b74,0x472c,0x4a80,0x473c,0x46a8,0x4884,0x1738,0x173c,
     0xc70,0x700,0x2344];
 pub const PROBE_RF:[u32;4]=[0,0x18,0xb2,0xc5];
 #[derive(Clone,Copy,Eq,PartialEq)]
@@ -191,6 +195,8 @@ pub(crate) struct DataSession<'q,'memory,'p,'a,'command,'receive,B:DeviceIo>{
     unreadables:u32,unreadable:Option<Unreadable>,
     // 213-DRV-0091: the firmware's error codes read and not yet taken, oldest first.
     firmware_errors:[FirmwareError;FIRMWARE_ERRORS_KEPT],firmware_pending:usize,halts:u32,halt_status:Option<HaltStatus>,
+    // 213-DRV-0091: SER_DBG_INFO as the last check read it and when, its steps so far, and the last not yet taken.
+    ser_now:u32,ser_checked:u64,ser_steps:u32,ser_step:Option<SerStep>,
 }
 /// A station register check that met an unreadable CMAC domain and went on (213-DRV-0091): the n-th, the register and
 /// the value it read first, the reads until it answered and over how long, SER_DBG_INFO before and after, and whether a
@@ -204,7 +210,110 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 /// `wifi`: every Wi-Fi frame the receive ring gave, kept or not, by which a stalled receive is seen (801-DRV-0071).
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64,pub wifi:u64,
-    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors}
+    pub signals:crate::ppdu::Signals,pub beacons:u64,pub other_beacons:u64,pub refused:Refused,pub errors:Errors,
+    // 213-DRV-0091: when the joined BSS's last beacon was taken from the ring (the bus clock, µs), and its interval.
+    pub beacon_at_us:u64,pub beacon_interval_us:u32,
+    // 213-DRV-0102: every PPDU report by its signal in 5 dB bins from -20 dBm down (the last below -100), and those
+    // that do not parse; the joined BSS's beacons measured and their signals' sum; the beacon just taken (its number and
+    // count and rate) whose report is awaited. The reports with no RPL (OFDM not to this radio) by the header's paths
+    // uncorrected, apart; the header's average over the RPL (half-dB summed, and how many) in the OFDM reports to us.
+    pub ppdu_rssi:[u32;17],pub ppdu_unparsed:u32,pub bss_measured:u32,pub bss_signal_sum:i64,pub bss_beacon:Option<(u64,(u8,u16))>,
+    pub beacon_now:bool,pub ppdu_no_rpl:[u32;17],pub ofdm_header_over:(i64,u32)}
+/// 213-DRV-0102: the joined access point's mean signal, once some of its beacons were measured.
+impl Counts{pub(crate) fn bss_dbm(&self)->Option<i8>{(self.bss_measured!=0).then(||(self.bss_signal_sum/i64::from(self.bss_measured))as i8)}}
+/// 213-DRV-0102: a minute's PPDU reports by signal (5 dB bins from -20 dBm down) and the detection floor's registers.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct FloorMinute{pub ppdu_rssi:[u32;17],pub unparsed:u32,pub registers:[u32;4],pub bss_dbm:Option<i8>,pub measured:u32,pub set:bool,
+    pub kind:FloorKind,pub switch_failures:u32,pub written:FloorWrite,pub no_rpl:[u32;17],pub header_over:(i64,u32)}
+/// 213-DRV-0102: the detection floor's registers, in detection_floor::REGISTERS' order.
+pub(crate) const FLOOR_REGISTERS:[usize;4]=[0x4860,0x4b64,0x4b74,0x4884];
+/// 213-DRV-0102: a floor's write: the registers (bits in FLOOR_REGISTERS' order) not read back as written, and of those
+/// the ones that read as before the write.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct FloorWrite{pub unread:u8,pub unchanged:u8}
+/// 213-DRV-0102: what a minute held when the floor alternates (DETECTION_FLOOR_ALTERNATES): not yet alternating, the
+/// values found, or Linux's.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub enum FloorKind{#[default]None,Off,On}
+impl FloorMinute{
+    /// The minute held Linux's floor throughout, or the values found (DETECTION_FLOOR_ALTERNATES).
+    pub fn on(&self)->bool{self.kind==FloorKind::On}
+    pub fn off(&self)->bool{self.kind==FloorKind::Off}
+}
+/// 213-DRV-0091: what may hold a fetched frame in the MAC, read directly at a late send (no RF, no indirect window, no
+/// H2C): the coexistence control byte and the scoreboard; MACID pause (SS_MACID_PAUSE_0) and sleep (MACID_SLEEP_0);
+/// CTN_TXEN; port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF;
+/// PTCL_COMMON_SETTING_0 and PTCL_TX_CTN_SEL; Linux's coexistence monitor set (0xD200, 0xD220, 0xDA10-0xDA34); the RX
+/// rings' indexes. BB: the monitor set's 0x980, the EDCCA level and its reports, TX collision.
+pub const HELD_MAC:[usize;26]=[0x70,0xac,0x9eb0,0xc2c0,0xc348,0xc400,0xc404,0xc408,0xc40c,0xc414,0xc434,0xc438,0xc43c,0xc600,
+    0xc6ec,0xd200,0xd220,0xda10,0xda20,0xda24,0xda28,0xda2c,0xda30,0xda34,0x1050,0x1054];
+pub const HELD_BB:[usize;8]=[0x980,0x1738,0x173c,0x4884,0xc70,0x4860,0x4b64,0x4b74];
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub struct Held{pub mac:[u32;HELD_MAC.len()],pub bb:[u32;HELD_BB.len()]}
+impl core::fmt::Debug for Held{
+    fn fmt(&self,f:&mut core::fmt::Formatter<'_>)->core::fmt::Result{
+        for(at,value)in HELD_MAC.iter().zip(self.mac){write!(f,"{:X}={:X} ",at,value)?;}
+        for(at,value)in HELD_BB.iter().zip(self.bb){write!(f,"B{:X}={:X} ",at,value)?;}Ok(())
+    }
+}
+/// 213-DRV-0091: where in the beacon interval a moment is: by our clock since the last beacon taken from the ring, and by
+/// port 0's TSF; the interval as the last beacon gave it (0: none heard yet).
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct Phase{pub clock_us:Option<u64>,pub tsf_us:Option<u64>,pub interval_us:u32}
+/// 213-DRV-0091: a minute's sends by how they ended. Releases by the beacon interval's phase in 10 ms bins, by our clock
+/// against the last beacon taken and by the port's TSF; the late frames released, those acknowledged at the first try and
+/// those never, and their median hold; the times the service's frame buffer was full and the longest.
+#[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
+pub struct TxMinute{pub clock:[u32;11],pub tsf:[u32;11],pub late:u32,pub first_try:u32,pub not_acked:u32,pub median_hold_ms:u64,
+    pub full_times:u32,pub full_longest_ms:u64,
+    // 213-DRV-0104: sends answered at their deadline, refused busy and parked; parked frames released and of them
+    // acknowledged; what the minute held when SEND_BEHIND_LATE alternates (None: it does not), and the switch otherwise.
+    pub answered_late:u32,pub busy:u32,pub parked:u32,pub parked_released:u32,pub parked_acked:u32,pub behind:FloorKind,pub behind_fixed:bool,
+    // 213-DRV-0104: sends answered in time by the time from their arrival to their answer, and the time from an answer
+    // (or a refusal) to the next send's arrival, both in 2 ms bins to 30 ms then 10 ms to 90 (MS_BINS; the gaps' last
+    // bin 90 or more); the most sends that arrived within one second.
+    pub answer_ms:[[u32;MS_BINS];3],pub gap_ms:[u32;MS_BINS+1],pub peak_sends:u32,
+    // 213-DRV-0104: the in-time answers above by the frame's size (SIZES: under 200 bytes, to 1000, over); sends to one
+    // station ended, by the rate they went at (txdesc::LEGACY_RATES' order: sends, acknowledged, tries) and by their tries
+    // (1 to 15); frames received for this station by the access point's rate (rx_rate_bin) and those with the retry bit.
+    pub by_rate:[[u32;3];12],pub by_tries:[u32;16],pub rx_rate:[u32;RX_RATES],pub rx_retry:u32,
+    // 213-DRV-0091: the service's steps: its waits for a request (POLL_MS asked) and its work after them, each over 5 and
+    // over 10 ms, and the longest (µs): a wait far over its time is the task not run again, work over it the step's own.
+    pub wait_over:[u32;2],pub wait_longest_us:u64,pub work_over:[u32;2],pub work_longest_us:u64,
+    // 213-DRV-0104: each ended send's final submission by size (size_class): µs from it to its DMA fetch seen, and from
+    // that to its release seen, in US_BINS (us_bin).
+    pub fetch_us:[[u32;US_BINS];3],pub release_us:[[u32;US_BINS];3],
+    // 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING (as `behind`), and the tight polls made.
+    pub tight:FloorKind,pub tight_fixed:bool,pub tight_polls:u32}
+/// 213-DRV-0104: µs bins: 250 µs each to 2 ms, 1 ms each to 10 ms, then to 20 ms, to 50 ms, and 50 ms or more.
+pub const US_BINS:usize=19;
+pub fn us_bin(us:u64)->usize{if us<2_000{(us/250)as usize}else if us<10_000{8+((us-2_000)/1_000)as usize}else if us<20_000{16}else if us<50_000{17}else{18}}
+/// 213-DRV-0104: a frame's size class for the in-time answers: under 200 bytes, 200 to 1000, over 1000.
+pub fn size_class(length:usize)->usize{if length<200{0}else if length<=1000{1}else{2}}
+/// 213-DRV-0104: the received rates binned: the descriptor's data rate as the hardware gives it (rtw89_hw_rate): CCK 0 to 3
+/// and OFDM 4 to 11 as they are, HT MCS 0 to 15 (0x80 to 0x8F) at 12 to 27, anything else at 28.
+pub const RX_RATES:usize=29;
+pub fn rx_rate_bin(rate:u16)->usize{match rate{0..=11=>rate as usize,0x80..=0x8f=>12+(rate-0x80)as usize,_=>RX_RATES-1}}
+/// 213-DRV-0104: the bins of a send's times: 2 ms each to 30 ms, then 10 ms each to 90.
+pub const MS_BINS:usize=21;
+/// The bin of `ms`: within 90 ms, or MS_BINS for 90 or more.
+pub fn ms_bin(ms:u64)->usize{if ms<30{(ms/2)as usize}else if ms<90{15+((ms-30)/10)as usize}else{MS_BINS}}
+impl TxMinute{
+    /// 213-DRV-0104: what the minute held of SEND_BEHIND_LATE, for its line.
+    pub fn behind_label(&self)->&'static str{
+        match(self.behind,self.behind_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE BEHIND LATE ON",(FloorKind::Off,_)=>"THIS MINUTE BEHIND LATE OFF",
+            (FloorKind::None,true)=>"BEHIND LATE ALWAYS",(FloorKind::None,false)=>"BEHIND LATE NEVER",
+        }
+    }
+    /// 213-DRV-0104: what the minute held of POLL_TIGHT_WHILE_PENDING, for its line.
+    pub fn tight_label(&self)->&'static str{
+        match(self.tight,self.tight_fixed){
+            (FloorKind::On,_)=>"THIS MINUTE TIGHT ON",(FloorKind::Off,_)=>"THIS MINUTE TIGHT OFF",
+            (FloorKind::None,true)=>"TIGHT ALWAYS",(FloorKind::None,false)=>"TIGHT NEVER",
+        }
+    }
+}
 /// The first frames the station's filter refused (213-DRV-0090): each one's length and first 24 bytes.
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Refused{pub frames:[(u16,[u8;24]);8],pub count:usize}
@@ -225,7 +334,10 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
                 if r.count<r.frames.len()&&m.len()>=24{r.frames[r.count]=(m.len() as u16,m[..24].try_into().unwrap());r.count+=1;}
                 if beacon{self.counts.other_beacons=self.counts.other_beacons.saturating_add(1);}return Ok(true)
             }
-            if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){self.counts.beacons=self.counts.beacons.saturating_add(1);}
+            if beacon&&filter.bssid()!=[0;6]&&m[16..22]==filter.bssid(){
+                self.counts.beacons=self.counts.beacons.saturating_add(1);self.counts.beacon_at_us=now;self.counts.beacon_now=true;
+                if m.len()>=34{self.counts.beacon_interval_us=u32::from(u16::from_le_bytes([m[32],m[33]]))*1024;}
+            }
             if full{self.counts.pressure=self.counts.pressure.saturating_add(1);return Ok(true)}
             return Ok(false)
         }
@@ -241,6 +353,34 @@ impl super::PacketHandler for Dispatcher<'_,'_>{
             Err(error)=>{self.error=Some(error);Err(super::Error::PacketHandler)},
         }
     }
+    // 213-DRV-0102: the joined BSS's beacon taken just now is remembered by its number, count and rate, for its report.
+    fn frame(&mut self,now:u64,number:u64,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
+        self.counts.beacon_now=false;let taken=self.packet(now,rx::Channel::Rxq,packet,buffer,full);
+        if core::mem::take(&mut self.counts.beacon_now){self.counts.bss_beacon=crate::ppdu::key(buffer).map(|key|(number,key));}
+        taken
+    }
+    // 213-DRV-0102: every report by its signal; the one after the BSS's beacon, of its count and rate, measures the BSS.
+    // A report with no RPL is binned apart by the header's paths: Linux's moved signal for it means nothing.
+    fn report(&mut self,frame:Option<u64>,packet:rxdesc::Packet,buffer:&[u8]){
+        use crate::ppdu::Conversion;
+        let c=&mut *self.counts;
+        let Some(report)=crate::ppdu::from_packet(packet,buffer) else{c.ppdu_unparsed=c.ppdu_unparsed.saturating_add(1);return};
+        let bin=|dbm:i8|((-20-i16::from(dbm)).max(0)/5).min(16)as usize;
+        match report.conversion{
+            Conversion::NoRpl=>{let b=bin(report.header_dbm);c.ppdu_no_rpl[b]=c.ppdu_no_rpl[b].saturating_add(1);}
+            conversion=>{
+                let b=bin(report.signal_dbm);c.ppdu_rssi[b]=c.ppdu_rssi[b].saturating_add(1);
+                if let Conversion::Rpl{header_over,ofdm:true}=conversion{
+                    let o=&mut c.ofdm_header_over;o.0=o.0.saturating_add(i64::from(header_over));o.1=o.1.saturating_add(1);
+                }
+            }
+        }
+        if let Some((number,key))=c.bss_beacon.take(){
+            if frame==Some(number)&&(report.count,report.rate)==key{
+                c.bss_measured=c.bss_measured.saturating_add(1);c.bss_signal_sum+=i64::from(report.signal_dbm);
+            }
+        }
+    }
 }
 
 impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a,'command,'receive,B>{
@@ -248,9 +388,11 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         ->Result<Self,ActivationFailure<'q,'memory,'p,'a,'command,'receive,B>>{
         let mut own=Self{session,queue,prepared,stopped:false,cleanup_allowed:false,last_shutdown:None,counts:Counts::default(),tx_deadline:None,snapshot:None,
             ser_seen:0,recoveries:0,recovery:None,grace_us:0,unreadables:0,unreadable:None,
-            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0,halts:0,halt_status:None};
+            firmware_errors:[FirmwareError::default();FIRMWARE_ERRORS_KEPT],firmware_pending:0,halts:0,halt_status:None,
+            ser_now:0,ser_checked:0,ser_steps:0,ser_step:None};
         if let Err(failure)=own.activate_inner(){return Err(ActivationFailure{owner:own,failure})}
-        own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);Ok(own)
+        own.ser_seen=io::read32(own.session.bus,SER_DBG_INFO).unwrap_or(u32::MAX);own.ser_now=own.ser_seen;
+        own.ser_checked=own.session.bus.now_us();Ok(own)
     }
     fn identity(&self)->bool{
         let p=&self.prepared;
@@ -414,11 +556,19 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             if halt!=0{window.write32(HISR0,halt)?;}
             let ctrl=io::read32(&mut window,HALT_C2H_CTRL)?;let set=ctrl!=0&&ctrl!=u32::MAX;
             let raw=if set{let raw=io::read32(&mut window,HALT_C2H)?;window.write32(HALT_C2H_CTRL,0)?;Some(raw)}else{None};
-            let ser=if set||halt!=0{io::read32(&mut window,SER_DBG_INFO)?}else{0};
+            // Read at every check (213-DRV-0091): a silent recovery is placed at the check that sees its step.
+            let ser=io::read32(&mut window,SER_DBG_INFO)?;
             Ok((if halt!=0{isr}else{0},ctrl,raw,ser,intx))
         })();
         self.session.last=window.last;
         let(isr,ctrl,raw,ser,intx)=read.map_err(Cause::Register)?;
+        let now=window.last;
+        if ser!=self.ser_now&&ser!=u32::MAX{
+            self.ser_steps=self.ser_steps.saturating_add(1);
+            self.ser_step=Some(SerStep{count:self.ser_steps,from:self.ser_now,to:ser,since_us:now.saturating_sub(self.ser_checked),polls:self.session.rings.polls()});
+            self.ser_now=ser;
+        }
+        self.ser_checked=now;
         if isr!=0{
             let e=&mut self.counts.errors;
             if isr&HISR0_HALT_C2H!=0{e.hisr_halt=e.hisr_halt.saturating_add(1)}
@@ -510,6 +660,27 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
+    /// RPQ_ALONE in a host model (tx.rs), whose default is the strict path.
+    #[cfg(test)]
+    pub(crate) fn rpq_alone(&mut self){self.queue.rpq_alone()}
+    /// 213-DRV-0104 (SEND_BEHIND_LATE): the pending send, answered late, parked on the ring so that the next can begin
+    /// behind it; its release is awaited by its sequence and it is not resubmitted. Refused for a frame that cannot be.
+    pub(crate) fn park(&mut self)->Result<(),Failure>{
+        self.queue.park().map_err(|e|Failure{stage:Stage::Runtime,cause:Cause::Tx(e),shutdown:None})?;self.tx_deadline=None;Ok(())
+    }
+    /// 213-DRV-0104: the parked frame's release, if it came (the rings are read by the steps' polls, as for any send).
+    /// With a send pending, `advance` made the checks and the reconcile this step, and only a recovery is looked for.
+    pub(crate) fn parked_release(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
+        Self::request(timeout_us)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;
+            let deadline=if self.queue.pending_request(){deadline}else{let d=self.live(deadline)?;self.reconcile(d)?;d};
+            let deadline=self.outlast_ser(deadline,true)?;
+            if !self.queue.parked(){return Ok(None)}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let result=self.queue.parked_release(&mut window);self.session.last=window.last;
+            let outcome=result?;self.session.left(deadline)?;Ok(outcome)})();
+        result.map_err(|cause|self.runtime_failure(cause))
+    }
     pub(crate) fn channel(&self)->u8{self.prepared.tuned.channel}
     pub(crate) fn mac(&self)->[u8;6]{self.prepared.board.identity.mac}
     pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}
@@ -525,6 +696,27 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn pending_packets(&self)->usize{self.session.pending_packets()}
     /// The registers the first shutdown found (SNAPSHOT), if it ran on an activated data mode.
     pub(crate) fn snapshot(&self)->Option<Snapshot>{self.snapshot}
+    /// 213-DRV-0104 (POLL_TIGHT_WHILE_PENDING): the pending send's progress without the liveness checks and the reconcile,
+    /// which the step's `advance` made: a recovery is still outlasted first. The rings are read by `poll_more` before it.
+    pub(crate) fn advance_light(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
+        Self::request(timeout_us)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;let deadline=self.outlast_ser(deadline,true)?;if !self.queue.pending_request(){return Ok(None)}
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let result=self.queue.advance(&mut window);self.session.last=window.last;
+            let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
+        result.map_err(|cause|self.runtime_failure(cause))
+    }
+    /// 213-DRV-0104: the bus clock, µs.
+    pub(crate) fn now_us(&mut self)->Option<u64>{self.session.now().ok()}
+    /// 213-DRV-0104: a pause of `us` on the bus (on the Ryzen io::short_delay: a spin on the clock, at most 1 ms).
+    pub(crate) fn pace(&mut self,us:u32)->Result<(),Failure>{
+        let result=(||{let deadline=self.deadline(us.saturating_add(1_000))?;
+            let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+            let r=window.delay_us(us);self.session.last=window.last;r?;Ok(())})();
+        result.map_err(|cause:Cause|self.runtime_failure(cause))
+    }
+    /// 213-DRV-0104: the last ended send's final submission: µs to its fetch seen and to its release seen after that.
+    pub(crate) fn take_tx_timing(&mut self)->Option<(u64,u64)>{self.queue.take_timing()}
     /// What the pending send has seen (a timeout's diagnostic).
     pub(crate) fn transmit_seen(&self)->tx::Seen{self.queue.seen()}
     /// More time for the pending send (service.rs's KEEP_LATE).
@@ -537,6 +729,10 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn take_unreadable(&mut self)->Option<Unreadable>{self.unreadable.take()}
     /// The last check that found HISR0's halt bits set, not yet taken (213-DRV-0091).
     pub(crate) fn take_halt_status(&mut self)->Option<HaltStatus>{self.halt_status.take()}
+    /// The last step of SER_DBG_INFO a check saw, not yet taken (213-DRV-0091).
+    pub(crate) fn take_ser_step(&mut self)->Option<SerStep>{self.ser_step.take()}
+    /// RXQ's and RPQ's polls since the last minute line, taken (213-DRV-0091).
+    pub(crate) fn take_polls(&mut self)->[crate::rx::Polls;2]{self.session.rings.take_polls()}
     /// The oldest firmware error code read and not yet taken (213-DRV-0091).
     pub(crate) fn take_firmware_error(&mut self)->Option<FirmwareError>{
         if self.firmware_pending==0{return None}
@@ -547,6 +743,43 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         let bus=&mut *self.session.bus;Snapshot(SNAPSHOT.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)))
     }
     /// PROBE's registers as they are now (213-DRV-0090).
+    /// 213-DRV-0091: HELD_MAC and HELD_BB, read directly.
+    pub(crate) fn held(&mut self)->Held{
+        let bus=&mut *self.session.bus;
+        Held{mac:HELD_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX)),bb:HELD_BB.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))}
+    }
+    /// 213-DRV-0102: the detection floor's four BB registers (detection_floor::REGISTERS order).
+    pub(crate) fn floor_registers(&mut self)->[u32;4]{
+        let bus=&mut *self.session.bus;
+        FLOOR_REGISTERS.map(|at|io::read32(bus,0x10000+at).unwrap_or(u32::MAX))
+    }
+    /// 213-DRV-0102: fields of the detection floor written: (register, mask, value), every one, each read back on its own.
+    /// The registers (bits in FLOOR_REGISTERS' order) whose field reads otherwise, and of those the ones that read as
+    /// before the write; only an access fault ends the writes (boot 93: one field that did not read back left the rest).
+    pub(crate) fn write_floor(&mut self,fields:&[(usize,u32,u32)])->io::Result<FloorWrite>{
+        let bus=&mut *self.session.bus;let mut done=FloorWrite::default();
+        for &(at,mask,value) in fields{
+            let before=io::read32(bus,0x10000+at)?;bus.write32(0x10000+at,(before&!mask)|(value&mask))?;
+            let after=io::read32(bus,0x10000+at)?;
+            if after&mask!=value&mask{
+                let bit=FLOOR_REGISTERS.iter().position(|r|*r==at).map_or(0,|i|1u8<<i);
+                done.unread|=bit;if after&mask==before&mask{done.unchanged|=bit;}
+            }
+        }
+        Ok(done)
+    }
+    /// 213-DRV-0102: the minute's PPDU reports by signal, those with no RPL, the unparsed and the header over the RPL,
+    /// taken: the next minute's start at zero.
+    pub(crate) fn take_ppdu_rssi(&mut self)->([u32;17],[u32;17],u32,(i64,u32)){
+        let c=&mut self.counts;
+        (core::mem::take(&mut c.ppdu_rssi),core::mem::take(&mut c.ppdu_no_rpl),core::mem::take(&mut c.ppdu_unparsed),core::mem::take(&mut c.ofdm_header_over))
+    }
+    /// 213-DRV-0091: port 0's TSF, its high word read before and after the low one.
+    pub(crate) fn tsf(&mut self)->Option<u64>{
+        let bus=&mut *self.session.bus;
+        let high=io::read32(bus,0xc43c).ok()?;let low=io::read32(bus,0xc438).ok()?;
+        (io::read32(bus,0xc43c).ok()?==high).then_some(u64::from(high)<<32|u64::from(low))
+    }
     pub(crate) fn probe(&mut self)->Probe{
         let bus=&mut *self.session.bus;
         let mac=PROBE_MAC.map(|at|io::read32(bus,at).unwrap_or(u32::MAX));

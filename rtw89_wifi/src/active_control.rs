@@ -69,6 +69,22 @@ impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
             },
         }
     }
+    /// Port 0 set for the link (213-DRV-0091 step 2) or for none, under the same admission as `connect`.
+    pub(crate) fn port_link(&mut self,linked:bool,timeout_us:u32)->Result<(),Failure>{
+        Self::request(timeout_us)?;
+        if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
+        let deadline=match self.deadline(timeout_us).and_then(|d|{let d=self.live(d)?;self.reconcile(d)?;Ok(d)}){
+            Ok(deadline)=>deadline,Err(cause)=>return Err(self.runtime_failure(cause)),
+        };
+        let mut update=FilterChange{session:&mut self.session,queue:self.queue,counts:&mut self.counts,
+            attempt:self.prepared.tuned.attempt,command:self.prepared.command,channel:self.prepared.tuned.channel,
+            policy:self.prepared.tuned.policy_version,board_mac:self.prepared.board.identity.mac,deadline};
+        match self.prepared.station.port(&mut update,linked){
+            Ok(())=>self.reconcile(deadline).map(|_|()).map_err(|cause|self.runtime_failure(cause)),Err(station::FilterFailure{stage,cause,..})=>{
+                let mut failure=self.runtime_failure(cause);failure.stage=Stage::Filter(stage);Err(failure)
+            },
+        }
+    }
     /// The existing raw-six-byte wlanhw policy is retained; publication follows actual CAM completion and epoch drain.
     pub(crate) fn set_filter(&mut self,all_beacons:bool,bssid:[u8;6],own:[u8;6],timeout_us:u32)->Result<(),Failure>{
         Self::request(timeout_us)?;

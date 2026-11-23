@@ -1,6 +1,6 @@
 //! Active CAM/filter update through the sealed packet-mode owner; no standalone transport callback.
 
-use super::{cam,cam_for,field,join_info,rx_filter,Filter,Prepared,Stage,RX_FILTER,RX_FILTER_MASK};
+use super::{cam,cam_for,field,join_info,port_link,rx_filter,Filter,Prepared,Stage,RX_FILTER,RX_FILTER_MASK};
 use crate::{btc_session::{DeviceIo,data_mode::{Cause,FilterChange}},io::Fault};
 
 #[derive(Debug)]
@@ -46,5 +46,23 @@ impl Prepared{
             })).map_err(|cause|check_failure.map_or(cause,Cause::Station))?;Ok(())
         })();
         result.map_err(|cause|FilterFailure{stage,cause,selector_restore})
+    }
+    /// Port 0 set for INFRA (`linked`) or for NO_LINK again (213-DRV-0091 step 2), then the station's registers checked
+    /// against it.
+    pub(crate) fn port<B:DeviceIo>(&mut self,update:&mut FilterChange<'_,'_,'_,'_,'_,B>,linked:bool)->Result<(),FilterFailure>{
+        let bare=|cause|FilterFailure{stage:Stage::Guard,cause,selector_restore:None};
+        let Some(filter)=self.filter else{return Err(bare(Cause::State))};
+        if self.attempt==0||self.session==0||self.attempt!=update.attempt()||self.session!=update.session()
+            ||self.channel!=update.channel()||self.policy_version!=update.policy_version()||self.mac!=update.physical_board_mac()
+            {return Err(bare(Cause::Identity));}
+        let mut stage=Stage::Port;let mut selector_restore=None;let was=self.linked;
+        let result=(||{
+            update.registers(|bus|port_link(bus,linked))?;self.linked=linked;
+            stage=Stage::Verify;let mut check_failure=None;
+            update.registers(|bus|self.check_registers_for(bus,Some(filter)).map_err(|e|{
+                selector_restore=e.selector_restore;check_failure=Some(e);e.cause
+            })).map_err(|cause|check_failure.map_or(cause,Cause::Station))?;Ok(())
+        })();
+        result.map_err(|cause|{self.linked=was;FilterFailure{stage,cause,selector_restore}})
     }
 }
