@@ -29,8 +29,8 @@ Such a reader is slow, not gone. 000-KRN-0030's bound still holds for one that w
 
 - [x] Builds for x86 and aarch64.
 - [x] The `services` suite's 12 KiB `cat` and its `dmesg` check pass, on 4 CPUs and on 1 CPU (QEMU x86, locally, 2026-11-23).
-- [ ] The `shell` suite passes: background programs still print.
-- [ ] The `vfs` suite passes.
+- [x] The `shell` suite passes: background programs still print (QEMU x86, 4 CPUs, locally (2026-11-23), on a tree of main 96d9b7ae00 with 000-KRN-0276, 0277, 213-KRN-0278, 801-NET-0093 and 0094).
+- [x] The `vfs` suite passes (the same run). The failure DRV saw once in six was not reproduced: this says the change breaks nothing, not that it mends the failure.
 - [x] `docs/api` describes the `LOG` row as it now is.
 
 ## Related
