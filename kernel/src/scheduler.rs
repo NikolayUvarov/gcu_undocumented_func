@@ -19,6 +19,7 @@ const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
 // A console read within this long pushes back on its writer (LOG takes only what fits); an application counts as read from its start.
+// A reader still waiting for the CPU after it, with less than this much of its own run time since, pushes back too (000-KRN-0277).
 const CONSOLE_READER_NS: u64 = 1_000_000_000;
 // The longest a task is held for the compositor's copy (000-KRN-0086): a bound for a compositor that neither releases
 // nor waits. A hold also ends when the compositor waits or ends, so a loaded machine that stops the compositor's CPU
@@ -101,7 +102,7 @@ struct Task {
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     // due_ms: the end of a timed wait that ended and has not run since; found_ms: when the tick saw it (000-KRN-0276).
     runs: u64, ticks: u64, due_ms: u64, found_ms: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64,
+    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64, console_reader: (usize, u64, u64),
     text: Option<alloc::boxed::Box<Text, Frames>>, // its text input, if it was started with one (SPAWN_TEXT)
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
     cspace: Vec<Option<Capability>, Frames>, generations: Vec<u32, Frames>,
@@ -1060,7 +1061,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, due_ms: 0, found_ms: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, due_ms: 0, found_ms: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, console_reader: (0, 0, 0), text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
         // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
         // after the last fallible step (issue 168, 171-KRN-0032).
         task.kernel = kernel_bytes(&task);
@@ -1505,8 +1506,9 @@ impl Scheduler {
             SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ => {
                 let (address, capacity) = (request.msg[0], request.msg[1].min(4096));
                 let console = request.syscall_num == SYSCALL_CONSOLE_READ;
+                let reader = self.tasks[slot].as_ref().map_or((0, 0, 0), |t| (slot, t.pid, t.run_ns));
                 let queue = match self.find(request.arg1 as u64) {
-                    Some(target) => { let t = self.tasks[target].as_mut().unwrap(); if console { t.console_read_ns = crate::clock::now_ns(); &mut t.console } else { &mut t.log } }
+                    Some(target) => { let t = self.tasks[target].as_mut().unwrap(); if console { t.console_read_ns = crate::clock::now_ns(); t.console_reader = reader; &mut t.console } else { &mut t.log } }
                     // The last focused or screenless program that exited: its unread output (for TASK_LOGS too, so a
                     // background console program's output can be read after it ended).
                     None => match self.exited_console.as_mut() { Some((pid, queue)) if *pid == request.arg1 as u64 => queue, _ => return Err(ERR_NOT_FOUND) },
@@ -1567,7 +1569,10 @@ impl Scheduler {
             SYSCALL_LOG => {
                 // Kept twice: LOGS drains `log`, the focus owner mirrors `console` of the focused task.
                 // A console its reader drained within the last second takes only what fits; the caller sends the rest again.
-                let reader = task.console_read_ns != 0 && crate::clock::now_ns().saturating_sub(task.console_read_ns) < CONSOLE_READER_NS;
+                // So does one whose reader is ready but has had under a second of the CPU since (000-KRN-0277): slow, not gone.
+                let (at, pid, ran) = task.console_reader;
+                let waiting = at != slot && (*(*tasks).ptr(at)).as_ref().is_some_and(|r| r.pid == pid && r.state == State::Ready && r.run_ns.saturating_sub(ran) < CONSOLE_READER_NS);
+                let reader = task.console_read_ns != 0 && (crate::clock::now_ns().saturating_sub(task.console_read_ns) < CONSOLE_READER_NS || waiting);
                 let length = if reader { request.arg2.min(4096).min(task.console.room()) } else { request.arg2.min(4096) };
                 if !task.space.validate_read(request.arg1, length) { Err(ERR_INVALID) } else {
                     // Until a task takes the screen, logs also go there in chunks (211-KRN-0017): a machine without COM1
