@@ -99,7 +99,8 @@ type TaskBox = alloc::boxed::Box<Task, Frames>;
 struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
-    runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
+    // due_ms: the end of a timed wait that ended and has not run since; found_ms: when the tick saw it (000-KRN-0276).
+    runs: u64, ticks: u64, due_ms: u64, found_ms: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64,
     text: Option<alloc::boxed::Box<Text, Frames>>, // its text input, if it was started with one (SPAWN_TEXT)
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
@@ -153,6 +154,17 @@ struct IrqBinding { ep: usize, slot: usize, pid: u64, pending: bool, unacked: bo
 #[derive(Clone, Copy)]
 struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
 const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
+// Timed waits that ran more than LATE_MS after their end, by where the time went, over a minute (000-KRN-0276).
+#[derive(Clone, Copy)]
+struct Lateness {
+    minute: u64, waits: u32, late: u32, most_ms: u64, most_pid: u64, most_cpu: usize, found_late: u32,
+    idle_ipi: u32, ipi_most_ms: u64, to_ipi_most_ms: u64, idle_other: u32, behind: u32, behind_most_ms: u64, behind_pid: u64, sent: u32, held: u32,
+}
+impl Lateness {
+    const NONE: Lateness = Lateness { minute: 0, waits: 0, late: 0, most_ms: 0, most_pid: 0, most_cpu: 0, found_late: 0, idle_ipi: 0, ipi_most_ms: 0, to_ipi_most_ms: 0, idle_other: 0, behind: 0, behind_most_ms: 0, behind_pid: 0, sent: 0, held: 0 };
+}
+const LATE_MS: u64 = 2;
+
 struct Scheduler {
     boot: BootInfo, tasks: Table<TaskBox>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
@@ -162,7 +174,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize, u64); EXIT_STATUSES], ended_next: usize, // (PID, reason, spawner's PID) of the last tasks that ended (EXIT_STATUS)
-    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
+    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], woken_at: [u64; cpu::MAX], late: Lateness, readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
     on_cpu: [Vec<usize>; cpu::MAX], // each CPU's task slots in order, sized to them: added at spawn, removed at reap
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
@@ -247,7 +259,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], woken_at: [0; cpu::MAX], late: Lateness::NONE, readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
     crate::serial_only(&alloc::format!("MIND CORE KERNEL: TASK STATES AT {:#X}, {} BYTES, EACH SECOND\n", core::ptr::addr_of!(STATES) as usize, STATES_BYTES));
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
@@ -268,7 +280,7 @@ impl Scheduler {
         if let Some(t) = self.tasks[slot].as_ref().filter(|t| t.pid == pid && t.state == State::Ready) { self.readied.mark(t.cpu); }
     }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
-        let current = self.current[cpu]; self.woken[cpu] = false;
+        let current = self.current[cpu]; let woken = core::mem::replace(&mut self.woken[cpu], false);
         // Every select reloads CR3, which completes a pending TLB flush of this CPU.
         if core::mem::take(&mut self.flush[cpu]) && !self.flush.iter().any(|&f| f) {
             for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; self.readied.mark(task.cpu); } }
@@ -307,12 +319,41 @@ impl Scheduler {
         };
         self.on_cpu[cpu] = mine;
         self.current[cpu] = next;
+        if next != 0 { self.note_late(next, cpu, current, woken); }
         if next != 0 && self.tasks[next].as_ref().is_some_and(|t| t.band == BAND_SYSTEM as u8) { self.readied.mark(cpu); }
         let (pid, name) = if next == 0 { (0, [0u8; 16]) } else { let task = self.tasks[next].as_ref().unwrap(); let mut name = [0u8; 16]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]); (task.pid, name) };
         for (word, value) in cpu::RUNNING[cpu].iter().zip([pid, u64::from_le_bytes(name[..8].try_into().unwrap()), u64::from_le_bytes(name[8..].try_into().unwrap())]) { word.store(value, Ordering::Relaxed); }
         if next != current { self.accounting.switches[cpu] += 1; }
         MAILBOX[cpu].store(if next == 0 { 0 } else { self.mailbox(next) as usize }, Ordering::Release);
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
+    }
+    // A task whose timed wait ended runs now: how late, and where the time went (000-KRN-0276). `before` ran on this CPU
+    // (0: it was idle) and `woken` says a wake IPI was pending for it.
+    fn note_late(&mut self, next: usize, cpu: usize, before: usize, woken: bool) {
+        let Some(task) = self.tasks[next].as_mut() else { return };
+        if task.due_ms == 0 { return; }
+        let (due, found, pid) = (core::mem::take(&mut task.due_ms), task.found_ms, task.pid);
+        let now = interrupts::milliseconds(); let late = now.saturating_sub(due);
+        let behind_pid = self.tasks[before].as_ref().map_or(0, |t| t.pid);
+        let l = &mut self.late; l.waits += 1;
+        if late <= LATE_MS { return; }
+        l.late += 1;
+        if late > l.most_ms { l.most_ms = late; l.most_pid = pid; l.most_cpu = cpu; }
+        if found.saturating_sub(due) > 1 { l.found_late += 1; }
+        else if before == 0 && woken {
+            l.idle_ipi += 1; l.ipi_most_ms = l.ipi_most_ms.max(now.saturating_sub(self.woken_at[cpu]));
+            l.to_ipi_most_ms = l.to_ipi_most_ms.max(self.woken_at[cpu].saturating_sub(due));
+        }
+        else if before == 0 { l.idle_other += 1; }
+        else { l.behind += 1; if late >= l.behind_most_ms { l.behind_most_ms = late; l.behind_pid = behind_pid; } }
+    }
+    // A minute's late timed waits, kept in the ring when there were any (000-KRN-0276).
+    fn report_late(&mut self, now: u64) {
+        let l = core::mem::replace(&mut self.late, Lateness { minute: now / 60_000, ..Lateness::NONE });
+        if l.late == 0 { return; }
+        let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!(
+            "MIND CORE KERNEL: TIMED WAITS IN A MINUTE: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING\n",
+            l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held));
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again.
     // After an event only the CPUs in `readied` are looked at; the boot CPU's tick looks at every task (`every`), which
@@ -330,7 +371,10 @@ impl Scheduler {
         if ready.is_empty() { return; }
         self.move_waiting(&mut ready, count);
         for other in 0..count {
-            if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
+            if !(ready.has(other) && other != this && self.current[other] == 0) { continue; }
+            if self.woken[other] { self.late.held += 1; continue; }
+            self.woken[other] = true; self.woken_at[other] = interrupts::milliseconds(); self.late.sent += 1;
+            unsafe { cpu::wake(other); }
         }
     }
     // An application whose wait ended, ready on a CPU that runs a system-band task, runs on an idle CPU until it waits
@@ -376,11 +420,12 @@ impl Scheduler {
             for task in self.tasks.iter_mut().flatten() {
                 let State::Sleeping(deadline) = task.state else { continue };
                 task.state.wake(ns);
-                if task.state == State::Ready { self.readied.mark(task.cpu); } else { self.next_wake = self.next_wake.min(deadline); }
+                if task.state == State::Ready { self.readied.mark(task.cpu); task.due_ms = now.max(1); task.found_ms = now; } else { self.next_wake = self.next_wake.min(deadline); }
             }
         }
         if now >= self.next_expiry { self.expire(now); }
         if now / 1000 != self.states_second { self.states_second = now / 1000; self.write_states(now); }
+        if now / 60_000 != self.late.minute { self.report_late(now); }
         if let Some((_, pid, _, _)) = self.held.filter(|&(_, _, since, _)| ns.saturating_sub(since) >= HOLD_NS) {
             // Kept in the ring, not printed: under load it came in the middle of the echo of a typed command.
             let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!("MIND CORE KERNEL: PID {} HELD FOR THE COMPOSITOR'S COPY {} MS, LET GO\n", pid, HOLD_NS / 1_000_000));
@@ -578,7 +623,7 @@ impl Scheduler {
             // A late reply finds the caller no longer waiting for this call number and fails with ERR_PEER.
             if let State::BlockedSend(ep) | State::BlockedRecv(ep) = task.state { self.accounting.endpoint[ep].timeouts += 1; }
             let task = self.tasks[slot].as_mut().unwrap();
-            task.state = State::Ready; let send = task.pending_cap.take(); task.deadline = 0; woken = true; self.readied.mark(task.cpu); self.forget_send(send);
+            task.state = State::Ready; let send = task.pending_cap.take(); task.due_ms = task.deadline; task.found_ms = now; task.deadline = 0; woken = true; self.readied.mark(task.cpu); self.forget_send(send);
             unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), ERR_TIMEOUT); }
         }
         woken
@@ -1011,7 +1056,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, due_ms: 0, found_ms: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, program, worker_of: worker.map(|w| w.creator), kernel: 0, ran_out: true, home: cpu }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
         // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
         // after the last fallible step (issue 168, 171-KRN-0032).
         task.kernel = kernel_bytes(&task);
