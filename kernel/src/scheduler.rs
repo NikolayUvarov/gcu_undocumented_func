@@ -351,9 +351,12 @@ impl Scheduler {
     fn report_late(&mut self, now: u64) {
         let l = core::mem::replace(&mut self.late, Lateness { minute: now / 60_000, ..Lateness::NONE });
         if l.late == 0 { return; }
-        let _ = core::fmt::Write::write_fmt(&mut crate::klog::Kept, format_args!(
-            "MIND CORE KERNEL: TIMED WAITS IN A MINUTE: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING\n",
-            l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held));
+        let line = alloc::format!(
+            "MIND CORE KERNEL: TIMED WAITS IN MINUTE {}: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING\n",
+            l.minute, l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held);
+        // Kept, and in init's log too: after boot nothing reads the kept lines, and init's reach the system log.
+        crate::klog::keep(&line);
+        if let Some(init) = self.tasks.iter_mut().flatten().find(|t| t.pid == 1) { for byte in line.bytes() { init.log.push(byte); } }
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again.
     // After an event only the CPUs in `readied` are looked at; the boot CPU's tick looks at every task (`every`), which
