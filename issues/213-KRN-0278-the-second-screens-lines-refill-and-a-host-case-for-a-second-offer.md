@@ -29,7 +29,7 @@ After about a dozen plugs the compositor would fall silent. On a bench run, or o
 
 - [x] The compositor builds for x86 and aarch64.
 - [x] The host cases pass, and `tests/compositor_mirror_host.rs` still does.
-- [ ] The `display` suite passes (the shell's `screen second`, no driver offers a screen in QEMU).
+- [x] The `display` suite passes (the shell's `screen second`, no driver offers a screen in QEMU): QEMU x86, 4 CPUs, locally (2026-11-23), on a tree of main 96d9b7ae00 with 000-KRN-0276, 0277, 213-KRN-0278, 801-NET-0093 and 0094.
 - [ ] On the Ryzen with 213-DRV-0096 (DRV, the maintainer at the plug, MC-12.1): each plug and unplug has its line, with the new size.
 
 ## Related
