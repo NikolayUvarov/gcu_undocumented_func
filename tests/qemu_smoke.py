@@ -16872,9 +16872,31 @@ class _Bench(socketserver.StreamRequestHandler):
             self.wfile.write(f"OK {count}\n".encode())
 
 
-def _bench_server(host):
+class _HeldBench(_Bench):
+    # An upload's reader that stops after its first 64 KiB for 25 s, its socket's buffer small (801-NET-0093): once the
+    # host's buffers and QEMU's user networking are full (some MiB), the window closes and the guest's send stops.
+    def handle(self):
+        command, count = self.rfile.readline().split()
+        if command == b"DOWN":
+            self.wfile.write(bytes(int(count))); return
+        count = int(count)
+        first = self.rfile.read(min(count, 65536))
+        time.sleep(25)
+        count -= len(first)
+        while count > 0:
+            data = self.rfile.read(min(count, 65536))
+            if not data:
+                return
+            count -= len(data)
+        self.wfile.write(f"OK {count}\n".encode())
+
+
+def _bench_server(host, handler=_Bench):
     # netbench's host side: TCP on a free port and a UDP echo on the same port number.
-    tcp = socketserver.ThreadingTCPServer((host, 0), _Bench)
+    tcp = socketserver.ThreadingTCPServer((host, 0), handler, bind_and_activate=False)
+    if handler is _HeldBench:
+        tcp.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    tcp.server_bind(); tcp.server_activate()
     tcp.daemon_threads = True
     threading.Thread(target=tcp.serve_forever, daemon=True).start()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -16891,6 +16913,38 @@ def _bench_server(host):
     return tcp, udp
 
 
+def held_upload_check(vm, port):
+    """801-NET-0093: an upload whose reader stops is named once in netstack's log after 5 s with nothing acknowledged,
+    with the bytes queued, the segments handed to the card since the last acknowledged byte and the peer's window
+    field (0: the peer holds it), and again when bytes are acknowledged; the upload completes."""
+    stopped = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:" + str(port) + r": NOTHING ACKNOWLEDGED FOR (\d+) MS WITH "
+                         r"([1-9]\d*) BYTES QUEUED \(ESTABLISHED\): SINCE THE LAST, (\d+) SEGMENTS HANDED TO THE CARD, (\d+) WITH DATA, "
+                         r"(\d+) OF THEM REFUSED; THE PEER'S LAST WINDOW FIELD (\d+) \((\d+) MS AGO\)")
+    log = ""  # `logs` drains: the lines since its last call are kept here
+    log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+    require(vm.command(f"run netbench 10.0.2.2:{port} 8 &"), "NAME=netbench BACKGROUND")
+    for _ in range(160):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if stopped.search(log):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("no stop named", log[-1500:], vm.command("ps", raw=True)[-800:], vm.command("dmesg -s netstack", raw=True)[-2500:]))
+    line = stopped.search(log)
+    assert int(line[2]) >= 5000 and int(line[7]) == 0, line[0]
+    for _ in range(240):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if f"[NETSTACK] TCP SOCKET {line[1]}: BYTES ACKNOWLEDGED AGAIN AFTER" in log and not re.search(r"^\d+ netbench ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the upload did not go on", log[-2000:]))
+    assert len(stopped.findall(log)) == 1, [m[0] for m in stopped.finditer(log)]
+    print(f"  {line[0]}", flush=True)
+    print(f"PASS: an upload whose reader stops is named once after 5 s with {line[3]} bytes queued and the peer's window field 0, "
+          "and again when bytes are acknowledged; it completes", flush=True)
+
+
 def netbench_suite(args, disk):
     # Network stack benchmark (issue 106): TCP down/upload and UDP round trips through virtio_net and netstack, with
     # the CPU time of the stack and the drivers. The numbers are printed (and recorded in docs/profile/network.md); the
@@ -16898,8 +16952,10 @@ def netbench_suite(args, disk):
     # no offloads; with --tap (a tap interface at 10.0.2.2/24 on the host, see .github/workflows/ci.yml) the card offers
     # checksum offload and both settings are measured (the host's TCP drops segments with a wrong checksum).
     tcp, udp = _bench_server("10.0.2.2" if args.tap else "127.0.0.1")
-    port = tcp.server_address[1]
-    (disk / "netpolicy.txt").write_text(f"netbench 10.0.2.2 tcp {port} 3600 1000000000\nnetbench 10.0.2.2 udp {port}\n")
+    held, held_udp = _bench_server("10.0.2.2" if args.tap else "127.0.0.1", _HeldBench)
+    port, held_port = tcp.server_address[1], held.server_address[1]
+    (disk / "netpolicy.txt").write_text(f"netbench 10.0.2.2 tcp {port} 3600 1000000000\nnetbench 10.0.2.2 udp {port}\n"
+                                        f"netbench 10.0.2.2 tcp {held_port} 3600 1000000000\nnetbench 10.0.2.2 udp {held_port}\n")
     backend = f"tap,id=n0,ifname={args.tap},script=no,downscript=no,vnet_hdr=on" if args.tap else "user,id=n0"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", backend, "-device", "virtio-net-pci,netdev=n0"])
     try:
@@ -16918,9 +16974,10 @@ def netbench_suite(args, disk):
                 assert re.search(r"NETBENCH UDP 500 OF 500 ROUND TRIPS", output), output
                 for line in re.findall(r"NETBENCH .*", output):
                     print(f"  offload {offload} run {run + 1}: " + line.strip(), flush=True)
+        held_upload_check(vm, held_port)
     finally:
         vm.close()
-        tcp.shutdown(); udp.close()
+        tcp.shutdown(); udp.close(); held.shutdown(); held_udp.close()
     print(f"PASS: netbench ({'tap, checksum offload offered' if args.tap else 'user networking, no offloads offered'}): TCP download and "
           "upload, UDP round trips, CPU time of netstack and the drivers, offload off and on", flush=True)
 
