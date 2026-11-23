@@ -753,7 +753,13 @@ pub enum Step {
     Watch { frames: u32 },
     /// Stage 16: the surface offered to the compositor as the second screen (213-KRN-0272, `display.wit` 1.3).
     Offer,
+    /// At least `us` microseconds before the next step: a reset bit held, which no status shows (213-DRV-0098).
+    Hold { us: u32 },
 }
+
+/// How long DIG_START holds the front end's FIFO in reset: Display Core holds it 1 us (`udelay(1)`,
+/// dcn20_stream_encoder.c); the survey's log held it about 21 ms (boot 81), the production order this.
+pub const DIG_START_HOLD_US: u32 = 10;
 
 /// First light's stages, in order: what `Step::Begin(n)` opens (step 3 of 213-DRV-0086 lets them go one at a time).
 /// Step 3's stages 1 to 8 (first light), then step 4's from 9 (213-DRV-0092: MIND Core's picture on the second output).
@@ -980,6 +986,7 @@ pub fn first_light(pipe: Pipe, output: Output, timing: &Timing, signal: Signal, 
     }))?;
     // The front end's FIFO started once its clock runs (the DIG_START pulse of the DCN 1 stream encoder).
     plan.update(reg(DigFeCntl, d)?, &[(DIG_START, 1)])?;
+    plan.push(Step::Hold { us: DIG_START_HOLD_US })?;
     plan.update(reg(DigFeCntl, d)?, &[(DIG_START, 0)])?;
     Ok(plan)
 }
