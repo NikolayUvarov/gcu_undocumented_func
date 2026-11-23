@@ -197,10 +197,19 @@ This holds for that machine, those cameras and that release (MC-12.1).
   - **What the next run says** (written after that run, not run yet):
     - `usb_host` says each time a bulk ring stood empty: when, for how long, what its spill held, and the transfer or command `usb_host` waited for (`BULK RING EMPTY n AT s S: NO TD t MS, …; WAITING ON SLOT a ENDPOINT b FOR w MS`). Up to 64 such lines a stream, then counts. The stream's end adds `ITS RING STOOD EMPTY n TIMES, t MS IN ALL, AT MOST m MS`. This is the same tool as 000-DRV-0094's for isochronous rings.
     - `video_gw` asks the camera why (VS_STREAM_ERROR_CODE_CONTROL, GET_CUR) after a frame it marked in error, 8 times a stream at most, and says the codes at the close (`ITS ERROR CODE, ASKED n TIMES: …`). It stops asking once a request is not answered.
+  - **The cameras run of 2026-11-22 10:36–10:38 UTC** (release 202611220957; `video_gw` of 3eb13b74c; `usb_host` of 0cfbcf847, which puts TDs back during other transfers' waits too, 000-DRV-0094 step 2; raw lines in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`):
+    - **The cameras do not answer VS_STREAM_ERROR_CODE_CONTROL.** It was not answered once, and then not asked again.
+    - **Camera 0 at 640×480:** beside camera 1, 197 good and 7 broken (3 by error bit, 4 by size); alone, 198 good and 0 broken.
+    - **Camera 0 at 1280×720 at 10:** 111 good and 1 broken (overflow). The 07:12 run had 117 good and 20 broken, 16 by error bit.
+    - **Camera 1 at 320×240 for 45 s:** 1324 good and 1 broken. The 07:12 run had 1229 and 90.
+    - **The bulk rings** stood empty 1 to 5 times a stream, 0.1 ms at most, never in a wait.
+    - **A guess, not shown:** the camera's error bit nearly went once `usb_host` refilled during other devices' waits (the stick's log writes, a log read over the cable). It was one run each, and the light differed: camera 0 gave about 17 frames a second at 640×480, 25 at 07:12.
 - **A restarted `usb_host` left `video_gw` with stale cameras** (found on that run): the old entries stayed beside the new (`CAMERAS: 0 V, 1 V, 2 IR, 3 IR`), and "camera 1" named a handle of the old instance. Its probe answered not-found.
   - **The fix:** the client counts its attaches (`Host::attaches`, `libmind/src/usb.rs`), and each camera keeps the count it was claimed under. After its claims, `look` drops a camera of an earlier count (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`); a stream on it fails its next pump and is marked gone.
   - **On the Ryzen** (the run above, after `usb_host`'s `replace`): the first open after the restart still failed (`"GDZS-DC004-EFVT-IR": PROBE FAILED (NotFound)`), and the next look dropped both cameras (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`) and claimed them again, `CAMERAS: 0 V, 1 IR`. The first look after a restart only learns that the instance is new: its first claim is refused as invalid, and the attach comes at the next claim.
   - **The mend:** `look` claims once more at once after such a refusal, so that look already drops the old cameras. `Host::claim` itself stays as it is, since `usb_storage`'s recovery reads that refusal as a new instance. Not run on the Ryzen yet. No QEMU device is a camera.
+
+**For a successor:** the state on 2026-11-22, the branches, how the Ryzen runs are made and the helpers are in [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc).
 
 ## Related
 

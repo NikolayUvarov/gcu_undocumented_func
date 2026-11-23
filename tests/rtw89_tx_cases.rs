@@ -446,3 +446,57 @@ fn rpq_alone_finishes_a_data_frame_on_dma_and_rpq_and_keeps_the_management_queue
         assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));
     });
 }
+
+// 213-DRV-0104: a late frame parked on the ring is released by its sequence, in either order with the frame begun behind
+// it, and is final at that release: never resubmitted, a drop counting no try.
+#[test]
+fn a_parked_frame_is_released_by_its_sequence_in_either_order_and_never_resubmitted(){
+    for parked_first in [true,false]{run(|d,q,r,s,_|{q.rpq_alone();d.auto_firmware=false;d.auto_rpq=false;
+        q.begin(d,&frame(2,Some(0),false),12,3,0,100_000).unwrap();assert_eq!(cycle(q,d,r,s).unwrap(),None,"held: fetched, not released");
+        q.park().unwrap();assert!(q.parked()&&!q.pending_request());
+        q.begin(d,&frame(2,Some(0),false),12,3,0,100_000).unwrap();assert_eq!(d.published.len(),2);
+        let(a,b)=(d.published[0].clone(),d.published[1].clone());assert_eq!((a.seq,b.seq),(0,1));
+        let done=|completed:u8|Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:completed,raw_data_tx_count:1};
+        if parked_first{
+            d.inject(Device::report(&a,Status::Done));assert_eq!(cycle(q,d,r,s).unwrap(),None,"the report is the parked frame's");
+            assert_eq!(q.parked_release(d).unwrap(),Some(done(1)));assert!(!q.parked());
+            d.inject(Device::report(&b,Status::Done));assert_eq!(cycle(q,d,r,s).unwrap(),Some(done(1)));
+        }else{
+            d.inject(Device::report(&b,Status::Done));assert_eq!(cycle(q,d,r,s).unwrap(),Some(done(1)));assert_eq!(q.parked_release(d).unwrap(),None);
+            d.inject(Device::report(&a,Status::Done));q.begin(d,&frame(2,Some(0),false),12,1,0,100_000).unwrap();d.auto_rpq=true;
+            assert_eq!(q.poll(d,r,s).unwrap(),None,"the parked frame's report read by the next send's poll");
+            assert_eq!(q.parked_release(d).unwrap(),Some(done(1)));
+        }
+    });}
+    for(status,acked,raw)in[(Status::RetryLimit,false,1),(Status::MacIdDrop,false,0)]{run(|d,q,r,s,_|{q.rpq_alone();q.drop_unacked();d.auto_firmware=false;d.auto_rpq=false;
+        q.begin(d,&frame(2,Some(0),false),12,8,0,100_000).unwrap();assert_eq!(cycle(q,d,r,s).unwrap(),None);q.park().unwrap();
+        d.inject_last(status);q.begin(d,&frame(2,Some(0),false),12,1,0,100_000).unwrap();
+        assert_eq!(q.poll(d,r,s).unwrap(),None);
+        assert_eq!(q.parked_release(d).unwrap(),Some(Completion{status,acked,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:raw}));
+        assert_eq!(d.published.len(),2,"the parked frame was not submitted again");
+    });}
+}
+// 213-DRV-0104: one frame parked at a time; a frame whose firmware report is awaited (MGQ) is not parked; and no frame
+// is begun whose submissions would write the parked frame's buffer again, refused busy without poisoning the queue.
+#[test]
+fn one_frame_is_parked_at_a_time_management_never_and_its_buffer_is_kept(){
+    run(|d,q,r,s,_|{q.rpq_alone();d.auto_firmware=false;d.auto_rpq=false;
+        q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();assert_eq!(q.park(),Err(Error::State),"MGQ waits for its firmware report");
+        assert!(q.pending_request());d.firmware_last(Status::Done,1);d.inject_last(Status::Done);
+        assert!(matches!(cycle(q,d,r,s).unwrap(),Some(Completion{acked:true,..})),"not poisoned");
+        assert_eq!(q.park(),Err(Error::State),"nothing pending");
+        q.begin(d,&frame(2,Some(0),false),12,3,0,100_000).unwrap();assert_eq!(cycle(q,d,r,s).unwrap(),None);q.park().unwrap();
+        assert_eq!(q.park(),Err(Error::Busy),"one at a time");
+        let parked=d.published.last().unwrap().clone();
+        for n in 0..29{q.begin(d,&frame(2,Some(0),false),12,1,0,100_000).unwrap();d.inject_last(Status::Done);
+            assert!(matches!(cycle(q,d,r,s).unwrap(),Some(Completion{acked:true,..})),"{n}");}
+        assert_eq!(q.begin(d,&frame(2,Some(0),false),12,2,0,100_000),Err(Error::Busy),"two submissions would reach the parked buffer");
+        q.begin(d,&frame(2,Some(0),false),12,1,0,100_000).unwrap();d.inject_last(Status::Done);assert!(cycle(q,d,r,s).unwrap().is_some());
+        assert_eq!(q.begin(d,&frame(2,Some(0),false),12,1,0,100_000),Err(Error::Busy),"its buffer is next");
+        // Its release read with no send pending, as the data mode's polls read it, frees the buffer.
+        d.inject(Device::report(&parked,Status::Done));let outcome=r.receive(d,rx::Channel::Rpq,s,100_000).unwrap();
+        let now=d.now;assert_eq!(q.ingest(now,rx::Channel::Rpq,outcome,s).unwrap(),Receive::Rpq);
+        assert!(matches!(q.parked_release(d).unwrap(),Some(Completion{acked:true,..})));
+        q.begin(d,&frame(2,Some(0),false),12,2,0,100_000).unwrap();
+    });
+}
