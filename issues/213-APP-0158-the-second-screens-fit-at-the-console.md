@@ -38,7 +38,7 @@ The compositor can show the first screen on the second in its own shape or stret
 - **Returned by DRV** (`APP/2026-11-22T1355Z-DRV-re-screen-second-is-on-the-ryzen-and-screen-second-rewrites-the-whole-of-displays-txt.md` on `internal-dev-messages`), before the Ryzen's run: a choice wrote the file anew with only its own line, against this plan's "a line the shell does not know is left for that layout". A line of 177's layout or of 213-DRV-0099 would have gone with it.
   - **The fix:** `screens::updated` replaces the `second keep|stretch` lines the shell reads with one, or adds it, and keeps every other line as it was, a `second` line it does not read among them; a file that is not there is written with the comment and the line. The shell reads the whole file, not its first KiB as before, and refuses one longer than 8 KiB (`NOT KEPT: … LONGER THAN 8 KIB`) rather than cut it.
   - **Tested:** `tests/shell_host.rs`'s `the_second_screens_fit_shown_set_and_kept` with other lines, one added, two lines made one, a `second extend` line kept, and an empty file (44 tests pass).
-  - **The shell suite's `screen_check`** now writes a line `output second light` first and checks that it is still in the file after `stretch` and after `keep`; its run in this container is under way.
+  - **The shell suite's `screen_check`** now writes a line `output second light` first and checks that it is still in the file after `stretch` and after `keep`. The suite passes in this container, x86_64, 4 CPUs (18 checks).
 - **Left:** the Ryzen's two monitors, where `stretch` must fill the second and `keep` show the first's shape (MC-12.1: QEMU has one screen).
 
 ## Related

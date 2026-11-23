@@ -74,21 +74,87 @@ it until the next boot.
     - a bounce while dark does nothing;
     - eight seconds plugged in run steps 1 to 4 again, with the first start's writes and offer.
 
+**A monitor in standby, or switched off at its button** (the owner session's question, 2026-11-22, for the maintainer):
+- **What `HOTPLUG` does if HPD 1 drops:** the same as an unplug. `display` cannot tell the two apart: it reads only the
+  sense.
+  - **The take-back:** once the sense has read 0 for 500 ms, `screen_gone`, then stages 16 to 1 undone, which turns
+    PHY A off by table 76's DISABLE and its PLL by table 12 at pixel clock 0. The mark is cleared, and the output is
+    dark.
+  - **The run again:** when the sense reads 1 again for 500 ms, steps 1 to 4 run again, about 6 s by boots 84 to 89, and
+    the compositor gets a new offer.
+  - **An EDID not ready:** if the monitor does not answer on DDC yet when HPD rises, step 2 fails and the mode falls
+    back to 1920x1080. The output stays so until the next unplug.
+- **If HPD 1 stays up in standby:** `HOTPLUG` does nothing. Pipe 1 goes on sending, and the monitor shows the picture
+  when it wakes.
+- **What the logs tell:**
+  - Every boot logged so far read HPD 1's sense as 1 in step 1's batch 1 (`B1 HPD SENSE 1:1 2:0 3:0 4:1 5:0`). That is
+    every survey log from 2026-11-21 19:08 to boot 81, among them the night's (night-ring, b8-ring, boot-after-restart
+    at 05:12, watched-run at 04:42).
+  - At each of them HDMI-A-1 had no signal from MIND Core until stage 8. The firmware lights only DP-2, and the reboot
+    from Linux left it dark for many seconds before batch 1's read at about 9 s. So the monitor may well have been in its
+    own no-signal standby at the read with HPD up, but no log says it was asleep.
+  - The production boots from 84 do not log batch 1's values. They passed `assess`, which refuses with
+    `HPD 1 SENSES NO MONITOR`, so the sense was 1 at each.
+  - **No log was made with the monitor switched off at its button.** What this monitor (TRG `KQ34C144C`) does with HPD
+    then is not known.
+- **The undo on the hardware so far:** the take-back's undo of stages 8 to 1, with both off calls run to their end, ran
+  once (boot 70), and that of 14 to 1 once (boot 74). Both were at 1920x1080 in DVI. Nothing of it has run at
+  3440x1440 in HDMI, and nothing after stage 16 (`screen_gone`).
+- **The questions for the maintainer:**
+  1. Does the monitor drop HPD when it goes to standby on its own, or when switched off at its button? A boot with it
+     off, or a release with `HOTPLUG` while he switches it off and on and watches DP-2, would tell.
+  2. Is a full take-back and run again at each standby wanted, or should a monitor that is only asleep keep its pipe?
+     The latter would need a longer settle, or the EDID read again to tell a new monitor from the same one.
+
+**Boot 94 (2026-11-22, the release of 15:40 UTC: the bench tree 82e458e2f with a5c933530's `display`; `HOTPLUG` and
+`STANDING_CHECK` true, `SHORT_WATCH` false, the production order, the EDID's mode): the maintainer at the monitor.**
+From the boot's log to 1168 s, which the owner session keeps:
+- **At start:**
+  - `THE SECOND SCREEN OFFERED 6181.0 MS AFTER DISPLAY'S START`;
+  - at 9.627 s, `HPD 1 FOLLOWED EVERY 50 MS, A CHANGE COUNTED AFTER 500 MS: SENSE 1, THE SECOND OUTPUT Lit`.
+- **The cable out and in (the first event):**
+  - at 1044.701 s, `STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES 16 TO 1 (179 WRITES)`;
+  - `[COMPOSITOR] SECOND SCREEN GONE (PID 38)` 26 ms later;
+  - `STEP 3 TAKEN BACK IN 30.9 MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE UNCHANGED`.
+  - The plug was counted about 4.5 s later. Steps 1 to 4 ran again:
+    - the EDID read at once, the mode 3440x1440 in HDMI;
+    - S1 to S16 done, the firmware's pipe unchanged after each, table 12's short path;
+    - the watch clean;
+    - the compositor's `SECOND SCREEN 3440X1440 ... STRETCHED` at 1055.370 s, and at 1055.433 s `A MONITOR PLUGGED
+      IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`.
+- **The monitor switched off at its button (the second event):** HPD 1 went low for about 0.6 s, from about 1104.6 s.
+  - At 1105.113 s the take-back came, the same three lines, in 35.6 ms, the firmware's pipe unchanged.
+  - HPD was up again by about 1105.2 s, so the stages ran again: all 16 done, the watch clean, the compositor's offer
+    at 1111.872 s, Lit at 1111.935 s.
+  - No third event came by 1168 s. So by the log, this monitor pulsed HPD once, for about 0.6 s, at its button, and
+    otherwise held it up. Whether that pulse came at the switch-off, or covers both off and on, the maintainer did not
+    say.
+- **What the maintainer saw:** «при отключении hdma и выключении монитора в обоих случаях через некоторое время появилось
+  изображение заставки mind-core-os, а затем и отобразился обычный экран», then «первый экран не мограл, сейчас на них
+  одно и тоже исзображение».
+  - That is: in both cases, the cable out and the monitor off, after some time the second monitor showed MIND Core's
+    splash, then the usual screen. The first screen did not blink, and both now show the same picture.
+  - The splash is stage 10's picture during stage 15's 5 s watch, before stage 16's offer.
+- **The standing check (213-DRV-0103) ran beside it.** Its line at 1210.482 s, `567 CHECKS IN 10 MIN, THE LONGEST
+  12270 MS BETWEEN TWO`, counted the dark span between the cable's take-back and the relight as a gap. 0103 now counts
+  dark spans apart.
+
+This is that machine, with that monitor (TRG `KQ34C144C`), on that boot (MC-12.1, 12.9).
+
 **Not shown:**
-- **On the hardware, nothing of it.** It needs the maintainer's hands, and the owner session arranges the run.
-- **The sense on the Ryzen:** what HPD 1 reads while a monitor is unplugged, or switched off by its own button.
-- **The settle:** whether 500 ms suits the Ryzen's monitor.
-- **The compositor** taking `screen_gone` and then a second `offer_screen` in one boot. Its host cases are KRN's.
-- **`display`'s glue in main.rs** (the loop and the run kept): it is not built on the host. Its parts are: `hpd`,
-  `take_back`, `prepare`, and step 1 on the same engine.
+- another monitor, or this one's HPD at other moments: left off overnight, or in a no-signal standby while lit;
+- a plug with a different monitor, whose EDID gives another mode;
+- `display`'s glue in main.rs on the host (it is not built there). It has now run on the hardware twice each way.
 
 ## Acceptance criteria
 
 - [x] Host cases: an unplug after stage 16 gives `screen_gone`, then every register as before step 3; a plug in again
   runs the stages once more; a short bounce of HPD runs neither. `display_light_host.rs` (on the model, end to end with
   `hpd::Follow`, and with the Ryzen's tables) and `display_hpd_host.rs`.
-- [ ] On the Ryzen: the maintainer unplugs and plugs HDMI-A-1's monitor with MIND Core running. The screen goes and comes
-  back, and DP-2 stays as it is.
+- [x] On the Ryzen: the maintainer unplugs and plugs HDMI-A-1's monitor with MIND Core running. The screen goes and comes
+  back, and DP-2 stays as it is. Boot 94: the cable out and in, and the monitor switched off at its button, each taken
+  back in about 31 to 36 ms and lit again; DP-2's pipe unchanged by the log, and «первый экран не мограл» by the
+  maintainer. That machine and that monitor (MC-12.1).
 
 ## Related
 
