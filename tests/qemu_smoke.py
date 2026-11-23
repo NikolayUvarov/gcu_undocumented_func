@@ -2925,9 +2925,11 @@ def screen_check(vm):
     taken for the screens offered later and kept in data/displays.txt; a restarted shell sets it again from the file."""
     require(vm.command("screen second"), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE")
     require(vm.command("screen second wide"), "SCREEN: SCREEN SECOND SHOWS THE SECOND SCREEN; SCREEN SECOND KEEP|STRETCH")
+    # A line of another (213-DRV-0099's, the layout's) is kept when the fit is (DRV's report of 2026-11-22).
+    require(vm.command("write data/displays.txt output second light"), "WROTE")
     out = vm.command("screen second stretch")
     require_all(out, "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt", "SCREEN: NO SECOND SCREEN")
-    require(vm.command("cat data/displays.txt"), "second stretch")
+    require_all(vm.command("cat data/displays.txt"), "output second light", "second stretch")
     shell = vm.services()["shell"]
     vm.collect()
     vm.send(f"kill {shell}\n", raw=True)
@@ -2937,9 +2939,12 @@ def screen_check(vm):
         assert time.monotonic() < deadline, log[-1500:]
         time.sleep(1)
     require(vm.command("screen second keep"), "(SECOND KEEP), KEPT IN data/displays.txt")
+    kept = vm.command("cat data/displays.txt")
+    require_all(kept, "output second light", "second keep")
+    assert "second stretch" not in kept, kept
     require(vm.command("rm data/displays.txt"), "OK")
     print("PASS: screen (213-APP-0158): no second screen said; stretch taken and kept in data/displays.txt, set again by a "
-          "restarted shell; keep back; a fit it does not know refused", flush=True)
+          "restarted shell; keep back; another's line of the file kept; a fit it does not know refused", flush=True)
 
 
 def secret_line_check(vm):
