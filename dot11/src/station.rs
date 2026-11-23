@@ -437,6 +437,13 @@ impl Station {
         self.rates[at]
     }
 
+    /// What became of a unicast data frame sent at `rate` (801-NET-0095): as `sent`, for a frame the radio held back
+    /// while busy and that went later, when other frames may have had other rates meanwhile.
+    pub fn sent_rate(&mut self, rate: u8, acked: bool, attempts: u8) {
+        if let Some(at) = self.rates[..self.rate_count].iter().position(|&r| r == rate) { self.sent_at = at; }
+        self.sent(acked, attempts);
+    }
+
     /// What became of the last unicast data frame: acknowledged or not, after `attempts` tries (550-NET-0091). A frame
     /// no try delivered steps the rate down at once. Every RATE_WINDOW frames each rate's success per try joins its
     /// average, and the rate whose delivered frame takes the least airtime is chosen.
