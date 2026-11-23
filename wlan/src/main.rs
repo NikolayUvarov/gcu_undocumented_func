@@ -32,6 +32,11 @@ const RADIO: Endpoint = Endpoint(2);
 const KEYSTORE: Endpoint = Endpoint(3);
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 10;
+// While frames went or came within BUSY_MS, the loop waits BUSY_POLL_MS for a client: the 10 ms is for an idle station (801-NET-0094).
+const BUSY_MS: u64 = 50;
+const BUSY_POLL_MS: u32 = 1;
+// Radio frames a `receive` with an empty queue takes first, until one is for the stack (801-NET-0094).
+const RECEIVE_FIRST: usize = 4;
 // Received Ethernet frames kept for the stack and parked `wait` calls.
 const QUEUE: usize = 32;
 const WAITERS: usize = 4;
@@ -156,6 +161,8 @@ enum Try { Scanning(u32), Joining([u8; 32], usize, u32) }
 
 struct Wlan {
     station: Station,
+    // When a frame last went to the radio or came from it (801-NET-0094).
+    busy_ms: u64,
     deadline: Deadline,
     // Whether the radio has answered `info`: until then the station has no channels and answers no-device.
     radio: bool,
@@ -463,6 +470,7 @@ impl Wlan {
         if let Some(f) = out.filter {
             let _ = radio_call(self.deadline, || wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 }));
         }
+        if out.send.is_some() || out.deliver.is_some() { self.busy_ms = mind::time::uptime_ms() as u64; }
         if let Some((len, rate)) = out.send {
             let unicast_data = self.tx[0] & 0x0C == 0x08 && self.tx[4] & 1 == 0;
             match radio_call(self.deadline, || wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
@@ -551,6 +559,10 @@ impl Wlan {
                 net::reply_send(call, sent.map_err(|e| if e == dot11::Error::NoDevice { net::Error::NoDevice } else { net::Error::Invalid }))
             }
             net::Request::Receive => {
+                // Frames the radio holds first, so one that came since the last turn is answered now, not at the next ask.
+                if self.queue.count == 0 && self.radio && self.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some() {
+                    for _ in 0..RECEIVE_FIRST { if !self.pump_frame() || self.queue.count > 0 { break; } }
+                }
                 let mut frame = [0u8; ETHERNET_MAX];
                 match self.queue.pop(&mut frame) { Some(len) => net::reply_receive(call, Ok(&frame[..len])), None => net::reply_receive(call, Err(net::Error::Empty)) }
             }
@@ -870,7 +882,7 @@ fn main(_info: &'static BootInfo) {
     mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
     // Without a radio's client (started by hand, not by init with a radio) there is nothing to drive.
     if mind::dev::cap_info(RADIO.0).0 != mind::abi::CAP_KIND_ENDPOINT { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
-    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
+    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), busy_ms: 0, deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0),
@@ -902,7 +914,8 @@ fn main(_info: &'static BootInfo) {
                 _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE (NO DEVICE, OR NOT A WLANHW {}.X RADIO)", wlanhw::VERSION.0); mind::process::exit_with(1) }
             }
         }
-        let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
+        let busy = now.saturating_sub(wlan.busy_ms) < BUSY_MS;
+        let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if busy { BUSY_POLL_MS } else { POLL_MS });
         // Dispatch accepted calls before bulk work; a long handler cannot renew the shared two-second deadline.
         service_turn::run(&mut wlan, received, |wlan, received| {
             let Ok(request) = received else { return };
