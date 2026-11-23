@@ -81,7 +81,7 @@ X86_GROUPS=(
     "x86: network, TLS and Effector|$X86 --suites net,tls,effector,hub"
     "x86: a developer's release through the Effector agent|$X86 --suites effector-update"
     "x86: a release that loses the server, rolled back|$X86 --suites rollback"
-    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,usbaudio,link,modes"
+    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,usbaudio,usbload,link,modes"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,tablet,usb,ehci,nnd,iso,cameras"
     "x86: the window manager|$X86 --suites wm"

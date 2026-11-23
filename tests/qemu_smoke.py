@@ -2925,9 +2925,11 @@ def screen_check(vm):
     taken for the screens offered later and kept in data/displays.txt; a restarted shell sets it again from the file."""
     require(vm.command("screen second"), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE")
     require(vm.command("screen second wide"), "SCREEN: SCREEN SECOND SHOWS THE SECOND SCREEN; SCREEN SECOND KEEP|STRETCH")
+    # A line of another (213-DRV-0099's, the layout's) is kept when the fit is (DRV's report of 2026-11-22).
+    require(vm.command("write data/displays.txt output second light"), "WROTE")
     out = vm.command("screen second stretch")
     require_all(out, "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt", "SCREEN: NO SECOND SCREEN")
-    require(vm.command("cat data/displays.txt"), "second stretch")
+    require_all(vm.command("cat data/displays.txt"), "output second light", "second stretch")
     shell = vm.services()["shell"]
     vm.collect()
     vm.send(f"kill {shell}\n", raw=True)
@@ -2937,9 +2939,12 @@ def screen_check(vm):
         assert time.monotonic() < deadline, log[-1500:]
         time.sleep(1)
     require(vm.command("screen second keep"), "(SECOND KEEP), KEPT IN data/displays.txt")
+    kept = vm.command("cat data/displays.txt")
+    require_all(kept, "output second light", "second keep")
+    assert "second stretch" not in kept, kept
     require(vm.command("rm data/displays.txt"), "OK")
     print("PASS: screen (213-APP-0158): no second screen said; stretch taken and kept in data/displays.txt, set again by a "
-          "restarted shell; keep back; a fit it does not know refused", flush=True)
+          "restarted shell; keep back; another's line of the file kept; a fit it does not know refused", flush=True)
 
 
 def secret_line_check(vm):
@@ -11348,6 +11353,70 @@ def audiostub_check(args):
         finally:
             vm.close()
     print(f"PASS: audiostub duplex: no capture on QEMU's usb-audio, said; {ended[2]} frames of a 440 Hz tone played in {ended[1]} ms, and the marker line (000-DRV-0093)", flush=True)
+
+
+def usbload_suite(args):
+    """000-DRV-0101: usb_host answers a bulk transfer from its loop, so a stick's reads, a serial converter's writes and an
+    isochronous stream go on together. The image boots from a USB stick on QEMU's xHCI with usb_host built to answer
+    every bulk transfer from its loop (QEMU's end at once, so the default build would answer them on the spot). Beside
+    it, on a second xHCI (usb_host takes two), QEMU's usb-audio plays audiostub's tone for 20 s and QEMU's FT232 carries
+    MIND Link. While
+    the tone plays, the host reads the system log over the link, and the shell reads a 4 MiB file off the stick three
+    times: every read whole (its SHA-256), the link's read whole, the tone played to its end, and usb_host said it
+    answered from its loop."""
+    if not args.usb_defer_elf or not args.audio_elf:
+        print("SKIP: usbload: usb_host's defer-every-bulk build or tests/audio_stub is not built (scripts/x86_fixtures.sh)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: usbload needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    mindlink = mindlink_tool()
+
+    def link(port, *command):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command], capture_output=True, text=True, timeout=180)
+        return r.returncode, r.stdout + r.stderr
+
+    big = bytes(range(256)) * (4 << 12)  # 4 MiB
+    expected = hashlib.sha256(big).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="smoke-usbload-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"usb_host.elf": args.usb_defer_elf},
+                                    extra={"link.conf": b"baud=115200 dev\n", "audiostub.elf": Path(args.audio_elf).read_bytes(), "big.bin": big})
+        wav = Path(temp) / "load.wav"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), usb=True, raw=True, snapshot=False, audio="none", audio_card="HDA",
+                extra=["-audiodev", f"wav,id=lsnd,path={wav}", "-device", "qemu-xhci,id=lxhci", "-device", "usb-audio,bus=lxhci.0,audiodev=lsnd,id=uac",
+                       "-chardev", "pty,id=link", "-device", "usb-serial,bus=lxhci.0,chardev=link"])
+        try:
+            log = ""
+            for _ in range(20):
+                log += vm.service_logs("audio_gw", "ATTACHED")
+                if "ATTACHED" in log:
+                    break
+            require(log, "[AUDIO] USB")
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            started = re.search(r"PID=(\d+) NAME=audiostub BACKGROUND", vm.command("run audiostub duplex 20 440 &"))
+            assert started, vm.log[-2000:]
+            read = []
+            reader = threading.Thread(target=lambda: read.append(link(port, "log")))
+            reader.start()
+            digests = [re.findall(r"^([0-9a-f]{64})  big\.bin", vm.command("sha256 big.bin", raw=True, timeout=120), re.M) for _ in range(3)]
+            reader.join(timeout=200)
+            assert digests == [[expected]] * 3, (digests, expected)
+            assert read and read[0][0] == 0 and "[USB]" in read[0][1], read[:1]
+            out = ""
+            for _ in range(60):
+                out += vm.command(f"logs {started[1]}")
+                if "*** AUDIO DUPLEX Complete. Data collected ***" in out:
+                    break
+                time.sleep(.5)
+            ended = re.search(r"AUDIO STUB: ENDED AT \d+ MS OF UPTIME \((\d+) MS\): CAPTURE NONE: 0 BUFFERS, 0 FRAMES, 0 OVERFLOWS; PLAYBACK (\d+) FRAMES AT 440 HZ", out)
+            assert ended and int(ended[1]) >= 20_000 and int(ended[2]) >= 20 * 48_000 * 8 // 10, out
+            usb = vm.service_logs("usb_host", "ANSWERED FROM THE LOOP")
+            loop = re.search(r"\[USB\] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT \d+ ENDPOINT [0-9A-F]{2}, \d+ BYTES, \d+ MS", usb)
+            assert loop, usb
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-usbload-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: usbload: with every bulk transfer answered from usb_host's loop, a 4 MiB file read off the USB stick 3 times whole while QEMU's usb-audio played {ended[2]} frames in {ended[1]} ms and the log came whole over MIND Link's FT232; {loop[0][6:]} (000-DRV-0101)", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -20174,6 +20243,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--storewrite-elf", help="test-only ELF built from tests/storewrite_stub (a write through a read-only store scope in the shell suite, 311-APP-0121); found where the fixture scripts put it")
     parser.add_argument("--clip-elf", help="test-only ELF built from tests/clip_stub (the clipboard from a program in front and behind in the tools suite, 000-APP-0032); found where the fixture scripts put it")
+    parser.add_argument("--usb-defer-elf", help="test-only usb_host built with defer-every-bulk (the usbload suite, 000-DRV-0101); found where the fixture scripts put it")
     parser.add_argument("--audio-elf", help="test-only ELF built from tests/audio_stub (capture and playback together in the usbaudio suite, 000-DRV-0093); found where the fixture scripts put it")
     parser.add_argument("--video-elf", help="test-only ELF built from tests/video_stub (two cameras at once in the cameras suite, 158-DRV-0082); found where the fixture scripts put it")
     parser.add_argument("--levels-elf", help="test-only ELF built from tests/levels_stub (the audio levels through a plain client in the audio suite, 000-DRV-0057); found where the fixture scripts put it")
@@ -20229,6 +20299,9 @@ def main():
     # The usbaudio suite's duplex stub (000-DRV-0093): x86, where the suite runs.
     duplex = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-audio-target/x86_64-unknown-none/release/audio_stub"
     args.audio_elf = args.audio_elf or (str(duplex) if args.arch == "x86_64" and duplex.exists() else None)
+    # The usbload suite's usb_host, every bulk transfer answered from its loop (000-DRV-0101): x86, where the suite runs.
+    defer = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-usbhost-defer-target/x86_64-unknown-none/release/usb_host"
+    args.usb_defer_elf = args.usb_defer_elf or (str(defer) if args.arch == "x86_64" and defer.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -20312,6 +20385,9 @@ def main():
             continue
         if suite == "usbaudio":
             usbaudio_suite(args)
+            continue
+        if suite == "usbload":
+            usbload_suite(args)
             continue
         if suite == "cameras":
             cameras_suite(args)

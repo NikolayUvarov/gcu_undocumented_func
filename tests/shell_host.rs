@@ -1089,6 +1089,14 @@ fn the_second_screens_fit_shown_set_and_kept() {
     assert_eq!(read("# layout\nsecond keep\nright of first\nsecond stretch\n"), Some(Fit::Stretch));
     assert_eq!((read(""), read("second wide\n")), (None, None));
     assert!(text(Fit::Keep).starts_with('#') && text(Fit::Keep).ends_with("second keep\n"));
+    // A choice keeps every other line of the file (DRV's report of 2026-11-22: the layout's, 213-DRV-0099's).
+    let others = "# the screens\noutput second light\nsecond keep\nright of first\n";
+    assert_eq!(updated(others, Fit::Stretch), "# the screens\noutput second light\nsecond stretch\nright of first\n");
+    assert_eq!(updated("output second off\n", Fit::Keep), "output second off\nsecond keep\n", "added when none was there");
+    assert_eq!(updated("second keep\nsecond stretch\n", Fit::Keep), "second keep\n", "one line left");
+    assert_eq!(updated("second extend\nsecond keep # mine\n", Fit::Stretch), "second extend\nsecond stretch\n", "a second line it does not read kept");
+    assert_eq!((updated("", Fit::Stretch), updated("  \n", Fit::Keep)), (text(Fit::Stretch), text(Fit::Keep)));
+    assert_eq!(read(&updated(others, Fit::Stretch)), Some(Fit::Stretch));
     // Its words.
     assert_eq!(second(None), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE");
     assert_eq!(second(Some((1920, 1080, Fit::Keep, 1728, 1080))), "SCREEN: THE SECOND SCREEN 1920X1080, KEEP: THE FIRST SHOWN IN ITS OWN SHAPE AT 1728X1080, CENTRED");
