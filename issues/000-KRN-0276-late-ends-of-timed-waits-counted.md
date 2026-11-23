@@ -28,8 +28,12 @@ The reading does not name the fault. The 18 to 21 ms ceiling is two of `QUANTUM_
    - on an idle CPU without one;
    - behind another task on that CPU, with its PID.
 
-   Wake IPIs sent, and those held back because one was pending, are counted too. Once a minute, only when any wait was late, the kernel keeps one line in its ring (the hardware report's `Kernel lines`):
-   `MIND CORE KERNEL: TIMED WAITS IN A MINUTE: … ENDED, … RAN OVER 2 MS LATE (MOST … MS, PID … ON CPU …): …`
+   Wake IPIs sent, and those held back because one was pending, are counted too.
+
+   Once a minute, only when any wait was late, the kernel writes one line:
+   `MIND CORE KERNEL: TIMED WAITS IN MINUTE m: … ENDED, … RAN OVER 2 MS LATE (MOST … MS, PID … ON CPU …): …`
+   - It goes into its ring.
+   - It also goes into init's log, so it reaches the system log (`dmesg -s init`). After boot nothing reads the ring: init gives up the platform privilege the report needs before it says READY.
 2. **Mend what the counts name,** on the Ryzen with DRV's instrument, before the machine leaves the bench.
 3. **Not in this task:** a tick for idle CPUs, unless the counts say the wake path cannot be mended.
 
