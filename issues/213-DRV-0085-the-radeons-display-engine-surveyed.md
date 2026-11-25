@@ -89,4 +89,4 @@ register read; nothing hung, and the machine was returned to MIND Core (bench lo
 
 ## Related
 
-[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) (the driver), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (first light), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) (the driver), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).

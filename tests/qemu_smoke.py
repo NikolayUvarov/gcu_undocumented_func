@@ -11514,10 +11514,19 @@ def usbload_suite(args):
             usb = vm.service_logs("usb_host", "ANSWERED FROM THE LOOP")
             loop = re.search(r"\[USB\] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT \d+ ENDPOINT [0-9A-F]{2}, \d+ BYTES, \d+ MS", usb)
             assert loop, usb
+            # The minute's tally, once the boot's first minute with transfers has closed: every one answered, none lost.
+            for _ in range(40):
+                usb += vm.service_logs("usb_host")
+                if "IN THE LAST MINUTE" in usb:
+                    break
+                vm.command("sha256 big.bin", raw=True, timeout=120)
+                time.sleep(1)
+            tally = re.search(r"BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: (\d+) DEFERRED, (\d+) ANSWERED, (\d+) NOT FOUND, (\d+) TIMED OUT, (\d+) STOPPED, (\d+) WAITED ON; THE LONGEST (\d+) MS", usb)
+            assert tally and int(tally[1]) > 0 and abs(int(tally[1]) - int(tally[2])) <= 1 and tally.groups()[2:6] == ("0", "0", "0", "0"), usb[-3000:]
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-usbload-{args.cpus}cpu.log").write_text(vm.log)
-    print(f"PASS: usbload: with every bulk transfer answered from usb_host's loop, a 4 MiB file read off the USB stick 3 times whole while QEMU's usb-audio played {ended[2]} frames in {ended[1]} ms and the log came whole over MIND Link's FT232; {loop[0][6:]} (000-DRV-0101)", flush=True)
+    print(f"PASS: usbload: with every bulk transfer answered from usb_host's loop, a 4 MiB file read off the USB stick 3 times whole while QEMU's usb-audio played {ended[2]} frames in {ended[1]} ms and the log came whole over MIND Link's FT232; {loop[0][6:]}; a minute's tally: {tally[1]} deferred, {tally[2]} answered, the longest {tally[7]} ms (000-DRV-0101)", flush=True)
 
 
 def listen_suite(vm, starts):

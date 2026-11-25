@@ -1,6 +1,6 @@
 # 213-DRV-0087 — The RTL8852BE on 5 GHz: 20 MHz channels at 802.11a's rates
 
-**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-21) · **Blocked by:** the branch of [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s change of 2026-11-21 in `main` (the base); NET's word on `wlan` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-21): written and in `main`, the join not run yet · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -226,6 +226,34 @@ Needs: the Ryzen's country chosen by the maintainer, and CoolNet2's 5 GHz networ
 - no `[RTW89] DATAPATH ADMITTED` line precedes the first `HEARD <the access point> ON 5 GHZ CHANNEL n` of that tune;
 - every `[RTW89] LISTEN-ONLY CHANNEL n: NOTHING SENT TO …` names a send refused before that beacon;
 - no probe request goes out there: the station sends none on a listen-only channel, and the driver refuses one in both of its modes.
+
+## The join under `00` (2026-11-25): the plan for the Ryzen's next window
+
+The maintainer, 2026-11-25: «То же касается и 5ГГц. Напомню, что на этапе тестирования мы не привязываемся к странам, первый приоритет - чтобы работало, hardening - это отдельный этап». So the join on channel 100 no longer waits for a country that allows the channel, nor for the owner's rule ([550-DRV-0088](550-DRV-0088-the-owners-rule-beside-the-catalogue.md), now the hardening stage's). It replaces the section above for the bench.
+
+**The way: the station under `00`.**
+- Under `00`, the rules every country allows, channels 36 to 165 are listen-only (NO-IR or DFS). The station and this driver already send there only to an access point whose beacon they heard on that channel, and send no probe request. Nothing in the driver changes for it.
+- The power under `00` is the catalogue's 20 dBm with this driver's cap for an unknown country, 75 % of the maximum (801-DRV-0071).
+- **What is missing is NET's:** the station cannot be kept under `00`. `wifi country 00` is refused, and a station under `00` moves to the country the access points announce (RU on the bench, which has no 5 GHz for us). Asked in `NET/2026-11-25T2200Z-DRV-no-country-tie-at-the-testing-stage-…` on `internal-dev-messages`. Until NET's change is in `main`, the bench branch carries a bench-only patch in `wlan`, `dot11` and `keystore` that takes `00` as a chosen country.
+
+**What the code says of the first join there (read, not run):**
+- The station tunes and sends its authentication at once. The driver has heard no beacon since the tune, so it refuses that send (`LISTEN-ONLY CHANNEL 100: NOTHING SENT TO …`), and `wlan` drops the frame.
+- The beacon comes within about 100 ms (`… HEARD n MS AFTER THE TUNE, m MS AFTER THE REFUSED SEND`).
+- The station tries again 300 ms after the first (`ANSWER_MS`), three times in all. The second try is admitted: the driver answers busy, calibrates the channel (on channel 8, boot 93 had `DATAPATH ADMITTED` 100 ms after the scan's last line), and `wlan` holds the frame up to 1 s for it.
+- If the 5 GHz calibration takes longer than the tries allow, the join fails once with `NoAnswer` and the automatic join comes again, to a channel already calibrated.
+
+**What may go wrong, and the way back:**
+- Nothing was ever sent on 5 GHz by this driver: IQK, TSSI and DPK there, the power tables and the coexistence have host cases only.
+- The station takes the network's 5 GHz access point first whenever its signal is above −70 dBm (550-NET-0090) and has no way back to the 2.4 GHz one while that holds. A 5 GHz join that keeps failing leaves the machine without its network.
+- So the run is made with the cable at hand: `wifi country UZ` typed there takes channel 100 out again, and the station joins channel 8 as before. The country is kept across restarts, so the same line is the way back after a reboot.
+
+**The order of the run:**
+1. The release's start as it is today: the station under the kept UZ, joined on channel 8, the server reached.
+2. `wifi country 00` at the console. The log should show `[WLAN] COUNTRY 00 (CHOSEN BY THE USER, KEPT BY KEYSTORE): …`, `[RTW89] COUNTRY 00: n CHANNELS, m LISTEN ONLY`, then the scan with `HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL 100`.
+3. The join: the refused first send and the beacon's line, `[RTW89] DATAPATH ADMITTED ON CHANNEL 100` with its calibration lines and no `ADMISSION` stop, `[WLAN] AUTO-JOIN CoolNet2: JOINED`, `[NETSTACK] DHCP …`.
+4. Three 6 MB downloads with the sender's `TCP_INFO`, and the agent's return to the server.
+5. A restart: the station comes up under the kept `00` and joins channel 100 by itself.
+6. `wifi country UZ`, and the join and three downloads on channel 8 with the same build.
 
 ## For a second Linux reference on channel 100 (asked by the owner session)
 
