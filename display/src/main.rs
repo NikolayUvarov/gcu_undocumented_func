@@ -266,6 +266,7 @@ fn follow<'a>(w: &mut Writer, mut run: Option<Run<'a>>, order: batches::Order, v
                 let Some(r) = run.as_mut() else { follow.set(hpd::State::Dark); state = hpd::State::Dark; continue };
                 let stages = done(r);
                 let unchanged = light::take_back(&r.light, w, &mut r.interp, &mut r.journal, stages, out);
+                account.dark(now_us()); // the check's account: no time between two spans the dark
                 r.outcome = light::Outcome::Stopped { done: 0 };
                 state = if unchanged { hpd::State::Dark } else { hpd::State::Stopped };
                 follow.set(state);

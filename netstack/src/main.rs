@@ -19,7 +19,7 @@ mod turn;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
 use mind::deadline::Deadline;
 use mind::idl::codec::List;
@@ -74,6 +74,53 @@ static OFFLOAD: AtomicBool = AtomicBool::new(false);
 // Frames each card sent and received.
 static SENT: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
+// Frames a card did not take: its ring full, or its call refused or unanswered (801-NET-0093).
+static REFUSED: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
+
+// For each local TCP port, the segments handed to a card, those with data and those it refused, and the peer's last
+// window field (before its scale) and when (801-NET-0093): a send that stops says which side holds it.
+struct Seen { port: AtomicU32, segments: AtomicU64, data: AtomicU64, refused: AtomicU64, window: AtomicU32, window_ms: AtomicU64 }
+impl Seen {
+    const NEW: Seen = Seen { port: AtomicU32::new(0), segments: AtomicU64::new(0), data: AtomicU64::new(0), refused: AtomicU64::new(0), window: AtomicU32::new(0), window_ms: AtomicU64::new(0) };
+    fn counts(&self) -> [u64; 3] { [self.segments.load(Ordering::Relaxed), self.data.load(Ordering::Relaxed), self.refused.load(Ordering::Relaxed)] }
+}
+const PORTS_SEEN: usize = 32;
+static SEEN: [Seen; PORTS_SEEN] = [const { Seen::NEW }; PORTS_SEEN];
+static SEEN_NEXT: AtomicUsize = AtomicUsize::new(0);
+
+fn seen(port: u16) -> Option<&'static Seen> { SEEN.iter().find(|s| s.port.load(Ordering::Relaxed) == port as u32 + 1) }
+
+// An IPv4 TCP segment's source and destination ports, window field and payload length.
+fn tcp_of(frame: &[u8]) -> Option<(u16, u16, u16, usize)> {
+    if frame.len() < 34 || frame[12..14] != [0x08, 0x00] || frame[14] >> 4 != 4 || frame[23] != 6 { return None; }
+    let ihl = (frame[14] & 0x0F) as usize * 4;
+    let total = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+    if ihl < 20 || frame.len() < 14 + ihl + 20 { return None; }
+    let tcp = &frame[14 + ihl..];
+    let header = (tcp[12] >> 4) as usize * 4;
+    Some((u16::from_be_bytes([tcp[0], tcp[1]]), u16::from_be_bytes([tcp[2], tcp[3]]), u16::from_be_bytes([tcp[14], tcp[15]]), total.saturating_sub(ihl + header)))
+}
+
+// A frame handed to card `index`, taken or not.
+fn note_sent(index: usize, frame: &[u8], taken: bool) {
+    if taken { SENT[index].fetch_add(1, Ordering::Relaxed); } else { REFUSED[index].fetch_add(1, Ordering::Relaxed); }
+    let Some((port, _, _, data)) = tcp_of(frame) else { return };
+    let entry = seen(port).unwrap_or_else(|| {
+        let entry = &SEEN[SEEN_NEXT.fetch_add(1, Ordering::Relaxed) % PORTS_SEEN];
+        for counter in [&entry.segments, &entry.data, &entry.refused, &entry.window_ms] { counter.store(0, Ordering::Relaxed); }
+        entry.port.store(port as u32 + 1, Ordering::Relaxed);
+        entry
+    });
+    entry.segments.fetch_add(1, Ordering::Relaxed);
+    if data > 0 { entry.data.fetch_add(1, Ordering::Relaxed); }
+    if !taken { entry.refused.fetch_add(1, Ordering::Relaxed); }
+}
+
+// A frame received: the window field a peer gives a port we sent from.
+fn note_received(frame: &[u8]) {
+    let Some((_, port, window, _)) = tcp_of(frame) else { return };
+    if let Some(entry) = seen(port) { entry.window.store(window as u32, Ordering::Relaxed); entry.window_ms.store(now_ms(), Ordering::Relaxed); }
+}
 // A driver's frames as a smoltcp device: one IDL call per frame.
 // `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on). `ring`: the frame ring shared
 // with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
@@ -191,7 +238,7 @@ impl smoltcp::phy::TxToken for Tx<'_> {
                 Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); (0, 0) }
                 None => (0, 0),
             };
-            if ring.send(&frame[..len], start, field) { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
+            note_sent(self.index, &frame[..len], ring.send(&frame[..len], start, field));
             if let Some(queued) = self.queued { *queued = true; }
             return result;
         }
@@ -202,7 +249,7 @@ impl smoltcp::phy::TxToken for Tx<'_> {
             None => None,
         };
         let sent = offloaded.unwrap_or_else(|| matches!(self.deadline.call(|| net::send(self.endpoint, &frame[..len])), Ok(Ok(()))));
-        if sent { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
+        note_sent(self.index, &frame[..len], sent);
         result
     }
 }
@@ -218,6 +265,7 @@ impl Device for Card {
             None => match self.deadline.call(|| net::receive(self.endpoint, &mut self.frame)) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
         };
         RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed);
+        note_received(&self.frame[..len]);
         Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued), deadline: self.deadline }))
     }
     fn transmit(&mut self, _: Instant) -> Option<Tx<'_>> {
@@ -242,7 +290,9 @@ enum Kind { Udp, Tcp, Listen }
 #[derive(Clone, Copy)]
 struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64, got: u64, waiting: u64, stalled: bool,
               // When it was opened, the client's reads that got bytes, and those that found the receive queue full (801-NET-0092).
-              opened: u64, reads: u32, full: u32 }
+              opened: u64, reads: u32, full: u32,
+              // Bytes the peer acknowledged, since when, whether a stop was named, and its port's counts then (801-NET-0093).
+              acked: u64, acked_ms: u64, quiet: bool, since: [u64; 3] }
 
 // An echo's data: 1 to 16 bytes repeated over it (socket.wit 2.6); `MINDCORE` by default, as `ping` sends.
 #[derive(Clone, Copy)]
@@ -280,6 +330,8 @@ enum Back { Same(u64), Other(u64) }
 
 struct Stack {
     links: [Option<Link>; CARDS], tried: [u64; CARDS], turn: turn::Turn<CARDS>,
+    // The minute of the cards' last counts, and each card's frames taken, refused and visits passed over then (801-NET-0093).
+    minute: u64, counted: [[u64; 3]; CARDS],
     slots: [Option<Slot>; SOCKETS], generations: [u32; SOCKETS], waiting: Vec<Waiting>, closing: Vec<(usize, SocketHandle, u64)>,
     sequence: u16, next_port: u16,
     // The card the default route goes out through, as last logged.
@@ -378,7 +430,7 @@ impl Link {
 
 impl Stack {
     fn new() -> Self {
-        Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
+        Self { links: [const { None }; CARDS], tried: [0; CARDS], turn: turn::Turn::new(), minute: 0, counted: [[0; 3]; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
                sequence: 0, next_port: EPHEMERAL, default: None, off: 0, preferred: None, listeners: [const { None }; SOCKETS], name: name::Name::new() }
     }
 
@@ -665,7 +717,7 @@ impl Stack {
         let (false, Some(index)) = (full, free) else { self.link(link).sockets.remove(handle); return Err(Error::Limit) };
         self.generations[index] = (self.generations[index] + 1) & 0xFF_FFFF;
         self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0, got: 0, waiting: 0, stalled: false,
-                                       opened: now_ms(), reads: 0, full: 0 });
+                                       opened: now_ms(), reads: 0, full: 0, acked: 0, acked_ms: 0, quiet: false, since: [0; 3] });
         Ok(index)
     }
     fn free(&mut self, index: usize) {
@@ -792,6 +844,48 @@ impl Stack {
             _ => return,
         }
         self.slots[index] = Some(slot);
+    }
+
+    // A send that stops (801-NET-0093): bytes queued and none acknowledged for STALL_MS. Named once, with the segments
+    // handed to the card for its port since the last acknowledged byte, those it refused, and the peer's last window
+    // field; and again when bytes are acknowledged. Once a minute each card's frames refused and visits passed over.
+    fn watch_sends(&mut self, now: u64) {
+        for index in 0..SOCKETS {
+            let Some(mut slot) = self.slots[index] else { continue };
+            if slot.kind != Kind::Tcp { continue; }
+            let Some(link) = self.links[slot.link].as_ref() else { continue };
+            let socket = link.sockets.get::<tcp::Socket>(slot.handle);
+            let queued = socket.send_queue() as u64;
+            let acked = slot.sent.saturating_sub(queued);
+            let entry = socket.local_endpoint().and_then(|e| seen(e.port));
+            let counts = entry.map_or([0; 3], Seen::counts);
+            if acked != slot.acked || queued == 0 || slot.acked_ms == 0 {
+                if slot.quiet { mind::println!("[NETSTACK] TCP SOCKET {}: BYTES ACKNOWLEDGED AGAIN AFTER {} MS", index + 1, now - slot.acked_ms); }
+                (slot.acked, slot.acked_ms, slot.quiet, slot.since) = (acked, now, false, counts);
+            } else if !slot.quiet && now - slot.acked_ms >= STALL_MS {
+                let peer = socket.remote_endpoint().map(|e| alloc::format!("{}", e)).unwrap_or_else(|| alloc::string::String::from("?"));
+                let window = match entry.map(|e| (e.window.load(Ordering::Relaxed), e.window_ms.load(Ordering::Relaxed))) {
+                    Some((field, at)) if at != 0 => alloc::format!("{} ({} MS AGO)", field, now.saturating_sub(at)),
+                    _ => alloc::string::String::from("NONE SEEN"),
+                };
+                mind::println!("[NETSTACK] TCP SOCKET {} TO {}: NOTHING ACKNOWLEDGED FOR {} MS WITH {} BYTES QUEUED ({}): SINCE THE LAST, {} SEGMENTS HANDED TO THE CARD, {} WITH DATA, {} OF THEM REFUSED; THE PEER'S LAST WINDOW FIELD {}",
+                               index + 1, peer, now - slot.acked_ms, queued, socket.state(), counts[0].saturating_sub(slot.since[0]), counts[1].saturating_sub(slot.since[1]), counts[2].saturating_sub(slot.since[2]), window);
+                slot.quiet = true;
+            }
+            self.slots[index] = Some(slot);
+        }
+        if now / 60_000 == self.minute { return; }
+        self.minute = now / 60_000;
+        for card in 0..CARDS {
+            if self.links[card].is_none() { continue; }
+            let counts = [SENT[card].load(Ordering::Relaxed), REFUSED[card].load(Ordering::Relaxed), self.turn.passed[card]];
+            let [sent, refused, passed] = [0, 1, 2].map(|i| counts[i].saturating_sub(self.counted[card][i]));
+            self.counted[card] = counts;
+            if refused > 0 || passed > 0 {
+                mind::println!("[NETSTACK] CARD {} IN THE LAST MINUTE: {} FRAMES TAKEN, {} REFUSED OR UNANSWERED, {} VISITS PASSED OVER AS ITS {} MS OF DRIVER TIME IN {} S WERE SPENT",
+                               card, sent, refused, passed, turn::CARD_MS, turn::WINDOW_MS / 1000);
+            }
+        }
     }
 
     fn reap(&mut self) {
@@ -1060,7 +1154,7 @@ fn main(_info: &'static BootInfo) {
             Access::Grant(grant) => policy.admits(grant, port, peer, now),
             _ => false,
         });
-        if now - reaped >= 1000 { reaped = now; stack.reap(); }
+        if now - reaped >= 1000 { reaped = now; stack.reap(); stack.watch_sends(now); }
         // Grants that ran out of time or volume lose their flows.
         for badge in policy.ended(now) {
             let closed = stack.close_badge(badge);

@@ -1,6 +1,6 @@
 # 213-APP-0158 — The second screen's fit at the console: `screen second keep|stretch`, kept
 
-**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's ask, with the Ryzen on the bench until about 2026-11-23) · **Status:** in progress (done in QEMU on x86, 2026-11-22; the Ryzen's two monitors left) · **Blocked by:** — (`display.wit` 1.4, [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), in `main` since round 171) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** shell command · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's ask, with the Ryzen on the bench until about 2026-11-23) · **Status:** in progress (done in QEMU on x86, in `main` since round 172, 2026-11-22; the file's other lines kept since DRV's report, in `main` since 96d9b7ae, 2026-11-23; the Ryzen's two monitors left) · **Blocked by:** — (`display.wit` 1.4, [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md), in `main` since round 171) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track G · **Constitution:** MC-12.1
 
 **Recorded by:** the tools track, 2026-11-22, from KRN's request in `issues/requests-APP.md` ("The second screen's fit chosen at the console, and kept").
 
@@ -35,6 +35,10 @@ The compositor can show the first screen on the second in its own shape or stret
 
 - **Written:** `shell/src/screens.rs`, the words and the file, and `screenctl.rs`, the calls and the start; the `help` line; the docs.
 - **Tested** in this container, x86_64: `tests/shell_host.rs` (44 tests, `the_second_screens_fit_shown_set_and_kept` among them); the shell suite (18 checks), whose `screen_check` passes: no second screen said, `stretch` taken and kept in `data/displays.txt`, set again by a shell `init` restarted (`[SHELL] THE SECOND SCREEN'S FIT FROM data/displays.txt: STRETCH`), `keep` back, a fit it does not know refused.
+- **Returned by DRV** (`APP/2026-11-22T1355Z-DRV-re-screen-second-is-on-the-ryzen-and-screen-second-rewrites-the-whole-of-displays-txt.md` on `internal-dev-messages`), before the Ryzen's run: a choice wrote the file anew with only its own line, against this plan's "a line the shell does not know is left for that layout". A line of 177's layout or of 213-DRV-0099 would have gone with it.
+  - **The fix:** `screens::updated` replaces the `second keep|stretch` lines the shell reads with one, or adds it, and keeps every other line as it was, a `second` line it does not read among them; a file that is not there is written with the comment and the line. The shell reads the whole file, not its first KiB as before, and refuses one longer than 8 KiB (`NOT KEPT: … LONGER THAN 8 KIB`) rather than cut it.
+  - **Tested:** `tests/shell_host.rs`'s `the_second_screens_fit_shown_set_and_kept` with other lines, one added, two lines made one, a `second extend` line kept, and an empty file (44 tests pass).
+  - **The shell suite's `screen_check`** now writes a line `output second light` first and checks that it is still in the file after `stretch` and after `keep`. The suite passes in this container, x86_64, 4 CPUs (18 checks).
 - **Left:** the Ryzen's two monitors, where `stretch` must fill the second and `keep` show the first's shape (MC-12.1: QEMU has one screen).
 
 ## Related

@@ -2925,9 +2925,11 @@ def screen_check(vm):
     taken for the screens offered later and kept in data/displays.txt; a restarted shell sets it again from the file."""
     require(vm.command("screen second"), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE")
     require(vm.command("screen second wide"), "SCREEN: SCREEN SECOND SHOWS THE SECOND SCREEN; SCREEN SECOND KEEP|STRETCH")
+    # A line of another (213-DRV-0099's, the layout's) is kept when the fit is (DRV's report of 2026-11-22).
+    require(vm.command("write data/displays.txt output second light"), "WROTE")
     out = vm.command("screen second stretch")
     require_all(out, "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt", "SCREEN: NO SECOND SCREEN")
-    require(vm.command("cat data/displays.txt"), "second stretch")
+    require_all(vm.command("cat data/displays.txt"), "output second light", "second stretch")
     shell = vm.services()["shell"]
     vm.collect()
     vm.send(f"kill {shell}\n", raw=True)
@@ -2937,9 +2939,12 @@ def screen_check(vm):
         assert time.monotonic() < deadline, log[-1500:]
         time.sleep(1)
     require(vm.command("screen second keep"), "(SECOND KEEP), KEPT IN data/displays.txt")
+    kept = vm.command("cat data/displays.txt")
+    require_all(kept, "output second light", "second keep")
+    assert "second stretch" not in kept, kept
     require(vm.command("rm data/displays.txt"), "OK")
     print("PASS: screen (213-APP-0158): no second screen said; stretch taken and kept in data/displays.txt, set again by a "
-          "restarted shell; keep back; a fit it does not know refused", flush=True)
+          "restarted shell; keep back; another's line of the file kept; a fit it does not know refused", flush=True)
 
 
 def secret_line_check(vm):
@@ -13724,6 +13729,7 @@ def net_suite(args, disk):
         vm.close()
     late_attach_check(args)
     slow_radio_check(args)
+    busy_radio_check(args)
     world_country_check(args)
     fresh_radio_check(args)
     browse_check(args)
@@ -14151,6 +14157,35 @@ def fresh_radio_check(args):
     print(f"PASS: a fresh radio already on the station's channel (801-NET-0085): the station, held by a CPU budget while init "
           f"started the radio again, knew it by the PID that answered ({reason[1]}), gave it the country again and joined "
           f"MIND-TEST again by itself", flush=True)
+
+
+def busy_radio_check(args):
+    """801-NET-0095: wlansim built with `busy` answers every unicast data frame busy at its first offer, as a radio whose
+    queue is full. wlan keeps such a frame and those behind it in order and offers them again, with no loss counted
+    for the rate: the handshake completes, DHCP leases, and every ping to the gateway is answered; nothing is dropped."""
+    if not args.busy_radio_elf or not raw_tools():
+        print("SKIP: the busy radio needs wlansim built with `busy` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-busy-radio-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.busy_radio_elf},
+                                    extra={"netpolicy.txt": b"console 10.0.4.1 icmp\n", "data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-cpu", "qemu64,+rdrand", "-nic", "none"])
+        try:
+            require(vm.service_logs("wlansim", "[WLANSIM] EVERY UNICAST"), "[WLANSIM] EVERY UNICAST DATA FRAME ANSWERED BUSY AT ITS FIRST OFFER")
+            require(vm.service_logs("wlan", "[WLAN] COUNTRY "), "[WLAN] COUNTRY UZ")
+            joined = front_command(vm, "wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90)
+            require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
+            out = vm.command("ping 10.0.4.1")
+            require(out, "PING: 3 SENT, 3 RECEIVED")
+            radio = vm.command(f"logs {vm.services()['wlansim']}", raw=True) + vm.command("dmesg -s wlansim", raw=True)
+            busy = max((int(n) for n in re.findall(r"\[WLANSIM\] (\d+) SENDS ANSWERED BUSY", radio)), default=0)
+            assert busy >= 1, radio[-1500:]
+            assert "DROPPED UNSENT" not in vm.command("dmesg -s wlan", raw=True)
+        finally:
+            vm.close()
+    print(f"PASS: a radio that answers busy: each unicast data frame refused at its first offer went at its next (at least {busy} "
+          "busy answers); the handshake completed, DHCP leased, every ping answered, nothing dropped", flush=True)
 
 
 def slow_radio_check(args):
@@ -16867,9 +16902,31 @@ class _Bench(socketserver.StreamRequestHandler):
             self.wfile.write(f"OK {count}\n".encode())
 
 
-def _bench_server(host):
+class _HeldBench(_Bench):
+    # An upload's reader that stops after its first 64 KiB for 25 s, its socket's buffer small (801-NET-0093): once the
+    # host's buffers and QEMU's user networking are full (some MiB), the window closes and the guest's send stops.
+    def handle(self):
+        command, count = self.rfile.readline().split()
+        if command == b"DOWN":
+            self.wfile.write(bytes(int(count))); return
+        count = int(count)
+        first = self.rfile.read(min(count, 65536))
+        time.sleep(25)
+        count -= len(first)
+        while count > 0:
+            data = self.rfile.read(min(count, 65536))
+            if not data:
+                return
+            count -= len(data)
+        self.wfile.write(f"OK {count}\n".encode())
+
+
+def _bench_server(host, handler=_Bench):
     # netbench's host side: TCP on a free port and a UDP echo on the same port number.
-    tcp = socketserver.ThreadingTCPServer((host, 0), _Bench)
+    tcp = socketserver.ThreadingTCPServer((host, 0), handler, bind_and_activate=False)
+    if handler is _HeldBench:
+        tcp.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    tcp.server_bind(); tcp.server_activate()
     tcp.daemon_threads = True
     threading.Thread(target=tcp.serve_forever, daemon=True).start()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -16886,6 +16943,38 @@ def _bench_server(host):
     return tcp, udp
 
 
+def held_upload_check(vm, port):
+    """801-NET-0093: an upload whose reader stops is named once in netstack's log after 5 s with nothing acknowledged,
+    with the bytes queued, the segments handed to the card since the last acknowledged byte and the peer's window
+    field (0: the peer holds it), and again when bytes are acknowledged; the upload completes."""
+    stopped = re.compile(r"\[NETSTACK\] TCP SOCKET (\d+) TO 10\.0\.2\.2:" + str(port) + r": NOTHING ACKNOWLEDGED FOR (\d+) MS WITH "
+                         r"([1-9]\d*) BYTES QUEUED \(ESTABLISHED\): SINCE THE LAST, (\d+) SEGMENTS HANDED TO THE CARD, (\d+) WITH DATA, "
+                         r"(\d+) OF THEM REFUSED; THE PEER'S LAST WINDOW FIELD (\d+) \((\d+) MS AGO\)")
+    log = ""  # `logs` drains: the lines since its last call are kept here
+    log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+    require(vm.command(f"run netbench 10.0.2.2:{port} 8 &"), "NAME=netbench BACKGROUND")
+    for _ in range(160):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if stopped.search(log):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("no stop named", log[-1500:], vm.command("ps", raw=True)[-800:], vm.command("dmesg -s netstack", raw=True)[-2500:]))
+    line = stopped.search(log)
+    assert int(line[2]) >= 5000 and int(line[7]) == 0, line[0]
+    for _ in range(240):
+        log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+        if f"[NETSTACK] TCP SOCKET {line[1]}: BYTES ACKNOWLEDGED AGAIN AFTER" in log and not re.search(r"^\d+ netbench ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the upload did not go on", log[-2000:]))
+    assert len(stopped.findall(log)) == 1, [m[0] for m in stopped.finditer(log)]
+    print(f"  {line[0]}", flush=True)
+    print(f"PASS: an upload whose reader stops is named once after 5 s with {line[3]} bytes queued and the peer's window field 0, "
+          "and again when bytes are acknowledged; it completes", flush=True)
+
+
 def netbench_suite(args, disk):
     # Network stack benchmark (issue 106): TCP down/upload and UDP round trips through virtio_net and netstack, with
     # the CPU time of the stack and the drivers. The numbers are printed (and recorded in docs/profile/network.md); the
@@ -16893,8 +16982,10 @@ def netbench_suite(args, disk):
     # no offloads; with --tap (a tap interface at 10.0.2.2/24 on the host, see .github/workflows/ci.yml) the card offers
     # checksum offload and both settings are measured (the host's TCP drops segments with a wrong checksum).
     tcp, udp = _bench_server("10.0.2.2" if args.tap else "127.0.0.1")
-    port = tcp.server_address[1]
-    (disk / "netpolicy.txt").write_text(f"netbench 10.0.2.2 tcp {port} 3600 1000000000\nnetbench 10.0.2.2 udp {port}\n")
+    held, held_udp = _bench_server("10.0.2.2" if args.tap else "127.0.0.1", _HeldBench)
+    port, held_port = tcp.server_address[1], held.server_address[1]
+    (disk / "netpolicy.txt").write_text(f"netbench 10.0.2.2 tcp {port} 3600 1000000000\nnetbench 10.0.2.2 udp {port}\n"
+                                        f"netbench 10.0.2.2 tcp {held_port} 3600 1000000000\nnetbench 10.0.2.2 udp {held_port}\n")
     backend = f"tap,id=n0,ifname={args.tap},script=no,downscript=no,vnet_hdr=on" if args.tap else "user,id=n0"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", backend, "-device", "virtio-net-pci,netdev=n0"])
     try:
@@ -16913,9 +17004,10 @@ def netbench_suite(args, disk):
                 assert re.search(r"NETBENCH UDP 500 OF 500 ROUND TRIPS", output), output
                 for line in re.findall(r"NETBENCH .*", output):
                     print(f"  offload {offload} run {run + 1}: " + line.strip(), flush=True)
+        held_upload_check(vm, held_port)
     finally:
         vm.close()
-        tcp.shutdown(); udp.close()
+        tcp.shutdown(); udp.close(); held.shutdown(); held_udp.close()
     print(f"PASS: netbench ({'tap, checksum offload offered' if args.tap else 'user networking, no offloads offered'}): TCP download and "
           "upload, UDP round trips, CPU time of netstack and the drivers, offload off and on", flush=True)
 
@@ -20304,6 +20396,8 @@ def main():
     world = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-nocountry-target/x86_64-unknown-none/release/wlansim"
     args.world_radio_elf = str(world) if args.arch == "x86_64" and world.exists() else None
     tuned = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-selftuned-target/x86_64-unknown-none/release/wlansim"
+    busy = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-busy-target/x86_64-unknown-none/release/wlansim"
+    args.busy_radio_elf = str(busy) if args.arch == "x86_64" and busy.exists() else None
     args.self_tuned_radio_elf = str(tuned) if args.arch == "x86_64" and tuned.exists() else None
     # keystore's build that takes no TPM in the boot's first minute (801-NET-0087): x86 only.
     late_keys = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-keystore-late-target/x86_64-unknown-none/release/keystore"

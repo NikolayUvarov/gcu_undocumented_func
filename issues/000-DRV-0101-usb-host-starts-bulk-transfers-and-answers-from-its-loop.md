@@ -27,7 +27,7 @@
 
 ## Acceptance criteria
 
-- [ ] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer.
+- [ ] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer. (2026-11-22: answered from the loop in QEMU's `usbload`. The host cases for a halt, a timeout and a device or client gone are written on `claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop` at 613434c46, which lands after this.)
 - [x] QEMU's `usb`, `ehci`, `cameras`, `link`, `usbaudio` and the USB storage suites pass. (2026-11-22, LEG9, on 05bc8e92c: those, `iso` with its USB disk's boot, `vfs`, `block` with its USB part, and the new `usbload`.)
 - [ ] On the Ryzen: a duplex with a log read and a stick write in its middle, every stream's `TIMES DRY` 0 while they run, and the stick's and the cable's throughput no lower (MC-12.1).
 
@@ -68,7 +68,57 @@
   - the full `host_tests.sh` passed whole (263 groups);
   - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` (ATA, AHCI and USB) and `usbload`, which passed three times in all;
   - in `usbload` the first transfer answered from the loop was the stick's first command, `SLOT 1 ENDPOINT 02, 31 BYTES, 1 MS`.
-- **Not covered yet** (criterion 1's rest): a deferred transfer that halts, one that times out, and a client gone before its answer. These are host-testable only through `pending.rs`'s rules, or in QEMU with a device made to stall.
+- **Criterion 1's rest, host cases (613434c46, on the task's branch, not in this landing):** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
+  - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
+- **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
+
+**On the Ryzen** (release 202611221738, boot 97 from 17:42:50 UTC, the bench tree with 3ad6e4d76; read over the cable by the owner session and CAM):
+- The first transfer answered from the loop came at 3.533 s: `SLOT 3 ENDPOINT 81, 65536 BYTES, 3 MS`, a 64 KiB read of the stick.
+- The tally, minute by minute, at uptime 60, 120 and 180 s: 157, 413 and 2914 deferred, every one answered, 0 not found, 0 timed out, 0 stopped, 0 waited on, the longest 6, 14 and 17 ms.
+  - The third minute holds eight timed log reads over the cable, about 600 KB through the CH340's pieces.
+- The stick, the CH340 and both cameras were found. There was no stop-list line (`usb_storage`'s no-answer, `vfs_server`'s drive not answering, the converter gone, an endpoint reset, a controller error, the Effector journal) to uptime 162 s.
+- **Not shown:**
+  - a ring kept full by it: no speakerphone was on the machine and no camera streamed, so no isochronous or bulk-stream ring existed;
+  - the link's throughput against before: the young boot's log gave reads of 76 KB, about 30 KB/s, not the earlier 137.8 KB.
+- It holds for that machine and that release (MC-12.1).
+
+**With the cameras** (release 202611221746, boot 98 with the same `usb_host`; 2026-11-22 17:58–17:59 UTC; CAM under a lease, the stubs typed with the shell in front; the raw lines are in `S/cam-logs/ryzen-2026-11-22-1758-cameras-0101.log`):
+- **The run:** camera 1 at 320×240 and camera 0 at 640×480 at 25, 60 s each, with five timed log reads over the cable in their middle.
+- **The tally:** that minute had 3453 transfers deferred, every one answered, the longest 16 ms; the other minutes 1 to 359. Every minute had 0 not found, 0 timed out, 0 stopped and 0 waited on.
+- **The bulk rings:** camera 1's never stood empty. Camera 0's stood empty once, for 0.0 ms, not in a wait, as camera 1 closed beside it. No line names a wait.
+- **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
+- **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
+
+## For a successor (state on 2026-11-22, 18:50 UTC)
+
+How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
+
+- **The heads:**
+  - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
+  - **This landing's head** (`claude/000-DRV-0101-landing`) is 3ad6e4d76 with this text on top.
+  - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
+  - **49bd2fede** makes `usbload` wait for and check the tally.
+  - Both stay on the task's branch and land after this, once they have run on the bench. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`), was going at 18:50.
+- **Reading a run:**
+  - The once-a-boot line is `A BULK TRANSFER ANSWERED FROM THE LOOP: …`.
+  - The minute's tally is `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`. What is right: a equals n, 0 in the four after, and the longest tens of ms at most.
+  - **Stop and take it back on:**
+    - a TIMED OUT;
+    - a NOT FOUND with no device gone;
+    - `usb_storage`'s `NO ANSWER TO READ`, `THE DEVICE IS GONE OR WAS RESET` or `CLAIMING IT AGAIN` with no restart;
+    - `vfs_server`'s `THE USB DRIVE DOES NOT ANSWER`;
+    - `[SERIAL] THE CONVERTER IS GONE`;
+    - `THE ENDPOINT IS RESET` repeating;
+    - a controller error or an unanswered command;
+    - the Effector journal's lines.
+- **What exercises it on the Ryzen:**
+  - the cable's reads, through the CH340's bulk OUT in 256-byte pieces;
+  - the stick's reads and writes.
+  - The cameras' video goes by `bulk-stream`, not by this path.
+- **Left:**
+  - control transfers, commands and a port's reset still hold the loop for a few ms each;
+  - EHCI's bulk transfers are still waited on;
+  - a real halt, timeout or client death while a transfer is deferred has not happened on any machine.
 
 ## Related
 

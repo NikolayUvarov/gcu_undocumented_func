@@ -17,6 +17,9 @@ use mind::idl::wire;
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
 
+mod second;
+use second::{Budget, Shape};
+
 const RECEIVED_CAP: usize = 10;
 const FRAME_MS: u32 = 15;
 // A screen whose task has not waited for this long is copied while it runs, torn or not (000-KRN-0086).
@@ -44,6 +47,15 @@ struct Watch { screens: u32, since: usize, second: usize, frames: u32, longest: 
 
 // One line of the watch while lines are left.
 fn say(lines: &mut u32, line: core::fmt::Arguments) { if *lines < LOG_LINES { *lines += 1; mind::println!("{}", line); } }
+
+// A line of the second screen or the remote marks while the budget has one (213-KRN-0278), with those it held back before.
+fn tell(budget: &mut Budget, line: core::fmt::Arguments) {
+    match budget.take(mind::time::uptime_ms()) {
+        Some(0) => mind::println!("{}", line),
+        Some(unsaid) => mind::println!("{} ({} LINES BEFORE IT UNSAID: {} AT ONCE, THEN ONE A MINUTE)", line, unsaid, Budget::LINES),
+        None => {}
+    }
+}
 
 // Pixels of the visible screen that are not black, in the shadow copy.
 #[inline(never)]
@@ -81,55 +93,59 @@ fn remote(mark: Remote, state: RemoteState, width: usize, height: usize) -> impl
 
 // A second screen a driver lent (213-KRN-0272): its mapping, its shape, where the first screen's picture lies on it,
 // and for each of the picture's columns and rows the first screen's column and row it shows.
-struct Second { map: Mapping, width: usize, height: usize, pitch: usize, format: u32, at: (usize, usize), size: (usize, usize), cols: Pages, rows: Pages }
+struct Second { map: Mapping, shape: Shape, pitch: usize, format: u32, cols: Pages, rows: Pages }
 
 impl Second {
     // A driver's offer checked against what it lent: the shape inside the mapping, a format drawn here.
     fn new(info: &BootInfo, width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize, fit: Fit) -> Result<Second, Error> {
         let (width, height, pitch) = (width as usize, height as usize, pitch as usize);
-        if width == 0 || height == 0 || pitch % 4 != 0 || pitch < width * 4 { return Err(Error::BadScreen); }
+        let offered = |lent| Shape::offered(width, height, pitch, lent, (info.width, info.height), fit == Fit::Stretch);
+        if offered(usize::MAX).is_none() { return Err(Error::BadScreen); }
         let map = Mapping::new(pixels).map_err(|_| Error::NoMemory)?;
-        if map.len() < pitch * height { return Err(Error::BadScreen); }
+        let shape = offered(map.len()).ok_or(Error::BadScreen)?;
         let (Some(cols), Some(rows)) = (Pages::new(width * 4), Pages::new(height * 4)) else { return Err(Error::NoMemory) };
-        let mut second = Second { map, width, height, pitch: pitch / 4, format: if format == PixelFormat::Rgb { PIXEL_RGB } else { PIXEL_BGR }, at: (0, 0), size: (1, 1), cols, rows };
-        second.place(info, fit);
+        let second = Second { map, shape, pitch: pitch / 4, format: if format == PixelFormat::Rgb { PIXEL_RGB } else { PIXEL_BGR }, cols, rows };
+        second.tables(info);
         Ok(second)
     }
     // The picture for a fit, and the first screen's column and row each of its columns and rows shows (the tables hold the
     // whole screen's width and height, the largest picture).
     fn place(&mut self, info: &BootInfo, fit: Fit) {
-        let (x, y, w, h) = placed(fit == Fit::Stretch, (info.width, info.height), (self.width, self.height));
-        (self.at, self.size) = ((x, y), (w, h));
+        self.shape.place((info.width, info.height), fit == Fit::Stretch);
+        self.tables(info);
+    }
+    fn tables(&self, info: &BootInfo) {
+        let (w, h) = self.shape.size;
         for c in 0..w { unsafe { core::ptr::write((self.cols.address() as *mut u32).add(c), source_of(c, w, info.width) as u32); } }
         for r in 0..h { unsafe { core::ptr::write((self.rows.address() as *mut u32).add(r), source_of(r, h, info.height) as u32); } }
     }
     fn mirror(&self, fit: Fit) -> Mirror {
-        Mirror { width: self.width as u16, height: self.height as u16, fit, picture_width: self.size.0 as u16, picture_height: self.size.1 as u16 }
+        Mirror { width: self.shape.width as u16, height: self.shape.height as u16, fit, picture_width: self.shape.size.0 as u16, picture_height: self.shape.size.1 as u16 }
     }
     fn col(&self, c: usize) -> usize { unsafe { core::ptr::read((self.cols.address() as *const u32).add(c)) as usize } }
     fn row(&self, r: usize) -> usize { unsafe { core::ptr::read((self.rows.address() as *const u32).add(r)) as usize } }
     fn put(&self, x: usize, y: usize, pixel: u32) {
         let device = if self.format == PIXEL_BGR { pixel & 0x00FF_FFFF } else { pixel_to_device(pixel, self.format, [0; 3]) };
-        unsafe { core::ptr::write_volatile(self.map.as_ptr::<u32>().add((self.at.1 + y) * self.pitch + self.at.0 + x), device); }
+        unsafe { core::ptr::write_volatile(self.map.as_ptr::<u32>().add((self.shape.at.1 + y) * self.pitch + self.shape.at.0 + x), device); }
     }
     // Everything: black around the picture, the picture from the shadow when it holds a frame.
     #[inline(never)]
     fn redraw(&self, info: &BootInfo, shadow: *const u32, valid: bool) {
         let target = self.map.as_ptr::<u32>();
-        for y in 0..self.height { for x in 0..self.width { unsafe { core::ptr::write_volatile(target.add(y * self.pitch + x), 0); } } }
+        for y in 0..self.shape.height { for x in 0..self.shape.width { unsafe { core::ptr::write_volatile(target.add(y * self.pitch + x), 0); } } }
         if !valid { return; }
-        for r in 0..self.size.1 {
+        for r in 0..self.shape.size.1 {
             let row = self.row(r) * info.stride;
-            for c in 0..self.size.0 { self.put(c, r, unsafe { core::ptr::read(shadow.add(row + self.col(c))) }); }
+            for c in 0..self.shape.size.0 { self.put(c, r, unsafe { core::ptr::read(shadow.add(row + self.col(c))) }); }
         }
     }
     // The picture's pixels that show what changed: each first-screen row's changed columns, from `spans`.
     #[inline(never)]
     fn update(&self, info: &BootInfo, shadow: *const u32, spans: *const [u32; 2]) {
-        for r in 0..self.size.1 {
+        for r in 0..self.shape.size.1 {
             let sy = self.row(r);
             let [first, last] = unsafe { core::ptr::read(spans.add(sy)) };
-            let Some((c0, c1)) = shown(first as usize, last as usize, self.size.0, info.width) else { continue };
+            let Some((c0, c1)) = shown(first as usize, last as usize, self.shape.size.0, info.width) else { continue };
             for c in c0..=c1 { self.put(c, r, unsafe { core::ptr::read(shadow.add(sy * info.stride + self.col(c))) }); }
         }
     }
@@ -144,9 +160,9 @@ impl Second {
 }
 
 // A driver's offer or its screen gone, answered after the second screen changed (213-KRN-0272).
-fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: Fit, shadow: *const u32, valid: bool, lines: &mut u32) {
+fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: Fit, shadow: *const u32, valid: bool, lines: &mut Budget) {
     if badge != BADGE_SCREEN {
-        say(lines, format_args!("[COMPOSITOR] SECOND SCREEN REFUSED: PID {} (BADGE {}) IS NO DISPLAY DRIVER (MC-3.11)", sender, badge));
+        tell(lines, format_args!("[COMPOSITOR] SECOND SCREEN REFUSED: PID {} (BADGE {}) IS NO DISPLAY DRIVER (MC-3.11)", sender, badge));
         if let Request::OfferScreen { pixels, .. } = request { let _ = mind::ipc::drop_cap(pixels); }
         let _ = if matches!(request, Request::ScreenGone) { display::reply_screen_gone(call, Err(Error::Denied)) } else { display::reply_offer_screen(call, Err(Error::Denied)) };
         return;
@@ -159,10 +175,10 @@ fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16
             match &made {
                 Ok(s) => {
                     s.redraw(info, shadow, valid);
-                    say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, {:?}, FROM PID {}: THE FIRST MIRRORED AT {}X{} FROM {},{}{}",
-                                            width, height, pitch, format, sender, s.size.0, s.size.1, s.at.0, s.at.1, stretched(fit)));
+                    tell(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, {:?}, FROM PID {}: THE FIRST MIRRORED AT {}X{} FROM {},{}{}",
+                                            width, height, pitch, format, sender, s.shape.size.0, s.shape.size.1, s.shape.at.0, s.shape.at.1, stretched(fit)));
                 }
-                Err(error) => say(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, FROM PID {} REFUSED: {:?}", width, height, pitch, sender, error)),
+                Err(error) => tell(lines, format_args!("[COMPOSITOR] SECOND SCREEN {}X{}, PITCH {}, FROM PID {} REFUSED: {:?}", width, height, pitch, sender, error)),
             }
             let answer = made.as_ref().map(|_| ()).map_err(|e| *e);
             *second = made.ok();
@@ -170,7 +186,7 @@ fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16
         }
         _ => {
             let was = second.take().is_some();
-            say(lines, format_args!("[COMPOSITOR] SECOND SCREEN GONE (PID {}){}", sender, if was { "" } else { ": THERE WAS NONE" }));
+            tell(lines, format_args!("[COMPOSITOR] SECOND SCREEN GONE (PID {}){}", sender, if was { "" } else { ": THERE WAS NONE" }));
             let _ = display::reply_screen_gone(call, Ok(()));
         }
     }
@@ -179,13 +195,13 @@ fn second_screen(info: &BootInfo, request: Request, call: wire::Call, badge: u16
 fn stretched(fit: Fit) -> &'static str { if fit == Fit::Stretch { ", STRETCHED" } else { "" } }
 
 // The fit chosen or asked for (213-KRN-0273): only a client with no badge chooses; the second screen now is drawn again.
-fn mirror(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: &mut Fit, shadow: *const u32, valid: bool, lines: &mut u32) {
+fn mirror(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sender: u64, second: &mut Option<Second>, fit: &mut Fit, shadow: *const u32, valid: bool, lines: &mut Budget) {
     let Request::MirrorFit { fit: chosen } = request else {
         let _ = display::reply_mirror(call, second.as_ref().map(|s| s.mirror(*fit)).as_ref().ok_or(Error::NoScreen));
         return;
     };
     if badge != 0 {
-        say(lines, format_args!("[COMPOSITOR] MIRROR FIT REFUSED: PID {} (BADGE {}) MAY NOT CHOOSE IT (MC-3.11)", sender, badge));
+        tell(lines, format_args!("[COMPOSITOR] MIRROR FIT REFUSED: PID {} (BADGE {}) MAY NOT CHOOSE IT (MC-3.11)", sender, badge));
         let _ = display::reply_mirror_fit(call, Err(Error::Denied));
         return;
     }
@@ -195,9 +211,9 @@ fn mirror(info: &BootInfo, request: Request, call: wire::Call, badge: u16, sende
             Some(s) => {
                 s.place(info, chosen);
                 s.redraw(info, shadow, valid);
-                say(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): THE FIRST AT {}X{} FROM {},{} ON THE SECOND SCREEN'S {}X{}", chosen, sender, s.size.0, s.size.1, s.at.0, s.at.1, s.width, s.height));
+                tell(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): THE FIRST AT {}X{} FROM {},{} ON THE SECOND SCREEN'S {}X{}", chosen, sender, s.shape.size.0, s.shape.size.1, s.shape.at.0, s.shape.at.1, s.shape.width, s.shape.height));
             }
-            None => say(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): FOR A SECOND SCREEN OFFERED LATER", chosen, sender)),
+            None => tell(lines, format_args!("[COMPOSITOR] MIRROR FIT {:?} (PID {}): FOR A SECOND SCREEN OFFERED LATER", chosen, sender)),
         }
     }
     let _ = display::reply_mirror_fit(call, Ok(()));
@@ -208,7 +224,7 @@ enum Lit { Capture, Camera, Remote(Remote, RemoteState) }
 
 // One display.wit request: the mode, a sealed read-only copy of what `source` shows, the camera mark, or the caller's
 // remote mark, which its badge from init names (MC-3.11).
-fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire::Call, badge: u16, sender: u64, lines: &mut u32) -> Option<Lit> {
+fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire::Call, badge: u16, sender: u64, lines: &mut Budget) -> Option<Lit> {
     let lit = match request {
         Request::Capture => Some(Lit::Capture), Request::Camera => Some(Lit::Camera), Request::Mode => None,
         Request::Remote { state } => remote_of(badge).map(|mark| Lit::Remote(mark, state)),
@@ -217,7 +233,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
     let _ = match request {
         Request::Camera => display::reply_camera(call),
         Request::Remote { .. } if lit.is_none() => {
-            say(lines, format_args!("[COMPOSITOR] REMOTE MARK REFUSED: PID {} (BADGE {}) HAS NO MARK (MC-3.11)", sender, badge));
+            tell(lines, format_args!("[COMPOSITOR] REMOTE MARK REFUSED: PID {} (BADGE {}) HAS NO MARK (MC-3.11)", sender, badge));
             display::reply_remote(call, Err(Error::Denied))
         }
         Request::Remote { .. } => display::reply_remote(call, Ok(())),
@@ -252,13 +268,13 @@ fn main(info: &'static BootInfo) {
     let mut captured = None::<usize>; // when the last capture was, while the dot is shown
     let mut filmed = None::<usize>; // when the video gateway last said a stream is open, while the mark is shown
     let mut remotes = [None::<(usize, RemoteState)>; 2]; // the link's and the Effector's: the last call and its state
-    let mut remote_lines = 0u32; // the remote marks' changes and refusals logged, LOG_LINES at most
+    let mut remote_lines = Budget::new(); // the remote marks' changes and refusals logged (213-KRN-0278)
     let mut busy = None::<usize>; // since when the screen changed while its task ran
     let (mut front, mut front_lines) = (0u64, 0u32); // the PID whose screen is in front (750-KRN-0192), and its lines logged
     let mut watch = Watch::default();
     let mut second: Option<Second> = None; // a second screen a driver lent (213-KRN-0272)
-    let mut second_lines = 0u32;
-    let mut fit = Fit::Stretch; // how the first screen is shown on the second (213-KRN-0273), until the shell chooses
+    let mut second_lines = Budget::new();
+    let mut fit = Fit::Keep; // how the first screen is shown on the second (213-KRN-0273), until the shell chooses
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
     say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {
@@ -339,21 +355,21 @@ fn main(info: &'static BootInfo) {
         if let Some(at) = captured {
             let capturing = mind::time::uptime_ms() - at < DOT_MS;
             mark(info, gop, shadow, valid, capturing, dot(info.width, info.height));
-            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, capturing, dot(s2.size.0, s2.size.1)); }
+            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, capturing, dot(s2.shape.size.0, s2.shape.size.1)); }
             if !capturing { captured = None; }
         }
         if let Some(at) = filmed {
             let streaming = mind::time::uptime_ms() - at < DOT_MS;
             mark(info, gop, shadow, valid, streaming, camera(info.width, info.height));
-            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, streaming, camera(s2.size.0, s2.size.1)); }
+            if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, streaming, camera(s2.shape.size.0, s2.shape.size.1)); }
             if !streaming { filmed = None; }
         }
         for (slot, which) in [Remote::Link, Remote::Effector].into_iter().enumerate() {
             if let Some((at, state)) = remotes[slot] {
                 let shown = mind::time::uptime_ms() - at < REMOTE_MS;
                 mark(info, gop, shadow, valid, shown, remote(which, state, info.width, info.height));
-                if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, shown, remote(which, state, s2.size.0, s2.size.1)); }
-                if !shown { remotes[slot] = None; say(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: OFF", which)); }
+                if let Some(s2) = second.as_ref() { s2.mark(info, shadow, valid, shown, remote(which, state, s2.shape.size.0, s2.shape.size.1)); }
+                if !shown { remotes[slot] = None; tell(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: OFF", which)); }
             }
         }
         // Wait for the next frame, answering requests meanwhile (without a service endpoint: just wait).
@@ -368,7 +384,7 @@ fn main(info: &'static BootInfo) {
                     Some(Lit::Camera) => filmed = Some(mind::time::uptime_ms()),
                     Some(Lit::Remote(mark, state)) => {
                         let slot = mark as usize;
-                        if remotes[slot].map(|(_, was)| was) != Some(state) { say(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: {:?}", mark, state)); }
+                        if remotes[slot].map(|(_, was)| was) != Some(state) { tell(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: {:?}", mark, state)); }
                         remotes[slot] = Some((mind::time::uptime_ms(), state));
                     }
                     None => {}
