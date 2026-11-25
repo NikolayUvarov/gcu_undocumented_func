@@ -278,7 +278,7 @@ Every request has a thread. Its messages:
 
 - **The release tree exactly as `scripts/release.py publish` writes it** ([publishing.md](../update/publishing.md)): `blobs/`, `releases/`, `channels/`, `keys/`, the timestamps.
   - It is served read-only through `tools/httpd`'s library, so that the same name checks and ranges apply as for `httpd` itself (NET's code, used and not copied).
-  - Built under `/updates/` with the public channels (100003-APP-0159, [server.md](server.md) section 1): tested on the host, not yet with MIND Core's updater.
+  - Built under `/updates/` with the public channels (100003-APP-0159, [server.md](server.md) section 1): tested on the host, and in QEMU, where MIND Core's updater fetched and staged a release from the hub.
 - **The modules' packages,** in UPD's signed format ([750-UPD-0019](../../issues/750-UPD-0019-signed-application-packages.md)): `packages/<name>/<version>/…` and a signed index per channel, when UPD's format names one.
 - **Publishing stays UPD's:** `release.py publish` over SSH, the channel renamed last. The hub has no route that writes a release.
 

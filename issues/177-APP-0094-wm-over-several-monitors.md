@@ -48,7 +48,7 @@ With QEMU's two outputs (or two screens in `BootInfo`), `wm` shows a window on e
   - Maximize, halves and quarters are within the window's screen. A window snaps to the outer edges of its screen; an edge with another screen beyond is crossed, not stuck to.
   - **Alt+Shift+arrows** move the window to the screen on that side, at the same place in proportion, its size kept as far as that screen holds it. One that fills a half, a quarter or the whole area fills the same share there. The frame `[⇕]` gives back goes with it. With no screen there the status line says `To another screen: no screen is to the right of this one`.
   - A full-screen window covers its own screen. The other keeps the desk, its windows and the mouse.
-- **Tested** in this container, x86_64: `tests/wm_host.rs`'s `the_windows_on_two_screens`, and the 50 tests before it unchanged, so one screen behaves as it did.
+- **Tested** in this container, x86_64, 4 CPUs: `tests/wm_host.rs`'s `the_windows_on_two_screens`, and the 50 tests before it unchanged, so one screen behaves as it did; the QEMU `wm` suite passes (17 checks) on its one screen. Two screens are tested on the host alone (MC-12.1).
 - **Left:**
   - 1.5 in `main` (177-KRN-0274's plan: a surface per extra screen, `extend-surface`; APP asked for one surface for the whole desk, not answered yet);
   - the bars, the dialogs, the menu and Settings drawn on the first screen, and the pixels, the background and the pointer over both; the run window and the list on the pointer's screen;

@@ -45,9 +45,11 @@
   - `server.rs` answers a path under `/updates/` before the API, outside the lock; `http.rs` takes HEAD there alone;
   - `mindhub serve … --releases DIR [--public NAME]… [--updates-per-minute N]`, and its line at the start.
 - **Not like `httpd`:** the rate counts requests for the network `util::network` names (an IPv6 /64 as one), not for the address; the hub has no access log of its own, so a refusal is not logged.
-- **Tested** in this container, x86_64: `tools/mindhub/tests/updates.rs`, its two tests as the acceptance criteria list them, with the hub's 35 other tests.
+- **Tested** in this container, x86_64, 4 CPUs:
+  - `tools/mindhub/tests/updates.rs`, its two tests as the acceptance criteria list them, with the hub's 35 other tests;
+  - **the QEMU suite `hubupdate`** (`tests/qemu_smoke.py`, in `scripts/ci_local.sh`'s group with `hub`): an image with release 5 in slot A, its `update.txt` naming `https://10.0.2.2:PORT/updates` with the hub's pin and `automatic fetch`. MIND Core's updater fetched release 6 from `tools/mindhub` and staged it in slot B: `113 FILES, 16684339 BYTES FETCHED`. From the host the hub served stable's channel as published and refused the channel `test`, naming why. The run took about 90 s.
+  - This is QEMU's x86 machine and the hub on the same host, not a hub across a network (MC-12.1).
 - **Left:**
-  - the QEMU check with MIND Core's updater;
   - the restricted channels, the packages and the delivery link, which wait for UPD (Blocked by);
   - a rate in bytes.
 
