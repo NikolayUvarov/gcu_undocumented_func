@@ -22,6 +22,9 @@ Headphones need the A2DP profile, its codec SBC (mandatory for every sink), AVDT
    - A stall of more than a second is skipped, not sent late.
 5. **The tone.** 440 Hz left and 660 Hz right, 0.4 s of every second. It is the first source, so the path can be heard before any program feeds it.
 6. **`audio_gw`.** A sink in `audio_gw` (DRV's) hands its 48 kHz PCM to `bt_hci`, so that `say` plays in the headphones. Its shape is DRV's to settle; until then the tone.
+   - `bt_host`'s side is ready: `Stack::audio(samples)` takes 16-bit stereo 48 kHz PCM into a quarter second's ring.
+   - `Stack::audio_wanted()` says how many frames would keep a tenth of a second waiting while a stream runs.
+   - While PCM came in the last second, it replaces the tone. A gap plays as silence. At 44.1 kHz it is read by linear interpolation (the testing stage's resampler).
 
 **What is not done.**
 - AVRCP (the headphones' buttons).

@@ -22,8 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
-    /* bt_hci's stack, PT_GNU_STACK's size (262-KRN-0164): 256 KiB, as the host stack (bt_host's Stack, ~57 KiB) and its
-       packets' buffers live on it, past the 64 KiB a task has without it. */
-    .stack (NOLOAD) : { . = . + 0x40000; } :stack
+    /* bt_hci's stack, PT_GNU_STACK's size (262-KRN-0164): 512 KiB, as the host stack (bt_host's Stack, ~105 KiB with
+       its PCM) and its packets' buffers live on it, past the 64 KiB a task has without it. */
+    .stack (NOLOAD) : { . = . + 0x80000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }

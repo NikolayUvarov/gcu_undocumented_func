@@ -249,3 +249,33 @@ fn as_acceptor_the_source_answers_a_sink_that_configures_it() {
     assert!(r.iter().any(|x| x == &(6, avdtp::REJECT, avdtp::GET_CAPABILITIES, vec![avdtp::BAD_ACP_SEID])));
     assert!(r.iter().any(|x| x == &(7, avdtp::GENERAL_REJECT, 0x3E, vec![])));
 }
+
+#[test]
+fn pcm_is_read_at_the_streams_rate() {
+    let mut p = avdtp::Pcm::new();
+    // A ramp, left rising, right falling.
+    let input: Vec<i16> = (0..200).flat_map(|i| [i * 100, -i * 100]).collect();
+    p.push(&input, 0);
+    assert_eq!(p.frames(), 200);
+    // At 48 kHz: the samples as they are.
+    let mut out = vec![0i16; 20];
+    p.take(&mut out, 2, 48_000);
+    assert_eq!(&out[..6], &[0, 0, 100, -100, 200, -200]);
+    assert_eq!(p.frames(), 190);
+    // At 44.1 kHz: 48/44.1 input frames an output frame, interpolated; mono is the two channels' mean (0 here).
+    let mut out = vec![0i16; 10];
+    p.take(&mut out, 2, 44_100);
+    let left: Vec<i16> = out.iter().step_by(2).copied().collect();
+    assert_eq!(left, vec![1000, 1108, 1217, 1326, 1435]);
+    let mut mono = vec![1i16; 4];
+    p.take(&mut mono, 1, 48_000);
+    assert!(mono.iter().all(|&v| v.abs() <= 1));
+    // Run short: silence, counted; overfull: the oldest dropped.
+    let mut out = vec![7i16; 2 * 400];
+    p.take(&mut out, 2, 48_000);
+    assert!(out[out.len() - 2..].iter().all(|&v| v == 0) && p.short > 0);
+    // One frame stays back: interpolation needs two.
+    let left_over = p.frames() as u64;
+    p.push(&vec![1i16; 2 * (avdtp::PCM / 2 + 10)], 5);
+    assert_eq!((p.frames(), p.dropped), (avdtp::PCM / 2, 10 + left_over));
+}

@@ -111,6 +111,51 @@ pub fn configured(info: [u8; 4]) -> Option<Config> {
     Some(cfg)
 }
 
+/// PCM handed to the stream: 16-bit stereo at 48 kHz, as the audio gateway plays it, a quarter second of it kept.
+/// While some came in the last second it replaces the tone; a gap is played as silence; another rate is reached by
+/// linear interpolation (the testing stage's resampler).
+pub struct Pcm { buf: [i16; PCM], head: usize, len: usize, frac: u32, pub fed_at: Option<u64>, pub dropped: u64, pub short: u64 }
+
+pub const PCM: usize = 2 * 48_000 / 4;
+pub const PCM_HZ: u32 = 48_000;
+/// How long PCM stays the stream's source after the last that came.
+pub const PCM_HOLD_MS: u64 = 1_000;
+
+impl Default for Pcm { fn default() -> Self { Self::new() } }
+
+impl Pcm {
+    pub const fn new() -> Self { Self { buf: [0; PCM], head: 0, len: 0, frac: 0, fed_at: None, dropped: 0, short: 0 } }
+    /// Frames (stereo pairs) waiting.
+    pub fn frames(&self) -> usize { self.len / 2 }
+    /// Interleaved stereo samples in; the oldest are dropped when it is full.
+    pub fn push(&mut self, samples: &[i16], now: u64) {
+        self.fed_at = Some(now);
+        for pair in samples.chunks_exact(2) {
+            if self.len == PCM { self.head = (self.head + 2) % PCM; self.len -= 2; self.dropped += 1; }
+            let at = (self.head + self.len) % PCM;
+            (self.buf[at], self.buf[at + 1]) = (pair[0], pair[1]);
+            self.len += 2;
+        }
+    }
+    fn at(&self, frame: usize, ch: usize) -> i32 { self.buf[(self.head + 2 * frame + ch) % PCM] as i32 }
+    /// `out`'s frames of `channels` channels at `hz`: the waiting PCM read at its rate, silence where it runs short.
+    pub fn take(&mut self, out: &mut [i16], channels: usize, hz: u32) {
+        let step = ((PCM_HZ as u64) << 16) / hz as u64;
+        for frame in out.chunks_mut(channels) {
+            if self.frames() < 2 { frame.fill(0); self.short += 1; continue; }
+            let f = self.frac as i32;
+            let (l, r) = ((self.at(0, 0) * (65536 - f) + self.at(1, 0) * f) >> 16, (self.at(0, 1) * (65536 - f) + self.at(1, 1) * f) >> 16);
+            if channels == 1 { frame[0] = ((l + r) / 2) as i16; } else { (frame[0], frame[1]) = (l as i16, r as i16); }
+            let next = self.frac as u64 + step;
+            let whole = (next >> 16) as usize;
+            self.frac = (next & 0xFFFF) as u32;
+            let n = whole.min(self.frames());
+            self.head = (self.head + 2 * n) % PCM;
+            self.len -= 2 * n;
+        }
+    }
+}
+
 pub struct Source {
     pub handle: Option<u16>,
     pub sig: Option<u16>,
@@ -128,6 +173,7 @@ pub struct Source {
     min_bitpool: u8,
     enc: Encoder,
     pub tone: Tone,
+    pub pcm: Pcm,
     seq: u16, timestamp: u32, started: u64, pub sent: u64, played: u64, pub packets: u32, pub late: u32,
     rx: [u8; 512], rx_len: usize,
 }
@@ -140,14 +186,14 @@ impl Source {
     pub fn new() -> Self {
         let cfg = Config { rate: 3, blocks: 16, mode: Mode::Joint, snr: false, subbands: 8, bitpool: BITPOOL };
         Self { handle: None, sig: None, media: None, state: State::Idle, ours: false, remote: 0, candidates: [0; 8], tried: 0, found: 0, label: 0, pending: None,
-               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0,
+               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0,
                late: 0, rx: [0; 512], rx_len: 0 }
     }
 
     fn reset(&mut self) {
-        let tone = core::mem::replace(&mut self.tone, Tone::new(440, 660, 48_000, 8192));
+        let level = self.tone.level;
         *self = Self::new();
-        self.tone = tone;
+        self.tone.level = level;
     }
 
     /// A secure link to an audio device: our signalling channel, unless the sink opened one.
@@ -425,7 +471,7 @@ impl Source {
             let mut at = 0;
             for _ in 0..frames {
                 let n = cfg.samples() * cfg.channels();
-                self.fill(&mut pcm[..n], cfg.channels(), cfg.hz());
+                self.fill(&mut pcm[..n], cfg.channels(), cfg.hz(), ctl.now);
                 at += self.enc.frame(&pcm[..n], &mut packet[at..]);
             }
             if !chans.send(ctl, handle, media, &[&rtp, &[frames as u8], &packet[..at]]) { break; }
@@ -436,8 +482,9 @@ impl Source {
         }
     }
 
-    /// The tone, 0.4 s of every second, else silence.
-    fn fill(&mut self, out: &mut [i16], channels: usize, hz: u32) {
+    /// PCM while it is fed; else the tone, 0.4 s of every second, else silence.
+    fn fill(&mut self, out: &mut [i16], channels: usize, hz: u32, now: u64) {
+        if self.pcm.fed_at.is_some_and(|at| now < at + PCM_HOLD_MS) { self.pcm.take(out, channels, hz); return; }
         self.tone.fill(out, channels);
         if self.played % hz as u64 >= hz as u64 * 4 / 10 { out.fill(0); }
         self.played += (out.len() / channels) as u64;

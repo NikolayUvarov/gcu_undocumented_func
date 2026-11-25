@@ -551,6 +551,13 @@ impl Stack {
         self.le.tick(&mut self.ctl);
     }
 
+    /// PCM for the stream (16-bit stereo, 48 kHz), from the audio gateway's sink; it replaces the tone while it comes.
+    pub fn audio(&mut self, samples: &[i16]) { self.a2dp.pcm.push(samples, self.ctl.now); }
+    /// Whether a stream runs, and how many 48 kHz frames it would take now to keep a tenth of a second waiting.
+    pub fn audio_wanted(&self) -> Option<usize> {
+        (self.a2dp.state == avdtp::State::Streaming).then(|| (avdtp::PCM_HZ as usize / 10).saturating_sub(self.a2dp.pcm.frames()))
+    }
+
     /// The LE long term key a link's pairing gave, kept for the device.
     pub fn keep_ltk(&mut self, addr: Addr, ltk: Ltk) { if let Some(d) = self.devices.get_mut(addr) { d.ltk = Some(ltk); self.ups.push(UP_KEYS, &[]); } }
 }
