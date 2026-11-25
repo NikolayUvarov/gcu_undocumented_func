@@ -12,7 +12,7 @@ use mind::block::{self, Driver, DriverError, Outcome, Refused};
 use mind::dev::{cap_info, Dma, Mmio};
 
 mod guard;
-use guard::{Tag, OP_CREATE_CQ, OP_CREATE_SQ, OP_FLUSH, OP_IDENTIFY, OP_READ, OP_WRITE};
+use guard::{Tag, OP_CREATE_CQ, OP_CREATE_SQ, OP_FLUSH, OP_IDENTIFY, OP_READ, OP_SET_FEATURES, OP_WRITE, QUEUES_FEATURE};
 
 const CAP: usize = 0x00; const CC: usize = 0x14; const CSTS: usize = 0x1C; const AQA: usize = 0x24; const ASQ: usize = 0x28; const ACQ: usize = 0x30;
 const ENTRIES: u16 = 16; // per queue: 16 commands of 64 bytes, 16 completions of 16
@@ -66,10 +66,16 @@ impl Nvme {
         let lba_shift = id[128 + 4 * format + 2];
         if lba_shift != 9 { mind::println!("{} NAMESPACE 1 HAS {}-BYTE SECTORS: ONLY 512 ARE SERVED", tag, 1u64 << lba_shift); return None; }
         nvme.sectors = size;
+        // A read-only instance asks for one queue pair first (Number of Queues), as Linux does for every controller; the
+        // first creates its queues without, as before. A failed ask is said, and the queues are created all the same.
+        if !writes && nvme.admin_command(OP_SET_FEATURES, 0, 0, [QUEUES_FEATURE, 0, 0, 0, 0, 0]).is_none() {
+            mind::println!("{} SET FEATURES (NUMBER OF QUEUES) FAILED: THE I/O QUEUES ARE CREATED WITHOUT IT, AS FOR THE FIRST INSTANCE", tag);
+        }
         // One I/O queue pair, polled (no interrupts).
         let (cq, sq) = (nvme.dma.physical(IO_CQ), nvme.dma.physical(IO_SQ));
-        nvme.admin_command(OP_CREATE_CQ, 0, cq, [(ENTRIES as u32 - 1) << 16 | 1, 1, 0, 0, 0, 0])?;
-        nvme.admin_command(OP_CREATE_SQ, 0, sq, [(ENTRIES as u32 - 1) << 16 | 1, 1 << 16 | 1, 0, 0, 0, 0])?;
+        let created = nvme.admin_command(OP_CREATE_CQ, 0, cq, [(ENTRIES as u32 - 1) << 16 | 1, 1, 0, 0, 0, 0])
+            .and_then(|()| nvme.admin_command(OP_CREATE_SQ, 0, sq, [(ENTRIES as u32 - 1) << 16 | 1, 1 << 16 | 1, 0, 0, 0, 0]));
+        if created.is_none() { mind::println!("{} NAMESPACE 1: {} SECTORS, BUT ITS I/O QUEUES WERE NOT CREATED", tag, size); return None; }
         (nvme.sectors != 0).then_some(nvme)
     }
 
@@ -84,7 +90,7 @@ impl Nvme {
     // command passes here: one an instance that does not write may not send is refused before the queue is touched.
     fn submit(&mut self, queue: &mut Queue, opcode: u8, nsid: u32, prp1: u64, prp2: u64, dwords: [u32; 6]) -> Option<()> {
         let kind = if queue.id == 0 { guard::Queue::Admin } else { guard::Queue::Io };
-        if !guard::allowed(self.writes, kind, opcode) {
+        if !guard::allowed(self.writes, kind, opcode, dwords[0]) {
             if let Some(n) = self.refusals.one() {
                 mind::println!("{} {} COMMAND {:#04x} ({}) NOT SENT: THE DISK IS READ-ONLY AT THE TESTING STAGE; REFUSAL {}{}",
                                self.tag, if kind == guard::Queue::Admin { "ADMIN" } else { "I/O" }, opcode, guard::name(kind, opcode), n, guard::after(n));
@@ -110,6 +116,8 @@ impl Nvme {
         queue.head = (queue.head + 1) % ENTRIES;
         if queue.head == 0 { queue.phase = !queue.phase; }
         self.regs.write32(queue.cq_bell, queue.head as u32);
+        // An admin command's failure is said with its status (type and code), for a bring-up that stops.
+        if status >> 17 & 0x7FFF != 0 && queue.id == 0 { mind::println!("{} ADMIN COMMAND {:#04x} ({}): STATUS TYPE {}, CODE {:#04x}", self.tag, opcode, guard::name(kind, opcode), status >> 25 & 7, status >> 17 & 0xFF); }
         (status >> 17 & 0x7FFF == 0).then_some(())
     }
 

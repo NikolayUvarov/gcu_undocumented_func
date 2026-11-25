@@ -1,10 +1,13 @@
 // What an nvme instance sends its controller (213-DRV-0060): the first instance (init's argument empty or 0) every
-// command the driver uses; any other instance, or an argument that names none, only Identify, the I/O queues' creation
-// and Read, so its disk is never written while it is tested. Built on the host for tests (tests/nvme_host.rs).
+// command the driver uses; any other instance, or an argument that names none, only Identify, the I/O queues' bring-up
+// (their number, then their creation) and Read, so its disk is never written while it is tested. Built on the host for
+// tests (tests/nvme_host.rs).
 use core::fmt;
 
 // Admin commands (NVMe 1.4, figure 139) and I/O commands (figure 346) the driver sends.
-pub const OP_CREATE_SQ: u8 = 0x01; pub const OP_CREATE_CQ: u8 = 0x05; pub const OP_IDENTIFY: u8 = 0x06;
+pub const OP_CREATE_SQ: u8 = 0x01; pub const OP_CREATE_CQ: u8 = 0x05; pub const OP_IDENTIFY: u8 = 0x06; pub const OP_SET_FEATURES: u8 = 0x09;
+// Set Features' command dword 10 for the Number of Queues (feature 07h), not saved (SV, bit 31, clear).
+pub const QUEUES_FEATURE: u32 = 0x07;
 pub const OP_FLUSH: u8 = 0x00; pub const OP_WRITE: u8 = 0x01; pub const OP_READ: u8 = 0x02;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,10 +24,11 @@ pub fn instance(args: &str) -> Option<u32> {
 // Whether the instance writes its disk: the first alone; another made writable is a task of its own (213-DRV-0105).
 pub fn writes(instance: Option<u32>) -> bool { instance == Some(0) }
 
-// Whether `opcode` on `queue` reaches the controller: an allow-list for an instance that does not write.
-pub fn allowed(writes: bool, queue: Queue, opcode: u8) -> bool {
+// Whether `opcode` with command dword 10 `cdw10` on `queue` reaches the controller: an allow-list for an instance that
+// does not write; of Set Features only the number of queues, unsaved, which the queues' bring-up needs.
+pub fn allowed(writes: bool, queue: Queue, opcode: u8, cdw10: u32) -> bool {
     writes || match queue {
-        Queue::Admin => matches!(opcode, OP_IDENTIFY | OP_CREATE_CQ | OP_CREATE_SQ),
+        Queue::Admin => matches!(opcode, OP_IDENTIFY | OP_CREATE_CQ | OP_CREATE_SQ) || (opcode == OP_SET_FEATURES && cdw10 == QUEUES_FEATURE),
         Queue::Io => opcode == OP_READ,
     }
 }
