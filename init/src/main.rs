@@ -1039,6 +1039,8 @@ impl Init {
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
                 // BENCH ONLY (700-BLT-0008, asked of KRN): the input privilege, as usb_hid has it, for a Bluetooth keyboard and mouse.
                 grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
+                // BENCH ONLY (700-DRV-0110, asked of KRN): audio_gw's client badged for its sink, the headphones' output.
+                if self.running(service_index("audio_gw")) { grants.add(SLOT_AUDIO, self.badged(&mut minted, "audio_gw", mind::audio::BADGE_SINK)?, CLIENT); }
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
