@@ -264,7 +264,8 @@ impl Model {
                 Step::Wait { reg, mask, value, .. } => assert_eq!(self.read(reg) & mask, value, "wait {} never ends at {:x}", i, reg.offset()),
                 Step::Call(t) => self.tables.push((i, t)),
                 Step::Frames { otg, .. } => assert_eq!(self.read(R::OtgControl.at(otg).unwrap()) & 1, 1, "frames waited for on a stopped generator"),
-                Step::Begin(_) => {}
+                Step::Hold { .. } => {}
+                Step::Reference | Step::Draw | Step::Late | Step::NoUnderflow | Step::ReadBack { .. } | Step::Watch { .. } | Step::Offer | Step::Begin(_) => {} // step 4's, after first light's plan
             }
         }
     }
@@ -325,6 +326,60 @@ fn first_light_programs_the_second_pipe_in_display_cores_order() {
     assert!(at(dcn::TABLE_SETPIXELCLOCK) < step_of(R::OtgHTotal.at(1).unwrap()), "the pixel clock before the timing");
     assert!(at(dcn::TABLE_DIG1TRANSMITTERCONTROL) > step_of(R::DigBeCntl.at(0).unwrap()), "the PHY after its back end");
     assert!(matches!(plan.steps().last(), Some(Step::Update { reg, .. }) if reg == R::DigFeCntl.at(0).unwrap()));
+    // The DIG_START pulse: the FIFO held in reset by a step of its own, as Display Core's udelay, in either order; the
+    // survey's log held it 21 ms on the Ryzen besides (213-DRV-0098).
+    let fe = R::DigFeCntl.at(0).unwrap();
+    let steps: Vec<Step> = plan.steps().collect();
+    let n = steps.len();
+    assert_eq!(steps[n - 3..], [Step::Update { reg: fe, mask: 1 << 10, value: 1 << 10 }, Step::Hold { us: dcn::DIG_START_HOLD_US }, Step::Update { reg: fe, mask: 1 << 10, value: 0 }]);
+    assert!(dcn::DIG_START_HOLD_US >= 1);
+}
+
+#[test]
+fn hdmi_signalling_adds_display_cores_stream_set_up_and_an_avi_infoframe_to_stage_6() {
+    let hdmi = first_light(PIPE1, HDMI_A, &CEA_1080P60, Signal::Hdmi, Pattern::ColorSquares, FIRMWARE).unwrap();
+    let dvi = first_light(PIPE1, HDMI_A, &CEA_1080P60, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).unwrap();
+    // The three tables in HDMI mode (encoder mode 3), the same clock.
+    let tables: Vec<Table> = hdmi.steps().filter_map(|s| if let Step::Call(t) = s { Some(t) } else { None }).collect();
+    assert_eq!(&tables[0].parameters().0[..10], &[0xC8, 0xA8, 0x16, 0x00, 20, 0x1E, 3, 0, 1, 0]);
+    assert_eq!(&tables[1].parameters().0[..9], &[0, 0x0F, 3, 4, 0x02, 0x3A, 0, 0, 2]);
+    assert_eq!(&tables[2].parameters().0[..11], &[0, 1, 3, 4, 0x02, 0x3A, 0, 0, 1, 1, 0x0C]);
+    // Stage 6's extra writes after DIG_FE_CNTL, in enc1_stream_encoder_hdmi_set_stream_attribute's and
+    // enc1_update_generic_info_packet's order, all on DIG front end A; nothing else differs from DVI's plan.
+    let d = |r: R| r.at(0).unwrap();
+    let extra: Vec<Step> = {
+        let fe = hdmi.steps().position(|s| matches!(s, Step::Update { reg, .. } if reg == d(R::DigFeCntl))).unwrap();
+        hdmi.steps().skip(fe + 1).take_while(|s| !matches!(s, Step::Begin(7))).collect()
+    };
+    let regs: Vec<Reg> = extra.iter().map(|s| match s { Step::Update { reg, .. } | Step::Wait { reg, .. } => *reg, _ => panic!("{:?}", s) }).collect();
+    assert_eq!(regs, [d(R::HdmiControl), d(R::HdmiVbiPacketControl), d(R::HdmiGc), d(R::AfmtCntl), d(R::AfmtVbiPacketControl), d(R::AfmtVbiPacketControl),
+        d(R::AfmtVbiPacketControl), d(R::AfmtGenericHdr), d(R::AfmtGeneric0), d(R::AfmtGeneric1), d(R::AfmtGeneric2), d(R::AfmtGeneric3), d(R::AfmtGeneric4),
+        d(R::AfmtGeneric5), d(R::AfmtGeneric6), d(R::AfmtGeneric7), d(R::AfmtVbiPacketControl1), d(R::HdmiGenericPacketControl0), d(R::HdmiGenericPacketControl1)]);
+    assert!(matches!(extra[4], Step::Wait { mask: 0x1_0000, value: 0, .. }), "the generic packet's conflict awaited clear");
+    assert_eq!(hdmi.len(), dvi.len() + extra.len());
+    // HDMI_CONTROL: packet version 1, keep-out mode, null packets filled, no deep colour or scrambling; the general
+    // control and null packets sent; the AVI packet sent every frame on line 2.
+    let m = |i: usize| match extra[i] { Step::Update { mask, value, .. } => (mask, value), _ => unreachable!() };
+    assert_eq!(m(0), (0x3100_001F, 0x19));
+    assert_eq!(m(1), (0x1031, 0x31));
+    assert_eq!(m(17), (0x3, 0x3));
+    assert_eq!(m(18), (0xFFFF, 2));
+    // The AVI infoframe for 1920x1080 at 60 Hz: version 2, 13 bytes; RGB, active format as the picture, 16:9, full
+    // range, VIC 16; its checksum makes the packet sum to 0.
+    let (header, words) = dcn::avi_infoframe(&CEA_1080P60);
+    assert_eq!((header, words[0], words[1]), (0x000D_0282, 0x0828_101F, 16));
+    let bytes: Vec<u8> = header.to_le_bytes()[..3].iter().copied().chain(words.iter().flat_map(|w| w.to_le_bytes()).take(14)).collect();
+    assert_eq!(bytes.iter().fold(0u8, |s, b| s.wrapping_add(*b)), 0);
+    assert_eq!((m(7), m(8)), ((0xFFFF_FFFF, 0x000D_0282), (0xFFFF_FFFF, 0x0828_101F)));
+    // 3440x1440: no VIC, no aspect code (CTA-861 has none for 64:27 outside its VICs).
+    let wide = Timing { pixel_khz: 324_000, h_active: 3440, h_front: 48, h_sync: 32, h_back: 80, v_active: 1440, v_front: 3, v_sync: 5, v_back: 52,
+        h_sync_positive: true, v_sync_positive: false, interlaced: false };
+    assert_eq!(dcn::avi_infoframe(&wide).1[..2], [0x0808_104F, 0]);
+    assert_eq!(timing::vic_of(&CEA_1080P60), Some(16));
+    assert_eq!(timing::vic_of(&wide), None);
+    // Within HDMI's 340 MHz the plan takes 3440x1440; DVI refuses it.
+    assert!(first_light(PIPE1, HDMI_A, &wide, Signal::Hdmi, Pattern::ColorSquares, FIRMWARE).is_ok());
+    assert_eq!(first_light(PIPE1, HDMI_A, &wide, Signal::Dvi, Pattern::ColorSquares, FIRMWARE).err(), Some(PlanError::ClockTooHigh));
 }
 
 #[test]

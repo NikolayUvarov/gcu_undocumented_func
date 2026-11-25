@@ -25,7 +25,7 @@ With 0094's step 2 the IN rings stay full through such waits, but the playback (
 - [x] A host case: the pieces of every length are in order, none longer than 256 bytes, none skipped (`tests/serial_host.rs`, `a_write_goes_in_pieces_of_at_most_256_bytes_in_order`).
 - [x] QEMU's `link` and `usbaudio` suites pass. (2026-11-22, LEG9, on 50f714052: `link` through QEMU's FT232, which writes through the same pieces; `usbaudio` with the audiostub check; `usb` too.)
 - [ ] On the Ryzen, run D again (`audiostub duplex 300 0` with one log read in its middle): no dry playback ring in the read.
-- [ ] The cable's throughput before and after, measured as a log read of a known size timed, shows the link no slower. Holds for that machine, that converter and that release (MC-12.1).
+- [x] The cable's throughput before and after, measured as a log read of a known size timed, shows the link no slower. Holds for that machine, that converter and that release (MC-12.1). (2026-11-22: 27.6 KB/s before, 33.3 KB/s after; below.)
 
 ## Progress (2026-11-22)
 
@@ -34,8 +34,13 @@ With 0094's step 2 the IN rings stay full through such waits, but the playback (
   - Five reads of the same 137 818 bytes of the Ryzen's log over the cable (`effector485 … log from=0 max_bytes=200000`, timed on LEG9) took 4.97, 4.98, 5.00, 7.74 and 7.91 s.
   - That is 27.6 KB/s for the three steady ones; the two slow ones look like the cable tool's own overhead.
   - The same five reads go after a release with the pieces.
+- **The throughput after,** release 202611221429 (boot 93; its `usb_serial` and `usb_host` from 43686b6a2), 15:36 UTC, no lease, nothing replaced, nothing typed. The same `log from=0` reads, timed on LEG9:
+  - five reads of 200 000 bytes' records (200 621 bytes of text each; the last 200 310) took 5.94, 9.14, 5.97, 5.97 and 6.04 s;
+  - three of the size read before (`max_bytes=137400`: 137 481, 137 776 and 137 776 bytes) took 7.22, 4.12 and 4.16 s.
+  - That is 33.3 KB/s for the steady ones, against 27.6 KB/s before. The pieces did not make the link slower.
+  - The one slow read of each set looks like the cable tool's own overhead, as before. The two boots ran different releases, so the gain is not shown to be the pieces'.
 - **Not yet on the Ryzen:**
-  - the cable's PC end (COM22) was lost at about 11:23 UTC and needs the maintainer;
+  - the cable's PC end (COM22) was lost at about 11:23 UTC; it was back by 15:30;
   - the STM-Speaker board left the Ryzen at 11:16:42 UTC, so run D waits for it to come back.
 
 ## Related

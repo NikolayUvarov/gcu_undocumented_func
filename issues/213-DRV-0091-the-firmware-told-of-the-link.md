@@ -123,6 +123,24 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 - **Sends that outran their time:** this evening the old driver had almost none too (9 in boot 60's 15 minutes of a 30 MB download). The lower count of 20:13–20:16 was the hour, not the change; nothing is claimed about them.
 - **Tonight's test:** the boot image's driver runs through the night, with Effector's traffic. Its boot logs are read for the beacons, late sends, holes, stalls and anything new from the firmware now that it knows the link.
 
+**2026-11-21, step 2 written** (branch `claude/213-DRV-0091-step-2-the-port`; host cases; not yet run on the Ryzen):
+- **`station.rs`, `port_link(bus, linked)`:** Linux's `rtw89_mac_port_update` (mac.c) for a port whose function is on:
+  - `rtw89_mac_port_cfg_func_sw` turns PORT_FUNC_EN and BRK_SETUP off, sets TSFTR_RST and writes BCN_CNT_TMR 0;
+  - then PORT_CFG's link fields for INFRA: NET_TYPE 2 (`rtw89_mac_port_cfg_net_type`), TBTT_PROHIB_EN and BRK_SETUP (`…_bcn_prct`), RX_BSSID_FIT_EN (`…_rx_sw`) and TSF_UDT_EN (`…_rx_sync_by_nettype`), or none of them for NO_LINK;
+  - PORT_FUNC_EN on (`…_func_en`), 20 µs (`BCN_ERLY_SET_DLY`), the beacon-early time 160 (`…_bcn_early`) and BCN_PSR_RPT's BSSID index 0 (`…_bcn_psr_rpt`).
+- **The beacon timing the station stage already writes** (setup, hold, mask area, the interval at 100 TU, TBTT early, HIQ, MBSSID) is the same for INFRA and NO_LINK in Linux, and is not written again. Linux's interval is the BSS's `beacon_int`; this driver keeps Linux's default `BCN_INTERVAL` 100. The bench access point's own interval is not read yet.
+- **Linux's wait of a beacon interval and a millisecond before turning the port off** (`msleep(beacon_int + 1)`) is the data service's: `PORT_WAIT_MS` 101 after the link's H2Cs, then the port update as its own operation when no send is pending. On a new filter, the NO_LINK port follows the NO_LINK H2Cs at once.
+- **The station's register checks** (`verify`, run at every data-mode check) expect PORT_CFG to read `0x1281C` under mask 0x13E1F once linked, and 4 otherwise.
+- **Line:** `[RTW89] PORT 0 SET FOR INFRA|NO LINK ON CHANNEL c (…; 213-DRV-0091)`, with the registers after it (`PORT AFTER n`) the first times.
+- **Host case:** `service_the_link_sets_port_0_for_infra_after_a_beacon_interval`:
+  - the H2Cs first, with the port untouched;
+  - nothing at 50 ms;
+  - at 110 ms PORT_CFG reads `1281C`;
+  - steps with traffic run on under the new expectation;
+  - the deauthentication brings it back to 4.
+
+  The 40 `rtw89_*_host.rs` files pass. Its hardware run comes after step 1's night, measured as step 1 was.
+
 **2026-11-22, boot 62: the data mode stopped twice on an unreadable CMAC register** (98 minutes, the boot image's driver):
 - **The stops:** at 1003.959 s and 3248.465 s. Each was `Station(CheckFailure { cause: Fault { kind: PowerState, register: 0x40018, value: DEADBEEF } })`: the station check read the CMAC window and got DEADBEEF. A fresh driver started each time.
 - **The registers at the stops:**
@@ -278,6 +296,22 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
   - Before the change, the unreadable-window case failed under it, as the Ryzen did. Every other case of the 40 files passed.
   - After the change, all 40 pass, and the release build builds.
 
+**2026-11-22, 04:57–05:07 UTC, step 2's first run on the Ryzen, back to back** (release 202611220438, boot 66, its driver 07e59deb9). Step 2 is 611499237, which is 07e59deb9 plus the port alone, put in by `replace`. Channel 8, UZ, three 6 MB downloads each, by the sender's figures:
+
+| Driver | 6 MB downloads | The stack's KiB/s | BSS beacons a minute | Sends outrun a minute | Holes, stops |
+|---|---|---|---|---|---|
+| Step 2 (replace) | 306, 186, 193 KB/s | 260, 157, 167 | 581, 579, 577 | 0, 5, 20 | none |
+| 07e59deb9 (boot image) | 247, 265, 346 KB/s | 214, 245, 249 | 579, 582 | 2, 2 | none |
+| Step 2 (replace again) | 347, 340, 312 KB/s | 260, 252, 248 | 576, 577 | 0, 2 | none |
+
+- **The port:**
+  - `PORT 0 SET FOR INFRA ON CHANNEL 8` came 0.10 s after `THE FIRMWARE TOLD: CONNECTED`, each time.
+  - PORT_CFG (0xC400) read C004 before and after the link's H2Cs, and 1E81C after the port step. Under the check's mask 0x13E1F that is 1281C, the INFRA expectation.
+- **The error masks in data mode** (the probe now reads them): DMAC_ERR_IMR 0x8520 and CMAC_ERR_IMR 0xC160 read FFFFFFFF, as written. RX_ERR_FLAG_IMR 0xC804, which neither this driver nor Linux writes, reads 00202800.
+- **The rate:** no difference is shown. The spread within the step 2 sets (186 to 347) is larger than between the drivers. Step 2's first set had 20 late sends in its third minute; its second set had 2.
+- **The cameras' usb_host replaces** (04:51:25 and 04:55:41, just before this run) left no line from the driver beyond its minute lines.
+- **Left running:** the boot image's driver, 07e59deb9.
+
 **2026-11-22, why the driver masks HIMR0's halt bit, and HISR0 read under the mask** (branch `claude/213-DRV-0091-the-halt-status`, on 07e59deb9; host cases, not yet run on the Ryzen):
 - **Who masks the bit, and why.** `mac::mask_host` came with 71589b8b9 (213-DRV-0032, 2026-11-04, "the bounded diagnostic passes on the Ryzen").
   - Its message: "the three host interrupt masks cleared, before the MAC preparation and after the download (the firmware enables HIMR0's halt interrupt), as disable_intr does".
@@ -355,6 +389,222 @@ From `rtw89_core_sta_link_assoc` (core.c) and `__rtw89_ops_bss_link_assoc` (mac8
 - **Not yet shown:**
   - This is one meeting only.
   - The count's rise of 30 between 66 and 666 s of this boot, during the display's stage runs, is not explained. In boot 65 it rose by 1 or 2 at a time.
+
+**2026-11-22, the recoveries under load, and an instrument to place them** (reading of boots 74 to 79, then branch `claude/213-DRV-0091-the-recoveries-placed`, on step 2's 3c6a1de2b; host cases, not run):
+- **The count's rises against what ran** (each ten-minute window between GOOD LINK probes, `wf-bench/windows.py`; the loads from the bench log):
+  - Without boot 74's first ten minutes (+30, during the display's stages 1 to 15 and the start of a duplex audio run), the windows with USB or audio load gave +14 in about 60 minutes. The idle windows gave +5 in about 140, about 2 an hour, as boot 65's night did.
+  - The load is not the whole story. A window with the audio run on gave 0, and an idle one gave +2.
+- **What the minute lines say about our own task's starvation: nothing either way.**
+  - In every window, including those with rises, the driver's minute lines kept their 60 s within 2 to 20 ms, the inbox was never full, and the frames kept stayed at 1000 to 1200 a minute.
+  - Sampled once a minute, that cannot show a stall of tens of ms between two polls of the ring.
+- **The change:**
+  - **Every step of SER_DBG_INFO placed.** Each data-mode check reads SER_DBG_INFO, one register. When it moves:
+
+    ```
+    [RTW89] SER_DBG_INFO STEP n: a -> b, SEEN t US AFTER THE CHECK BEFORE; THIS MINUTE'S RX POLLS SO FAR: RXQ LONGEST GAP g US, MOST WAITING w; RPQ … (213-DRV-0091)
+    ```
+
+    The step lies between the two checks.
+  - **The ring's polls.** `rx::Rings::receive` keeps, for RXQ and RPQ:
+    - the longest time between two of its polls;
+    - the most descriptors waiting at one poll, the hardware index ahead of the host's, out of 256.
+
+    The minute line gives them and starts them again:
+
+    ```
+    [RTW89] TRAFFIC ON c: RX POLLS: RXQ LONGEST GAP g US, MOST WAITING w; RPQ LONGEST GAP g US, MOST WAITING w; OF 256 (213-DRV-0091)
+    ```
+
+- **What it tells.** If our task is starved, a step should follow a long gap or a ring near full. If not, steps come with short gaps and a low backlog. The runs planned are an hour under load (duplex audio, with two-camera video if the console allows) and an idle hour, on the same build.
+- **Host case:** `service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls`. It covers:
+  - three frames waiting at one poll;
+  - a silent recovery's step from 0 to 1, placed with its time since the check before and the polls so far;
+  - the minute line's polls, and the next minute's starting again.
+
+  The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, boot 81: the instrument's first idle half hour** (release 202611221107, S/rz37 57b609354. It is step 2 plus 8e57f1c56. Its USB side changed with it too: CAM's usb_host steps and usb_serial's pieces. Read through the server):
+- **Two USB events, neither ours:** the speakerphone left the hub (`XHCI 1: DEVICE ON PORT 1.4 GONE`, 321.1 s, 11:16:42 UTC), and the cable's converter on the PC's side failed (`[LINK] MARK: Unconnected`, 706.5 s, 11:23:07 UTC). From then on there was no load, and boot 81 is an idle run.
+- **A meeting with no recovery:** `833.232 … CHECK MET AN UNREADABLE CMAC 1: 40018 READ DEADBEEF, READABLE AGAIN AFTER 2 READS IN 1327 US; SER_DBG_INFO 00000000 -> 00000000`.
+  - SER_DBG_INFO did not move at this check or any other, and the boot has no `SER_DBG_INFO STEP` line.
+  - The window can read DEADBEEF for about 1.3 ms without a recovery being counted.
+  - It came two minutes after the link's mark went Unconnected (11:25:14 against 11:23:07 UTC). The times show no more than that.
+- **The ring's polls, 31 minutes to 1866 s:**
+  - RXQ's longest gap a minute had a median of 18.8 ms (18.3 to 19.8 ms), and 27.0 ms in the first minute.
+  - The most descriptors waiting at one poll had a median of 31, at most 39 of 256.
+  - RPQ never had more than 1 waiting.
+  - The minutes with a probe (every tenth) were no longer than the others, so the probe does not set the 19 ms.
+- **What the design intends and what it does not explain:**
+  - Each service step waits at most POLL_MS (2 ms) for a request (`recv_timeout`), then drains up to DRAIN (64) descriptors of each ring. The checks and the coexistence reconcile run once in CHECK_MS (10 ms) after the queue reads empty. So the design's cadence is about 2 ms plus a step's own work.
+  - The worst cases written into the loop:
+    - a recovery outlasted: SER_WAIT_US 60 ms plus SER_GRACE_US 20 ms;
+    - an unreadable window read again: 16 reads 1 ms apart;
+    - an H2C waiting its whole COMMAND_US: 100 ms;
+    - the service's 16-frame buffer full, which leaves RXQ unread until wlan reads.
+  - None of these recurs every minute at idle. So the steady 19 ms is not explained by the design, and its cause is not known.
+  - Headroom: at idle about 525 descriptors arrive a second (frames and PPDU reports), so 256 last about half a second. Even 100 ms leaves half the ring.
+- **To place the 19 ms** (this commit): the minute line also gives each ring's gaps over 5 ms and over 10 ms, and how long ago the longest ended:
+
+  ```
+  [RTW89] TRAFFIC ON c: RX POLL GAPS OVER 5 / 10 MS: RXQ a / b, RPQ c / d; THE LONGEST ENDED x / y MS AGO (213-DRV-0091)
+  ```
+
+  - Many such gaps a minute would be periodic work of our own.
+  - A handful at random offsets would be the scheduler.
+  - A fixed offset from the minute line would be the minute's own work.
+
+  The new host case is `the_rings_keep_their_poll_gaps_and_backlog_until_taken` (tests/rtw89_rx_host.rs). The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+
+**2026-11-22, boot 82: sends held in the MAC; what holds them, and the calibrations' results** (branch `claude/213-DRV-0091-the-recoveries-placed`; host cases, not run):
+- **What boot 82 showed** (release 202611221215, read from the stick; boot 83 is the same image and sent well):
+  - 22% of sends late: 228 of 1027 over 8 minutes, against at most 2.3% in the 33 other driver starts of boots 55 to 83 with minute lines.
+  - Of its 221 late frames, 155 were in the end acknowledged at the first try. They were released at a median of 222 ms after their submission (90th percentile 832 ms, longest 2.5 s), after the TX DMA had fetched them.
+  - So the MAC held the frames and then sent them once. The access point did not fail to acknowledge them.
+  - Every other boot shows the same kind of late frame at a low rate (boots 65, 76, 79, 81: all at least half acknowledged at the first try, medians 138 to 199 ms).
+  - The starts, line by line, and the register dumps at the port step and in the first minute (their pieces joined) do not tell boot 82 from 80, 81 and 83.
+  - Its first minute had RXQ MOST WAITING 255 of 256, where boots 81 and 83 had 34.
+- **The change:**
+  - **A late frame probed while the MAC holds it.** It reads directly, with no RF read, no indirect window and no H2C: `data_mode::HELD_MAC` and `HELD_BB`. These are the coexistence control byte and scoreboard, MACID pause and sleep, CTN_TXEN, port 0's PORT_CFG, TBTT_PROHIB, BCN_AREA, the early-interrupt times, BCN_SPACE, BCN_CNT_TMR and the TSF, the PTCL settings, Linux's coexistence monitor set, the RX ring indexes, and BB's 0x980, the EDCCA level and its reports, and TX collision.
+    - The first 8 late frames of a run are probed, then at most one a minute.
+    - The line gives the time since the frame's submission, and where in the beacon interval it was submitted and is now: by our clock since the last beacon taken from the ring, and by the TSF modulo the beacon's own interval.
+    - One frame released in time after the first held one is probed once beside them:
+
+    ```
+    [RTW89] HELD FRAME (LATE n): t MS SINCE ITS SUBMISSION; SUBMITTED a / b MS INTO THE BEACON INTERVAL OF i MS (OUR CLOCK / TSF), NOW c / d (213-DRV-0091)
+    [RTW89] HELD FRAME'S REGISTERS: … (213-DRV-0091)
+    [RTW89] A FRAME RELEASED IN TIME, BESIDE THE HELD ONES: …
+    ```
+
+  - **The minute line:**
+
+    ```
+    [RTW89] TRAFFIC ON c: LATE FRAMES RELEASED n: m ACKNOWLEDGED AT THE FIRST TRY, k NEVER; THEIR MEDIAN HOLD h MS; THE FRAME BUFFER FULL f TIMES, THE LONGEST l MS (213-DRV-0091)
+    [RTW89] TRAFFIC ON c: RELEASES BY THE BEACON INTERVAL'S PHASE, 10 MS BINS: BY OUR CLOCK [...]; BY THE TSF [...] (213-DRV-0091)
+    ```
+
+    A hold locked to the TBTT would pile the releases into a few bins. By our clock the phase is good to the ring's poll cadence. By the TSF it holds only while the port's TSF follows the access point's, which is step 2's TSF_UDT.
+  - **The calibrations at admission,** two lines a path, each with PASS or FAIL by Linux's criteria in rtw8852b_rfk.c at 05f7e89:
+    - IQK: LOK's IDAC and VBUF words in range, as `_lok_finetune_check` (line 1147; the ranges at 1163 and 1174: core 0x2 to 0x1D, VBUF 0x2 to 0x3D). The one-shots' failures, NCTL's report flag read by `_iqk_check_cal` (line 253) for each `_iqk_one_shot` (line 815). The restore.
+    - DPK: TXAGC, thermal, and the sync's correlation and DC against `_dpk_sync_check` (line 1974; DPK_SYNC_TH_DC_I/Q 200 and DPK_SYNC_TH_CORR 170 at 1976 to 1978, the test at 2009). This driver's own sync already refuses beyond them (dpk.rs), so a DPK FAIL cannot reach the data mode.
+    - TSSI: the alignment words and the two reports. Linux sets no threshold for them, only that the alignment was done (`_tssi_alimentk_done`, line 3374).
+    - DACK runs once at the initial PHY and its result is not kept, so it is not printed. Linux's criterion is its done-polls timing out (lines 601 to 638).
+  - **A bench switch, `service::PORT_AS_LINUX`:** true, as now, sets port 0 for INFRA once linked (step 2). False leaves the port as before step 2, for a series of starts without it.
+- **Host cases:**
+  - `service_probes_held_frames_and_counts_how_the_minutes_sends_ended`. The model holds sends' final reports back. Ten late frames get eight probes and one more in the minute, an in-time frame gets its probe once, and the minute line counts 10 late, 10 at the first try, a median hold over 90 ms and the frame buffer's full spell.
+  - `calibration_results_are_judged_by_linuxs_criteria`: the DPK and IQK criteria at their edges.
+  - The 40 `rtw89_*_host.rs` files pass, and the release build builds.
+- **What a late answer does upstream.** From the code at 2e854da9c; `wlan` and `dot11` are main's at 1e9d8beb5. Nothing is changed. True of every boot at its own low rate of late frames:
+  1. **One send at a time.** A send while one is pending is answered Busy at once (rtw89_wifi/src/service.rs:536).
+  2. **The deadline.** A send's deadline is COMMAND_US less FRAME_MARGIN_MS, 100 − 10 = 90 ms (service.rs:537; the constants at 17 and 20).
+  3. **The late answer.** At the deadline, KEEP_LATE (service.rs:29) answers `Sent { acked: false, attempts }` with the tries seen so far (service.rs:265). It keeps the frame pending, its release awaited LATE_MS (5000 ms, service.rs:30) more (service.rs:262). Every send meanwhile is refused as in step 1.
+  4. **wlan waits for the answer.** `wlan`'s send is a synchronous call under its deadline (wlan/src/main.rs:468, `radio_call` at :60), so wlan is blocked for the 90 ms.
+  5. **wlan records the outcome.** A unicast data frame's answer goes to `station.sent(sent.acked, sent.attempts)` (wlan/src/main.rs:469). Any error, Busy included, goes to `station.sent(false, ATTEMPTS)` with ATTEMPTS 15 (wlan/src/main.rs:470 and :40). The frame is not sent again: a held frame does go out later, and a refused one is dropped.
+  6. **The rate steps down.** `dot11::Station::sent` (dot11/src/station.rs:443) steps the rate down at once for a frame not acknowledged (station.rs:449), and its tries count against that rate's success, which chooses the rate every RATE_WINDOW frames.
+  - **So one hold causes:**
+    - a false loss and a step down in rate;
+    - every frame sent behind it refused and lost, each another step down with 15 tries counted;
+    - wlan blocked for 90 ms.
+
+    TCP loses the refused frames. The held one reaches the peer once, unless TCP's timer runs out first. At boot 82's rate of holds, that is why the uploads failed outright.
+  - **What I would try, once the series has shown what holds the frames:**
+    - (1) answer a late send at its release, up to a bound (about 1 s), with its true tries and outcome;
+    - (2) queue sends behind a held one instead of refusing them.
+
+    (2) changes wlanhw's contract and wlan's handling of Busy, so it is NET's as well.
+- **The frame buffer:** until now nothing logged its full spells. The minute line now counts them and gives the longest. With the ring's polls every 20 ms or less, boot 82's 255 waiting needs RXQ left unread for about 0.4 s, which is the buffer full while wlan did not read. A wlan blocked in its synchronous sends is one way that happens.
+
+**2026-11-22, the service's steps timed** (branch `claude/213-DRV-0102-floor-and-answer`; host cases, not run):
+- **Why:** the RX ring's poll gaps over 5 ms (300 to 450 a minute, the longest 18 to 21 ms) still have no cause. The owner's `ps` on boot 97 shows `rtw89_wifi` on CPU 4 with `compositor` and `clipboard`, on a machine of 16 CPUs.
+- **A minute line:**
+
+  ```
+  [RTW89] TRAFFIC ON c: SERVICE STEPS: WAITS OVER 5 / 10 MS a / b, THE LONGEST w US; WORK OVER 5 / 10 MS c / d, THE LONGEST k US (213-DRV-0091)
+  ```
+
+  - A step's wait is its `recv_timeout` of POLL_MS (2 ms; IPC timeouts end at the first 1 ms tick after the time asked on x86, docs/api).
+  - A step's work is the rest of the step: the rings' polls, the checks, the dispatch.
+  - A wait far over 2 ms without a request is the task not run again on time: the scheduler, or another task on its CPU, which is KRN's. Work over it is the step's own.
+- **Host case:** the minute sends case checks both at zero over 5 ms in the model, whose receive wait ends at once.
+
+**2026-11-22, boot 99: the poll gaps are late wake-ups of an idle machine** (release with ca9da3f25; cable reads at 18:23 and 18:28 UTC):
+- **The SERVICE STEPS line:** in every minute without the cameras, the 2 ms receive wait came back after more than 5 ms 373 to 431 times, and after more than 10 ms 252 to 311 times, the longest 18 to 21 ms. The step's own work never passed 5 ms, apart from the tight poll's spin. The RX poll gaps are those waits, one for one.
+- **With CAM's two cameras streaming** (465 to 650 s): 0 waits over 5 ms in two whole minutes (552 and 612 s), the longest 2,979 and 3,204 µs. The minutes at the edges had 194 and 144. Boot 98's camera minute had shown the same: 36 against 294 to 463.
+- **What the kernel's code says** (read, not changed):
+  - IPC deadlines end only on the boot CPU's 1 ms tick (`Scheduler::timers` when cpu == 0, kernel/src/scheduler.rs:1994, 1997, 2070, 2071; :369 to 371; TICK_MS, kernel/src/arch/x86_64/interrupts.rs:7).
+  - `expire` (scheduler.rs:571) readies the task, and `wake_idle` (scheduler.rs:317 to 333) sends an idle CPU one wake IPI until it selects again.
+  - An idle CPU halts in `scheduler::idle` (scheduler.rs:2095 to 2100; `cpu::wait_for_interrupt`, kernel/src/arch/x86_64/cpu.rs:394), with no tick of its own (scheduler.rs:325).
+- **So the late wake-ups come from the kernel's idle-CPU wake path:** a late tick or timers pass on CPU 0, or a wake IPI not sent while `woken[]` stays set. They do not come from the driver or from CPU 4's sharing. That is KRN's, and the owner carries it there.
+- **Not shown:** which of those paths it is. A kernel counter per CPU would tell: IPIs sent, IPIs suppressed, timers passes late.
+- **Under uploads** (the same boot, eleven minutes at 853 to 1513 s, 400 sends a minute): 301 to 431 waits over 5 ms a minute, as on the quiet machine. Only the cameras' whole minutes had none. The figures are in [213-DRV-0104](213-DRV-0104-the-sends-answer-the-drivers-side.md), boot 99's figures.
+
+## For a successor (state on 2026-11-22)
+
+**Branches and heads** (the WIFI agent's; worktrees under the session's scratchpad, `a-*`):
+
+| Branch | Head | State |
+|---|---|---|
+| `claude/213-DRV-0087-rtl8852be-on-5-ghz` | ef2bb4f65 | In main (round 0748) |
+| `claude/213-DRV-0090-the-receiver-goes-deaf` | 96784295b | In main (round 0748) |
+| `claude/213-DRV-0091-the-firmware-told-it-is-connected` (step 1) | e4fbbd891 | In main (round 0748) |
+| `claude/213-DRV-0091-the-halt-interrupt` (the mended check, the error codes, HISR0, the PCI state, `HALT_INTERRUPT_AS_LINUX` false) | 5b105801a | In main (round 170). Superseded heads: c6202f1c8, 07e59deb9, 551b174ce |
+| `claude/213-DRV-0091-step-2-the-port` | 3c6a1de2b | Main 1e9d8beb5 merged in, so the port alone over main. Full suite green (261, 0 failed). In the boot image since boot 80. Waits for the starts series and a night that shows it does no harm |
+| `claude/213-DRV-0091-the-recoveries-placed` (on step 2) | 2e854da9c | The SER steps placed, the ring's polls and gaps, the held-frame probe, the minute's sends, the calibrations, `PORT_AS_LINUX`. In the bench tree (2fe8f4319, the release of 13:35 UTC). b7ade4b60 green (261, 0 failed); 2e854da9c's full run was in progress at this writing. Waits for the loaded hour and the series |
+| `claude/213-DRV-0091-halt-interrupt-on` (bench only, never to land) | a99e72427 | Flips `HALT_INTERRUPT_AS_LINUX` to true on 3c6a1de2b. Not run. The next one-change run after step 2's verdict |
+| `claude/550-DRV-0088-the-owners-rule` | 068c5e589 | Green 254 then. Waits for NET (wlanhw) |
+
+**Bench switches:**
+- **`mac::HALT_INTERRUPT_AS_LINUX`** (false): never run true. a99e72427 is the flip. On the Ryzen, `halt_interrupt_refusal` allows it (INTx on INTA, line 255, MSI off).
+- **`service::PORT_AS_LINUX`** (true): step 2's port. Every boot from 80 ran it true, and the starts series runs it true. False is the series to run if the held probes show the port's TBTT prohibit holding the frames.
+- The driver's older DEBUG constants (KEEP_LATE, OUTLAST_SER, OWN_DEADLINES) are as they were.
+
+**The collector and the tools** (wf-bench/ in the session's scratchpad):
+- **`collect-day.sh FIRST_BOOT READS`:**
+  - Every 30 minutes it fetches the current boot's file through the server (`hes-op.sh … collect_file log:/bootNNNN.log`, `max_bytes` 1500000) into handoff/wifi/day/.
+  - It skips a read while anyone but WIFI holds the machine.
+  - It exits at the first new CHECK MET, SER_DBG_INFO STEP, HISR0, error code, recovery, stop or hole line (seen.txt holds those already reported).
+- **Analysis scripts:**
+  - `day_report.py`: a boot's drivers, SER_DBG_INFO, meetings and line kinds;
+  - `windows.py`: the ten-minute windows against the count's rises;
+  - `traffic_minutes.py`: beacons and late sends a minute;
+  - `ser_per_driver.py`;
+  - `probe_values.py`: a probe's pieces joined, the values that differ between boots;
+  - `starts_table.py`: one row a start for the series. The series' logs come into handoff/wifi/starts/.
+- **The rtw89 host files:**
+  - `wf-bench/hosttests.sh`, its path and output folder changed with sed for each worktree, builds each `tests/rtw89_*_host.rs` with `rustc --edition=2021 --test`, the service file with `--cfg rtw89_service`, and runs it.
+  - The release build is `cd rtw89_wifi && CARGO_TARGET_DIR=… cargo build --release`.
+  - The full suite runs under `flock /tmp/claude-1000/heavy.lock` with `MIND_SSHD=/tmp/claude-1000/sshd-pkg/root/usr/sbin/sshd bash scripts/host_tests.sh`. A fresh worktree runs `./02_build.sh` first.
+  - APP's `improve` case failed now and then until its fix in round 170.
+
+**What is shown:**
+- **The mended check works on the Ryzen:** CHECK MET lines in boots 74, 76 and 81, with no stop. The 2 ms wait of c6202f1c8 was refused by `io::short_delay` and stopped the data mode five times in boots 64 and 65.
+- **The firmware's recoveries are silent:**
+  - no HALT_C2H code and no HISR0 halt bit in boots 65 to 83;
+  - SER_DBG_INFO counts them;
+  - about 2 an hour idle, about 14 an hour in the windows of USB or audio load (boots 74 to 79).
+- **The error masks match Linux's.**
+- **The PCI interrupt state:** INTx on INTA, line 255, MSI present and off.
+- **Step 2 sets the port** (C400 1E81C, INFRA). No rate difference is shown.
+- **Late frames are held in the MAC, then sent once and acknowledged:** boot 82 at 22%, every other boot at 2.3% or less. That makes one bad start in 34 of boots 55 to 83.
+
+**What is open:**
+- **What holds the frames.** The series and the held probe will tell, TBTT prohibit first.
+- **The poll cadence:** 18 to 21 ms longest gaps and about 400 gaps over 5 ms a minute. The same in a good boot and a bad one, so not the cause of the late sends. It is not mended before the loaded hour shows whether RXQ's backlog grows.
+- **Whether a recovery follows our own task's starvation.** The loaded hour waits for the cable and the console.
+- **Unexplained readings:**
+  - boot 81's meeting with no SER step;
+  - boot 74's rise of 30 in its first ten minutes;
+  - boot 82's RXQ backlog of 255 in its first minute.
+- **5 GHz** (213-DRV-0087): the first join waits for NET's first-join wait and for 550-DRV-0088 (the owner's rule), which waits for NET's wlanhw.
+- **The answer path for late sends** (above) is NET's contract question, carried by the owner after the series.
+
+**Traps:**
+- **A probe's value can be cut in two.** A probe is printed in pieces of a fixed width, and a register's value may straddle two pieces. Join the pieces' text exactly before comparing (`probe_values.py`); read piece by piece, 0x4688 and 0xC70 once looked different.
+- **The minute's own printing lands in the next minute.** A minute's polls are taken when its TRAFFIC event is built, before its lines are printed. So the printing falls into the next minute, and a longest gap caused by it would show "ago" of about 60 s.
+- **CHECK MET's "before" is stale.** Its SER_DBG_INFO "before" is the session's last-seen value, not a read just before. The SER_DBG_INFO STEP line has the step.
+- **`io::short_delay` refuses more than 1 ms.** The host model now refuses it too. The model's bus clock is not the IPC clock, so gaps and phases in host cases are the model's.
+- **A server read during another agent's usb_host replace latches the Effector agent** (its journal on the stick) until the machine restarts. Read outside others' leases.
+- **A boot that sends badly cannot upload its log** (collect_file `upload`, boot 82). The log is then read from the stick under Linux.
+- **The late frame's `ANSWERED NOT ACKNOWLEDGED` is not the access point's.** It is our 90 ms answer. The LATE FRAME WAS RELEASED line that follows has the outcome.
 
 ## Related
 

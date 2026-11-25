@@ -268,3 +268,22 @@ Neither was recorded as third-party code until 158-DRV-0084's record of 2026-11-
 - [ ] **Confirm** that this meets the IJG's terms as you read them, **or say what else you want**. For instance: a rewrite of both DCTs from the published algorithm (Loeffler, Ligtenberg and Moschytz, 1989) instead of IJG's code, or another wording of the record.
 
 Done when your answer is noted here and in 158-DRV-0084.
+
+## 18. MIND Hub on the maintainer's server, read by the agents
+
+Main task [100003](../issues/100003-mind-hub-requests-conversation-check-and-updates.md): the hub takes users' requests and fixes, and the agents read them through its agents' API. Each agent has its own key, as with Effector: an Ed25519 key in a file, its public half in `hub.conf`, and every call signed over the hub's challenge.
+- **On 2026-11-25:** the kernel session built `mindhub` from `main` (dbce8c09de) and served it on loopback; `mindhub conformance` passed, 20 of 20. A cloud agent cannot reach an outside hub until `APP` makes its client work through the cloud's proxy ([requests-APP.md](../issues/requests-APP.md), the request of 2026-11-25).
+
+- [ ] **A host and a name:** a Linux machine with a public address (the release server's of section 15 will do) and a DNS name for the hub, e.g. `hub.<your domain>`; port 443 or 8443 open.
+- [ ] **A certificate from a public CA** for that name (Let's Encrypt will do): the cloud agents reach the hub through a proxy that checks the chain, not a pin. Keep the key across renewals, since devices pin it.
+- [ ] **Build and run:** `cargo build --release --manifest-path tools/mindhub/Cargo.toml`; then `mindhub serve hub --listen 0.0.0.0:443 --cert chain.pem --key key.pem` as a systemd service. Note the `SPKI SHA-256` line it prints.
+- [ ] **Keys** (`mindhub key FILE` prints the public half; the file is 0600):
+  - the admin's key stays with you;
+  - one key for intake, one per track that will take requests, one for the integrator;
+  - each public half goes into `hub/hub.conf` as `admin maintainer <key>` or `agent <TRK> intake|track|integrator <key>`;
+  - the private files go to the agents the way the Effector key does, never into the repository or a message.
+- [ ] **Which track handles incoming requests:** `APP` (intake by design 7.2) until you name a new track for it.
+- [ ] **The cloud environment:** add the hub's name to the environment's allowed hosts. The kernel session can propose that change once the name exists; you approve it.
+- [ ] **Backups** of the hub's directory (`journal.jsonl`, `attachments/`).
+
+Done when an agent in a cloud session reads its queue on the hub with `mindhub call`, and the host, the name and the pin are recorded in 100003.

@@ -512,6 +512,32 @@ fn service_an_association_response_tells_the_firmware_of_the_link(){run(0,true,t
     drop(service);clean();
 });}
 
+// 213-DRV-0091 step 2: a beacon interval and a millisecond after the link's H2Cs, port 0 is set for INFRA as Linux's
+// rtw89_mac_port_update does; the station's checks then expect it; the deauthentication sets it for no link again.
+#[test]
+fn service_the_link_sets_port_0_for_infra_after_a_beacon_interval(){run(0,true,true,|data,c|{
+    use crate::{btc_session::data_mode::PROBE_MAC,receive_service::Event};
+    let port=|probe:&crate::btc_session::data_mode::Probe|probe.mac[PROBE_MAC.iter().position(|&a|a==0xc400).unwrap()];
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,7,0xc0]),0,0)];assert!(service.step());
+    let Some(Event::Linked{aid:Some(7),after:Some(after),..})=service.take_event()else{panic!("no link")};
+    assert_eq!(port(&after)&0x13e1f,4,"the H2Cs first, the port untouched");
+    ipc::advance(50);assert!(service.step());assert!(service.take_event().is_none(),"not before a beacon interval");
+    ipc::advance(60);assert!(service.step());
+    let Some(Event::Port{channel:6,linked:true,after:Some(after)})=service.take_event()else{panic!("no port")};
+    assert_eq!(port(&after)&0x13e1f,0x1281c,"FUNC_EN, NET_TYPE INFRA, TBTT_PROHIB, BRK_SETUP, BSSID fit, TSF update");
+    // The data mode's checks go on expecting it: steps with traffic run on.
+    for _ in 0..3{c.borrow_mut().incoming.push(packet());ipc::advance(20);assert!(service.step());}
+    assert!(service.take_event().is_none());
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(10,&[8,0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:None,..})));
+    ipc::advance(110);assert!(service.step());
+    let Some(Event::Port{linked:false,after,..})=service.take_event()else{panic!("no port back")};
+    if let Some(after)=after{assert_eq!(port(&after)&0x13e1f,4);}
+    drop(service);clean();
+});}
+
 // 213-DRV-0091: the firmware's error codes are read at each data-mode check as Linux's rtw89_mac_get_err_status reads
 // them (HALT_C2H_CTRL set, then HALT_C2H, then the CTRL cleared), named with their level, counted in the minute's line,
 // and never answered.
@@ -566,6 +592,375 @@ fn service_reads_hisr0s_halt_bits_under_the_mask_and_answers_nothing(){run(0,tru
     let Some(Event::Traffic{errors,..})=traffic else{panic!("no traffic line")};
     assert_eq!(errors,Errors{l0:1,l1:0,l2:0,unknown:0,hisr_halt:2,hisr_wdt:1});
     let _=Event::HaltStatus{count:0,hisr:0,ctrl:0,ser:0,intx:None};drop(service);clean();
+});}
+
+// 213-DRV-0102: the detection floor is Linux's arithmetic for the joined access point's RSSI (phy.c at 05f7e89): at
+// -60 dBm OFDM PD 9, CCK PD 0xAD and EDCCA 66, and each clamp at its edge.
+#[test]
+fn the_detection_floor_is_linuxs_arithmetic_for_the_aps_rssi(){
+    use crate::service::detection_floor::*;
+    assert!(!DETECTION_FLOOR_AS_LINUX,"committed as the driver was");
+    assert_eq!(for_rssi(-60),Floor{ofdm_pd:9,cck_pd:0xad,edcca:66});
+    // OFDM: the lower clamp (8 + 23) down to -79 dBm, then 2 dB a step, the upper (70 + 23) from -17 dBm.
+    assert_eq!([-100,-79,-77,-61,-17,0].map(|d|for_rssi(d).ofdm_pd),[0,0,1,9,31,31]);
+    // CCK: max(igi - 23, -18) - 110 as a byte, -128 at and below -105 dBm.
+    assert_eq!([-110,-105,-104,-60,0].map(|d|for_rssi(d).cck_pd),[0x80,0x80,0x81,0xad,0xe9]);
+    // EDCCA: igi + 15, at least 66 (EDCCA_TH_L2H_LB).
+    assert_eq!([-100,-59,-58,-20].map(|d|for_rssi(d).edcca),[66,66,67,105]);
+    assert_eq!(fields(&for_rssi(-60)),[(0x4860,0x7c0,9<<6),(0x4860,1<<30,1<<30),(0x4b64,0xff00_0000,0xad00_0000),
+        (0x4b74,1<<30,1<<30),(0x4884,0xff00_ffff,0x4200_4242)]);
+}
+
+// 213-DRV-0102: with the switch on, the floor is written once the joined BSS's beacons are measured (their reports'
+// signal), read back, and counted in the minute line with every report by its signal.
+#[test]
+fn service_writes_the_detection_floor_once_the_aps_beacons_are_measured(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event};
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,false);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);
+    let mut set=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(e@Event::FloorSet{..})=service.take_event(){set=Some(e);break}}
+    // FIVE's report is -63 dBm: igi 47, OFDM PD (47 - 31) >> 1 = 8, CCK 24 - 110 = -86 (0xAA), EDCCA 66.
+    let Some(Event::FloorSet{dbm:-63,measured:8,ofdm_pd:8,cck_pd:0xaa,edcca:66,written:true,registers,..})=set else{panic!("{set:?}")};
+    assert_eq!((registers[0]>>6&31,registers[0]>>30&1,registers[1]>>24,registers[2]>>30&1,registers[3]&0xff,registers[3]>>24),(8,1,0xaa,1,66,66));
+    // An OFDM report not to this radio (DATA's with to_self cleared) has no RPL: binned apart by its header, -56 dBm.
+    let mut other=bytes(crate::captures::DATA);other[16]&=!1;
+    c.borrow_mut().buffers=vec![other,bytes(crate::captures::DATA)];ipc::advance(10);assert!(service.step());
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{floor,..})=traffic else{panic!("no traffic line")};
+    assert!(floor.set&&floor.bss_dbm==Some(-63)&&floor.measured>=8,"{floor:?}");
+    assert_eq!(floor.ppdu_rssi[8],floor.ppdu_rssi.iter().sum::<u32>(),"-63 dBm in the -60 to -64 bin: {floor:?}");
+    assert!(floor.ppdu_rssi[8]>=8,"{floor:?}");assert_eq!(floor.registers,registers);
+    assert_eq!((floor.no_rpl[7],floor.no_rpl.iter().sum::<u32>(),floor.header_over),(1,1,(9,1)),"-55 to -59 dBm, 4.5 dB: {floor:?}");
+    let _=Event::FloorRefused{channel:36};drop(service);clean();
+});}
+
+// 213-DRV-0104, SEND_BEHIND_LATE: with the switch, a send while one is late (answered at its deadline, its release
+// awaited) goes on the ring behind it with its call open, and is answered at its own release with its true outcome; the
+// late one, parked, is counted released late and is not sent again. A third while one is parked and the next is late
+// too is refused busy. Without the switch the second is refused busy, as before. RPQ alone, no firmware report (fault 7),
+// the releases held back as the MAC holds the frames.
+#[test]
+fn service_sends_behind_a_late_frame_when_the_switch_is_on(){for behind in[false,true]{run(7,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().send_behind_late(behind);service.rpq_alone();assert!(service.step());
+    let sent=|id:usize|{let(w,b)=ipc::response(id).unwrap();assert_eq!(w,[2<<16,0]);wlanhw::Sent::decode(&mut Reader::new(&b[..2])).unwrap()};
+    c.borrow_mut().hold_rpq=true;
+    let a=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(a).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(a).acked,"A answered at its deadline");
+    assert!(matches!(service.take_event(),Some(Event::LateFrame{count:1,..})));
+    let b=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    if !behind{error(b,wlanhw::Error::Busy);assert_eq!(c.borrow().published,1);c.borrow_mut().hold_rpq=false;ipc::advance(5);assert!(service.step());
+        drop(service);clean();return}
+    assert!(ipc::response(b).is_none(),"B taken, its call open");assert_eq!(c.borrow().published,2,"B on the ring behind A");
+    // Both released within B's time: B answered with its outcome, A counted as a late frame released.
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());
+    assert_eq!(sent(b),wlanhw::Sent{acked:true,attempts:1});
+    let event=service.take_event();assert!(matches!(event,Some(Event::LateRelease{acked:true,attempts:1,..})),"{event:?}");
+    // D late, E behind it and late too: F is refused, one parked at a time; then both released, nothing sent again.
+    c.borrow_mut().hold_rpq=true;
+    let d=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());ipc::advance(91);assert!(service.step());assert!(!sent(d).acked);
+    let e=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(e).is_none());
+    ipc::advance(91);assert!(service.step());assert!(!sent(e).acked,"E answered at its deadline");
+    let f=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(f,wlanhw::Error::Busy);
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());ipc::advance(5);assert!(service.step());
+    assert_eq!(c.borrow().published,4,"A, B, D and E once each");
+    let g=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(sent(g).acked,"sends go on");
+    let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
+});}}
+
+// 213-DRV-0104, SEND_BEHIND_LATE_ALTERNATES: the partial minute as committed, then off (the send behind a late one refused
+// busy), then on (parked, the next taken), then off; each minute's line counts what it did and says what it held; and
+// the switch waits while a frame is pending or parked at the boundary.
+#[test]
+fn service_alternates_sending_behind_a_late_frame_by_the_minute(){run(7,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().send_behind_late_alternates(true);service.rpq_alone();assert!(service.step());
+    macro_rules! minute{()=>{{let mut line=None;
+        for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+            if let Some(Event::Traffic{tx,..})=service.take_event(){line=Some(tx);break}}
+        line.expect("a minute line")}}}
+    // A late send and one behind it, both released 10 ms after the second: whether the second was taken or refused.
+    macro_rules! late_and_behind{()=>{{
+        c.borrow_mut().hold_rpq=true;
+        let a=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());ipc::advance(91);assert!(service.step());assert!(ipc::response(a).is_some());
+        let _=service.take_event();let b=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let taken=ipc::response(b).is_none();
+        c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());ipc::advance(5);assert!(service.step());
+        assert!(ipc::response(b).is_some());let _=service.take_event();taken}}}
+    let first=minute!();assert_eq!(first.behind_label(),"BEHIND LATE NEVER","the partial minute");
+    assert!(!late_and_behind!(),"off: refused");
+    let off=minute!();assert_eq!(off.behind_label(),"THIS MINUTE BEHIND LATE OFF");
+    assert_eq!((off.answered_late,off.busy,off.parked,off.parked_released),(1,1,0,0),"{off:?}");
+    assert!(late_and_behind!(),"on: taken behind it");
+    // A late frame pending at the boundary keeps the minute's kind until its release (made late 2 s before the line, as
+    // a frame held past LATE_MS stops the service).
+    for _ in 0..64{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        assert!(!matches!(service.take_event(),Some(Event::Traffic{..})),"not yet the minute's line");}
+    c.borrow_mut().hold_rpq=true;let d=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());ipc::advance(91);assert!(service.step());
+    assert!(ipc::response(d).is_some());let _=service.take_event();
+    let on=minute!();assert_eq!(on.behind_label(),"THIS MINUTE BEHIND LATE ON");
+    assert_eq!((on.answered_late,on.busy,on.parked,on.parked_released,on.parked_acked),(2,0,1,1,1),"{on:?}");
+    let e=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(e).is_none(),"still on: parked behind the pending one");
+    c.borrow_mut().hold_rpq=false;ipc::advance(10);assert!(service.step());ipc::advance(5);assert!(service.step());assert!(ipc::response(e).is_some());
+    let _=service.take_event();
+    assert!(!late_and_behind!(),"switched off once nothing was pending or parked");
+    let next=minute!();assert_eq!(next.behind_label(),"THIS MINUTE BEHIND LATE OFF");
+    assert_eq!((next.parked,next.busy),(1,1),"D parked, E behind it, before the switch; then a refusal: {next:?}");
+    let stopped=service.stop();assert!(stopped.failure.is_none(),"{:?}",stopped.failure);clean();
+});}
+
+// 213-DRV-0104, POLL_TIGHT_WHILE_PENDING: a send is answered in the step that took it, not the next; with its release held
+// the tight poll gives up after TIGHT_US and the send is answered at its release; a frame that arrives while it polls is
+// taken and its waiter woken in that step; and by the minute when it alternates.
+#[test]
+fn service_polls_tight_while_a_send_is_pending(){
+    for tight in [false,true]{run(0,true,true,|data,_|{
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+        assert_eq!(ipc::response(send).is_some(),tight,"answered in its own step only with the tight poll");
+        assert!(service.step());assert!(ipc::response(send).is_some());drop(service);clean();
+    });}
+    for tight in [false,true]{run(0,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(tight,false);assert!(service.step());
+        let wait=ipc::words(6,0);assert!(service.step());assert!(ipc::response(wait).is_none(),"nothing received yet");
+        // The release held; a frame for the station comes 600 register reads into the step, after the send was taken.
+        c.borrow_mut().hold_reports=true;c.borrow_mut().incoming_after=Some((600,vec![packet()]));
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none(),"held");
+        assert_eq!(ipc::response(wait).is_some(),tight,"the frame taken and the waiter woken in that step only while polling");
+        c.borrow_mut().hold_reports=false;ipc::advance(5);assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its release");
+        assert!(ipc::response(wait).is_some());
+        let mut traffic=None;
+        for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+            if let Some(Event::Traffic{tx,..})=service.take_event(){traffic=Some(tx);break}}
+        let tx=traffic.expect("a minute line");
+        assert_eq!(tx.tight_label(),if tight{"TIGHT ALWAYS"}else{"TIGHT NEVER"});
+        if tight{assert!((10..=25).contains(&tx.tight_polls),"gave up after about TIGHT_US / TIGHT_PACE_US polls: {}",tx.tight_polls);}
+        else{assert_eq!(tx.tight_polls,0);}
+        drop(service);clean();
+    });}
+    // Alternating: the partial minute never, then off, then on. The frame buffer fills (nobody reads), so the tight poll
+    // reads the release queue alone: data frames final on DMA and the RPQ, as on the Ryzen (RPQ_ALONE, no firmware report).
+    run(7,true,true,|data,c|{
+        use crate::receive_service::Event;
+        ipc::reset();let mut service=Service::new(data).unwrap().poll_tight(false,true);service.rpq_alone();assert!(service.step());
+        let mut labels=vec![];
+        for _ in 0..3{
+            let mut line=None;
+            for _ in 0..80{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+                if let Some(Event::Traffic{tx,..})=service.take_event(){line=Some(tx);break}}
+            let tx=line.expect("a minute line");labels.push(tx.tight_label());
+            let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());let own_step=ipc::response(send).is_some();
+            assert!(service.step());assert!(ipc::response(send).is_some());
+            labels.push(if own_step{"ANSWERED IN ITS STEP"}else{"ANSWERED NEXT STEP"});
+        }
+        assert_eq!(labels,["TIGHT NEVER","ANSWERED NEXT STEP","THIS MINUTE TIGHT OFF","ANSWERED IN ITS STEP","THIS MINUTE TIGHT ON","ANSWERED NEXT STEP"]);
+        drop(service);clean();
+    });
+}
+
+// 213-DRV-0102, DETECTION_FLOOR_ALTERNATES: off for the first whole minute after the beacons are measured, then Linux's,
+// then the values found again, exactly; a send pending at a minute's boundary postpones the switch to the next poll.
+#[test]
+fn service_alternates_the_detection_floor_by_the_minute(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::{fields,for_rssi}};
+    ipc::reset();let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{dbm:-63,measured:8,found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");assert_eq!(service.floor_registers(),found,"nothing written yet");
+    let linux=fields(&for_rssi(-63));let is_linux=|r:[u32;4]|linux.iter().all(|&(at,mask,value)|{
+        let i=[0x4860,0x4b64,0x4b74,0x4884].iter().position(|a|*a==at).unwrap();r[i]&mask==value});
+    // Each minute's line: the kind it held and its registers.
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let kinds:Vec<_>=minutes.iter().map(|m|(m.on(),m.off())).collect();
+    assert_eq!(kinds,[(false,false),(false,true),(true,false),(false,true)],"the partial minute, then off, on, off");
+    assert_eq!(minutes[1].registers,found);assert!(is_linux(minutes[2].registers),"{:X?}",minutes[2].registers);
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
+    assert!(minutes.iter().all(|m|m.switch_failures==0));
+    // A send pending at the boundary: the switch waits for the next poll with none pending, not for the next minute.
+    // (Held within LATE_MS: sent a second before the boundary.)
+    for _ in 0..59{c.borrow_mut().incoming.push(packet());ipc::advance(999);assert!(service.step());assert!(service.take_event().is_none());}
+    c.borrow_mut().hold_reports=true;let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    let mut line=None;
+    for _ in 0..40{ipc::advance(100);assert!(service.step());if let Some(e@Event::Traffic{..})=service.take_event(){line=Some(e);break}}
+    let Some(Event::Traffic{floor,..})=line else{panic!("no line")};assert!(floor.on(),"the minute that ended held Linux's");
+    assert!(is_linux(service.floor_registers()),"still Linux's while the send is pending");
+    c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());assert!(ipc::response(send).is_some());
+    ipc::advance(5);assert!(service.step());assert_eq!(service.floor_registers(),found,"switched at the next poll");
+    drop(service);clean();
+});}
+
+// 213-DRV-0102: every field of the floor is written and read back on its own. Two registers that keep their value whatever
+// is written (the Ryzen's 0x4B64 and 0x4B74, boot 93) are named as read as before the write, and EDCCA's level after them is
+// still written: boot 93's ON minutes stopped at 0x4B64 and never wrote 0x4B74 or 0x4884.
+#[test]
+fn service_writes_every_floor_field_and_names_those_not_read_back(){run(0,true,true,|data,c|{
+    use crate::{captures::{bytes,frame as buffer,FIVE},receive_service::Event,service::detection_floor::for_rssi};
+    ipc::reset();c.borrow_mut().write_ignored=vec![0x14b64,0x14b74];
+    let mut service=Service::new(data).unwrap();service.floor_as_linux(true,true);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().buffers=vec![crate::captures::frame(&to_station(1,&[0x11,4,0,0,1,0xc0]),0,0)];assert!(service.step());
+    assert!(matches!(service.take_event(),Some(Event::Linked{aid:Some(1),..})));
+    let mut beacon=bss_beacon();beacon.extend_from_slice(&[0;4]);let mut found=None;
+    for _ in 0..12{c.borrow_mut().buffers=vec![buffer(&beacon,1,4),bytes(FIVE)];ipc::advance(10);assert!(service.step());
+        if let Some(Event::FloorAlternates{found:f,..})=service.take_event(){found=Some(f);break}}
+    let found=found.expect("the alternation announced");
+    let mut minutes=vec![];
+    for _ in 0..300{
+        c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(Event::Traffic{floor,..})=service.take_event(){minutes.push(floor);if minutes.len()==4{break}}
+    }
+    let linux=for_rssi(-63);let on=minutes[2];assert!(on.on(),"{on:?}");
+    assert_eq!((on.registers[0]>>6&31,on.registers[0]>>30&1),(u32::from(linux.ofdm_pd),1),"the OFDM floor: {:X?}",on.registers);
+    assert_eq!((on.registers[1],on.registers[2]),(found[1],found[2]),"0x4B64 and 0x4B74 keep what they held");
+    assert_eq!((on.registers[3]>>24,on.registers[3]&0xffff),(u32::from(linux.edcca),u32::from(linux.edcca)*0x101),"EDCCA written after them");
+    assert_eq!((on.written,on.switch_failures),(crate::btc_session::data_mode::FloorWrite{unread:0b0110,unchanged:0b0110},0),"named, not a failed switch");
+    for off in [minutes[1],minutes[3]]{assert!(off.off());assert_eq!((off.written,off.switch_failures),(Default::default(),0));}
+    assert_eq!(minutes[3].registers,found,"the values found, restored exactly");
+    drop(service);clean();
+});}
+
+// 213-DRV-0091: a late frame the MAC holds is probed while it holds it: the first HELD_PROBES of a run, then one a minute;
+// a frame released in time after the first is probed once beside them. The minute line counts the late frames released,
+// those acknowledged at the first try and their median hold, and the frame buffer's full spells.
+#[test]
+fn service_probes_held_frames_and_counts_how_the_minutes_sends_ended(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().minute_detail(true);assert!(service.step());
+    let mut held=vec![];
+    for n in 1..=10u32{
+        c.borrow_mut().hold_reports=true;
+        let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(send).is_none());
+        ipc::advance(91);assert!(service.step(),"late {n}");assert!(ipc::response(send).is_some(),"answered at its deadline");
+        // 213-DRV-0104: a send while the late one waits for its release is refused busy, and counted.
+        if n==1{let busy=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());error(busy,wlanhw::Error::Busy);}
+        held.extend(service.take_held());
+        c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());
+        let _=service.take_event();
+    }
+    let probed:Vec<_>=held.iter().map(|e|match e{Event::Held{n,held:true,ms,..}=>{assert!(*ms>=90,"{e:?}");*n},e=>panic!("{e:?}")}).collect();
+    assert_eq!(probed,[1,2,3,4,5,6,7,8,9],"eight, then one in the minute");
+    // A frame released in time after them: probed once beside them.
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert!(matches!(service.take_held(),Some(Event::Held{held:false,..})),"the in-time frame's probe");
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert!(service.take_held().is_none(),"once only");
+    // The frame buffer fills: twenty frames for the station and no reader.
+    {let mut c=c.borrow_mut();let mut retried=packet();retried[1]|=8;c.incoming.push(retried);for _ in 0..20{c.incoming.push(packet());}}
+    for _ in 0..4{ipc::advance(5);assert!(service.step());}
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{tx,..})=traffic else{panic!("no traffic line")};
+    assert_eq!((tx.late,tx.first_try,tx.not_acked,tx.busy,tx.answered_late,tx.parked),(10,10,0,1,10,0),"{tx:?}");
+    assert_eq!(tx.behind_label(),"BEHIND LATE NEVER");
+    // 213-DRV-0104: the two sends in time binned by their answer's time, every arrival after the first by its gap since
+    // the answer before it (13 arrivals: ten late, one refused, two in time), and the busiest second.
+    // 213-DRV-0104: every ended send's submission to fetch and fetch to release, by size: twelve of 64 bytes.
+    let timed:Vec<(u32,u32)>=tx.fetch_us.iter().zip(tx.release_us.iter()).map(|(f,r)|(f.iter().sum(),r.iter().sum())).collect();
+    assert_eq!(timed,vec![(12,12),(0,0),(0,0)],"{tx:?}");
+    let in_time:Vec<u32>=tx.answer_ms.iter().map(|c|c.iter().sum()).collect();
+    assert_eq!((in_time,tx.gap_ms.iter().sum::<u32>()),(vec![2,0,0],12),"two of 64 bytes in time, 13 arrivals: {tx:?}");
+    assert!(tx.answer_ms[0][..5].iter().sum::<u32>()==2,"answered within 10 ms in the model: {:?}",tx.answer_ms);
+    // Each unicast send ended at 6 Mb/s (rate 12, the fifth of LEGACY_RATES): 12 ended (ten late, two in time), all
+    // acknowledged at their one try; the refused one did not end.
+    assert_eq!((tx.by_rate[4],tx.by_tries[1],tx.by_tries.iter().sum::<u32>()),([12,12,12],12,12),"{tx:?}");
+    // The frames for this station taken into the buffer (16, nobody reads them), at the model's rate 0 (CCK 1 Mb/s), the
+    // first with the retry bit.
+    assert_eq!((tx.rx_rate[0],tx.rx_rate.iter().sum::<u32>(),tx.rx_retry),(16,16,1),"{:?}",tx.rx_rate);
+    // 213-DRV-0091: the steps' waits and work, in the model's clock: its receive wait ends at once, with the 2 ms asked.
+    assert_eq!((tx.wait_over,tx.work_over,tx.work_longest_us),([0,0],[0,0],0),"{tx:?}");assert!(tx.wait_longest_us<=2_000,"{tx:?}");
+    {use crate::btc_session::data_mode::{rx_rate_bin,size_class,ms_bin};
+    assert_eq!([0,4,11,0x80,0x87,0x8f,0x90,0x100,0x180].map(rx_rate_bin),[0,4,11,12,19,27,28,28,28],"CCK, OFDM, HT MCS 0-15, other");
+    assert_eq!([0,199,200,1000,1001,2346].map(size_class),[0,0,1,1,2,2]);
+    assert_eq!([0,249,250,1999,2000,9999,10000,19999,20000,49999,50000].map(crate::btc_session::data_mode::us_bin),[0,0,1,7,8,15,16,16,17,17,18]);assert_eq!([0,1,2,29,30,39,89,90,500].map(ms_bin),[0,0,1,14,15,15,20,21,21]);}
+    assert!(tx.peak_sends>=2&&tx.peak_sends<=13,"{tx:?}");assert!(tx.median_hold_ms>=90,"{tx:?}");
+    assert!(tx.full_times>=1&&tx.full_longest_ms>0,"{tx:?}");
+    let _=Event::Held{n:0,held:true,ms:0,submitted:Default::default(),at:Default::default(),registers:service.data_held()};
+    drop(service);clean();
+});}
+
+// receive_service::MINUTE_DETAIL, committed false for a machine in use: without it no frame is probed and no release is
+// placed in the beacon interval; with it both are. The minute's sends are counted either way.
+#[test]
+fn service_probes_and_places_releases_only_with_the_minute_detail(){for detail in[false,true]{run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap().minute_detail(detail);
+    let id=ipc::buffer(3,&filter(false));assert!(service.step());assert_eq!(words(id),[0,0]);
+    c.borrow_mut().incoming.push(bss_beacon());assert!(service.step());
+    c.borrow_mut().hold_reports=true;
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());
+    ipc::advance(91);assert!(service.step());assert!(ipc::response(send).is_some(),"answered at its deadline");
+    assert_eq!(service.take_held().is_some(),detail,"the held frame's probe");
+    c.borrow_mut().hold_reports=false;ipc::advance(20);assert!(service.step());
+    let send=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(service.step());assert!(ipc::response(send).is_some());
+    assert_eq!(service.take_held().is_some(),detail,"the in-time frame's probe");
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{tx,..})=traffic else{panic!("no traffic line")};
+    assert_eq!((tx.late,tx.answered_late,tx.by_tries[1]),(1,1,2),"{tx:?}");
+    let placed=tx.clock.iter().chain(tx.tsf.iter()).sum::<u32>();
+    assert_eq!(placed!=0,detail,"releases placed in the beacon interval: {tx:?}");
+    drop(service);clean();
+});}}
+
+// 213-DRV-0091: the calibrations' lines say PASS or FAIL by Linux's criteria (rtw8852b_rfk.c): DPK's sync at most 200 of
+// DC on I and Q and at least 170 of correlation; IQK's LOK in range and no one-shot failing.
+#[test]
+fn calibration_results_are_judged_by_linuxs_criteria(){
+    use crate::receive_service::CalibrationPath;
+    let good=CalibrationPath{dpk_correlation:170,dpk_dc:[200,200],..Default::default()};assert!(good.dpk_ok()&&good.iqk_ok());
+    assert!(!CalibrationPath{dpk_correlation:169,..good}.dpk_ok());assert!(!CalibrationPath{dpk_dc:[201,0],..good}.dpk_ok());
+    assert!(!CalibrationPath{dpk_dc:[0,201],..good}.dpk_ok());
+    for bad in[CalibrationPath{lok_range_fail:true,..good},CalibrationPath{tx_fails:1,..good},CalibrationPath{rx_fails:1,..good},
+        CalibrationPath{lok_fails:1,..good},CalibrationPath{restore_fail:true,..good}]{assert!(!bad.iqk_ok(),"{bad:?}");}
+}
+
+// 213-DRV-0091: every step of SER_DBG_INFO is placed at the check that sees it, with the time since the check before and
+// the ring's polls so far; the minute line gives RXQ's and RPQ's longest gap between two polls and the most waiting at one.
+#[test]
+fn service_places_each_step_of_ser_dbg_info_and_counts_the_rings_polls(){run(0,true,true,|data,c|{
+    use crate::receive_service::Event;
+    ipc::reset();let mut service=Service::new(data).unwrap();assert!(service.step());
+    assert!(service.take_ser_step().is_none(),"no step, none placed");
+    // Three frames wait at one poll.
+    {let mut c=c.borrow_mut();for _ in 0..3{c.incoming.push(packet());}}ipc::advance(20);assert!(service.step());
+    // A silent recovery: SER_DBG_INFO steps from 0 to 1; the next check places it.
+    {let mut c=c.borrow_mut();c.ser=true;c.ser_heal=Some(2);}
+    let mut step=None;
+    for _ in 0..10{ipc::advance(20);assert!(service.step());step=step.or(service.take_ser_step());if step.is_some(){break}}
+    let Some(s)=step else{panic!("no step placed")};
+    assert_eq!((s.count,s.from,s.to),(1,0,1));assert!(s.since_us>0&&s.since_us<1_000_000,"{s:?}");
+    assert!(s.polls[0].most_waiting>=3,"{s:?}");
+    // The minute line takes the polls; the next minute's start again.
+    let mut traffic=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){traffic=Some(e);break}}
+    let Some(Event::Traffic{polls:[q,_],..})=traffic else{panic!("no traffic line")};
+    // The model's bus clock moves by its own delays, not by the service's minute: the gap is the model's.
+    assert!(q.most_waiting>=3&&q.longest_gap_us>0&&q.longest_at_us>0,"{q:?}");
+    assert!(q.over_10ms<=q.over_5ms,"{q:?}");
+    let mut next=None;
+    for _ in 0..70{c.borrow_mut().incoming.push(packet());ipc::advance(900);assert!(service.step());
+        if let Some(e@Event::Traffic{..})=service.take_event(){next=Some(e);break}}
+    let Some(Event::Traffic{polls:[q,_],..})=next else{panic!("no second traffic line")};
+    assert!(q.most_waiting<=1,"the second minute's own: {q:?}");
+    let _=Event::SerStep{count:0,from:0,to:0,since_us:0,polls:Default::default()};drop(service);clean();
 });}
 
 // 213-DRV-0091: a station check that meets an unreadable CMAC window (DEADBEEF, the Ryzen's boot 62 twice in 98 minutes)

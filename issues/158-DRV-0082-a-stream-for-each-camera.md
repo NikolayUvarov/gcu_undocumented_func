@@ -209,6 +209,8 @@ This holds for that machine, those cameras and that release (MC-12.1).
   - **On the Ryzen** (the run above, after `usb_host`'s `replace`): the first open after the restart still failed (`"GDZS-DC004-EFVT-IR": PROBE FAILED (NotFound)`), and the next look dropped both cameras (`CAMERA "…" GONE: USB_HOST STARTED AGAIN`) and claimed them again, `CAMERAS: 0 V, 1 IR`. The first look after a restart only learns that the instance is new: its first claim is refused as invalid, and the attach comes at the next claim.
   - **The mend:** `look` claims once more at once after such a refusal, so that look already drops the old cameras. `Host::claim` itself stays as it is, since `usb_storage`'s recovery reads that refusal as a new instance. Not run on the Ryzen yet. No QEMU device is a camera.
 
+**For a successor:** the state on 2026-11-22, the branches, how the Ryzen runs are made and the helpers are in [000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc).
+
 ## Related
 
 [158-DRV-0072](158-DRV-0072-every-usb-camera-and-bulk-streaming.md) (every USB camera listed), [158-APP-0147](158-APP-0147-switching-between-cameras-in-camera-and-wm.md) (`camera -c`, `n`, Tab), [158-DRV-0083](158-DRV-0083-a-cameras-modes-listed-and-chosen.md) (a camera's modes).

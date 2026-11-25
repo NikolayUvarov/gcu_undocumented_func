@@ -72,7 +72,8 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
 - **Step 3, written** (not run on the Ryzen yet):
   - `usb_host` reads each controller's Isochronous Scheduling Threshold (HCSPARAMS2's IST: microframes, or frames with bit 3) and says it at its start (`ISOCHRONOUS SCHEDULING THRESHOLD n MICROFRAMES: …`).
   - A TD's frame must then be at least IST + 1 microframe ahead, in whole frames, as Linux's `xhci_get_isoc_frame_id` schedules. A stream's first TD, and the first after a dry ring, goes one frame further. Before, it went 64 microframes ahead (`FIRST_AHEAD`, a guess), and a TD continued down to 16 ahead.
-  - On QEMU (IST 7 frames) that is 64 and 72. On the Ryzen it is to be read.
+  - On QEMU (IST 7 frames) that is 64 and 72.
+  - **On the Ryzen** (release of 2026-11-22 13:35 UTC with 43686b6a2's `usb_host`; boots 84 to 86, `S/handoff/wifi/starts/`): both AMD xHCIs say `ISOCHRONOUS SCHEDULING THRESHOLD 1 MICROFRAMES: A TD AT LEAST 8 AHEAD, A STREAM'S FIRST 16`. A dry ring's restart now costs 2 ms, where it cost 8. Both cameras were found in each of the three starts, and their `usb_host` lines differ only in the order of parallel services' lines.
 - **Runs C and D on the Ryzen, 2026-11-22.**
   - The setup: release 202611220957; the board behind the Genesys hub; `audiostub duplex 300 0`, each with one log read over the cable at its middle; nobody else on the cable.
   - The raw lines are in `S/handoff/cam/0094-runs-C-D-and-cameras.txt`; the bench log has each run's times.
@@ -84,6 +85,70 @@ A guess, not shown: `usb_host` waits for a synchronous transfer of another devic
     - capture 0 times dry (its spill at most 4508 bytes, never full) and feedback 0 times dry, its close too;
     - playback, an OUT ring, still ran dry 12 times in the read, all waiting on the converter, and once at the close. That is step 4.
   - It holds for that machine, that board and that release (MC-12.1).
+
+## For a successor (state on 2026-11-22, 18:50 UTC)
+
+The CAM agent worked here for the DRV owner session, on 158-DRV-0082 to 0084, 000-DRV-0093, 0094, 000-LNK-0050 and 000-DRV-0101. Its brief was `S/handoff/BENCH.md`, where `S` is the owner session's scratchpad.
+
+**Branches and heads**
+- **In `main`:**
+  - 502d9a4f2, round 169: 0082 to 0084's core;
+  - b437cb189, round 172 (`main` 7346ab3d5): the spill, the stale cameras, the causes, the error code, the audio stub, this issue's step 1, the IJG record and 158-ASR-0016.
+- **`claude/158-DRV-0082-two-cameras-and-their-modes` at 89cf8a099:**
+  - its landing request was posted at 18:45 UTC: this issue's steps 2 and 3, 000-LNK-0050 and their records;
+  - it is in `fast-test` (0832813b2);
+  - its trial merge with 7346ab3d5 is clean.
+- **`claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop`:**
+  - its code head is 3ad6e4d76, which ran on the Ryzen as the boot image in boots 97 to 99;
+  - 613434c46, the answer rules host-tested, and 49bd2fede, `usbload` checking the tally, came after; they have not run on hardware;
+  - the issue text is on top, at 05ac6a253 and later.
+
+**How a Ryzen run is made**
+1. **The owner session's word first,** and a gap in the bench log (`S/handoff/bench-log.txt`): read its tail first.
+2. **The lease:** `effector485.exe reserve --minutes ≤60 --reason … --owner CAM`, renewed before it ends, released after. Write a bench-log line at each take and release, naming the release (`MIND Core …`).
+   - Reading the log alone needs no lease.
+   - The lease file the helpers read is `/tmp/claude-1000/cam/lease`; write it from the `reserve` output.
+3. **A replace of `usb_host`, or a release that changes it,** takes the keyboard, the cable, the stick and the Effector agent's journal away for some seconds.
+   - Before it: the bench-log line saying that NOBODY SENDS A SERVER COMMAND.
+   - After it: read the log for `REFUSED UNJOURNALED` and `THE JOURNAL CANNOT BE WRITTEN`.
+   - The commands: `replace unit=usb_host file=…`, and `back=true` to put it back.
+4. **The stubs** live in `data/link/`, put there with `put … name=videostub.elf` and `audiostub.elf`.
+   - `audiostub` runs by the cable's `run`.
+   - `videostub` is typed on the console: `type text="run data/link/videostub.elf 1 180 &"`, then `key names=ret`.
+   - **Before any `type`:** the log's last `[COMPOSITOR] SCREEN OF PID n IN FRONT` must name the shell's PID (`[INIT] STARTED shell PID=n`). If it does not, stop.
+5. **An uptime against UTC:** `effector485.exe submit shell "line=time" --wait` answers `UPTIME MS=`.
+6. **No log read over the cable during a measurement** unless the read is the measurement. Other agents ping through the cable's shell; a read would queue behind them.
+7. **Each boot's whole log** lands in `S/handoff/wifi/starts/bootNNNN.log` during the Wi-Fi agent's series. Compare the `usb_host` lines with the times taken out.
+
+**The helpers** are in `/home/un/.local/share/mind-bench/cam/`, which outlasts a restart of LEG9 (it restarted at 15:21 UTC today and wiped `/tmp`):
+- `e485.sh` makes one cable operation;
+- `ryzen-g2.sh` runs the cameras, the duplex, and puts both services back;
+- `ryzen-g3.sh C|D` runs a duplex with a log read at its middle;
+- `ryzen-g4.sh` runs both cameras with timed cable reads in their middle, the shell checked first;
+- `eff/` holds the Effector operations for the aarch64 groups;
+- `tests/s4-run.sh` to `s12-run.sh` are the LEG9 test runs, under `flock /tmp/claude-1000/heavy.lock`, shared with the other DRV agents;
+- `logs/` keeps the Ryzen runs' logs and the test results kept for reports.
+- `S/cam-logs/` holds copies of the logs.
+
+**What is shown** (each for that machine, those devices and that release, MC-12.1):
+- **Step 1's lines.**
+- **Run C:** every dry ring was named by the CH340's writes.
+- **Run D:** step 2 kept the IN rings full through a log read, and the board agreed.
+- **Step 3:** IST 1 microframe on both AMD xHCIs, so a first TD now goes 16 ahead.
+- **000-LNK-0050:** 33.3 KB/s after the pieces, against 27.6 before.
+- **000-DRV-0101 as the boot image** (boots 97 to 99):
+  - the tally showed up to 3453 transfers deferred a minute, all answered, the longest 17 ms;
+  - in two camera runs with cable reads, no ring stood empty in a wait;
+  - the cameras broke no frame by the error bit.
+
+**What is open**
+- **For this issue:** run D again with playback watched, and criterion 3, 15 minutes with 0 TIMES DRY. Both need the speakerphone, which has not been on the Ryzen since 11:16 UTC.
+- **000-DRV-0081:** the close order.
+- **000-DRV-0101:** its landing, and where 613434c46 goes (with it or after; its own QEMU run, s12, is going).
+- **0084's criterion 1:** Ryzen MJPEG frames compared with Linux's decoding.
+- **The maintainer's IJG answer:** `issues-human/README.md`, section 17.
+- **The Wi-Fi agent's audiostub hour:** it waits for the board.
+- **The `vfs` suite's flaky check** (`dmesg -s init` cut at the front), passed by the owner session to KRN.
 
 ## Related
 
