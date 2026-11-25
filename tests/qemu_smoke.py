@@ -10707,6 +10707,85 @@ def slot_applications_check(args):
           "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
+def hub_update_suite(args):
+    """100003-APP-0159: MIND Core's updater takes a release from MIND Hub. A raw image with release 5 in slot A,
+    confirmed, its channel and key file kept there; update.txt names the hub's /updates over HTTPS, trusted by its
+    pinned key, with `automatic fetch` every 5 s. tools/mindhub serves the tree release.py published (--releases), with
+    release 6 on stable: the updater checks, fetches release 6's files from the hub and stages it in slot B. From the
+    host, the hub serves stable's channel as published and refuses the restricted channel test, naming why."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: hubupdate suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    import http.client
+    import ssl
+    temp = Path(tempfile.mkdtemp(prefix="mind-hub-update-"))
+    arch = args.arch
+    volume, _, server, kept, good, _, _, _, _ = update_releases(temp, arch)
+    serve_channel(server, good)
+    serve_channel(server, kept, channel="test")
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    pin = _spki_pin(certificates / "server.pem")
+    target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
+    subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
+    mindhub = str(target / "release" / "mindhub")
+    data = temp / "hub"
+    data.mkdir()
+    admin = subprocess.run([mindhub, "key", str(temp / "admin.key")], check=True, capture_output=True, text=True).stdout.strip()
+    (data / "hub.conf").write_text(f"admin maintainer {admin}\n")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    hub = subprocess.Popen([mindhub, "serve", str(data), "--listen", f"127.0.0.1:{port}", "--cert", str(certificates / "server.pem"),
+                            "--key", str(certificates / "server.key"), "--releases", str(server)], stderr=subprocess.PIPE, text=True)
+    vm = None
+    try:
+        started = ""
+        while "OFFERED UNDER /updates/" not in started:
+            line = hub.stderr.readline()
+            assert line, f"mindhub did not start: {started}"
+            started += line
+        require(started, "CHANNELS stable OFFERED UNDER /updates/")
+        # From the host: stable's channel as published; the restricted one refused with its reason.
+        context = ssl.create_default_context(cafile=str(certificates / "ca.pem"))
+        context.check_hostname = False
+        def fetch(path):
+            c = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=30)
+            c.request("GET", path)
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+            return r.status, body
+        assert fetch("/updates/channels/stable") == (200, good)
+        status, body = fetch("/updates/channels/test")
+        assert status == 404 and b"a restricted channel is served on the device's signature" in body, (status, body)
+        layout = temp / "layout"
+        boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+        (layout / "MIND/A/CHANNEL").write_bytes(kept)
+        (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())
+        (layout / "netpolicy.txt").write_text(f"# the updater may reach the hub\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+        (layout / "update.txt").write_text(f"# MIND Hub's release tree (100003-APP-0159)\nsource https://10.0.2.2:{port}/updates\npin {pin}\n"
+                                           "channel stable\nautomatic fetch\nevery 5\n")
+        image = boot_slots.Image.create(temp / "hub-update.img", layout)
+        cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+        vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+                extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        log = updater_log(vm, "[UPDATER] FETCH: VERSION 6 STAGED IN SLOT B", 900)
+        require(log, "[UPDATER] METADATA: CHANNEL stable VERSION 6")
+        staged = re.search(r"\[UPDATER\] FETCH: VERSION 6 STAGED IN SLOT B: [^\n]*", log).group(0)
+        print(f"PASS: hubupdate (100003-APP-0159): MIND Core's updater, its source the hub's /updates, fetched release 6 from "
+              f"tools/mindhub and staged it ({staged.split(': ', 2)[2]}); the hub served stable's channel as published and "
+              f"refused the restricted channel test, naming why", flush=True)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        if vm is not None:
+            vm.close()
+        hub.terminate()
+        hub.wait(timeout=30)
+        shutil.rmtree(temp, ignore_errors=True)
+
+
 def hub_check(args, disk):
     """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
     (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
@@ -20456,6 +20535,9 @@ def main():
             continue
         if suite == "updatekeys":
             update_keys_suite(args)
+            continue
+        if suite == "hubupdate":  # MIND Core's updater takes a release from MIND Hub's tree (100003-APP-0159)
+            hub_update_suite(args)
             continue
         if suite == "updaterecovery":
             update_recovery_suite(args)
