@@ -1,9 +1,9 @@
-// The compositor's mirror of the first screen on a second one (213-KRN-0272): where the picture goes, which source
-// pixel each of its pixels shows, and which picture pixels a changed source span touches.
+// The compositor's mirror of the first screen on a second one (213-KRN-0272): where the picture goes, kept in shape or
+// stretched (213-KRN-0273), which source pixel each of its pixels shows, and which picture pixels a changed span touches.
 #[allow(dead_code)]
 #[path = "../libmind/src/display.rs"]
 mod display;
-use display::{fit, shown, source_of};
+use display::{fit, placed, shown, source_of};
 
 #[test]
 fn the_ryzens_screens_fit_centred() {
@@ -41,4 +41,23 @@ fn a_changed_span_touches_exactly_the_picture_pixels_that_show_it() {
         }
     }
     assert_eq!(shown(5, 4, 10, 10), None);
+}
+
+#[test]
+fn a_stretched_mirror_fills_the_second_screen_each_axis_on_its_own() {
+    // The Ryzen's two shapes: the whole of 1920x1080, no black columns; kept, 1.3's picture.
+    assert_eq!(placed(true, (2560, 1600), (1920, 1080)), (0, 0, 1920, 1080));
+    assert_eq!(placed(false, (2560, 1600), (1920, 1080)), fit((2560, 1600), (1920, 1080)));
+    assert_eq!(placed(true, (1280, 800), (3440, 1440)), (0, 0, 3440, 1440));
+    assert_eq!(placed(true, (10, 10), (0, 0)), (0, 0, 1, 1));
+    // Each axis on its own: the first picture column and row show the source's first; the last show one of the source's
+    // last `source / picture` (rounded up), all of them when the picture is the larger.
+    for (source, target) in [((2560, 1600), (1920, 1080)), ((1280, 800), (3440, 1440)), ((1920, 1080), (1280, 1024))] {
+        let (_, _, w, h) = placed(true, source, target);
+        for (s, p) in [(source.0, w), (source.1, h)] {
+            assert_eq!(source_of(0, p, s), 0);
+            assert!(source_of(p - 1, p, s) >= s - s.div_ceil(p), "{s} on {p}: {}", source_of(p - 1, p, s));
+            if p >= s { assert_eq!(source_of(p - 1, p, s), s - 1); }
+        }
+    }
 }

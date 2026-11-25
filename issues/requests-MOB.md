@@ -1,6 +1,6 @@
 # Requests for the phones and mobile devices track (MOB), not numbered yet
 
-**Owner:** `MOB` (the assessing session) · **Status:** open (one request, 2026-11-20) · **Recorded by:** the kernel session (`UPD`), for [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md)
+**Owner:** `MOB` (the assessing session) · **Status:** open (three requests: 2026-11-20 and two of 2026-11-25) · **Recorded by:** the kernel session (`UPD`), for [352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md)
 
 The `MOB` track numbers its own tasks (`NNN-MOB-MMMM`), so requests from other tracks wait here. `MOB` turns each into a task and removes it from this file. The file is removed when it is empty.
 
@@ -19,3 +19,24 @@ The `MOB` track numbers its own tasks (`NNN-MOB-MMMM`), so requests from other t
 3. **The entries:** the Orange Pi Zero Plus 2 and Zero 3 first; the PinePhone when the phone is at hand.
 
 **Not asked:** any change to U-Boot's or Tow-Boot's builds, or to the boards' runs of 100004-MOB-0002 and 0003.
+
+## 2. Everything ready for the PinePhone before it is at hand (for 100000)
+
+**Why.** The maintainer (2026-11-25): «подготовить все для деплоя на аппаратный телефон pinephone». The phone is not at hand yet ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)). The goal is that its first boot needs only a card written and the cable plugged in.
+
+**Asked, in this order:**
+1. **The PinePhone's entry in request 1's catalog now,** not when the phone is at hand, and its card from `board_image.py --board pinephone`, with a host test of the layout.
+   - Where Tow-Boot lives on the original PinePhone (the eMMC's boot partition or SPI flash: 100000 and request 1 say different things), from Tow-Boot's documentation.
+   - Whether the A64's boot ROM, finding no loader at 8 KiB on our card, goes on to Tow-Boot, and so what our card must leave free.
+2. **`docs/phones/pinephone.md`:** the first boot as the maintainer does it (Tow-Boot's installer, the card, the cable, the Effector host and its port), and as an agent does it (the console read through Effector, 100000-EFF-0026), with stage 1's criteria as the lines that show them.
+3. **A run script** that reads the console through Effector and checks stage 1's criteria from it: the kernel's lines, four CPUs, the timer, the memory map, the shell's prompt, a reboot. It is tried first on QEMU `virt` under U-Boot's UEFI with four Cortex-A53, as evidence for QEMU only (MC-12.1).
+4. **The profile's skeleton,** `docs/profile/aarch64-pinephone/` (with `KRN`): the TCB and the limits from 100000's stage 6, each line "not tested" until a run (MC-12.3).
+
+**Not asked:** buying or wiring anything (the maintainer's, issues-human sections 12 and 14).
+
+## 3. Stage 1 on the boards first (for 100004)
+
+**Why.** The same priority. The boards share the A64's addresses and need the same steps; their first boots (100004-MOB-0002 and 0003) are the rehearsal for the phone's.
+
+**Asked:** 100004-MOB-0001's card finished and the two first boots run as soon as the maintainer has wired the bench ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); then the kernel's runs of 100000-PRT-0010, 100000-PRT-0012 (on the H5, if its tree names the erratum), 100004-PRT-0014 and 100004-PRT-0015 on them.
+

@@ -1,5 +1,5 @@
 {
-  "budget": 8000,
+  "budget": 8100,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -50,6 +50,11 @@
       "date": "2026-11-19",
       "to": 8000,
       "why": "801-KRN-0261 (78 lines: kernel/src/firmware.rs's record, fatal and fatal_end in main.rs, their callers in scheduler.rs and the x86 interrupt table): every stop the kernel chooses that no task asked for (a panic, an exception in the kernel, init's exit, an interrupt with no handler) keeps its report's line in a firmware variable and, on a trial, restarts into the fallback; the next boot names the record and tells init, which takes it as a freeze's evidence. After such a stop no task runs, so only the kernel can write the record or restart the machine (MC-1.2, as 801-KRN-0258's panic on a trial); the next boot's read comes before init exists. 7971 lines after it; about 29 of room."
+    },
+    {
+      "date": "2026-11-23",
+      "to": 8100,
+      "why": "000-KRN-0276 (41 lines in kernel/src/scheduler.rs: the Lateness counters in select, timers, expire and wake_idle, and the minute's line) and 000-KRN-0277 (3 lines: a console's reader and its run time in CONSOLE_READ and LOG): a timed wait's end, the tick that found it, the wake IPI sent or held back, the task a CPU ran before, and a reader's CPU time are the scheduler's own state, which no user-space service sees; the counters name where DRV's late waits on the Ryzen go before the wake path is mended"
     }
   ]
 }

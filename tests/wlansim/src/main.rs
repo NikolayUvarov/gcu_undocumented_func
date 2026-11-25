@@ -74,6 +74,11 @@ struct Sim {
     group_pn: u64,
     // Whether a frame at a rate the radio lacks was refused (logged once).
     refused: bool,
+    // Built with `busy` (801-NET-0095): whether the unicast data frame last offered was answered busy, and how many were.
+    #[cfg_attr(not(feature = "busy"), allow(dead_code))]
+    busied: bool,
+    #[cfg_attr(not(feature = "busy"), allow(dead_code))]
+    busy_answers: u64,
     // The country's limits (1.2): each channel and whether the station may only listen there; None before any.
     limits: Option<Vec<(u8, bool)>>,
     // Whether a probe request came before any limits (logged once).
@@ -416,7 +421,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, early_probe: false, silent_until: None, gone_until: None };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, busied: false, busy_answers: 0, limits: None, early_probe: false, silent_until: None, gone_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
     // 801-NET-0085: as rtw89 on the Ryzen, which took its own channel after a restart: its `info` names the channel the
     // station tuned the one before to, so only the PID that answers tells the station it is a fresh radio.
@@ -425,6 +430,8 @@ fn main(_info: &'static BootInfo) {
         sim.channel = CHANNEL;
         mind::println!("[WLANSIM] ON CHANNEL {} BY ITSELF: A FRESH RADIO THAT TUNED ITSELF", CHANNEL);
     }
+    #[cfg(feature = "busy")]
+    mind::println!("[WLANSIM] EVERY UNICAST DATA FRAME ANSWERED BUSY AT ITS FIRST OFFER: A RADIO WHOSE QUEUE IS FULL");
     #[cfg(feature = "slow")]
     {
         mind::println!("[WLANSIM] SILENT FOR {} S: A RADIO THAT ANSWERS LATE", LATE_MS / 1000);
@@ -460,7 +467,16 @@ fn main(_info: &'static BootInfo) {
                 mind::println!("[WLANSIM] REFUSED A FRAME ON CHANNEL {}: THE COUNTRY'S LIMITS DO NOT LET IT GO OUT", sim.channel);
                 wlanhw::reply_send(call, Err(wlanhw::Error::Invalid))
             }
+            // Built with `busy`: a unicast data frame's first offer is answered busy, the next one taken (801-NET-0095).
+            #[cfg(feature = "busy")]
+            wlanhw::Request::Send { frame: f, .. } if f.len() > 4 && f[0] & 0x0C == 0x08 && f[4] & 1 == 0 && !core::mem::replace(&mut sim.busied, true) => {
+                sim.busy_answers += 1;
+                if sim.busy_answers % 50 == 1 { mind::println!("[WLANSIM] {} SENDS ANSWERED BUSY", sim.busy_answers); }
+                wlanhw::reply_send(call, Err(wlanhw::Error::Busy))
+            }
             wlanhw::Request::Send { frame: f, attempts, .. } => {
+                #[cfg(feature = "busy")]
+                { sim.busied = false; }
                 let acked = sim.channel == CHANNEL && sim.station_sent(f);
                 wlanhw::reply_send(call, Ok(&wlanhw::Sent { acked, attempts: if acked { 1 } else { attempts.max(1) } }))
             }

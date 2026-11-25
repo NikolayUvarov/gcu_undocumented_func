@@ -818,3 +818,22 @@ fn a_rejoin_on_a_listen_only_channel_waits_for_the_networks_beacon() {
     air.wait(REJOIN_MS + 20);
     assert_eq!(air.station.state(), State::Joined);
 }
+
+#[test]
+fn a_frame_sent_later_counts_at_the_rate_it_went_at() {
+    // 801-NET-0095: a frame the radio held back goes after others; its outcome counts for its own rate. A loss at a
+    // rate that is not the chosen one does not step the chosen rate down; at the chosen one it does.
+    let mut air = joined();
+    assert_eq!(air.station.data_rate(), 48);
+    let mut ethernet = BSSID.to_vec();
+    ethernet.extend_from_slice(&OWN);
+    ethernet.extend_from_slice(&[0x08, 0x00]);
+    ethernet.extend_from_slice(b"a data frame");
+    air.run(|s, _, out, tx| s.send(&ethernet, out, tx)).unwrap();
+    let held = air.sent.last().unwrap().1;
+    assert_eq!(held, 48);
+    air.station.sent_rate(108, false, 15); // a rate the station does not run at now
+    assert_eq!(air.station.data_rate(), 48);
+    air.station.sent_rate(held, false, 15);
+    assert_eq!(air.station.data_rate(), 24);
+}

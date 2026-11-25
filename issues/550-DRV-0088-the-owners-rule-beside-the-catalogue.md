@@ -1,6 +1,13 @@
 # 550-DRV-0088 — A machine's owner adds a rule beside the regulatory catalogue: the Ryzen's channel 100 under UZ
 
-**Type:** driver and catalogue (`regdb`, `rtw89_wifi`; the station's side asked of NET) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-21) · **Blocked by:** NET's word on how an owner's rule reaches the station and the radio · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.4, MC-12.5
+**Type:** driver and catalogue (`regdb`, `rtw89_wifi`; the station's side asked of NET) · **Owner:** `DRV` · **Priority:** P3 · **Status:** later: the hardening stage (the maintainer, 2026-11-25) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.4, MC-12.5
+
+## Put off to the hardening stage (2026-11-25)
+
+The maintainer, on what is left of the Ryzen: «на этапе тестирования мы не привязываемся к странам, первый приоритет - чтобы работало, hardening - это отдельный этап».
+
+- **The bench's join on channel 100 does not wait for this task.** It goes under `00`, the rules every country allows, where the channel is listen-only: [213-DRV-0087](213-DRV-0087-rtl8852be-on-5-ghz.md)'s section of the same date.
+- **Nothing below is built.** The plan stands for the hardening stage, with NET's word still to come then.
 
 ## Problem
 

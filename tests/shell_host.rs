@@ -7,7 +7,8 @@
 //! `nnd`'s clients (shell/src/nnclients.rs, 262-APP-0112); a program's question about a flow (shell/src/flowask.rs,
 //! 000-APP-0120); a console program's secret line (shell/src/secret.rs, 000-APP-0126); `nn run`'s rows (shell/src/nnrows.rs, 262-APP-0112); `volume`, `mic` and data/sound.conf (shell/src/sound.rs,
 //! 000-APP-0076, 000-APP-0077); keystore's passphrase typed at the console (shell/src/passphrase.rs, 308-APP-0130);
-//! `install`'s words (shell/src/installer.rs, 352-APP-0157).
+//! `install`'s words (shell/src/installer.rs, 352-APP-0157); `screen second` and data/displays.txt (shell/src/screens.rs,
+//! 213-APP-0158).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -62,6 +63,8 @@ mod nnrows;
 mod sound;
 #[path = "../shell/src/installer.rs"]
 mod installer;
+#[path = "../shell/src/screens.rs"]
+mod screens;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -1073,4 +1076,31 @@ fn install_lists_shows_and_names_what_failed() {
     for code in 5..=15 { assert!(error(code).ends_with("THE DISK HAS NO ESP: INSTALL AGAIN"), "{code}"); }
     assert_eq!(layout(1, 0x1A2B3C4D, [(2048, 196608), (198656, 65536), (264192, 784384)]),
                "INSTALL: DONE ON DISK 1, MBR 1A2B3C4D: THE ESP AT SECTOR 2048 (196608 SECTORS), MIND LOG AT 198656 (65536), THE STORE AT 264192 (784384). TAKE THE LIVE MEDIUM OUT AND RESTART TO BOOT IT");
+}
+
+#[test]
+fn the_second_screens_fit_shown_set_and_kept() {
+    use screens::*;
+    // 213-APP-0158: `screen` and `screen second` show it; `screen second keep|stretch` sets it, in either case.
+    assert_eq!((parse(""), parse("second"), parse("second stretch"), parse("SECOND Keep")), (Ok(Asked::Show), Ok(Asked::Show), Ok(Asked::Fit(Fit::Stretch)), Ok(Asked::Fit(Fit::Keep))));
+    assert_eq!((parse("second wide"), parse("first keep"), parse("second keep now")), (Err(USAGE), Err(USAGE), Err(USAGE)));
+    // The file: read back as written; the last `second` line counts; a line it does not know is left alone.
+    assert_eq!((read(&text(Fit::Stretch)), read(&text(Fit::Keep))), (Some(Fit::Stretch), Some(Fit::Keep)));
+    assert_eq!(read("# layout\nsecond keep\nright of first\nsecond stretch\n"), Some(Fit::Stretch));
+    assert_eq!((read(""), read("second wide\n")), (None, None));
+    assert!(text(Fit::Keep).starts_with('#') && text(Fit::Keep).ends_with("second keep\n"));
+    // A choice keeps every other line of the file (DRV's report of 2026-11-22: the layout's, 213-DRV-0099's).
+    let others = "# the screens\noutput second light\nsecond keep\nright of first\n";
+    assert_eq!(updated(others, Fit::Stretch), "# the screens\noutput second light\nsecond stretch\nright of first\n");
+    assert_eq!(updated("output second off\n", Fit::Keep), "output second off\nsecond keep\n", "added when none was there");
+    assert_eq!(updated("second keep\nsecond stretch\n", Fit::Keep), "second keep\n", "one line left");
+    assert_eq!(updated("second extend\nsecond keep # mine\n", Fit::Stretch), "second extend\nsecond stretch\n", "a second line it does not read kept");
+    assert_eq!((updated("", Fit::Stretch), updated("  \n", Fit::Keep)), (text(Fit::Stretch), text(Fit::Keep)));
+    assert_eq!(read(&updated(others, Fit::Stretch)), Some(Fit::Stretch));
+    // Its words.
+    assert_eq!(second(None), "SCREEN: NO SECOND SCREEN: NO DISPLAY DRIVER OFFERS ONE");
+    assert_eq!(second(Some((1920, 1080, Fit::Keep, 1728, 1080))), "SCREEN: THE SECOND SCREEN 1920X1080, KEEP: THE FIRST SHOWN IN ITS OWN SHAPE AT 1728X1080, CENTRED");
+    assert_eq!(second(Some((1920, 1080, Fit::Stretch, 1920, 1080))), "SCREEN: THE SECOND SCREEN 1920X1080, STRETCH: THE FIRST FILLS IT");
+    assert_eq!(chosen(Fit::Stretch, Ok(())), "SCREEN: THE SECOND SCREEN SHOWS THE FIRST FILLING IT (SECOND STRETCH), KEPT IN data/displays.txt");
+    assert_eq!(chosen(Fit::Keep, Err("READ-ONLY DEVICE")), "SCREEN: THE SECOND SCREEN SHOWS THE FIRST IN ITS OWN SHAPE (SECOND KEEP), NOT KEPT: data/displays.txt: READ-ONLY DEVICE");
 }

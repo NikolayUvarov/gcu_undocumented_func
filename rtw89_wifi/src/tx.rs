@@ -45,6 +45,10 @@ pub(crate) struct Seen{pub finished:u8,pub fetched:bool,pub released:bool,pub re
 #[derive(Clone,Copy)]
 struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>,firmware:Option<txdesc::FirmwareReport>,last_counter:u8}
 struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
+// 213-DRV-0104: a frame parked on the ring behind which the next is sent: its submission (descriptor, sequence, report),
+// what it is to (QSEL, MAC ID, a group), its tries and submissions so far, and the serial of its buffer.
+#[derive(Clone,Copy)]
+struct Parked{pending:Pending,qsel:u8,mac_id:u8,group:bool,raw_count:u16,completed:u8,serial:u64}
 
 // DEBUG (the Ryzen, 2026-11-08: everything runs first, hardening later): the firmware sent its final report for the
 // management queue's frames, never for a data queue's (a WPA2 handshake's message 2, fetched and released by the RPQ,
@@ -60,7 +64,10 @@ const DROP_UNACKED:bool=true;
 pub(crate) struct Queue<'a>{
     base:NonNull<u8>,physical:u64,session:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
     serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,last_firmware:Option<txdesc::FirmwareReport>,
-    rpq_alone:bool,drop_unacked:bool,_exclusive:PhantomData<&'a mut[u8]>,
+    rpq_alone:bool,drop_unacked:bool,parked:Option<Parked>,
+    // 213-DRV-0104: the pending submission's times (submitted, its fetch seen, its release seen; the bus clock, µs), and
+    // the last completed frame's (submission to fetch, fetch to release).
+    timing:(u64,Option<u64>,Option<u64>),last_timing:Option<(u64,u64)>,_exclusive:PhantomData<&'a mut[u8]>,
 }
 impl<'a> Queue<'a>{
     /// # Safety
@@ -77,12 +84,34 @@ impl<'a> Queue<'a>{
         let session=io::dma_session()?;
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
         Ok(Self{base,physical,session,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
-            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),drop_unacked:DROP_UNACKED&&!cfg!(test),_exclusive:PhantomData})
+            request:None,pending:None,last_report:None,last_firmware:None,rpq_alone:RPQ_ALONE&&!cfg!(test),drop_unacked:DROP_UNACKED&&!cfg!(test),parked:None,timing:(0,None,None),last_timing:None,_exclusive:PhantomData})
     }
     pub(crate) fn state(&self)->State{self.state}
     pub(crate) fn session(&self)->u64{self.session}
     pub(crate) fn physical(&self)->u64{self.physical}
     pub(crate) fn pending_request(&self)->bool{self.request.is_some()}
+    /// 213-DRV-0104: the last completed frame's final submission: µs from it to its fetch seen, and from that to its release
+    /// seen (0 when the release was seen first), taken.
+    pub(crate) fn take_timing(&mut self)->Option<(u64,u64)>{self.last_timing.take()}
+    // The final submission's times at its completion, `now` the clock then.
+    fn timed(&mut self,now:u64){
+        let(submitted,fetched,reported)=self.timing;let fetched=fetched.unwrap_or(now);
+        self.last_timing=Some((fetched.saturating_sub(submitted),reported.unwrap_or(now).saturating_sub(fetched)));
+    }
+    /// 213-DRV-0104: a frame is parked, its release awaited.
+    pub(crate) fn parked(&self)->bool{self.parked.is_some()}
+    /// 213-DRV-0104: the pending frame parked on the ring, so that the next can be begun behind it: its release is awaited
+    /// by its sequence, and it is final at it, never resubmitted (that would put it behind the next). One at a time; a
+    /// frame whose firmware report is awaited (MGQ, the strict path) names itself by four bits and is not parked.
+    pub(crate) fn park(&mut self)->Result<()>{
+        if self.state!=State::Running{return Err(Error::State)}
+        if self.parked.is_some(){return Err(Error::Busy)}
+        let(Some(request),Some(pending))=(self.request.as_ref(),self.pending) else{return Err(Error::State)};
+        if self.reported(pending.queue)||self.serial==0{return Err(Error::State)}
+        self.parked=Some(Parked{pending,qsel:request.meta.qsel,mac_id:request.mac_id,group:request.meta.group,raw_count:request.raw_count,
+            completed:request.completed,serial:self.serial-1});
+        self.request=None;self.pending=None;Ok(())
+    }
     /// RPQ_ALONE in a host model, whose default is the strict path.
     #[cfg(test)]
     pub(crate) fn rpq_alone(&mut self){self.rpq_alone=true;}
@@ -104,7 +133,7 @@ impl<'a> Queue<'a>{
     }
     pub(crate) fn poison(&mut self){self.state=State::Faulted;}
     pub(crate) fn installed_for_data(&mut self,bus:&mut impl Bus)->Result<()>{
-        if self.state!=State::Installed||self.request.is_some()||self.pending.is_some()||self.serial!=0{return Err(Error::State)}
+        if self.state!=State::Installed||self.request.is_some()||self.pending.is_some()||self.parked.is_some()||self.serial!=0{return Err(Error::State)}
         if io::read32(bus,fwcmd::DMA_STOP)?&(OWN_STOP|WP_STOP)!=(OWN_STOP|WP_STOP){return Err(Error::State)}
         self.rings(bus)?;self.reclaim(bus)?;
         if self.issued!=[0;CHANNELS]||self.completed!=[0;CHANNELS]{return Err(Error::State)}Ok(())
@@ -180,7 +209,10 @@ impl<'a> Queue<'a>{
         if self.request.is_some(){return Err(Error::Busy);}
         let meta=txdesc::frame(frame,rate,max_submissions).map_err(Error::Input)?;
         if mac_id>127||timeout_us==0||timeout_us>1_000_000{return Err(Error::Input(txdesc::Error::Count));}
-        let now=bus.now_us();let mut request=Request{meta,mac_id,limit:if meta.group{1}else{max_submissions},completed:0,raw_count:0,start:now,budget:timeout_us,last:now,polls:0,frame:[0;txdesc::MAX_FRAME]};
+        // 213-DRV-0104: room for every submission of this frame before a parked frame's buffer comes round again.
+        let limit=if meta.group{1}else{max_submissions};
+        if self.parked.is_some_and(|p|self.serial+u64::from(limit)-p.serial>BUFFERS as u64-1){return Err(Error::Busy);}
+        let now=bus.now_us();let mut request=Request{meta,mac_id,limit,completed:0,raw_count:0,start:now,budget:timeout_us,last:now,polls:0,frame:[0;txdesc::MAX_FRAME]};
         request.frame[..frame.len()].copy_from_slice(frame);self.request=Some(request);
         let result=(||{self.live(bus)?;self.reclaim(bus)?;self.submit(bus)})();self.observe(result)
     }
@@ -191,6 +223,8 @@ impl<'a> Queue<'a>{
         let next=self.serial.checked_add(1).ok_or(Error::Count)?;
         let issued=self.issued[q].checked_add(1).ok_or(Error::Count)?;
         if self.issued[q]-self.completed[q]>=DESCRIPTORS as u64-1{return Err(Error::Busy);}
+        // A parked frame's buffer is not written again before its release.
+        if self.parked.is_some_and(|p|self.serial-p.serial>=BUFFERS as u64-1){return Err(Error::Busy);}
         let sequence=(self.serial&0x7fff)as u16;
         let buffer=BUFFERS_AT+(self.serial%BUFFERS as u64)as usize*STRIDE;
         let wd=txdesc::descriptor(request.meta,request.mac_id,sequence,self.physical+(buffer+PAYLOAD_AT)as u64,self.reported(q)).map_err(Error::Input)?;
@@ -206,6 +240,7 @@ impl<'a> Queue<'a>{
         }
         self.time(bus)?;fence(Ordering::Release);
         self.pending=Some(Pending{queue:q,sequence,descriptor:self.issued[q],report:None,firmware:None,last_counter:0});self.serial=next;self.issued[q]=issued;
+        self.timing=(bus.now_us(),None,None);
         bus.write16(INDEX[q],(issued%DESCRIPTORS as u64)as u16)?;self.time(bus)?;Ok(())
     }
     fn reports(&mut self,bytes:&[u8])->Result<()>{
@@ -213,6 +248,12 @@ impl<'a> Queue<'a>{
         for raw in bytes.chunks_exact(4){
             let report=txdesc::rpq(raw).map_err(Error::Input)?;
             if self.last_report==Some(report){continue;}
+            // 213-DRV-0104: the parked frame's release, by its sequence.
+            if let Some(parked)=self.parked.as_mut().filter(|p|p.pending.sequence==report.sequence){
+                if report.qsel!=parked.qsel||report.mac_id!=parked.mac_id{return Err(Error::Report);}
+                if parked.pending.report.is_some_and(|old|old!=report.status){return Err(Error::Report);}
+                parked.pending.report=Some(report.status);self.last_report=Some(report);continue;
+            }
             let pending=self.pending.as_mut().ok_or(Error::Report)?;
             let request=self.request.as_ref().ok_or(Error::Report)?;
             if report.sequence!=pending.sequence||report.qsel!=request.meta.qsel||report.mac_id!=request.mac_id{return Err(Error::Report);}
@@ -224,6 +265,7 @@ impl<'a> Queue<'a>{
         self.time(bus)?;self.reclaim(bus)?;self.time(bus)?;
         let pending=self.pending.ok_or(Error::State)?;
         if self.completed[pending.queue]<=pending.descriptor{return Ok(None);}
+        let now=bus.now_us();if self.timing.1.is_none(){self.timing.1=Some(now);}
         let Some(status)=pending.report else{return Ok(None);};
         let request=self.request.as_mut().ok_or(Error::State)?;
         if matches!(status,Status::Lifetime|Status::MacIdDrop){
@@ -231,7 +273,7 @@ impl<'a> Queue<'a>{
             request.completed=request.completed.checked_add(1).ok_or(Error::Count)?;self.pending=None;
             let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?.max(1).min(request.limit);
             let completion=Completion{status,acked:false,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
-            self.time(bus)?;self.request=None;return Ok(Some(completion));
+            self.time(bus)?;self.request=None;self.timed(now);return Ok(Some(completion));
         }
         let tries=if !self.rpq_alone||pending.queue==MGQ{
             let Some(firmware)=pending.firmware else{return Ok(None);};
@@ -245,7 +287,7 @@ impl<'a> Queue<'a>{
             let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?;
             if attempts==0||attempts>request.limit{return Err(Error::Count);}
             let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
-            self.time(bus)?;self.request=None;return Ok(Some(completion));
+            self.time(bus)?;self.request=None;self.timed(now);return Ok(Some(completion));
         }
         self.submit(bus)?;Ok(None)
     }
@@ -291,13 +333,32 @@ impl<'a> Queue<'a>{
     /// The single RX owner supplies its copied record and a fresh clock; this never polls or releases a receive descriptor.
     /// Retain Other records for their owner. Ingesting a report alone cannot complete or submit an MPDU.
     pub(crate) fn ingest(&mut self,now:u64,channel:rx::Channel,outcome:rx::Outcome,buffer:&[u8])->Result<Receive> {
-        if self.state!=State::Running||self.request.is_none(){return Err(Error::State)}
-        let result=self.polling_at(now).and_then(|()|self.ingest_inner(channel,outcome,buffer));self.observe(result)
+        if self.state!=State::Running||self.request.is_none()&&self.parked.is_none(){return Err(Error::State)}
+        let result=(if self.request.is_some(){self.polling_at(now)}else{Ok(())}).and_then(|()|self.ingest_inner(channel,outcome,buffer));
+        if self.pending.is_some_and(|p|p.report.is_some())&&self.timing.2.is_none(){self.timing.2=Some(now);}
+        self.observe(result)
     }
     /// Revalidate actual TX registers and advance DMA/status ownership without touching either receive ring.
     pub(crate) fn advance(&mut self,bus:&mut impl Bus)->Result<Option<Completion>> {
         if self.state!=State::Running||self.request.is_none(){return Err(Error::State)}
         let result=(||{self.polling_at(bus.now_us())?;self.live(bus)?;self.progress(bus)})();self.observe(result)
+    }
+    /// 213-DRV-0104: the parked frame, final once its descriptor is fetched and its release reported: acknowledged or not,
+    /// its tries (one a submission), never resubmitted. A drop (lifetime, MAC ID) counts no try, as `progress` does.
+    pub(crate) fn parked_release(&mut self,bus:&mut impl Bus)->Result<Option<Completion>>{
+        if self.state!=State::Running||self.parked.is_none(){return Err(Error::State)}
+        let result=(||{
+            self.live(bus)?;self.reclaim(bus)?;
+            let p=self.parked.ok_or(Error::State)?;
+            if self.completed[p.pending.queue]<=p.pending.descriptor{return Ok(None)}
+            let Some(status)=p.pending.report else{return Ok(None)};
+            let dropped=matches!(status,Status::Lifetime|Status::MacIdDrop);
+            if dropped&&!self.drop_unacked{return Err(Error::Dropped{status,completed_descriptors:p.completed})}
+            let raw=if dropped{p.raw_count}else{p.raw_count.checked_add(u16::from(txdesc::SELECTED_LIMIT)).ok_or(Error::Count)?};
+            let attempts=u8::try_from(raw.max(1)).map_err(|_|Error::Count)?;
+            let completed=p.completed.checked_add(1).ok_or(Error::Count)?;self.parked=None;
+            Ok(Some(Completion{status,acked:status==Status::Done&&!p.group,attempts:AttemptCount::Known(attempts),completed_descriptors:completed,raw_data_tx_count:raw}))
+        })();self.observe(result)
     }
     // Host-model adapters own the test rings; production uses the Session dispatcher and retained records.
     #[cfg(test)]
