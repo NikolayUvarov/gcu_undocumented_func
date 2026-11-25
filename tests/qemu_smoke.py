@@ -19629,6 +19629,7 @@ def second_nvme_check(args, disk):
                         f"[NVME#1] NAMESPACE 1: {sectors} SECTORS", ", READ-ONLY\n",
                         f"[NVME#1] SECTORS 0 TO 2047 READ: SHA-256 {first_mib}; SECTOR 0 ENDS 55AA, SECTOR 1 A GPT HEADER")
             assert "; REFUSAL " not in log and "NOT SENT" not in log, log  # nothing in the system asked it to write
+            assert "FAILED" not in log and "STATUS TYPE" not in log, log  # its queue pair asked for and created without an error
             first = vm.service_logs("nvme", "NAMESPACE 1:")
             require(first, "[NVME] CONTROLLER: VENDOR 1B36")
             assert "READ-ONLY" not in first and "[NVME#" not in first, first
