@@ -378,7 +378,7 @@ offered the second screen, and the compositor took it.**
 **Not done, written down as tasks (2026-11-22, the owner session's list):**
 - [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md): the second screen in its monitor's
   own mode, from its EDID, not the fixed 1920x1080. On this machine that is 3440x1440 at 324 MHz.
-- [213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md): the second output's hot-plug. HPD 1
+- [213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done): the second output's hot-plug. HPD 1
   off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
 - [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md): table 12's cold path on the Ryzen, by
   213-DRV-0086's procedure.

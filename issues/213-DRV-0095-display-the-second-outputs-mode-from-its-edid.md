@@ -396,5 +396,5 @@ Superseded by the section of the same name in [213-DRV-0103](213-DRV-0103-displa
 [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror, the
 pitch), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (first light, table 12's two paths),
 [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md) (the paths, the monitors, the survey's hang),
-[213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md) (hot-plug, which reads the EDID
+[213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (hot-plug, which reads the EDID
 again).

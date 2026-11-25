@@ -279,5 +279,5 @@ nothing.
 ## Related
 
 [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md) (the watch's numbers, the gap at `init`'s end
-of boot), [213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md) (the loop it rides on),
+of boot), [213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (the loop it rides on),
 [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the watch, boot 74's underflow).

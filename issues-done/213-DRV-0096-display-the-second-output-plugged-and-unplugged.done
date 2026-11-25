@@ -1,6 +1,6 @@
-# 213-DRV-0096 — `display`: the second output plugged and unplugged
+# 213-DRV-0096 — `display`: the second output plugged and unplugged — done
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.4
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -156,6 +156,30 @@ This is that machine, with that monitor (TRG `KQ34C144C`), on that boot (MC-12.1
   back in about 31 to 36 ms and lit again; DP-2's pipe unchanged by the log, and «первый экран не мограл» by the
   maintainer. That machine and that monitor (MC-12.1).
 
+## Resolution
+
+- **What was built:** `display` follows HPD 1's sense after steps 1 to 4, behind `HOTPLUG` (committed off):
+  - `display/src/hpd.rs` (the poll every 50 ms, a change counted after 500 ms, the output's state);
+  - `light::take_back` (stages `done` to 1 undone, `screen_gone` first, the mark cleared);
+  - the follow loop in `display/src/main.rs`, which runs steps 1 to 4 again on a plug.
+- **Where:** code 5e63d41b4, on 213-DRV-0098's a71a47b83; the hardware run recorded at 8823e6433. In `main` since that
+  head's landing, e9e1445d7 ("Land claude/213-DRV-0096-display-the-second-output-plugged-and-unplugged (8823e6433fd5)
+  through the landing queue").
+- **Host cases:** `tests/display_hpd_host.rs` (4) and 5 in `tests/display_light_host.rs`, on the model and with the
+  Ryzen's tables when `MIND_AMD_VBIOS` names them (MC-12.2: a model, not the hardware).
+- **On the Ryzen:** boot 94 (2026-11-22, from 15:40 UTC; `HOTPLUG` and `STANDING_CHECK` set, the watch of 300, the
+  production order, 3440x1440 in HDMI). The maintainer took the cable out and in, then switched the monitor off and on
+  at its button. Each event was taken back in 31 to 36 ms, DP-2's pipe unchanged by the log, and lit again: «первый
+  экран не мограл, сейчас на них одно и тоже исзображение». That machine and that monitor (MC-12.1).
+- **After it, in `main`:** 213-DRV-0103's 9acc0b773 counts a take-back's dark span apart in the standing check's line,
+  and 5dfb4d4b9 logs the held detail of a take-back whose undo goes wrong. Neither has run on the hardware: the bench
+  kept ba592c2b8's `display`.
+- **Not shown:** another monitor; this one's HPD left off overnight or in a no-signal standby while lit; a plug of a
+  monitor whose EDID gives another mode; a take-back that goes wrong; a take-back and relight with the watch of 60.
+- **Not decided:** the question above whether a monitor that only sleeps should keep its pipe. This monitor pulsed HPD
+  about 0.6 s at its button, so it was taken back and lit again; the maintainer said what he saw, not what he wants.
+- **Next:** 213-DRV-0099 is to turn this on under the machine's `light` setting.
+
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (HPD 1, step 1), [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md) (HPD 1, step 1), [213-DRV-0095](../issues/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).
