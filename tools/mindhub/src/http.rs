@@ -73,7 +73,9 @@ impl<S: Read + Write> Conn<S> {
             return Err(ReadError::Bad(400, "not a request line"));
         };
         let close_by_version = match version { "HTTP/1.1" => false, "HTTP/1.0" => true, _ => return Err(ReadError::Bad(505, "HTTP/1.1 only")) };
-        if !matches!(method, "GET" | "POST" | "PUT" | "DELETE") { return Err(ReadError::Bad(405, "GET, POST, PUT or DELETE")); }
+        // HEAD for the release tree alone (100003-APP-0159), whose answers are files.
+        let head_of_tree = method == "HEAD" && crate::updates::ours(target.split('?').next().unwrap_or(""));
+        if !matches!(method, "GET" | "POST" | "PUT" | "DELETE") && !head_of_tree { return Err(ReadError::Bad(405, "GET, POST, PUT or DELETE")); }
         if !target.starts_with('/') || target.len() > TARGET_MAX || target.bytes().any(|b| !(0x21..0x7f).contains(&b)) {
             return Err(ReadError::Bad(400, "the target is not a path of printable ASCII"));
         }
@@ -143,9 +145,9 @@ impl Response {
 
 pub fn reason(status: u16) -> &'static str {
     match status {
-        100 => "Continue", 200 => "OK", 201 => "Created", 303 => "See Other", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
+        100 => "Continue", 200 => "OK", 201 => "Created", 206 => "Partial Content", 303 => "See Other", 304 => "Not Modified", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
         404 => "Not Found", 405 => "Method Not Allowed", 409 => "Conflict", 411 => "Length Required", 413 => "Content Too Large",
-        429 => "Too Many Requests", 431 => "Request Header Fields Too Large", 500 => "Internal Server Error", 501 => "Not Implemented",
+        416 => "Range Not Satisfiable", 429 => "Too Many Requests", 431 => "Request Header Fields Too Large", 500 => "Internal Server Error", 501 => "Not Implemented",
         503 => "Service Unavailable", 505 => "HTTP Version Not Supported", _ => "Status",
     }
 }

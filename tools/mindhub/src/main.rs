@@ -8,7 +8,10 @@ use std::sync::{Arc, Mutex};
 
 const USAGE: &str = "usage:
   mindhub serve DATA [--listen 127.0.0.1:8443] [--cert CHAIN.pem --key KEY.pem]
-      DATA holds hub.conf, journal.jsonl and attachments/; without a certificate it listens on loopback alone
+                [--releases DIR [--public CHANNEL]... [--updates-per-minute 600]]
+      DATA holds hub.conf, journal.jsonl and attachments/; without a certificate it listens on loopback alone;
+      DIR is a release tree as scripts/release.py publish writes it, served under /updates/, its public channels
+      alone (stable when none is named)
   mindhub key FILE                 make an Ed25519 key in FILE (0600) and print its public half for hub.conf
   mindhub public FILE              print a key file's public half
   mindhub admin-code --key FILE --hub URL [--pin SPKI-SHA256]...
@@ -24,7 +27,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().position(|a| a == name).map(|i| args.get(i + 1).cloned().unwrap_or_else(|| fail(&format!("{name} takes a value"))));
     match args.first().map(String::as_str) {
-        Some("serve") => serve(args.get(1).cloned().unwrap_or_else(|| fail(USAGE)).into(), flag("--listen"), flag("--cert"), flag("--key")),
+        Some("serve") => {
+            let updates = flag("--releases").map(|dir| {
+                let public: Vec<String> = args.windows(2).filter(|w| w[0] == "--public").map(|w| w[1].clone()).collect();
+                let per_minute = flag("--updates-per-minute").map_or(600, |n| n.parse().ok().filter(|&n| n > 0).unwrap_or_else(|| fail("--updates-per-minute takes a number above 0")));
+                Arc::new(mindhub::updates::Updates::new(dir.into(), public, per_minute).unwrap_or_else(|e| fail(&e)))
+            });
+            serve(args.get(1).cloned().unwrap_or_else(|| fail(USAGE)).into(), flag("--listen"), flag("--cert"), flag("--key"), updates)
+        }
         Some("key") => {
             let path = PathBuf::from(args.get(1).unwrap_or_else(|| fail(USAGE)));
             let key = client::write_key(&path).unwrap_or_else(|e| fail(&e));
@@ -74,7 +84,7 @@ fn main() {
     }
 }
 
-fn serve(data: PathBuf, listen: Option<String>, cert: Option<String>, key: Option<String>) {
+fn serve(data: PathBuf, listen: Option<String>, cert: Option<String>, key: Option<String>, updates: Option<Arc<mindhub::updates::Updates>>) {
     let listen = listen.unwrap_or_else(|| "127.0.0.1:8443".into());
     let addr: SocketAddr = listen.parse().unwrap_or_else(|_| fail(&format!("--listen {listen}: an address and a port")));
     let tls = match (cert, key) {
@@ -91,7 +101,8 @@ fn serve(data: PathBuf, listen: Option<String>, cert: Option<String>, key: Optio
     let listener = TcpListener::bind(addr).unwrap_or_else(|e| fail(&format!("{listen}: {e}")));
     eprintln!("MINDHUB: SERVING {} ON {}, {} EVENTS, {} USERS, {} REQUESTS", improve_proto::API, listener.local_addr().map(|a| a.to_string()).unwrap_or(listen),
               shared.hub.events, shared.hub.users().len(), shared.hub.requests().len());
+    if let Some(u) = &updates { eprintln!("MINDHUB: THE RELEASE TREE {}, CHANNELS {} OFFERED UNDER {}/", u.root.display(), u.public.join(" "), mindhub::updates::PREFIX); }
     let shared = Arc::new(Mutex::new(shared));
-    let options = server::Options { tls, ..server::Options::new() };
+    let options = server::Options { tls, updates, ..server::Options::new() };
     if let Err(e) = server::serve(listener, shared, options) { fail(&e.to_string()); }
 }

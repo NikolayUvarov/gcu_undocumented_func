@@ -13,4 +13,5 @@ pub mod hub;
 pub mod journal;
 pub mod pages;
 pub mod server;
+pub mod updates;
 pub mod util;
