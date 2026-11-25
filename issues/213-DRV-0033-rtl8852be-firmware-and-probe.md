@@ -1,6 +1,6 @@
 # 213-DRV-0033 — Pin RTL8852BE firmware and identify the chip before radio initialization
 
-**Type:** firmware format / hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV`, with a `KRN` read-only probe · **Priority:** P1 · **Status:** in progress (Linux chip identity collected; MIND raw register observation pending) · **Blocked by:** the Ryzen MIND `SYS_CFG1` report · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
+**Type:** firmware format / hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV`, with a `KRN` read-only probe · **Priority:** P1 · **Status:** in progress (the cut and the running firmware logged under MIND Core; `SYS_CFG1`'s raw value in the board line from 2026-11-26, one boot of the Ryzen left) · **Blocked by:** the Ryzen MIND `SYS_CFG1` report · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -56,3 +56,11 @@ local temporary directory read back all five files with matching SHA-256;
 Realtek offline `check` and all five fetcher regressions passed. Git tracks
 none of the store or build-image files. This verifies Linux directory copying,
 not the Windows disk path, MIND firmware download or radio operation.
+
+## Under MIND Core on the Ryzen (2026-11-22), and the register's raw value (2026-11-26)
+
+- **What the Ryzen's boots show** (boot 93 of 2026-11-22; the board line is in 74 log files kept from 2026-11-21 and 2026-11-22, and the firmware line reads 0.29.29.15 in each of its 81 occurrences): `[RTW89] BOARD READ: CUT 1, RFE 1, XTAL 7C, COUNTRY FFFF, PLAN 7F`, then `[RTW89] FW STATUS 7 OBSERVED: [0, 29, 29, 15]`. So under MIND Core the cut is read as 1 before initialization, the CE image for cut 1 of the pinned file is the one downloaded, and it runs as 0.29.29.15.
+- **What they do not show:** `SYS_CFG1`'s raw value. The driver decoded the cut from it and logged the cut alone, so the fourth criterion's "records `SYS_CFG1`" was not met to the letter.
+- **The change:** the board line now carries the register as read: `[RTW89] BOARD READ: SYS_CFG1 xxxxxxxx, CUT 1, …`. It is one more read of the register the driver already reads twice at that point (`board::power_off_left_on`, `board::read`), with the MAC in the same state.
+- **Left:** one boot of the Ryzen with this driver, the line copied here, and the task closes. A guarded KRN probe is no longer needed for it.
+

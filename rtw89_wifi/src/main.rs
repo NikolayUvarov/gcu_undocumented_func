@@ -550,10 +550,12 @@ fn main(_info: &'static BootInfo) {
         Ok(false) => {}
         Err(cause) => { mind::println!("[RTW89] THE MAC WAS LEFT ON AND DID NOT POWER OFF: {:?}; NO NETWORK LINK", cause); idle(); }
     }
+    // The register the cut is decoded from, as read: the machine's report records it (213-DRV-0033).
+    let sys_cfg1 = native.read32(rtw89_wifi::registers::SYS_CFG1).unwrap_or(u32::MAX);
     let board = match board::read(&mut native) {
         Ok(board) => {
             let b = board.identity;
-            mind::println!("[RTW89] BOARD READ: CUT {}, RFE {}, XTAL {:02X}, COUNTRY {:02X}{:02X}, PLAN {:02X}", b.cut, b.rfe, b.xtal, b.country[0], b.country[1], b.channel_plan);
+            mind::println!("[RTW89] BOARD READ: SYS_CFG1 {:08X}, CUT {}, RFE {}, XTAL {:02X}, COUNTRY {:02X}{:02X}, PLAN {:02X}", sys_cfg1, b.cut, b.rfe, b.xtal, b.country[0], b.country[1], b.channel_plan);
             mind::println!("[RTW89] MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}; PHY CAP {} BYTES; MAC POWERED OFF", b.mac[0], b.mac[1], b.mac[2], b.mac[3], b.mac[4], b.mac[5], board.maps.phycap.len());
             board
         }
