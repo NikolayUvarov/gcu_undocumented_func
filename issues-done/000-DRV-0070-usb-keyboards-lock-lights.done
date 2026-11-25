@@ -79,4 +79,4 @@ Recorded for that machine and its firmware only (MC-12.1). The code is `usb_hid`
 
 ## Related
 
-[213](../issues/213-amd-ryzen-pc.md) (the Ryzen), [213-DRV-0061](../issues/213-DRV-0061-the-ryzens-usb-keyboard.md) (its other USB keyboard), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (`usb_hid`).
+[213](../issues/213-amd-ryzen-pc.md) (the Ryzen), [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.done) (its other USB keyboard), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (`usb_hid`).

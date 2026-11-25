@@ -47,8 +47,8 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 
 The maintainer (2026-11-25): «закончить с поддержкой аппаратных устройств на Ryzen». Against the acceptance criteria below:
 - **Done:** the shell on the screen ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done)); the first NVMe disk and the log partition; both xHCI controllers ([213-KRN-0099](../issues-done/213-KRN-0099-a-usb-host-for-every-xhci.done)); the screen mirrored on the second output ([213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done)).
+- **Done since (2026-11-26):** the keyboard, [213-DRV-0061](../issues-done/213-DRV-0061-the-ryzens-usb-keyboard.done), closed on the maintainer's word that every keyboard at hand types.
 - **Left for the criteria, `DRV`'s:**
-  - the keyboard, [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md);
   - the analog sound, [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md).
 - **Left for "each finding a closed task", `DRV`'s:**
   - the wired card: [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md);

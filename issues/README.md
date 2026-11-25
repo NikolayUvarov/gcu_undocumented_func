@@ -28,7 +28,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [000-ASR-0008](000-ASR-0008-test-only-openssh-path.md) | Run the full SSH host tests with an explicitly selected OpenSSH executable | `ASR` / ASTRA auditor-fixer | P2 | Full gate | Assurance |
 | [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md) | RTL8168 Ethernet: bounded controller, retained DMA and boot/net endpoint integrated | `DRV` / ASTRA auditor-fixer | P1 | Actual Ryzen link, load and recovery acceptance | H / 213 |
 | [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md) | The Ryzen 9 5900HX's second NVMe disk, and its analog sound heard | `DRV` | P2 | `init`'s second `nvme` (KRN); the maintainer's run | H / 213 |
-| [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md) | The USB keyboard 1C4F:000E on the Ryzen's AMD xHCI types nothing | `DRV` | P2 | the maintainer's run | H / 213 |
 | [177-DRV-0051](177-DRV-0051-the-dexps-intel-display-engine.md) | The DEXP's Intel display engine (8086:46D1): both outputs lit, a mode set without a restart, 177's step 3b (the maintainer's two projectors, 2026-11-08) | `DRV` | P2 | `KRN`: 177's step 1 | A, G / 177 |
 | [177-DRV-0059](177-DRV-0059-virtio-gpu-the-first-display-driver.md) | `virtio-gpu`, the first display driver of our own, two outputs in QEMU (177's step 3a) | `DRV` | P2 | KRN: 177's steps 0–1 | H / 177 |
 | [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) | RTL8852BE coexistence once the station has joined: the role notice and a policy that shares the time (the Ryzen lost CoolNet2 during a Bluetooth inquiry) | `DRV` | P1 | — | H / 213 |
@@ -421,6 +420,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [213-DRV-0061](../issues-done/213-DRV-0061-the-ryzens-usb-keyboard.done) | The USB keyboard on the Ryzen's AMD xHCI types nothing | closed on the maintainer's word (2026-11-26) that every keyboard at hand types on the Ryzen; the logs show the Logitech receiver `046D:C534` taken on every kept boot, none shows `1C4F:000E`; a keyboard that fails later gets its own task |
 | [000-KRN-0277](../issues-done/000-KRN-0277-a-console-reader-waiting-for-the-cpu-keeps-its-writer-back.done) | A console reader that waits for the CPU still holds its writer back (DRV: `dmesg` lost its head on a loaded host) | a starved reader keeps back-pressure (CPU time since its read); landed in round 175; the cause inferred, DRV's failure not reproduced |
 | [000-KRN-0275](../issues-done/000-KRN-0275-the-remote-marks-check-from-the-restart.done) | The remote mark's check samples the screen from the restart on, not after a slow dmesg read (round 171's gate) | the check samples from the stub's restart, dmesg at most every 3 s; 4 of 4 on x32 and x32-2 at once, then round 172's gate with no failure |
 | [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done) | `display`: the second screen's vertical blank, if the mirror tears | not needed: the maintainer saw no tearing on the Ryzen's mirror (boot 76); KRN keeps display.wit 1.3 |
