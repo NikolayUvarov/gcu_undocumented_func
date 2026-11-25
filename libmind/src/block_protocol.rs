@@ -39,6 +39,10 @@ impl From<DriverError> for Error {
 /// What a driver's read, write or flush did.
 pub type Outcome = core::result::Result<(), DriverError>;
 
+/// A write or flush the serve loop refused for want of the write right, before it reached the driver (213-DRV-0060).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused { Write { lba: u64, count: u16 }, Flush }
+
 /// Storage driver with 512-byte sectors.
 pub trait Driver {
     fn sectors(&self) -> u64;
@@ -53,6 +57,9 @@ pub trait Driver {
     /// The medium went away and came back while the driver ran, so it may be another one (000-KRN-0085): `block::serve`
     /// answers the request not-found and ends the instance for a fresh one. A driver that cannot tell keeps the default.
     fn returned(&mut self) -> bool { false }
+    /// A write or flush refused before it reached the driver (no write badge, or a read-only medium), with the client's
+    /// badge and PID: a driver that keeps a record of such attempts says so (213-DRV-0060); the default says nothing.
+    fn refused(&mut self, _what: Refused, _badge: u16, _sender: u64) {}
 }
 
 /// Clients of one driver instance that hold a buffer at once, each badge its own (307-KRN-0177): clients that share a

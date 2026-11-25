@@ -8,13 +8,14 @@ use crate::sys::{Error, Result};
 const RECEIVED_CAP: usize = 9;
 pub const BUFFER: usize = BLOCK_MAX_SECTORS * BLOCK_SECTOR;
 
-pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, DriverError, Outcome, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
+pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, DriverError, Outcome, Refused, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
 use crate::block_protocol as protocol;
 
 /// Driver loop for idl/block.wit: sectors, kind, attach of the client's buffer, read, and for a client with the write
 /// badge write (from sealed memory) and flush. Without a device every call reports not-found. A client of a window sees
 /// the window as the device; `init`'s client badged BADGE_WINDOWS sets the windows (1.2, 307-DRV-0054), which a
-/// restarted instance holds none of. Each client badge attaches a buffer of its own (BUFFERS, 307-KRN-0177).
+/// restarted instance holds none of. Each client badge attaches a buffer of its own (BUFFERS, 307-KRN-0177). A write or
+/// flush refused for want of the write right is told to the driver with the client's badge and PID (213-DRV-0060).
 pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
     let mut buffers: Buffers<Mapping> = Buffers::new();
     let mut windows = Windows::new();
@@ -51,13 +52,23 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
                 let result = match driver.as_deref_mut() {
                     None => Err(Error::NotFound),
                     Some(device) if windows.view(badge, device.sectors()).is_err() => Err(Error::NotFound),
-                    Some(device) if !protocol::writable(badge, device, &windows) => Err(Error::Rights),
+                    Some(device) if !protocol::writable(badge, device, &windows) => { device.refused(Refused::Write { lba, count }, badge, request.sender); Err(Error::Rights) }
                     Some(_) if !mem::sealed(data) => Err(Error::Invalid),
                     Some(device) => Mapping::new(data).and_then(|source| protocol::write(device, &windows, badge, source.as_slice(), count, lba)),
                 };
                 block::reply_write(call, result)
             }
-            Ok((block::Request::Flush, call)) => block::reply_flush(call, match driver.as_deref_mut() { None => Err(Error::NotFound), Some(device) => protocol::flush(device, &windows, badge) }),
+            Ok((block::Request::Flush, call)) => {
+                let result = match driver.as_deref_mut() {
+                    None => Err(Error::NotFound),
+                    Some(device) => {
+                        let flushed = protocol::flush(device, &windows, badge);
+                        if flushed == Err(Error::Rights) { device.refused(Refused::Flush, badge, request.sender); }
+                        flushed
+                    }
+                };
+                block::reply_flush(call, result)
+            }
             Ok((block::Request::Window { index, first, count }, call)) => {
                 let set = match driver.as_deref() { None => Err(Error::NotFound), Some(device) => windows.set(badge, device.sectors(), index, first, count as u64) };
                 match set {
