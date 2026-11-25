@@ -1,5 +1,6 @@
 //! A host client of `hub-api 3`: signs a call over the last challenge the hub gave, as a device, an agent or an admin
-//! does, and speaks TLS 1.3 to a hub known by its key's SPKI SHA-256 (4.1). The tests, the conformance suite and
+//! does, and speaks TLS 1.3 to a hub known by its key's SPKI SHA-256 (4.1), or by a chain to a CA bundle's roots,
+//! directly or through an HTTP proxy's CONNECT (100003-APP-0160). The tests, the conformance suite and
 //! `mindhub admin-code` use it; `improve` on a host (stage 5) is built on it.
 
 use ed25519_dalek::SigningKey;
@@ -7,9 +8,10 @@ use improve_proto::json::{self, Value};
 use improve_proto::sign;
 use pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,27 +80,116 @@ impl ServerCertVerifier for Pinned {
 
 enum Transport { Plain, Tls(Arc<ClientConfig>, ServerName<'static>) }
 
+/// How a client knows the hub over TLS: by its key's SPKI SHA-256, as a device does; or by a chain to one of these
+/// roots, its name the URL's host, as an agent does behind a proxy that ends TLS with a CA of its own (100003-APP-0160).
+/// Either way every call is signed over the hub's challenge, so whoever ends TLS on the way cannot forge one.
+#[derive(Clone)]
+pub enum Trust { Pins(Vec<[u8; 32]>), Roots(Arc<RootCertStore>) }
+
+/// The roots of a PEM bundle; one that holds no certificate it can use is refused.
+pub fn roots(path: &Path) -> Result<Arc<RootCertStore>, String> {
+    use pki_types::pem::PemObject;
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path).map_err(|e| format!("{}: {e}", path.display()))?
+        .collect::<Result<_, _>>().map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut store = RootCertStore::empty();
+    let (added, _) = store.add_parsable_certificates(certs);
+    if added == 0 { return Err(format!("{}: no certificate of a CA", path.display())); }
+    Ok(Arc::new(store))
+}
+
+/// The proxy `https://HOST` is reached through: `HTTPS_PROXY` (or `https_proxy`), as `host:port`, unless `NO_PROXY`
+/// names the host or the host is a loopback one; `Err` for a proxy this client cannot use.
+pub fn proxy_from_env(host: &str) -> Result<Option<String>, String> {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    proxy_for(host, var("HTTPS_PROXY").or_else(|| var("https_proxy")).as_deref(), var("NO_PROXY").or_else(|| var("no_proxy")).as_deref())
+}
+
+/// `proxy_from_env` with the variables' values given.
+pub fn proxy_for(host: &str, https_proxy: Option<&str>, no_proxy: Option<&str>) -> Result<Option<String>, String> {
+    let Some(url) = https_proxy.filter(|u| !u.is_empty()) else { return Ok(None) };
+    if loopback(host) || no_proxy.unwrap_or("").split(',').map(str::trim).any(|e| excepted(host, e)) { return Ok(None); }
+    proxy(url).map(Some)
+}
+
+/// A proxy's URL as `host:port`: `http://HOST:PORT` or `HOST:PORT`, with no user and no TLS to the proxy itself.
+pub fn proxy(url: &str) -> Result<String, String> {
+    if url.starts_with("https://") { return Err("a proxy spoken to over TLS is not supported: http://HOST:PORT".into()); }
+    let rest = url.strip_prefix("http://").unwrap_or(url).trim_end_matches('/');
+    if rest.contains('@') { return Err("a proxy with a user and a password is not supported".into()); }
+    if rest.rsplit_once(':').is_none_or(|(h, p)| h.is_empty() || p.parse::<u16>().is_err()) { return Err(format!("the proxy {rest}: HOST:PORT")); }
+    Ok(rest.to_string())
+}
+
+// `host:port`, the scheme's port added when the URL names none (`hub.example`, `[::1]`).
+fn with_port(addr: &str, port: u16) -> String {
+    let named = match addr.rfind(']') { Some(end) => addr[end..].contains(':'), None => addr.matches(':').count() == 1 };
+    if named { addr.to_string() } else { format!("{addr}:{port}") }
+}
+
+fn loopback(host: &str) -> bool { host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) }
+
+// Whether a NO_PROXY entry names the host: `*`, the host, a domain it is in, or an IPv4 network that holds it.
+fn excepted(host: &str, entry: &str) -> bool {
+    let entry = entry.trim_start_matches('.');
+    if entry.is_empty() { return false; }
+    if entry == "*" || host == entry || host.ends_with(&format!(".{entry}")) { return true; }
+    let (Some((net, bits)), Ok(std::net::IpAddr::V4(ip))) = (entry.split_once('/'), host.parse::<IpAddr>()) else { return false };
+    match (net.parse::<std::net::Ipv4Addr>(), bits.parse::<u32>()) {
+        (Ok(net), Ok(bits)) if bits <= 32 => { let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) }; u32::from(ip) & mask == u32::from(net) & mask }
+        _ => false,
+    }
+}
+
+// A TCP connection to `addr` through an HTTP proxy's CONNECT; its head read to its end and no further, so that TLS
+// starts at the next byte; a refusal named with the proxy's status line.
+fn tunnel(proxy: &str, addr: &str, timeout: Duration) -> io::Result<TcpStream> {
+    let mut s = TcpStream::connect(proxy)?;
+    s.set_read_timeout(Some(timeout))?;
+    s.set_write_timeout(Some(timeout))?;
+    s.write_all(format!("CONNECT {addr} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() > 16 * 1024 { return Err(io::Error::other(format!("the proxy {proxy} answered CONNECT with a head over 16 KiB"))); }
+        if s.read(&mut byte)? == 0 { return Err(io::Error::other(format!("the proxy {proxy} closed the connection to CONNECT {addr}"))); }
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    let line = text.lines().next().unwrap_or("");
+    if !line.split(' ').nth(1).is_some_and(|status| status.starts_with('2')) {
+        return Err(io::Error::other(format!("the proxy {proxy} refused CONNECT {addr}: {line}")));
+    }
+    Ok(s)
+}
+
 /// A client of one hub, with the key it signs with.
-pub struct Client { addr: String, transport: Transport, key: SigningKey, challenge: Option<[u8; 32]>, pub timeout: Duration }
+pub struct Client { addr: String, transport: Transport, proxy: Option<String>, key: SigningKey, challenge: Option<[u8; 32]>, pub timeout: Duration }
 
 impl Client {
-    /// A client of `http://HOST:PORT` (a hub on loopback) or `https://HOST:PORT`, known by one of `pins`.
-    pub fn new(url: &str, pins: &[[u8; 32]], key: SigningKey) -> Result<Client, String> {
+    /// A client of `http://HOST:PORT` (a hub on loopback) or `https://HOST:PORT`, known by one of `pins`, reached directly.
+    pub fn new(url: &str, pins: &[[u8; 32]], key: SigningKey) -> Result<Client, String> { Client::connect(url, Trust::Pins(pins.to_vec()), None, key) }
+
+    /// A client of `url` known by `trust`, reached through `proxy` (`host:port`, CONNECT) when one is given.
+    pub fn connect(url: &str, trust: Trust, proxy: Option<String>, key: SigningKey) -> Result<Client, String> {
         let (tls, rest) = if let Some(r) = url.strip_prefix("https://") { (true, r) } else if let Some(r) = url.strip_prefix("http://") { (false, r) }
             else { return Err(format!("{url}: http:// or https://")) };
-        let addr = rest.trim_end_matches('/').to_string();
+        let addr = with_port(rest.trim_end_matches('/'), if tls { 443 } else { 80 });
         let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(&addr).trim_start_matches('[').trim_end_matches(']').to_string();
         let transport = if tls {
-            if pins.is_empty() { return Err("a hub over TLS is known by its key's SPKI SHA-256: --pin".into()); }
-            let provider = httpd::tls::provider(false);
-            let verifier = Arc::new(Pinned { pins: pins.to_vec() });
-            let mut config = ClientConfig::builder_with_provider(provider).with_protocol_versions(&[&rustls::version::TLS13]).map_err(|e| e.to_string())?
-                .dangerous().with_custom_certificate_verifier(verifier).with_no_client_auth();
+            let builder = |provider| ClientConfig::builder_with_provider(provider).with_protocol_versions(&[&rustls::version::TLS13]).map_err(|e| e.to_string());
+            let mut config = match trust {
+                Trust::Pins(pins) if pins.is_empty() => return Err("a hub over TLS is known by its key's SPKI SHA-256 (--pin) or by a CA bundle (--ca)".into()),
+                Trust::Pins(pins) => builder(httpd::tls::provider(false))?.dangerous().with_custom_certificate_verifier(Arc::new(Pinned { pins })).with_no_client_auth(),
+                Trust::Roots(roots) => builder(crate::verify::provider())?.with_root_certificates(roots).with_no_client_auth(),
+            };
             config.alpn_protocols = vec![b"http/1.1".to_vec()];
             let name = ServerName::try_from(host).map_err(|e| format!("{url}: {e}"))?;
             Transport::Tls(Arc::new(config), name)
-        } else { Transport::Plain };
-        Ok(Client { addr, transport, key, challenge: None, timeout: Duration::from_secs(30) })
+        } else {
+            if proxy.is_some() { return Err(format!("{url}: a hub reached through a proxy is reached over TLS, https://")); }
+            Transport::Plain
+        };
+        Ok(Client { addr, transport, proxy, key, challenge: None, timeout: Duration::from_secs(30) })
     }
 
     pub fn key(&self) -> &SigningKey { &self.key }
@@ -106,7 +197,7 @@ impl Client {
     pub fn challenge(&self) -> Option<[u8; 32]> { self.challenge }
 
     fn exchange(&mut self, method: &str, target: &str, headers: &[(&str, String)], body: &[u8]) -> io::Result<Reply> {
-        let tcp = TcpStream::connect(&self.addr)?;
+        let tcp = match &self.proxy { Some(proxy) => tunnel(proxy, &self.addr, self.timeout)?, None => TcpStream::connect(&self.addr)? };
         tcp.set_read_timeout(Some(self.timeout))?;
         tcp.set_write_timeout(Some(self.timeout))?;
         let mut head = format!("{method} {target} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\n", self.addr, body.len());
@@ -128,8 +219,10 @@ impl Client {
                 s.flush()?;
                 match s.read_to_end(&mut raw) {
                     Ok(_) => {}
-                    // A server that closes without close_notify after a whole answer.
+                    // A server that closes without close_notify after a whole answer; a proxy that resets the
+                    // connection after one (the cloud's does, 100003-APP-0160).
                     Err(e) if e.kind() == io::ErrorKind::UnexpectedEof && !raw.is_empty() => {}
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionReset && whole(&raw) => {}
                     Err(e) => return Err(e),
                 }
             }
@@ -154,6 +247,14 @@ impl Client {
         }
         unreachable!()
     }
+}
+
+// Whether `raw` holds an answer's head and all of the body its Content-Length names.
+fn whole(raw: &[u8]) -> bool {
+    let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+    let head = String::from_utf8_lossy(&raw[..end]);
+    head.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse::<usize>().ok()))
+        .is_some_and(|n| raw.len() - end - 4 >= n)
 }
 
 fn parse(raw: &[u8]) -> Option<Reply> {

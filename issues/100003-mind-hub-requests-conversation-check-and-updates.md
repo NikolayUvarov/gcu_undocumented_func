@@ -65,7 +65,7 @@ The design is [docs/hub/README.md](../docs/hub/README.md). In short:
 | 5 | [100003-APP-0150](../issues-done/100003-APP-0150-improve-on-a-host.done), done | `improve` on a host ([docs/hub/improve.md](../docs/hub/improve.md)); the web pages were made in 0146 and 0148 |
 | 6 | [100003-APP-0153](100003-APP-0153-the-shells-notice-and-wms-mark.md), in progress | the shell's notice and `wm`'s mark, done in QEMU on x86; `wm`'s window and the phone's screen with `MOB` later |
 | 7 | numbered when it starts | the native hub (needs 110's MIND Core server side, NET's) |
-| 8 | at the maintainer's word | the agents' rule in AGENTS.md; the intake agent named |
+| 8 | at the maintainer's word | the agents' rule in AGENTS.md, drafted in [docs/hub/agents.md](../docs/hub/agents.md) by [100003-APP-0160](100003-APP-0160-the-hub-reached-by-agents-through-a-proxy.md); the intake agent named (`APP` until then) |
 
 ## Acceptance criteria
 
