@@ -56,6 +56,54 @@
 - [ ] The `usb`, `keys` and `link` QEMU suites pass with this `bt_hci` (no controller: it waits and says none).
 - [ ] On the Ryzen, with a device of the maintainer's: a link made and an L2CAP channel opened (the bench, see 700-BLT-0007 and 0008).
 
+## Progress (2026-11-25, UTC)
+
+- **QEMU.** The `usb`, `keys` and `link` suites pass on x86 (4 CPUs, LEG9, `tests/qemu_smoke.py --suites usb,keys,link`) with this `bt_hci` at e05c89e10. QEMU has no controller, and `bt_hci` sleeps in its claim loop.
+- **The DEXP, a release of this branch** (202611252251, tree bcb794384 on main 219b9da78, no device listed), through the Effector server's `update_agent`:
+  - The agent took the operation at 22:51:53 and downloaded the bundle.
+  - Its last heartbeat was at 22:57:58, with `shutting_down` (the apply's restart).
+  - It had not answered the server again by 23:14, so the run was stopped there and reported to the owner session (manageability first).
+  - Whether the trial boot or the fallback to slot A is what does not come back is unknown from here. No log of either boot has been read.
+- **Delivery to the DEXP.** An empty device list was delivered to its `data/inbox/bt-devices.txt` (22:49). The server refuses `data/bluetooth/`.
+
+## Review of the start path against a real controller (2026-11-25, after the DEXP did not come back)
+
+**Main's `bt_hci` at 219b9da78 with no `data/bt-listen.txt`:** the bring-up, then `SET_EVENT_MASK` and `WRITE_INQUIRY_MODE`, then `idle()`. It made no further `usb_host` call, and its bulk IN endpoint was never polled.
+
+**The build released to the DEXP (bcb794384), nothing listed:** the bring-up the same, then always the stack.
+- **The stack's setup,** each command once, never retried:
+  - `READ_LOCAL_FEATURES`, `READ_BUFFER_SIZE`;
+  - `SET_EVENT_MASK`, with the SSP bits 46-53 and 58;
+  - `WRITE_SIMPLE_PAIRING_MODE` 1, `WRITE_INQUIRY_MODE` 2;
+  - `WRITE_CLASS_OF_DEVICE`, `WRITE_LOCAL_NAME` (3 + 248 bytes, under the patch fragments' 3 + 253);
+  - `WRITE_DEFAULT_LINK_POLICY` 5, `WRITE_PAGE_TIMEOUT`;
+  - `LE_SET_EVENT_MASK`, `WRITE_LE_HOST_SUPPORTED` (1, 0), `LE_READ_BUFFER_SIZE`.
+- **Then a loop that never ended,** every 20 ms. Each turn made two `usb_host` calls: `reports` on the interrupt endpoint, and `reports` on the bulk IN endpoint. The first bulk call armed that endpoint, its first use on any machine. That is about 100 calls a second, as much as one more HID device.
+- **What it did not do:**
+  - every wait sleeps 20 ms, or 10 ms in the bring-up;
+  - a command not answered is given up after 3 s, an error is logged, nothing is retried;
+  - event floods are bounded by usb_host's eight packets a call;
+  - `sleep` returns early only with keyboard input queued, which a background service never has.
+- **The polled endpoints.** The DEXP's last log polls five endpoints at start (`usb_host`'s limit is eight); the bulk IN endpoint made six.
+- **The stack.** `PT_GNU_STACK` grew from 64 to 256 KiB (now 512 KiB), and `bt_hci.elf` from about 270 to 350 KiB.
+
+**Could it have hung the DEXP?** I found no mechanism. `bt_hci` is a ring-3 client that sleeps between calls, and the kernel's trial restart (120 s) is beyond its reach. That the machine did not come back even through the fall-back to slot A points below it. This is a judgment, not shown.
+
+**What else came with the release.** The DEXP ran de3eac32 (2026-11-21, ABI 34); the release is 511 commits of main on top (ABI 37). Among them:
+- `usb_host` +600 lines: deferred bulk transfers (000-DRV-0101) on the boot stick's xHCI, bulk streams, spill;
+- the kernel's scheduler, interrupts and trial;
+- `init`, the updater and the bootloader;
+- the new `display` service.
+
+**Fixed (bt_host::driver).**
+- With no device listed and no listening asked, `bt_hci` sends main's last two commands and idles with no `usb_host` call: main's footprint, command for command.
+- On the active path, the bulk IN endpoint is polled only while a link is up.
+- A controller gone (or 50 failed polls in a row) stops the loop.
+- The whole bring-up and loop moved into `bt_host::driver` behind a port, and run on the host in `bt_host/tests/driver.rs`. A scripted RTL8821C-like and RTL8852B-like controller answers normally, answers errors, answers nothing, or floods events, with the time advanced by the harness.
+- The sequences recorded there:
+  - **quiet:** `RESET`, `READ_LOCAL_VERSION`, `READ_ROM_VERSION`, n × `DOWNLOAD`, `RESET`, `READ_LOCAL_VERSION`, `READ_BD_ADDR`, `SET_EVENT_MASK`, `WRITE_INQUIRY_MODE`, then nothing;
+  - **active:** `1003 1005 0C01 0C56 0C45 0C24 0C13 080F 0C18 0C1A 2001 0C6D 2002`, then `0405` for a device listed. Events are polled at 50 a second, the bulk IN endpoint never without a link.
+
 ## Related
 
 [700](700-bluetooth.md), [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md) (pairing), [700-BLT-0007](700-BLT-0007-a2dp-source.md) (A2DP), [700-BLT-0008](700-BLT-0008-classic-hid-host.md) (HID), [700-BLT-0009](700-BLT-0009-le-pairing-and-hid-over-gatt.md) (LE), [700-DRV-0043](700-DRV-0043-usb-host-hands-out-bluetooth-controllers.md) (the bulk IN endpoint polled).

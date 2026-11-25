@@ -6,6 +6,7 @@
 //! keystore, a pairing policy and an audit (issue 700's plan; MC-3.x, MC-10.x, MC-11.4) is the hardening stage: it does
 //! not exist yet.
 //!
+//! - `driver`: bt_hci's bring-up and loop apart from its I/O; `rtl`: a Realtek controller's patch;
 //! - `hci`: commands and events; `ctl`: the controller's command credit and ACL buffers; `acl`: ACL packets and L2CAP
 //!   reassembly; `l2cap`: channels and signalling;
 //! - `stack`: links, pairing, dispatch; `devices`: the devices listed and their keys; `scan`: the listening rounds;
@@ -17,10 +18,12 @@ pub mod avdtp;
 pub mod buf;
 pub mod ctl;
 pub mod devices;
+pub mod driver;
 pub mod hci;
 pub mod hid;
 pub mod l2cap;
 pub mod le;
+pub mod rtl;
 pub mod sbc;
 pub mod scan;
 pub mod sdp;

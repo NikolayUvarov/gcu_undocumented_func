@@ -2,8 +2,9 @@
 //! for the testing stage (700-BLT-0006). Only a device named in the list is paged, accepted or paired: the scans hear
 //! the neighbours' devices too.
 //!
-//! `data/bt-devices.txt`, a line a device: `AA:BB:CC:DD:EE:FF audio`, `... hid`, or `... le-hid` (`le-hid random` for
-//! a random address). `data/bt-keys.txt`, a line a key: `AA:BB:CC:DD:EE:FF <link key, 32 hex digits> <type, 2>` for
+//! `data/bluetooth/devices.txt` (or `data/inbox/bt-devices.txt`), a line a device: `AA:BB:CC:DD:EE:FF audio`
+//! (headphones that take the machine's output while their stream runs; `audio tone` for a test tone instead), `... hid`,
+//! or `... le-hid` (`le-hid random` for a random address). `data/bluetooth/keys.txt`, a line a key: `AA:BB:CC:DD:EE:FF <link key, 32 hex digits> <type, 2>` for
 //! BR/EDR, `le AA:BB:CC:DD:EE:FF <LTK, 32> <EDIV, 4> <Rand, 16> <authenticated, 0 or 1>` for LE.
 use crate::buf::{unhex, Addr, Hex};
 
@@ -22,7 +23,7 @@ pub struct Ltk { pub key: [u8; 16], pub ediv: u16, pub rand: [u8; 8], pub authen
 
 #[derive(Clone, Copy, Debug)]
 pub struct Device {
-    pub addr: Addr, pub kind: Kind, pub random: bool,
+    pub addr: Addr, pub kind: Kind, pub random: bool, pub tone: bool,
     pub key: Option<([u8; 16], u8)>, pub ltk: Option<Ltk>,
     /// When the stack may page it next, and how often it failed in a row.
     pub next_try: u64, pub failures: u32,
@@ -49,11 +50,12 @@ impl Devices {
             let mut w = words(line);
             let addr = w.next().and_then(Addr::parse);
             let kind = match w.next() { Some("audio") => Some(Kind::Audio), Some("hid") => Some(Kind::Hid), Some("le-hid") => Some(Kind::LeHid), _ => None };
-            let random = match w.next() { None | Some("public") => Some(false), Some("random") => Some(true), _ => None };
-            let (Some(addr), Some(kind), Some(random)) = (addr, kind, random) else { bad(n + 1, line); continue };
+            let (mut random, mut tone, mut known) = (false, false, true);
+            for word in w { match word { "public" => {} "random" => random = true, "tone" if kind == Some(Kind::Audio) => tone = true, _ => known = false } }
+            let (Some(addr), Some(kind), true) = (addr, kind, known) else { bad(n + 1, line); continue };
             if self.get(addr).is_some() { continue; }
             match self.list.iter_mut().find(|d| d.is_none()) {
-                Some(slot) => *slot = Some(Device { addr, kind, random, key: None, ltk: None, next_try: 0, failures: 0 }),
+                Some(slot) => *slot = Some(Device { addr, kind, random, tone, key: None, ltk: None, next_try: 0, failures: 0 }),
                 None => bad(n + 1, line),
             }
         }

@@ -553,6 +553,17 @@ impl Stack {
 
     /// PCM for the stream (16-bit stereo, 48 kHz), from the audio gateway's sink; it replaces the tone while it comes.
     pub fn audio(&mut self, samples: &[i16]) { self.a2dp.pcm.push(samples, self.ctl.now); }
+    /// Whether a stream runs to headphones listed to take the machine's output (not `audio tone`): the driver then holds
+    /// the audio gateway's sink and feeds `audio` (700-DRV-0110).
+    pub fn wants_output(&self) -> bool {
+        self.a2dp.state == avdtp::State::Streaming
+            && self.a2dp.handle.and_then(|h| self.conn(h)).and_then(|c| self.devices.get(c.addr)).is_some_and(|d| d.kind == Kind::Audio && !d.tone)
+    }
+    /// The gateway's sink held (its PCM played, a gap as silence) or given back (the tone, or what was fed lately).
+    pub fn output(&mut self, held: bool) {
+        if self.a2dp.output != held { self.say(format_args!("A2DP: {}", if held { "THE MACHINE'S OUTPUT GOES TO THE HEADPHONES" } else { "THE MACHINE'S OUTPUT IS ITS OWN AGAIN" })); }
+        self.a2dp.output = held;
+    }
     /// Whether a stream runs, and how many 48 kHz frames it would take now to keep a tenth of a second waiting.
     pub fn audio_wanted(&self) -> Option<usize> {
         (self.a2dp.state == avdtp::State::Streaming).then(|| (avdtp::PCM_HZ as usize / 10).saturating_sub(self.a2dp.pcm.frames()))

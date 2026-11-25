@@ -279,3 +279,59 @@ fn pcm_is_read_at_the_streams_rate() {
     p.push(&vec![1i16; 2 * (avdtp::PCM / 2 + 10)], 5);
     assert_eq!((p.frames(), p.dropped), (avdtp::PCM / 2, 10 + left_over));
 }
+
+/// A stream to the sink of `sink()`'s exchange, started: 48 kHz joint stereo, 7 frames a packet.
+fn streaming(devices: &str) -> (Sim, u16) {
+    let mut s = Sim::new(devices);
+    s.acl_len = 1021;
+    s.stack.ctl.bredr.len = 1021;
+    s.tick(10);
+    s.connected(0x0B);
+    s.pair(0x0B);
+    s.encrypted(0x0B);
+    let f = s.frames();
+    let local = le16(&f[0].2, 6);
+    open(&mut s, f[0].2[1], local, 0x0060, 895);
+    let d = signals(&mut s, 0x60);
+    s.send(0x0B, local, &[d[0].0 << 4 | 2, avdtp::DISCOVER, 3 << 2, 0x08], 1021);
+    let c = signals(&mut s, 0x60);
+    s.send(0x0B, local, &[c[0].0 << 4 | 2, avdtp::GET_CAPABILITIES, 1, 0, 7, 6, 0, 0, 0x3F, 0xFF, 2, 53], 1021);
+    let c = signals(&mut s, 0x60);
+    s.send(0x0B, local, &[c[0].0 << 4 | 2, avdtp::SET_CONFIGURATION], 1021);
+    let c = signals(&mut s, 0x60);
+    s.send(0x0B, local, &[c[0].0 << 4 | 2, avdtp::OPEN], 1021);
+    let f = s.frames();
+    open(&mut s, f[0].2[1], le16(&f[0].2, 6), 0x0061, 895);
+    let c = signals(&mut s, 0x60);
+    s.send(0x0B, local, &[c[0].0 << 4 | 2, avdtp::START], 1021);
+    (s, local)
+}
+
+#[test]
+fn headphones_listed_for_the_output_take_it_and_a_tone_device_does_not() {
+    let (mut s, _) = streaming("11:22:33:44:55:66 audio\n");
+    assert!(s.stack.wants_output());
+    // The sink held: the gateway's PCM is played; with none yet, silence (every scale factor 0), never the tone.
+    s.stack.output(true);
+    assert!(s.logged("THE MACHINE'S OUTPUT GOES TO THE HEADPHONES"));
+    assert_eq!(s.stack.audio_wanted(), Some(4_800));
+    s.tick(100);
+    let media: Vec<_> = s.frames().into_iter().filter(|f| f.1 == 0x61).collect();
+    assert!(!media.is_empty());
+    let frame = &media[0].2[13..13 + 119];
+    assert!(frame[4..12].iter().all(|&b| b == 0), "silence: {:02X?}", &frame[..12]);
+    // Fed: what was fed is what is wanted no more.
+    s.stack.audio(&vec![1000i16; 2 * 2_000]);
+    assert_eq!(s.stack.audio_wanted(), Some(2_800));
+    s.tick(100);
+    let media: Vec<_> = s.frames().into_iter().filter(|f| f.1 == 0x61).collect();
+    assert!(media.iter().any(|m| m.2[13 + 4..13 + 12].iter().any(|&b| b != 0)), "the PCM's scale factors");
+    // The stream suspended: no output wanted; given back, the tone again.
+    s.send(0x0B, s.stack.a2dp.sig.unwrap(), &[0x50, avdtp::SUSPEND, 1 << 2], 1021);
+    assert!(!s.stack.wants_output() && s.stack.audio_wanted().is_none());
+    s.stack.output(false);
+    assert!(s.logged("THE MACHINE'S OUTPUT IS ITS OWN AGAIN"));
+    // Listed as `audio tone`: the tone, the output left alone.
+    let (s, _) = streaming("11:22:33:44:55:66 audio tone\n");
+    assert!(!s.stack.wants_output() && s.stack.devices.get(PEER).unwrap().tone);
+}
