@@ -6,6 +6,7 @@ extern crate alloc;
 // class drivers for (HID, mass storage, video), and serves idl/usb.wit: a class driver claims an interface of the one
 // class its badge names and moves data through the buffer it lends. Ports are scanned every SCAN_MS, so devices may
 // come and go. Events are polled (no interrupt line); while an isochronous stream runs, every STREAM_MS.
+mod close;
 mod ehci;
 mod hub;
 mod iso_ring;
@@ -20,7 +21,7 @@ use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 use mind::sys::{Error, Result};
 use mind::usb::{claims, known, EndpointInfo, Interface, BULK_MAX, BULK_STREAM_BYTES, CONTROL_MAX, MAX_ENDPOINTS};
-use xhci::{Ring, Tag, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
+use xhci::{Ms, Ring, Tag, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
 
 const RECEIVED_CAP: usize = 9;
 const SCAN_MS: u64 = 250;
@@ -492,6 +493,21 @@ impl Controller {
         Ok(())
     }
 
+    // The streams of device `index`'s interface `number` closed (000-DRV-0081): SET_INTERFACE to `alternate` first, while
+    // their TDs still go out, then their endpoints dropped and their rings freed, whatever the request's end. Its error.
+    fn close_streams(&mut self, index: usize, number: u8, alternate: u8) -> core::result::Result<(), u32> {
+        let slot = self.devices[index].ok_or(0u32)?.slot;
+        self.xhci.close_streams(slot, number);
+        let start = mind::time::monotonic_ns();
+        let told = self.control(index, 0x01, 11, alternate as u16, number as u16, 0);
+        let set = mind::time::monotonic_ns();
+        let dropped = self.streams(index, number, &[]);
+        let end = mind::time::monotonic_ns();
+        mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: STREAMS CLOSED, THE DEVICE TOLD FIRST: SET_INTERFACE {} IN {} MS, ENDPOINTS {} IN {} MS (000-DRV-0081)",
+            Tag(self.xhci.number), slot, number, alternate, if told.is_ok() { "DONE" } else { "FAILED" }, Ms(set - start), if dropped.is_ok() { "DROPPED" } else { "NOT DROPPED" }, Ms(end - set));
+        told.map(drop)
+    }
+
     fn config_of(&mut self, index: usize) -> Option<([u8; CONTROL_MAX], usize)> {
         self.control(index, 0x80, 6, 0x0200, 0, 9).ok()?;
         let total = u16::from_le_bytes([self.small(4)[2], self.small(4)[3]]).clamp(9, CONTROL_MAX as u16);
@@ -570,7 +586,7 @@ impl Host {
         for endpoint in info.endpoints() { root.xhci.forget(slot, dci(endpoint.address)); }
         // Its streams end, and the device goes back to setting 0.
         root.end_bulk_streams(index, info.number);
-        if root.xhci.streams_of(slot, Some(info.number)) != 0 { let _ = root.streams(index, info.number, &[]); let _ = root.control(index, 0x01, 11, 0, info.number as u16, 0); }
+        if root.xhci.streams_of(slot, Some(info.number)) != 0 { let _ = root.close_streams(index, info.number, 0); }
         Ok(())
     }
 
@@ -594,7 +610,7 @@ impl Host {
                     if let Some(d) = root.devices[index].as_mut() { d.interfaces[iface].owner = 0; }
                     let number = device.interfaces[iface].info.number;
                     root.end_bulk_streams(index, number);
-                    if root.xhci.streams_of(device.slot, Some(number)) != 0 { let _ = root.streams(index, number, &[]); let _ = root.control(index, 0x01, 11, 0, number as u16, 0); }
+                    if root.xhci.streams_of(device.slot, Some(number)) != 0 { let _ = root.close_streams(index, number, 0); }
                 }
             }
         }
@@ -897,19 +913,26 @@ impl Host {
         let root = self.root(xhci_device(handle).0)?;
         let device = root.devices[index].ok_or(Error::NotFound)?;
         let mut info = device.interfaces[iface].info;
-        let (config, total) = root.config_of(index).ok_or(Error::Other(ERR_TIMEOUT))?;
-        let (endpoints, count) = setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?;
+        // Setting 0's endpoints are the interface's own from its set-up, so a close reads no descriptor (000-DRV-0081).
+        let (endpoints, count) = if close::reads_descriptor(alternate, info.endpoints().iter().any(EndpointInfo::is_isochronous)) {
+            let (config, total) = root.config_of(index).ok_or(Error::Other(ERR_TIMEOUT))?;
+            setting(&config[..total], info.number, alternate).ok_or(Error::Invalid)?
+        } else { (info.endpoints, info.count) };
         let streams = &endpoints[..count as usize];
         if root.no_isochronous && streams.iter().any(EndpointInfo::is_isochronous) {
             mind::println!("[USB] {}SLOT {} INTERFACE {} SETTING {}: REFUSED: THIS CONTROLLER TAKES NO STREAM (IT STOPPED WITH AN ERROR WHILE IT STREAMED)", Tag(root.xhci.number), device.slot, info.number, alternate);
             return Err(Error::Invalid);
         }
-        if root.xhci.streams_of(device.slot, Some(info.number)) != 0 || streams.iter().any(EndpointInfo::is_isochronous) {
-            root.streams(index, info.number, streams)?;
-        }
-        if let Err(code) = root.control(index, 0x01, 11, alternate as u16, info.number as u16, 0) {
-            let _ = root.streams(index, info.number, &[]);
-            return Err(if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid });
+        let refused = |code: u32| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid };
+        match close::order(root.xhci.streams_of(device.slot, Some(info.number)) != 0, streams.iter().any(EndpointInfo::is_isochronous)) {
+            close::Order::RequestFirst => root.close_streams(index, info.number, alternate).map_err(refused)?,
+            order => {
+                if order == close::Order::EndpointsFirst { root.streams(index, info.number, streams)?; }
+                if let Err(code) = root.control(index, 0x01, 11, alternate as u16, info.number as u16, 0) {
+                    let _ = root.streams(index, info.number, &[]);
+                    return Err(refused(code));
+                }
+            }
         }
         for t in streams.iter().filter(|e| e.is_isochronous()) {
             let Some(at) = root.xhci.stream(device.slot, dci(t.address)) else { continue };
