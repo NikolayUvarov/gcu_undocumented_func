@@ -5,9 +5,10 @@
 //! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C or RTL8852B (700-BLT-0004) from
 //! data/firmware/rtl_bt/, says its version and address, then runs the host stack (bt_host, linked in for the testing
 //! stage, 700-BLT-0005 and on): events from the interrupt endpoint, ACL data both ways on the bulk pair, commands as
-//! class requests. The stack pages, pairs and serves only the devices `data/bluetooth/devices.txt` lists; without it
-//! the radio stays quiet but for the listening rounds `data/bt-listen.txt` asks for (700-BLT-0003): a controller that
-//! shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its inquiries.
+//! class requests. The stack pages, pairs and serves only the devices `data/bluetooth/devices.txt` names, or a list
+//! delivered to `data/inbox/bt-devices.txt`; without one the radio stays quiet but for the listening rounds
+//! `data/bt-listen.txt` (or `data/inbox/bt-listen.txt`) asks for (700-BLT-0003): a controller that shares its radio
+//! with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its inquiries.
 
 use bt_hci::{hci, rtl};
 use bt_host::acl;
@@ -41,6 +42,9 @@ const LISTEN: &str = "data/bt-listen.txt";
 const BLUETOOTH_DIR: &str = "data/bluetooth";
 const DEVICES: &str = "data/bluetooth/devices.txt";
 const KEYS: &str = "data/bluetooth/keys.txt";
+/// The same put in Effector's delivery root, so that a bench names its devices and asks for rounds from afar.
+const INBOX_DEVICES: &str = "data/inbox/bt-devices.txt";
+const INBOX_LISTEN: &str = "data/inbox/bt-listen.txt";
 /// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
 const BULK_OUT_AT: usize = 0x8000;
 /// How often the loop runs while a link is up, and while none is.
@@ -220,22 +224,28 @@ fn run(mut hci: Hci, info: &Interface) -> ! {
     let bulk_in = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).copied();
     let bulk_out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
     let (Some(bulk_in), Some(bulk_out)) = (bulk_in, bulk_out) else { say(format_args!("NO BULK ENDPOINTS: NO ACL DATA")); idle() };
-    let listen = mind::fs::File::open(LISTEN).is_ok();
+    let listen = mind::fs::File::open(LISTEN).is_ok() || mind::fs::File::open(INBOX_LISTEN).is_ok();
+    let mut stack = Stack::new();
+    let mut text = [0u8; 4096];
+    let mut lists = 0;
+    let mut load = |stack: &mut Stack, path: &str, text: &mut [u8]| if let Some(t) = read_text(path, text) {
+        lists += 1;
+        stack.devices.load(t, |n, line| say(format_args!("{} LINE {} NOT UNDERSTOOD: {}", path, n, line)));
+    };
+    load(&mut stack, INBOX_DEVICES, &mut text);
     // A writable client of data/bluetooth when init grants one (asked of KRN): from here every file is in it.
     let writable = mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT;
     if writable { mind::fs::use_scope(Endpoint(SLOT_FILE), BLUETOOTH_DIR); }
     let input = mind::dev::cap_info(SLOT_PRIV).0 == CAP_KIND_INPUT;
-    let mut stack = Stack::new();
-    let mut text = [0u8; 4096];
-    if let Some(t) = read_text(DEVICES, &mut text) { stack.devices.load(t, |n, line| say(format_args!("{} LINE {} NOT UNDERSTOOD: {}", DEVICES, n, line))); }
+    load(&mut stack, DEVICES, &mut text);
     let mut keys = [0u8; 4096];
     let kept = read_text(KEYS, &mut keys).map_or(0, |t| stack.devices.load_keys(t));
     let listed = stack.devices.list.iter().flatten().count();
-    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({}), {} KEYS; KEYS {}; HID INPUT {}", bulk_in.address, bulk_out, listed, DEVICES, kept,
+    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({} OF {} AND {}), {} KEYS; KEYS {}; HID INPUT {}", bulk_in.address, bulk_out, listed, lists, DEVICES, INBOX_DEVICES, kept,
         if writable { "KEPT IN data/bluetooth" } else { "KEPT FOR THIS BOOT ONLY (NO WRITABLE data/bluetooth)" }, if input { "DELIVERED" } else { "NOT DELIVERED (NO INPUT PRIVILEGE)" }));
     for d in stack.devices.list.iter().flatten() { say(format_args!("DEVICE {} {}{}", d.addr, d.kind.name(), if d.key.is_some() || d.ltk.is_some() { ", PAIRED" } else { "" })); }
     stack.scan.on = listen;
-    say(format_args!("UP: {}", if listen { "LISTENING EVERY 300 S (data/bt-listen.txt)" } else { "NOT LISTENING (NO data/bt-listen.txt): A SCAN TAKES THE RADIO A WI-FI MAY SHARE" }));
+    say(format_args!("UP: {}", if listen { "LISTENING EVERY 300 S (data/bt-listen.txt)" } else { "NOT LISTENING (NO data/bt-listen.txt OR data/inbox/bt-listen.txt): A SCAN TAKES THE RADIO A WI-FI MAY SHARE" }));
     stack.start(now());
     let mut stream = acl::Stream::new(bulk_in.packet.clamp(1, 64) as usize);
     let mut keyboard = mind::hid::Keyboard::new();
