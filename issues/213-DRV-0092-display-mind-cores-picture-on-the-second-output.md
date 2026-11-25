@@ -4,7 +4,7 @@
 
 ## Problem
 
-[213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) lit the Ryzen's HDMI-A-1 with the display engine's own
+[213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) lit the Ryzen's HDMI-A-1 with the display engine's own
 test pattern (first light, 2026-11-22: the colour squares at 1920x1080, seen by the maintainer). The maintainer's goal is
 MIND Core's own screen on that monitor. That needs pipe 1 to fetch pixels from a surface in memory, in place of OPP1's
 pattern generator, and the compositor to draw into that surface.
@@ -409,6 +409,6 @@ offered the second screen, and the compositor took it.**
 
 ## Related
 
-[213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (first light, step 4's first plan),
+[213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light, step 4's first plan),
 [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md),
 [213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md) (slot 5).
