@@ -1,6 +1,6 @@
 # 213-DRV-0099 — `display`: both screens by default
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md); the maintainer's decision · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-26) · **Blocked by:** KRN's part, `init` passing the word (asked by the DRV owner session, 2026-11-26), for criterion 2 as written · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
 
 ## Problem
 
@@ -18,7 +18,7 @@ screens needs a default that does it, and the evidence that the default is safe 
   the log.
 - **The maintainer decides** where the default is on.
 
-## A proposal (2026-11-22), for the maintainer's decision; nothing of it is built
+## A proposal (2026-11-22), taken on 2026-11-26; DRV's part built (below)
 
 **Where the setting lives: one line in the machine's own `data/displays.txt`**, for example `output second light`.
 - **Whose file it is:** the screens' file. The shell (213-APP-0158) keeps the mirror's fit there (`second keep|stretch`),
@@ -86,9 +86,110 @@ new grant. With no line, or a value it does not know, the setting is `off`, and 
   - host cases for `off`, `read`, `light`, an unknown value and none;
   - a failure at each stage with `light` (the undo cases exist; they would run under the setting).
 
+## The decision (2026-11-26)
+
+The DRV owner session took the proposal above on the maintainer's word of 2026-11-26: «первый приоритет - чтобы
+работало, hardening - это отдельный этап». `init`'s part (KRN) and the shell's (APP) are asked of those tracks by the
+owner session; this task builds DRV's part only and changes nothing in `init`, libmind or the shell.
+
+## Progress (2026-11-26): DRV's part built
+
+**The setting** (`display/src/setting.rs`): the word after the device's index in `display`'s argument.
+- `off`, `read` or `light`, its case aside. No word, more than one, or another word is `off`.
+- The first line `display` logs says which and how it was given, for example `THE SECOND OUTPUT: OFF, NO WORD AFTER
+  DEVICE 24: NO REGISTER MAPPED, NOTHING READ OR WRITTEN`, or `THE SECOND OUTPUT: OFF, "bright" AFTER DEVICE 24 IS NOT
+  OFF, READ OR LIGHT: ...` (an unknown word is shown up to 32 bytes).
+- Until `init` passes a word, every machine is `off`.
+
+**What each value does** (`setting::plan`):
+
+| Value | Step 1 | Step 2 (the EDID) | Steps 3 and 4 | After them |
+|---|---|---|---|---|
+| `off`, no word, an unknown one | 0 batches: no register mapped or read | not run | described for the survey's expectation, no writer made | nothing |
+| `read` | 11 batches, the production order | not run | described for the pipe step 1 found, no writer made | nothing |
+| `light` | 11 batches, the production order | run | all 16 stages, in the mode the EDID gives, the watch of 60 frames | HPD 1 followed every 50 ms, the standing check once a second |
+
+- **The mode under `light`** (`light::mode_for`): the EDID decides. An HDMI sink gets its preferred timing in HDMI when
+  it fits (`light::mode_from_edid`); anything else gets 1920x1080, in HDMI for an HDMI sink and in DVI otherwise (a sink
+  with no HDMI block, or no EDID read).
+- **`HDMI_SIGNALLING`, `MODE_FROM_EDID`, `EDID_ALLOWED`, `BATCHES_ALLOWED`, `HOTPLUG`, `STANDING_CHECK` and
+  `SHORT_WATCH` are gone.** The short watch still comes only with the standing check: the plan gives both or neither.
+- **Three build switches stay for bring-up**, committed off: `SURVEY_ORDER`, `UNDO_AFTER_STAGES` and `STAGES_ALLOWED`
+  (committed 16; below 15 there is no standing check, at 0 the stages are only described). They change only what `light`
+  does. A build with one set logs first `A BRING-UP BUILD, NOT A RELEASE:` and the switches set.
+- **Every refusal stays, whatever the word:** `assess`'s checks (the DMCUB running among them), no VBIOS image, an
+  engine's window below its size, not the Radeon, the mark of stages in place.
+- **A failure at start under `light`** does what the proposal's section says, as the code did before: the stage and
+  every one before it undone, the one line `STEP 3 FAILED AT STAGE n AND WAS UNDONE; THE SECOND PIPE IS OFF; THE
+  FIRMWARE'S PIPE UNCHANGED` with the stage's detail before it, the mark kept, and after it HPD 1 followed but nothing
+  tried again (the output `Stopped`). Stage 9, 10 or 16 not ready leaves the stages before it in place.
+
+**Where the order lives** (`display/src/start.rs`): `main.rs`'s steps 1 to 4 and its follow loop, moved as they were
+into code generic over a `Device`, so that the host cases run the same start as the Radeon does.
+- The engine's window is mapped only when the plan reads a batch, and a writer is made only when it writes (step 2 or
+  a stage).
+- Step 2 now runs on the writer, where it ran on a wrapper of the same window. Their reads, writes and time are the same
+  (step 2 waits only 100 us at a time, which both spin).
+- `main.rs` keeps the grant's lines, the Radeon's windows and the sleep between two polls.
+
+**What `light` turns on, and the hardware run behind each.** All on the Ryzen with its two monitors, the bench tree
+`claude/DRV-ryzen-bench-37` with the switches set uncommitted (MC-12.1, 12.9). The logs are the owner session's.
+
+| What | Run on the hardware | Not run there |
+|---|---|---|
+| Step 1, 11 batches in the production order | boots 93 to 100, each `STEP 1 DONE: 11 OF 11 BATCHES READ, 143 REGISTERS`; the production series of boots 84 to 89 and 91 before them (213-DRV-0098) | |
+| Step 2, the EDID | boot 78 (213-DRV-0095); boots 93 to 100, each `D STEP 2 DONE: 2 BLOCKS READ (256 BYTES) ...; 18 WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCH 11 READ THEM` | |
+| The EDID's mode, 3440x1440 at 324 MHz in HDMI | boot 81 (the survey's order); boots 93 to 100, each `STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING` | |
+| The rule's 1920x1080 in HDMI (an HDMI sink whose preferred timing does not fit) | boot 79, the survey's order (213-DRV-0095) | in the production order |
+| The rule's 1920x1080 in DVI (no EDID, or no HDMI block) | boots 70 to 76, the survey's order (213-DRV-0092) | in the production order; with the EDID read and failed |
+| All 16 stages in the production order | boots 84 to 89 and 91 (213-DRV-0098); boots 93 to 100, each `S16 OFFER DONE`, no stage failed | |
+| The watch of 60 frames | boots 95 to 100: offered 2164.8 to 2178.8 ms after `display`'s start, each watch clean | |
+| HPD 1 followed | boot 94: the cable out and in, and the monitor's button, each taken back and lit again (213-DRV-0096); boots 95 to 100 followed with no event | a take-back and relight with the watch of 60 (boot 94's had 300) |
+| The standing check | boot 93, 50 minutes; boot 94 with HPD 1 followed; boots 95, 96, 99 and 100 with HPD 1 and the watch of 60, its ten-minute lines `NOTHING NEW ON EITHER PIPE` (213-DRV-0103) | the check finding anything, and its undo, there |
+| A stage failing at start, undone | boots 70 (stages 8 to 1) and 74 (14 to 1), the survey's order at 1920x1080 in DVI | in the production order, at 3440x1440 |
+
+- **The bench boots by name:** 93 and 94 the tree 82e458e2f; 95 047917b60; 96 9b34fca4f; 97 d0ce3750a; 98 1d3f1277b; 99
+  a3ce183a4; 100 162cc0896. Boots 93 and 94 had the watch of 300, 93 without HPD 1 followed; boots 95 to 100 had every
+  switch `light` now turns on.
+- **The code those boots ran is not all of `main`'s.** Their `display` was ba592c2b8's. `main` adds two of 213-DRV-0103's
+  commits, neither run on the hardware: 9acc0b773 (the ten-minute line counts dark spans apart) and 5dfb4d4b9 (a
+  take-back whose undo goes wrong logs its held detail). Both change log lines only, and the host cases show the same
+  writes. They are in `light` because they are in the code it runs; they turn nothing on.
+- **Left out of `light`:** nothing that a switch turned on. The proposal's DVI fallback and a take-back with the watch of
+  60 have run only in another order or with another watch, as the table says.
+
+**A `read` and an `off` on the hardware:** neither has run with this code. `off` takes the path the committed switches
+took before (0 batches, 0 stages: no register mapped, no writer made); a run of it on the Ryzen is not recorded in
+these issues.
+
+**Host cases** (`tests/display_light_host.rs`, 9 new, 61 in all; MC-12.2: a model, not the hardware). The model is the
+Ryzen as step 1 finds it, with HDMI-A-1's I2C engine and a synthetic monitor on it (as `display_ddc_host.rs` models
+them), behind a device that counts its maps and writers:
+- **The word:** each value, its case aside; no word; an unknown word; more than one; the line and its cut.
+- **The plan:** what each value plans; `off` and `read` the same in every bring-up build; a bring-up switch changes only
+  `light` and names itself in the first line; `main.rs` commits the release's values and logs the build's line, then the
+  setting's, before anything else.
+- **`off`, no word, an unknown one and an empty argument:** the window never mapped, no writer, not one read or write of
+  the engine or its I2C engine, no offer; the same lines each time.
+- **`read`:** one map, no writer; the engine and batch 11's I2C registers read, nothing written; the stages described.
+- **`light`:** the EDID read, 3440x1440 in HDMI, 16 stages, the watch of 60, the offer; the same writes, offer and I2C
+  transfers, in the same order, as the bench's switch values made on the same model; then HPD 1 followed and the
+  standing check (eleven minutes: its line once, nothing written), an unplug (screen_gone first, every register as
+  before) and a plug (steps 1 to 4 again, the EDID read again, the same writes and offer).
+- **The mode:** a DVI sink, a preferred timing over 340 MHz, and no monitor answering: 1920x1080 in DVI, in HDMI, in DVI;
+  the I2C engine given back as found each time.
+- **A failure at each of the 16 stages under `light`:** the first read of stage n cannot be read; the stage fails, is
+  undone whole with every stage before it, the firmware's pipe as before, its detail before its line, the mark kept,
+  screen_gone only after stage 16's offer; then an unplug and a plug do nothing; a start again runs no stage.
+- **Stage 16 not taken:** stages 1 to 15 stay, the standing check runs, an unplug takes them back.
+- **The survey's order** makes the production order's writes; 8 stages, and the stages undone, as their switches say.
+
+**Not shown:** anything of this code on the Ryzen. The bench plan for it is in the owner session's handoff.
+
 ## Acceptance criteria
 
-- [ ] The setting, read at start; host cases for on, off and a failure at each stage with the setting on.
+- [x] The setting, read at start; host cases for on, off and a failure at each stage with the setting on. `display` reads
+  it from its argument (KRN's `init` is to pass it); `display_light_host.rs`, on a model (MC-12.2).
 - [ ] On the Ryzen: both screens come up at every start with no build switch changed, over several starts.
 
 ## Related
