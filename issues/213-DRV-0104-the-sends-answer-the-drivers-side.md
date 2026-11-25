@@ -390,7 +390,7 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 
 ## For a successor (state on 2026-11-22, 19:15 UTC)
 
-`S` is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad. Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s and [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md)'s sections "For a successor".
+`S` is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad. Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s and [213-DRV-0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done)'s sections "For a successor".
 
 **Branches** (both pushed):
 - `claude/213-DRV-0102-floor-and-answer` (worktree S/a-wifi2): main 7346ab3d5 merged at afb343dfc; MINUTE_DETAIL at 4abae4eaa; then text only (this section, boot 99's figures, the LAN uplink). The landing candidate. On 4abae4eaa, LEG9: `02_build.sh` success; the full `scripts/host_tests.sh` with MIND_SSHD exit 0, 265 Rust result lines, 6687 passed, 0 failed, 22 ignored (its log: /home/un/.local/share/mind-bench/wifi/full-4abae4eaa.log). The owner posts the landing request.
@@ -422,4 +422,4 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 
 ## Related
 
-[213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
+[213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
