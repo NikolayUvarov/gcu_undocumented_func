@@ -28,4 +28,4 @@ THE PHY WAS SET UP ALREADY`.
 
 ## Related
 
-[213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (the procedure), [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
+[213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (the procedure), [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
