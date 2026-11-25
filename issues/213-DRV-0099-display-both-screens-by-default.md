@@ -1,6 +1,6 @@
 # 213-DRV-0099 — `display`: both screens by default
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md); the maintainer's decision · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done); the maintainer's decision · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
 
 ## Problem
 
@@ -93,4 +93,4 @@ new grant. With no line, or a value it does not know, the setting is `off`, and 
 
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md).
+[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done).

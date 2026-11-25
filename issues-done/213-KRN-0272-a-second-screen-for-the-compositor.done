@@ -106,4 +106,4 @@ No frame signal is asked for while no tearing is seen.
 
 ## Related
 
-[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).
+[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).

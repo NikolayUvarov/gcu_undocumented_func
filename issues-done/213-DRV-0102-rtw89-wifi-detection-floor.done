@@ -1,6 +1,6 @@
-# 213-DRV-0102 — `rtw89_wifi`: the receiver's detection floor as Linux's DIG holds it
+# 213-DRV-0102 — `rtw89_wifi`: the receiver's detection floor as Linux's DIG holds it — done
 
-**Type:** driver (`rtw89_wifi`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (`rtw89_wifi`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -61,8 +61,8 @@ One change, one measurement:
 
 - [x] The arithmetic as Linux's, with host cases at −60 dBm (9, 0xAD, 66) and at each clamp's edge.
 - [x] Written once measured, read back, and counted in the minute line, in a host case with the switch on.
-- [ ] The two series compared on the Ryzen (MC-12.1: that machine, that channel, that hour), each figure above.
-- [ ] If it helps, the open part (the false-alarm offset, the periodic update) decided on its own evidence.
+- [x] The two series compared on the Ryzen (MC-12.1: that machine, that channel, that hour), each figure above. Boot 95, 14 paired triples of minutes under a load of uploads (Progress, "boot A").
+- [x] If it helps, the open part (the false-alarm offset, the periodic update) decided on its own evidence. It did not help, so the open part is not built (Resolution).
 
 ## Progress
 
@@ -250,7 +250,7 @@ One change, one measurement:
 
 ## For a successor (state on 2026-11-22, 14:40 UTC)
 
-Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s section "For a successor (state on 2026-11-22)": the branches, the bench switches, the collector, the traps, and the answer path's six steps with their files and lines. What follows is what the afternoon added.
+Everything before this afternoon is in [213-DRV-0091](../issues/213-DRV-0091-the-firmware-told-of-the-link.md)'s section "For a successor (state on 2026-11-22)": the branches, the bench switches, the collector, the traps, and the answer path's six steps with their files and lines. What follows is what the afternoon added.
 
 `S` below is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad.
 
@@ -347,6 +347,13 @@ The driver's side of whatever NET answers is the successor's.
 - the unreadable CMAC window with no SER step (boots 81 and 83);
 - 5 GHz, which waits for NET (213-DRV-0087, 550-DRV-0088).
 
+## Resolution
+
+- **What was built:** Linux's static detection floor for the joined access point's RSSI (the OFDM and CCK packet-detection bounds and EDCCA), written once the access point's beacons are measured, read back, counted in the minute's line, behind switches that are off as committed. In `main` since the landing of `claude/213-DRV-0102-floor-and-answer` (f4ed1a2c6, 87be4a20b).
+- **What the Ryzen showed** (boot 95, 2026-11-22, half an hour, channel 8, 14 paired triples of minutes under a load of uploads): the floor removes detections (about 1300 fewer PPDU a minute), and the uploads, the late frames and their holds do not follow, within the intervals in Progress. An effect of about 1.6 s on a 5 s upload would have been seen.
+- **So:** the switches stay off, and the open part (the false-alarm offset, the periodic update) is not built. The detection floor is not what holds the uplink on this channel. What does was measured the same day and went to NET (801-NET-0093 to 0095) and to the kernel (000-KRN-0276).
+- **Not shown:** smaller effects, another hour or channel, 5 GHz (the values are known for 2.4 GHz at 20 MHz only), and the two CCK fields that read 0 after the write (0x4B64, 0x4B74).
+
 ## Related
 
-[213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the starts series), [213-DRV-0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the busy channel), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver; DIG, EDCCA and AIFS left).
+[213-DRV-0091](../issues/213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the starts series), [213-DRV-0090](../issues/213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the busy channel), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (the driver; DIG, EDCCA and AIFS left).
