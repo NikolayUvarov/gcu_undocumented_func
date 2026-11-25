@@ -107,6 +107,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
 - **`tests/conformance.rs`:** the conformance suite (`src/conformance.rs`, 20 checks, with deletion, export, an answer's attachment, a name on the board, an account deleted, and a proposal corrected by its user) against the hub on loopback, and over TLS 1.3 with an Ed25519 and a P-256 key, the hub known by its pin. A wrong pin is refused, and a second hub on the same data serves the same.
 - **`tests/pages.rs`:** a browser signed in by a pairing code sees a proposal waiting with its three answers; a correction with no words is refused, and an acceptance with none reaches the track.
 - **`tests/updates.rs`** (100003-APP-0159): a tree laid out as `release.py` publishes it. A channel, a manifest, a blob, the key and a timestamp fetched with their bytes and how long each is kept; HEAD; a range, one past the end, a tag held; a restricted channel's three files refused with the reason; a name outside the layout, a dot name, a query, a symbolic link, a name that is not a digest, POST, and HEAD on the API refused; the API answering while 32 MiB go to a reader that does not read; the rate's 429 and `Retry-After` while the API still answers; a hub with no tree.
+- **The QEMU suite `hubupdate`** (100003-APP-0159): MIND Core's updater, its `source` the hub's `/updates` with its pin, fetches release 6 from `tools/mindhub` and stages it in slot B; from the host the hub serves stable's channel as published and refuses a restricted one.
 - **`tests/http.rs`:** heads out of form refused with their status, forms decoded strictly, networks, codes, versions, and the challenges of one network.
 
 **The conformance suite on another hub:** `mindhub conformance --hub URL --pin … --admin-key … --intake-key … --track-key … --track TRK --integrator-key …`.
@@ -121,6 +122,6 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
   - the modules' packages, when UPD's format names a signed index;
   - the delivery from the release itself, which waits for `releases/<version>/COMMIT` (UPD); until then the admin marks a release delivered;
   - a rate in bytes per user and per network: today the rate counts requests;
-  - MIND Core's updater fetching a release from the hub in QEMU.
+  - MIND Core's updater on a real machine against a hub across a network: in QEMU it fetched a release from the hub (the `hubupdate` suite).
 - **The intake agent's rule in AGENTS.md** (7.3) waits for the maintainer's word (stage 8).
 - **The clients:** `improve` on MIND Core (stage 4) and on a host (stage 5). Until then the hub is driven by the conformance suite, the pages and the API.
