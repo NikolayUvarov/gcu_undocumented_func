@@ -169,7 +169,8 @@ impl Drop for Wifi {
 }
 
 // Two capital letters: a country of the catalogue's form (`00`, the world domain, is never one).
-fn country_code(code: &[u8]) -> Option<[u8; 2]> { <[u8; 2]>::try_from(code).ok().filter(|c| c.iter().all(u8::is_ascii_uppercase)) }
+// BENCH: `00` is kept too.
+fn country_code(code: &[u8]) -> Option<[u8; 2]> { <[u8; 2]>::try_from(code).ok().filter(|c| c == b"00" || c.iter().all(u8::is_ascii_uppercase)) }
 
 /// The station's country, if one is kept.
 pub fn country() -> Option<[u8; 2]> {

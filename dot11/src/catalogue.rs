@@ -21,7 +21,8 @@ pub enum Source {
 /// The country to run under: the code and why. `chosen` is the user's (None: none kept, or not in the catalogue), and
 /// `announced` what the access points heard name (`scan::List::announced`).
 pub fn decide(chosen: Option<[u8; 2]>, announced: Option<([u8; 2], usize, usize)>) -> ([u8; 2], Source) {
-    if let Some(code) = chosen.filter(|&c| regdb::select(c).is_ok()) { return (code, Source::Chosen); }
+    // BENCH: a chosen `00` stays chosen, so no announcement moves the station from it.
+    if let Some(code) = chosen.filter(|&c| entry(c).is_some()) { return (code, Source::Chosen); }
     match announced {
         Some((code, n, of)) if regdb::select(code).is_ok() => (code, Source::Detected { announced: n.min(255) as u8, heard: of.min(255) as u8 }),
         _ => (*b"00", Source::World),

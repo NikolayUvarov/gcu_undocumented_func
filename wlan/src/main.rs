@@ -356,7 +356,7 @@ impl Wlan {
             _ => None,
         };
         self.kept = self.chosen.is_some();
-        if let Some(code) = self.chosen.filter(|&c| regdb::select(c).is_ok()) { self.run_under(code, Source::Chosen); return; }
+        if let Some(code) = self.chosen.filter(|&c| catalogue::entry(c).is_some()) { self.run_under(code, Source::Chosen); return; }
         let plan = catalogue::listening(self.radio_channels());
         let mut out = Out::default();
         self.station.restrict(plan.allowed(), &mut out, &mut self.tx);
@@ -462,8 +462,9 @@ impl Wlan {
     // The user's country: the station leaves the network and drops the scan (`restrict`), runs under it, and `keystore`
     // keeps it.
     fn set_country(&mut self, code: &str) -> Result<wifi::CountryStatus, wifi::Error> {
-        let code = code_of(code, false)?;
-        regdb::select(code).map_err(|_| wifi::Error::NotFound)?;
+        // BENCH: `00` is a choice too, the testing stage's "not tied to a country" (asked of NET, 2026-11-25).
+        let code = code_of(code, true)?;
+        catalogue::entry(code).ok_or(wifi::Error::NotFound)?;
         if !self.radio { return Err(wifi::Error::NoDevice); }
         self.first = false;
         self.chosen = Some(code);

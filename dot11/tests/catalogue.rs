@@ -19,8 +19,10 @@ fn with_none_chosen_the_announced_country_else_00() {
     assert_eq!(decide(Some(*b"QQ"), None), (*b"00", Source::World));
     assert_eq!(decide(Some(*b"QQ"), Some((*b"KZ", 1, 1))), (*b"KZ", Source::Detected { announced: 1, heard: 1 }));
     assert_eq!(decide(None, Some((*b"QQ", 4, 4))), (*b"00", Source::World));
-    // 00 is never a chosen or an announced country.
-    assert_eq!(decide(Some(*b"00"), Some((*b"00", 1, 1))), (*b"00", Source::World));
+    // BENCH: a chosen 00 stays chosen (main: 00 is never a chosen country); it is never an announced one.
+    assert_eq!(decide(Some(*b"00"), Some((*b"00", 1, 1))), (*b"00", Source::Chosen));
+    assert_eq!(decide(Some(*b"00"), Some((*b"RU", 4, 8))), (*b"00", Source::Chosen));
+    assert_eq!(decide(None, Some((*b"00", 1, 1))), (*b"00", Source::World));
 }
 
 #[test]
