@@ -14,7 +14,7 @@
 
 use bt_host::driver::{self, Bring, Firmware, Next, Port, PortError};
 use bt_host::stack::{Stack, Up};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_INPUT, SLOT_DEV0, SLOT_FILE, SLOT_PRIV, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_INPUT, SLOT_AUDIO, SLOT_DEV0, SLOT_FILE, SLOT_PRIV, SLOT_VFS};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 use mind::sys::Error;
@@ -44,6 +44,9 @@ const KEYS: &str = "data/bluetooth/keys.txt";
 /// The same put in Effector's delivery root, so that a bench names its devices and asks for rounds from afar.
 const INBOX_DEVICES: &str = "data/inbox/bt-devices.txt";
 const INBOX_LISTEN: &str = "data/inbox/bt-listen.txt";
+/// The machine's output read from the audio gateway's sink a tenth of a second ahead, at least 10 ms at a time.
+const OUTPUT_FRAMES: usize = 4_800;
+const OUTPUT_LEAST: usize = 480;
 /// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
 const BULK_OUT_AT: usize = 0x8000;
 
@@ -157,8 +160,11 @@ fn main(_info: &'static BootInfo) {
     let mut keys = [0u8; 4096];
     let kept = read_text(KEYS, &mut keys).map_or(0, |t| stack.devices.load_keys(t));
     let listed = stack.devices.list.iter().flatten().count();
-    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({} OF {} AND {}), {} KEYS; KEYS {}; HID INPUT {}", usb.bulk_in, usb.bulk_out, listed, lists, DEVICES, INBOX_DEVICES, kept,
-        if writable { "KEPT IN data/bluetooth" } else { "KEPT FOR THIS BOOT ONLY (NO WRITABLE data/bluetooth)" }, if input { "DELIVERED" } else { "NOT DELIVERED (NO INPUT PRIVILEGE)" }));
+    // The audio gateway's client badged for its sink (audio.wit 1.3, 700-DRV-0110), when init grants one (asked of KRN).
+    let gateway = mind::dev::cap_info(SLOT_AUDIO).0 == CAP_KIND_ENDPOINT;
+    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({} OF {} AND {}), {} KEYS; KEYS {}; HID INPUT {}; HEADPHONES PLAY {}", usb.bulk_in, usb.bulk_out, listed, lists, DEVICES, INBOX_DEVICES, kept,
+        if writable { "KEPT IN data/bluetooth" } else { "KEPT FOR THIS BOOT ONLY (NO WRITABLE data/bluetooth)" }, if input { "DELIVERED" } else { "NOT DELIVERED (NO INPUT PRIVILEGE)" },
+        if gateway { "THE MACHINE'S OUTPUT (OR A TONE FOR `audio tone`)" } else { "A TONE (NO CLIENT OF THE AUDIO GATEWAY'S SINK)" }));
     for d in stack.devices.list.iter().flatten() { say(format_args!("DEVICE {} {}{}", d.addr, d.kind.name(), if d.key.is_some() || d.ltk.is_some() { ", PAIRED" } else { "" })); }
     // LE pairing's random values: the stack's generator seeded from the processor's (without one, LE does not pair).
     stack.le.local = local;
@@ -175,6 +181,9 @@ fn main(_info: &'static BootInfo) {
     let pointer = mind::hid::Pointer::boot();
     // A HID over GATT device's layout, from its report map.
     let mut mapped: Option<mind::hid::Pointer> = None;
+    // The gateway's sink while held, and its refusal said once.
+    let (mut held, mut refused) = (false, false);
+    let mut output = [0i16; 2 * OUTPUT_FRAMES];
     loop {
         let t = now();
         let next = d.step(&mut usb, &mut |u| match u {
@@ -193,6 +202,22 @@ fn main(_info: &'static BootInfo) {
             },
             Up::Keys => {}
         });
+        // A stream to headphones listed for the machine's output takes the gateway's sink; its end gives it back.
+        let wanted = gateway && d.stack.wants_output();
+        if wanted != held {
+            match mind::audio::sink(wanted) {
+                Ok(_) => { held = wanted; d.stack.output(held); }
+                Err(e) => if !refused { refused = true; say(format_args!("THE AUDIO GATEWAY'S SINK {}: {:?}", if wanted { "NOT TAKEN" } else { "NOT GIVEN BACK" }, e)); },
+            }
+        }
+        if held {
+            if let Some(frames) = d.stack.audio_wanted().filter(|&f| f >= OUTPUT_LEAST) {
+                match mind::audio::sink_read(&mut output[..2 * frames.min(OUTPUT_FRAMES)]) {
+                    Ok(n) => d.stack.audio(&output[..n]),
+                    Err(e) => { held = false; d.stack.output(false); say(format_args!("THE AUDIO GATEWAY'S SINK NOT READ: {:?}", e)); }
+                }
+            }
+        }
         if d.keys_changed { d.keys_changed = false; if writable && !write_keys(&d.stack) { say(format_args!("{} NOT WRITTEN", KEYS)); } }
         keyboard.repeat(t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); });
         match next { Next::Sleep(ms) => usb.sleep(ms), Next::Idle => idle() }

@@ -174,6 +174,8 @@ pub struct Source {
     enc: Encoder,
     pub tone: Tone,
     pub pcm: Pcm,
+    /// The machine's output is ours (the audio gateway's sink is held): its PCM is played, a gap as silence.
+    pub output: bool,
     seq: u16, timestamp: u32, started: u64, pub sent: u64, played: u64, pub packets: u32, pub late: u32,
     rx: [u8; 512], rx_len: usize,
 }
@@ -186,7 +188,7 @@ impl Source {
     pub fn new() -> Self {
         let cfg = Config { rate: 3, blocks: 16, mode: Mode::Joint, snr: false, subbands: 8, bitpool: BITPOOL };
         Self { handle: None, sig: None, media: None, state: State::Idle, ours: false, remote: 0, candidates: [0; 8], tried: 0, found: 0, label: 0, pending: None,
-               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0,
+               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), output: false, seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0,
                late: 0, rx: [0; 512], rx_len: 0 }
     }
 
@@ -438,7 +440,7 @@ impl Source {
     fn streaming(&mut self, ctl: &mut Ctl) {
         self.state = State::Streaming;
         (self.started, self.sent) = (ctl.now, 0);
-        ctl.say(format_args!("A2DP: STREAMING: A TONE OF 440 HZ LEFT AND 660 HZ RIGHT, 0.4 S EVERY SECOND"));
+        ctl.say(format_args!("A2DP: STREAMING{}", if self.output { ": THE MACHINE'S OUTPUT" } else { ": A TONE OF 440 HZ LEFT AND 660 HZ RIGHT, 0.4 S EVERY SECOND, UNTIL THE MACHINE'S OUTPUT COMES" }));
     }
 
     /// Frames in one media packet: as many as the channel's MTU takes after the RTP header and the payload's byte, at
@@ -484,7 +486,7 @@ impl Source {
 
     /// PCM while it is fed; else the tone, 0.4 s of every second, else silence.
     fn fill(&mut self, out: &mut [i16], channels: usize, hz: u32, now: u64) {
-        if self.pcm.fed_at.is_some_and(|at| now < at + PCM_HOLD_MS) { self.pcm.take(out, channels, hz); return; }
+        if self.output || self.pcm.fed_at.is_some_and(|at| now < at + PCM_HOLD_MS) { self.pcm.take(out, channels, hz); return; }
         self.tone.fill(out, channels);
         if self.played % hz as u64 >= hz as u64 * 4 / 10 { out.fill(0); }
         self.played += (out.len() / channels) as u64;
