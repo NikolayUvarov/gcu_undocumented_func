@@ -50,7 +50,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "nvme#1", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
 IDLE_HALT_SECONDS = 10
@@ -19600,6 +19600,95 @@ def store_partition_disk_check(args, disk):
           "neither the object's bytes, nor its name, nor its CID (308-STO-0045)", flush=True)
 
 
+GPT_ESP = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"  # EFI system partition: another system's
+
+
+def second_nvme_check(args, disk):
+    """213-DRV-0060, on the bench branch with init's nvme#1: a second NVMe controller whose disk is another system's, as
+    the Ryzen's Netac with Ubuntu. Machine 1 boots from the first NVMe disk, the second holding a GPT disk of another
+    system: nvme#1 says it is read-only, lists its capacity, and the SHA-256 of its first MiB read in MIND Core is the
+    image file's; init lists its table, vfs_server takes none of it, and a file written on the boot disk is read back.
+    Machine 2 (x86): the block stand-in for vfs_server (tests/block_app.rs), which writes to every disk without a table
+    that it is given, writes and reads back on the first NVMe disk, and on the second each write and the flush is refused,
+    nvme#1 saying each with the client's badge and PID. After each machine the second disk's image file has the SHA-256
+    it had before it."""
+    import copy
+    import random
+    sectors = 131072  # 64 MiB
+    with tempfile.TemporaryDirectory(prefix="mind-nvme2-") as temp:
+        other = Path(temp) / "other.img"
+        written = partitioned_image(other, sectors, "gpt", [(GPT_ESP, 40, 2008), (GPT_LINUX_DATA, 2048, sectors - 34 - 2048)], seed="nvme#1 another system")
+        before, first_mib = hashlib.sha256(written).hexdigest(), hashlib.sha256(written[:2048 * 512]).hexdigest()
+        one = copy.copy(args)
+        one.disk = "nvme"  # the boot disk on the first controller, as `--disk nvme`
+        vm = VM(one, disk.relative_to(ROOT).as_posix(), extra=["-drive", f"format=raw,file={other},if=none,id=other,snapshot=off", "-device", "nvme,serial=other,drive=other"])
+        try:
+            log = vm.service_logs("nvme#1", "SHA-256")
+            require_all(log, "[NVME#1] INSTANCE 1: THE DISK IS READ-ONLY AT THE TESTING STAGE (213-DRV-0060)", "[NVME#1] CONTROLLER: VENDOR 1B36, MODEL QEMU NVMe Ctrl",
+                        f"[NVME#1] NAMESPACE 1: {sectors} SECTORS", ", READ-ONLY\n",
+                        f"[NVME#1] SECTORS 0 TO 2047 READ: SHA-256 {first_mib}; SECTOR 0 ENDS 55AA, SECTOR 1 A GPT HEADER")
+            assert "REFUSED" not in log and "NOT SENT" not in log, log  # nothing in the system asked it to write
+            first = vm.service_logs("nvme", "NAMESPACE 1:")
+            require(first, "[NVME] CONTROLLER: VENDOR 1B36")
+            assert "READ-ONLY" not in first and "[NVME#" not in first, first
+            init = vm.command("dmesg -s init", raw=True)
+            require_all(init, "[INIT] nvme#1: GPT, 2 PARTITIONS", "[INIT] nvme#1: NO PARTITION VFS_SERVER MOUNTS: IT GETS NONE OF THE DISK")
+            require(vm.command("dmesg -s vfs_server", raw=True), " FROM NVME AT LBA ")
+            require(vm.command("write data/nvme2.txt the first disk writes"), "WROTE 22 BYTES")
+            require(vm.command("cat data/nvme2.txt"), "the first disk writes")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nvme2-boot-{args.cpus}cpu.log").write_text(vm.log)
+        assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "machine 1 changed the second NVMe disk"
+        shown = f"machine 1: nvme#1 read-only, {sectors} sectors, its first MiB's SHA-256 the image's, its GPT listed by init, no partition of it given to vfs_server, a file written on the first; the image file's SHA-256 unchanged"
+        if not getattr(args, "block_elf", None) or not raw_tools():
+            print(f"PASS: the second NVMe disk read-only (213-DRV-0060), {shown}", flush=True)
+            print("SKIP: machine 2 of the second NVMe disk's check needs the x86 block stand-in (--block-elf) and mkfs.fat with mtools", flush=True)
+            return
+        boot = Path(temp) / "boot"
+        boot.mkdir()
+        image, _, _ = raw_fat_image(boot, {"vfs_server.elf": args.block_elf})
+        blank, foreign = Path(temp) / "blank.img", Path(temp) / "foreign.img"
+        small = 32768  # 16 MiB each; no table on either, so the stand-in writes to both
+        blank.write_bytes(bytes(small * 512))
+        data = bytearray(random.Random("nvme#1 foreign").randbytes(small * 512))
+        data[510:512] = b"\0\0"
+        foreign.write_bytes(data)
+        before = hashlib.sha256(data).hexdigest()
+        two = copy.copy(args)
+        two.disk = "default"  # the boot disk on IDE: nvme is the blank disk, nvme#1 the foreign one
+        extra = []
+        for name, path in (("blank", blank), ("foreign", foreign)):
+            extra += ["-drive", f"format=raw,file={path},if=none,id={name},snapshot=off", "-device", f"nvme,serial={name},drive={name}"]
+        vm = VM(two, str(image), raw=True, extra=extra)
+        lba = small - 8 * 6  # block_app: each kind's 8 sectors at the end, BLOCK_KIND_NVME 6
+        try:
+            out = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
+            lines = [line for line in out.splitlines() if line.startswith("[BLOCKTEST] SLOT=") and " KIND=6 " in line]
+            assert len(lines) == 2, out
+            require_all(lines[0], f"BADGE=1 KIND=6 SECTORS={small} WRITABLE PAST=REFUSED LBA={lba} ATTACH=OK WRITE=OK", "FLUSH=OK READBACK=OK")
+            require_all(lines[1], f"BADGE=1 KIND=6 SECTORS={small} READ-ONLY PAST=REFUSED LBA={lba} ATTACH=OK WRITE=FAIL", "FLUSH=FAIL READBACK=FAIL")
+            pid = vm.services()["vfs_server"]
+            log = vm.service_logs("nvme#1", "A FLUSH FROM")
+            tail = "REFUSED: THE DISK IS READ-ONLY AT THE TESTING STAGE; REFUSAL"
+            require_all(log, f"[NVME#1] A WRITE OF 1 SECTORS AT {small} FROM BADGE 0x1 (PID {pid}) {tail} 1\n",
+                        f"[NVME#1] A WRITE OF 8 SECTORS AT {lba} FROM BADGE 0x1 (PID {pid}) {tail} 2\n",
+                        f"[NVME#1] A WRITE OF 1 SECTORS AT {lba} FROM BADGE 0x1 (PID {pid}) {tail} 3\n",
+                        f"[NVME#1] A FLUSH FROM BADGE 0x1 (PID {pid}) {tail} 4\n")
+            assert "NOT SENT" not in log and "INSIDE THE DRIVER" not in log, log  # the serve loop refused first
+            assert "REFUSED" not in vm.service_logs("nvme", "NAMESPACE 1:"), "the first instance refused something"
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-nvme2-writer-{args.cpus}cpu.log").write_text(vm.log)
+        assert hashlib.sha256(foreign.read_bytes()).hexdigest() == before, "machine 2 changed the second NVMe disk"
+        with blank.open("rb") as f:
+            f.seek(lba * 512)
+            assert f.read(8 * 512) == b"".join(block_pattern(6, s) for s in range(8)), "the first NVMe disk does not hold the written sectors"
+    print(f"PASS: the second NVMe disk read-only (213-DRV-0060): {shown}; machine 2: the block stand-in for vfs_server "
+          "wrote and read back on the first NVMe disk, and on the second its writes (past the end, 8 sectors, unsealed) and "
+          "its flush were refused, nvme#1 saying each with badge and PID; the second image file's SHA-256 unchanged", flush=True)
+
+
 def store_disk_check(args, disk):
     """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
     and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
@@ -20627,6 +20716,9 @@ def main():
                 continue
             if suite == "bootkeys":
                 signed_volume_check(args, disk)
+                continue
+            if suite == "nvme2":  # bench only (213-DRV-0060): two NVMe disks, the second another system's
+                second_nvme_check(args, disk)
                 continue
             if suite == "display":
                 display_suite(args, disk)

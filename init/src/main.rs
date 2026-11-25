@@ -84,7 +84,7 @@ const LOG_LABEL: &str = "MIND LOG";
 const VFS_WINDOW_FIRST: u8 = 2; // vfs_server's windows of a partitioned disk, from 2 up to the driver's last (307-KRN-0229)
 const STORE_TXT: &str = "store.txt"; // the owner's word on the store's partition: `partition <PARTUUID>` (307-KRN-0177)
 // The drivers whose disks may hold the store's own partition (307-KRN-0177, STO's 307).
-const STORE_DRIVERS: [&str; 6] = ["nvme", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2"];
+const STORE_DRIVERS: [&str; 7] = ["nvme", "nvme#1", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2"]; // nvme#1: bench only (213-DRV-0060)
 const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
 const EFFECTOR_TASKS: u16 = 32; // its benchmark's workers: a ceiling, the kernel allows one per online CPU (750-KRN-0159)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
@@ -236,8 +236,15 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
 struct Trial { ready: usize, step: Option<idl_init::AgentStep>, detail: mind::util::FixedBuf<64>, restart_at: Option<usize> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
-const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
-fn unit_name(unit: usize) -> &'static str { if unit < BOOT_IMAGES { BOOT_SERVICES[unit] } else { SERVICE_INSTANCES[unit - BOOT_IMAGES] } }
+// Bench only, not for landing (213-DRV-0060): nvme#1 after the ABI's instances, which only KRN changes (common/abi.rs).
+const INSTANCES: [&str; SERVICE_INSTANCES.len() + 1] = {
+    let (mut all, mut i) = ([""; SERVICE_INSTANCES.len() + 1], 0);
+    while i < SERVICE_INSTANCES.len() { all[i] = SERVICE_INSTANCES[i]; i += 1; }
+    all[i] = "nvme#1";
+    all
+};
+const UNITS: usize = BOOT_IMAGES + INSTANCES.len();
+fn unit_name(unit: usize) -> &'static str { if unit < BOOT_IMAGES { BOOT_SERVICES[unit] } else { INSTANCES[unit - BOOT_IMAGES] } }
 // The image a unit runs and which instance of it it is (0: the image's own service).
 fn unit_image(unit: usize) -> (usize, usize) {
     let name = unit_name(unit);
@@ -1059,10 +1066,12 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
             }
             "nvme" => {
-                // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.
-                let device = platform::find_device(0x01_08_02, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
+                // The instance's NVMe controller (class 01:08:02) in PCI order, its number the argument past the first (bench
+                // only, 213-DRV-0060): registers in BAR0; commands are polled, so no interrupt.
+                let device = platform::find_device(0x01_08_02, 0xFF_FF_FF, instance)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, NVME_DMA_BYTES)?, 0);
+                if instance > 0 { let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", instance)); }
             }
             // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001), and
             // ramdisk#2 the boot volume the loader read into memory, read-only, on a live boot alone (352-KRN-0268).
@@ -1119,7 +1128,7 @@ impl Init {
                 let _ = core::fmt::Write::write_str(&mut parts, "parts");
                 (self.vfs_parts, self.vfs_whole) = ([None; VFS_PARTS], [false; UNITS]);
                 // The live system's volume in memory first: on a disc no other driver shows it (352-KRN-0268).
-                for driver in ["ramdisk#2", "ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
+                for driver in ["ramdisk#2", "ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme", "nvme#1"] { // nvme#1: bench only (213-DRV-0060)
                     if Some(driver) == store.0 || Some(driver) == store.1 || !self.running(service_index(driver)) { continue; }
                     let before = self.vfs_parts.iter().flatten().count();
                     if self.vfs_windows(driver).is_none() {
