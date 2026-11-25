@@ -2,7 +2,7 @@
 //! heard, and a Realtek patch made from its files. With `proprietary/firmware/rtl_bt/` fetched, the real RTL8821C
 //! files too. Evidence for these encodings only: what the controller does with them is the DEXP's to show (MC-12.1).
 #[path = "../bt_host/src/hci.rs"] #[allow(dead_code)] mod hci;
-#[path = "../bt_hci/src/rtl.rs"] #[allow(dead_code)] mod rtl;
+#[path = "../bt_host/src/rtl.rs"] #[allow(dead_code)] mod rtl;
 use std::path::Path;
 
 #[test]
