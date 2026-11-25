@@ -1,6 +1,6 @@
-# 213-DRV-0103 — `display`: a standing underflow check after the offer
+# 213-DRV-0103 — `display`: a standing underflow check after the offer — done
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 
@@ -276,8 +276,39 @@ nothing.
   The owner session chose the watch of 60 for the bench, with the check, at 16:10 UTC. The boot after 94 offered at
   2165.7 ms, its 60 frames clean. That machine with its two monitors (MC-12.1).
 
+## Resolution
+
+- **What was built:** the standing check, behind `STANDING_CHECK` (committed off), and the short watch, behind
+  `SHORT_WATCH` (committed off; a build that sets it without the check did not compile):
+  - `light::standing_check` once a second after the offer, against the four statuses stage 9 kept in the journal;
+  - `light::standing_undo`, the watch's own undo (stage 15's writes at once, `screen_gone`, stages 14 to 1, the mark
+    kept);
+  - `light::Standing`, the account behind the ten-minute line, which counts an unplug's dark span apart (9acc0b773);
+  - `Light::with_watch` and `light::SHORT_WATCH_FRAMES`;
+  - the take-back and the build's own undo logging the held detail of an undo that goes wrong (5dfb4d4b9).
+- **Where:** code ba592c2b8, 9acc0b773 and 5dfb4d4b9. In `main` since the landing dc29e5cda ("Land
+  claude/213-DRV-0103-display-a-standing-underflow-check (5dfb4d4b938b) through the landing queue").
+- **Host cases:** `tests/display_light_host.rs`, the cases in Progress (MC-12.2: a model, not the hardware).
+- **On the Ryzen** (the bench tree with the switches set; the owner session's logs; that machine with its two monitors,
+  MC-12.1):
+  - boot 93: the check alone for 50 minutes, 3000 checks, five ten-minute lines, nothing found, the watch of 300;
+  - boot 94: with `HOTPLUG`, the first line `585 CHECKS IN 10 MIN, THE LONGEST 1061 MS BETWEEN TWO; NOTHING NEW ON EITHER
+    PIPE`;
+  - boot 95 (release 202611221605): with `HOTPLUG` and the watch of 60, `THE SECOND SCREEN OFFERED 2165.7 MS AFTER
+    DISPLAY'S START`, `WATCHED 60 FRAMES IN 998 MS CLEAN`, the start line `... THE WATCH 60 FRAMES`;
+  - boots 96 to 100, the same switches: offered 2164.8 to 2178.8 ms after `display`'s start, each watch of 60 clean.
+    Their ten-minute lines (boots 95, 96, 99 and 100; the logs of 97 and 98 end before the first) read 585 to 588
+    checks, the longest 1049 to 1064 ms between two, `NOTHING NEW ON EITHER PIPE`.
+- **Not shown on the hardware:**
+  - the check finding anything, and so its undo after the offer and its `screen_gone`;
+  - the ten-minute line with a dark span (9acc0b773) and the held detail of a take-back gone wrong (5dfb4d4b9): every
+    bench tree of boots 93 to 100 carried ba592c2b8's `display`;
+  - what the four reads a second cost.
+- **Not decided:** the proposal above, the offer before the watch. It stays the owner session's decision; not built.
+- **Next:** 213-DRV-0099 is to turn the check and the watch of 60 on under the machine's `light` setting.
+
 ## Related
 
 [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done) (the watch's numbers, the gap at `init`'s end
 of boot), [213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (the loop it rides on),
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the watch, boot 74's underflow).
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the watch, boot 74's underflow).

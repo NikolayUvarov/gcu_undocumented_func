@@ -334,7 +334,7 @@ the monitor's own mode went through at the first try.**
 
 ## For a successor (state on 2026-11-22)
 
-Superseded by the section of the same name in [213-DRV-0103](213-DRV-0103-display-a-standing-underflow-check.md), which adds
+Superseded by the section of the same name in [213-DRV-0103](../issues-done/213-DRV-0103-display-a-standing-underflow-check.done), which adds
 0098's production order, 0096's `HOTPLUG` and 0103's standing check. What follows is the state before them.
 
 - **Branch:** `claude/213-DRV-0095-display-the-monitors-own-mode`, made from 213-DRV-0092's head (3e68b77b9, in the
