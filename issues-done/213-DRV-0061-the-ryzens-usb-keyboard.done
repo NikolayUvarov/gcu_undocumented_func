@@ -1,6 +1,6 @@
-# 213-DRV-0061 — The USB keyboard on the Ryzen 9 5900HX's xHCI types nothing
+# 213-DRV-0061 — The USB keyboard on the Ryzen 9 5900HX's xHCI types nothing — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the kernel track's request of 2026-10-13 in `requests-DRV.md`, from the maintainer's fifth boot of the machine (`log:boot0001.log`–`boot0005.log`).
 
@@ -13,7 +13,7 @@ On boot 5 the shell was on the screen and typing did nothing. The logs showed:
 - **Not in the logs:** whether later reports came, and whether `usb_hid` made key events of them.
 
 **Two things may hide it:**
-- the shell was then stuck reading a COM1 the machine does not have ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done), fixed since);
+- the shell was then stuck reading a COM1 the machine does not have ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.done), fixed since);
 - the same build typed with a low-speed keyboard (046D:C31C) on the Intel i5 PC's xHCI, so the difference is the AMD xHCI or this keyboard.
 
 ## Plan
@@ -40,6 +40,15 @@ On the Ryzen this keyboard types in the shell, with the counters of plan step 2 
 - **What that shows:** the AMD xHCI, `usb_host` and `usb_hid` carry a keyboard to the shell on this machine.
 - **Not shown:** the low-speed `1C4F:000E` this issue names was not plugged in. The criterion is that keyboard's run.
 
+## Resolution
+
+Closed on the maintainer's word of 2026-11-26: «все клавиатуры которые есть в наличии, работают. Если будут другие - откроем задачу новую.»
+
+- **What the logs show:** the Logitech receiver `046D:C534` is taken by `usb_hid` as a keyboard and a mouse in every boot log kept from 2026-11-21 and 2026-11-22, and the maintainer typed with it in `wm`'s shell window on 2026-11-13 (the progress above).
+- **What they do not show:** no kept log has `1C4F:000E`, the low-speed keyboard this issue names. That it types rests on the maintainer's word for every keyboard at hand, not on a logged run (MC-12.1).
+- **The cause of boot 5's silence** was not isolated. The likeliest is [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.done) (the shell stuck reading a COM1 the machine lacks), mended since. The counters of plan step 2 were not needed and were not written.
+- **A keyboard that does not type later** gets a new task of its own, as the maintainer said.
+
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done), [214](214-intel-core-i5-pc.md).
+[213](../issues/213-amd-ryzen-pc.md), [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.done), [214](../issues/214-intel-core-i5-pc.md).

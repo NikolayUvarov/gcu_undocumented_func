@@ -21,7 +21,7 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
     - the second xHCI is done in [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done);
     - Ethernet is [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md);
     - the sound and the second disk are [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md);
-  - the Ryzen's USB keyboard: [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md);
+  - the Ryzen's USB keyboard: [213-DRV-0061](../issues-done/213-DRV-0061-the-ryzens-usb-keyboard.done), done 2026-11-26;
   - the boot stick on an Intel xHCI's USB 2 port: [214-DRV-0062](214-DRV-0062-the-boot-stick-on-an-intel-xhci-usb-2-port.md);
   - the Intel i5 PC's sound and Ethernet: [214-DRV-0063](214-DRV-0063-the-intel-i5-pcs-sound-and-ethernet.md);
   - `ata` and `ahci` waits with a deadline: [000-DRV-0064](000-DRV-0064-ata-and-ahci-waits-with-a-deadline.md);
