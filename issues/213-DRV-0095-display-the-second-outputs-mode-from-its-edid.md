@@ -377,6 +377,19 @@ Superseded by the section of the same name in [213-DRV-0103](../issues-done/213-
    - `offer_screen` with the new shape. Offering again replaces the screen.
 4. **Stages and their undo as now;** nothing runs on the machine without the owner session's word.
 
+## Boot 94: the maintainer at the monitors in the monitor's mode (recorded 2026-11-26)
+
+On boot 94 (2026-11-22, the release of 15:40 UTC, the production order; 213-DRV-0096's run) the second screen came up
+in the monitor's own mode by the log, at start and after each take-back: `STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi
+SIGNALLING, THE EDID'S PREFERRED TIMING`, then `[COMPOSITOR] SECOND SCREEN 3440X1440, PITCH 13824, Bgr, FROM PID 38:
+THE FIRST MIRRORED AT 3440X1440 FROM 0,0, STRETCHED` (9.564, 1055.370 and 1111.872 s; the bench's compositor stretched
+the mirror). The maintainer, after the cable out and in and the monitor's button: «при отключении hdma и выключении
+монитора в обоих случаях через некоторое время появилось изображение заставки mind-core-os, а затем и отобразился
+обычный экран», and «первый экран не мограл, сейчас на них одно и тоже исзображение».
+
+He saw the picture come up and both screens alike. He has not read the monitor's own menu for the mode it shows, so his
+look at the mode, criterion 5's, is still to come.
+
 ## Acceptance criteria
 
 - [x] Batch 11 reads HDMI-A-1's DDC line and the I2C engine, read-only and never `DC_I2C_DATA`, with host cases; steps 3
@@ -389,7 +402,8 @@ Superseded by the section of the same name in [213-DRV-0103](../issues-done/213-
 - [ ] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
   (MC-12.1).
   Boot 81's log shows the mode, the mirror at 2304x1440 from x 568 and the watch clean; the maintainer's look is still
-  to come.
+  to come. Boot 94 (above): he saw both screens alike with the second in 3440x1440 by the log; the monitor's own menu
+  not read.
 
 ## Related
 
