@@ -173,7 +173,7 @@ fn main(_info: &'static BootInfo) {
     let Some(events_ep) = events_endpoint(&info) else { say(format_args!("{:04X}:{:04X}: NO EVENT ENDPOINT", info.vendor, info.product)); idle() };
     say(format_args!("CONTROLLER {:04X}:{:04X}, INTERFACE {}, EVENTS ON {:02X}", info.vendor, info.product, info.number, events_ep));
     let mut hci = Hci { host, handle, number: info.number, events_ep, events: hci::Events::new(), ret: [0; hci::EVENT_MAX], ret_len: 0 };
-    let up = (|| -> Result<(), Fail> {
+    let up = (|| -> Result<[u8; 6], Fail> {
         // The first call starts the event endpoint's polling.
         hci.poll(|_, _| {})?;
         hci.command(hci::RESET, &[])?;
@@ -189,10 +189,12 @@ fn main(_info: &'static BootInfo) {
         }
         let a = hci::bd_addr(hci.command(hci::READ_BD_ADDR, &[])?).ok_or(Fail::Status(hci::READ_BD_ADDR, 0xFF))?;
         say(format_args!("ADDRESS {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", a[0], a[1], a[2], a[3], a[4], a[5]));
-        Ok(())
+        Ok(a)
     })();
-    if let Err(e) = up { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle(); }
-    run(hci, &info)
+    match up {
+        Ok(a) => run(hci, &info, bt_host::buf::Addr(core::array::from_fn(|i| a[5 - i]))),
+        Err(e) => { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle() }
+    }
 }
 
 /// A text file whole into `buf`, if it is there and fits.
@@ -220,12 +222,17 @@ fn write_keys(stack: &Stack) -> bool {
 
 /// The host stack on the controller brought up: events and ACL data in, commands and ACL data out, its lines logged,
 /// its keys kept, its HID reports delivered as usb_hid delivers a USB keyboard's and mouse's.
-fn run(mut hci: Hci, info: &Interface) -> ! {
+fn run(mut hci: Hci, info: &Interface, local: bt_host::buf::Addr) -> ! {
     let bulk_in = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).copied();
     let bulk_out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
     let (Some(bulk_in), Some(bulk_out)) = (bulk_in, bulk_out) else { say(format_args!("NO BULK ENDPOINTS: NO ACL DATA")); idle() };
     let listen = mind::fs::File::open(LISTEN).is_ok() || mind::fs::File::open(INBOX_LISTEN).is_ok();
     let mut stack = Stack::new();
+    // LE pairing's random values: the stack's generator seeded from the processor's (without one, LE does not pair).
+    stack.le.local = local;
+    let mut seed = [0u8; 32];
+    if mind::random::fill(&mut seed) { stack.le.rng.seed(&seed); } else { say(format_args!("NO {}: LE DEVICES ARE NOT PAIRED", mind::random::SOURCE)); }
+    seed.fill(0);
     let mut text = [0u8; 4096];
     let mut lists = 0;
     let mut load = |stack: &mut Stack, path: &str, text: &mut [u8]| if let Some(t) = read_text(path, text) {
@@ -251,9 +258,11 @@ fn run(mut hci: Hci, info: &Interface) -> ! {
     let mut keyboard = mind::hid::Keyboard::new();
     let mut decoder = mind::keys::Ps2::new();
     let pointer = mind::hid::Pointer::boot();
+    // A HID over GATT device's layout, from its report map.
+    let mut mapped: Option<mind::hid::Pointer> = None;
     let mut out = [0u8; acl::PACKET_MAX];
     let mut line = [0u8; bt_host::buf::LINE];
-    let mut up = [0u8; 64];
+    let mut up = [0u8; bt_host::stack::UP_MAX];
     let mut complained = false;
     loop {
         let t = now();
@@ -277,6 +286,17 @@ fn run(mut hci: Hci, info: &Interface) -> ! {
                 Up::Keys => {}
                 Up::Keyboard(r) => keyboard.feed(r, t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); }),
                 Up::Pointer(r) => pointer.events(r, &mut |e| { let _ = mind::dev::input_key(e, e, false); }),
+                Up::Map(m) => {
+                    mapped = mind::hid::Pointer::parse(m);
+                    say(format_args!("REPORT MAP OF {} BYTES: {}", m.len(), if mapped.is_some() { "A POINTER IN IT" } else { "NO POINTER IN IT" }));
+                }
+                // The report ID goes first where the map names IDs.
+                Up::Report(id, r) => if let Some(p) = mapped.as_ref() {
+                    let mut with = [0u8; 64];
+                    let n = r.len().min(63);
+                    let report = if p.id != 0 { with[0] = id; with[1..1 + n].copy_from_slice(&r[..n]); &with[..1 + n] } else { r };
+                    p.events(report, &mut |e| { let _ = mind::dev::input_key(e, e, false); });
+                },
             }
         }
         keyboard.repeat(t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); });

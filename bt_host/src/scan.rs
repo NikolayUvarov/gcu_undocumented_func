@@ -73,7 +73,7 @@ impl Scan {
         let shown = h.name.map_or(0, |n| { let n = &n[..n.len().min(32)]; name[0] = b'"'; for (i, &c) in n.iter().enumerate() { name[1 + i] = if (0x20..0x7F).contains(&c) { c } else { b'?' }; } name[1 + n.len()] = b'"'; n.len() + 2 });
         let name = core::str::from_utf8(&name[..shown]).unwrap_or("");
         if h.le {
-            ctl.say(format_args!("LE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} APPEARANCE {:04X} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, name));
+            ctl.say(format_args!("LE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} {} RSSI {} APPEARANCE {:04X} {}", a[0], a[1], a[2], a[3], a[4], a[5], if h.random { "RANDOM" } else { "PUBLIC" }, h.rssi, h.kind, name));
         } else {
             ctl.say(format_args!("BR/EDR {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} CLASS {:06X} {} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, hci::major_class(h.kind), name));
         }

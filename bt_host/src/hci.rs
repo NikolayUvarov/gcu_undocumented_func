@@ -148,10 +148,10 @@ pub fn bd_addr(ret: &[u8]) -> Option<[u8; 6]> {
     Some(core::array::from_fn(|i| ret[6 - i]))
 }
 
-/// A device heard: its address (most significant byte first), whether over LE, its signal, its name if it gave one,
-/// and its class of device (BR/EDR) or appearance (LE).
+/// A device heard: its address (most significant byte first), whether over LE and with a random address, its signal,
+/// its name if it gave one, and its class of device (BR/EDR) or appearance (LE).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Heard<'a> { pub addr: [u8; 6], pub le: bool, pub rssi: i8, pub name: Option<&'a [u8]>, pub kind: u32 }
+pub struct Heard<'a> { pub addr: [u8; 6], pub le: bool, pub random: bool, pub rssi: i8, pub name: Option<&'a [u8]>, pub kind: u32 }
 
 fn addr_at(b: &[u8]) -> [u8; 6] { core::array::from_fn(|i| b[5 - i]) }
 
@@ -184,7 +184,7 @@ pub fn le_reports(params: &[u8], mut each: impl FnMut(Heard)) {
         if rest.len() < 9 + len + 1 { return; }
         let (data, rssi) = (&rest[9..9 + len], rest[9 + len] as i8);
         let (name, appearance) = ad_fields(data);
-        each(Heard { addr, le: true, rssi, name, kind: appearance.unwrap_or(0) as u32 });
+        each(Heard { addr, le: true, random: rest[1] & 1 != 0, rssi, name, kind: appearance.unwrap_or(0) as u32 });
         rest = &rest[10 + len..];
     }
 }
@@ -195,7 +195,7 @@ pub fn extended_inquiry(params: &[u8]) -> Option<Heard<'_>> {
     if params.len() < 15 || params[0] != 1 { return None; }
     let class = u32::from_le_bytes([params[9], params[10], params[11], 0]);
     let (name, _) = ad_fields(&params[15..]);
-    Some(Heard { addr: addr_at(&params[1..7]), le: false, rssi: params[14] as i8, name, kind: class })
+    Some(Heard { addr: addr_at(&params[1..7]), le: false, random: false, rssi: params[14] as i8, name, kind: class })
 }
 
 /// The devices in an Inquiry Result with RSSI's parameters.
@@ -204,7 +204,7 @@ pub fn inquiry_rssi(params: &[u8], mut each: impl FnMut(Heard)) {
     for i in 0..count as usize {
         // Address, page scan repetition mode, reserved, class (3), clock offset (2), RSSI: 14 bytes each.
         let Some(r) = rest.get(i * 14..i * 14 + 14) else { return };
-        each(Heard { addr: addr_at(&r[..6]), le: false, rssi: r[13] as i8, name: None, kind: u32::from_le_bytes([r[8], r[9], r[10], 0]) });
+        each(Heard { addr: addr_at(&r[..6]), le: false, random: false, rssi: r[13] as i8, name: None, kind: u32::from_le_bytes([r[8], r[9], r[10], 0]) });
     }
 }
 

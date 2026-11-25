@@ -101,10 +101,13 @@ impl Sim {
     }
 
     pub fn ups(&mut self) -> Vec<String> {
-        let mut out = [0u8; 64];
+        let mut out = [0u8; bt_host::stack::UP_MAX];
         let mut got = Vec::new();
         while let Some(u) = self.stack.ups.take(&mut out) {
-            got.push(match u { Up::Keys => "keys".to_string(), Up::Keyboard(r) => format!("keyboard {:02X?}", r), Up::Pointer(r) => format!("pointer {:02X?}", r) });
+            got.push(match u {
+                Up::Keys => "keys".to_string(), Up::Keyboard(r) => format!("keyboard {:02X?}", r), Up::Pointer(r) => format!("pointer {:02X?}", r),
+                Up::Map(m) => format!("map of {} bytes", m.len()), Up::Report(id, r) => format!("report {} {:02X?}", id, r),
+            });
         }
         got
     }

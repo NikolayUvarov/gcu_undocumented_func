@@ -24,4 +24,5 @@ pub mod le;
 pub mod sbc;
 pub mod scan;
 pub mod sdp;
+pub mod smp_crypto;
 pub mod stack;

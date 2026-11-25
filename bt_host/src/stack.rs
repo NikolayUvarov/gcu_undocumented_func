@@ -17,6 +17,8 @@ use crate::sdp;
 pub const CONNS: usize = 4;
 /// How long a page may take before it is given up (the page timeout set is 5.12 s), and the waits after failures.
 pub const PAGE_MS: u64 = 8_000;
+/// An LE connection is waited for longer: a device advertises only while it is awake (a mouse moved, a key pressed).
+pub const LE_CONNECT_MS: u64 = 30_000;
 pub const RETRY_MS: u64 = 15_000;
 pub const RETRY_MAX_MS: u64 = 60_000;
 /// After a device connects to us, how long we leave it to open its channels before we open ours.
@@ -42,25 +44,33 @@ pub struct Conn {
     pub kind: Option<Kind>, pub since: u64, pub started: bool, pub repaired: bool, pub used_key: bool, pub pdu: Pdu,
 }
 
-/// What the driver must act on: a key to keep, a HID report to deliver.
+/// What the driver must act on: keys to keep; a boot keyboard's or mouse's report; a HID over GATT device's report map
+/// and its reports (the report ID first when the map has IDs), laid out by the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Up<'a> { Keys, Keyboard(&'a [u8]), Pointer(&'a [u8]) }
+pub enum Up<'a> { Keys, Keyboard(&'a [u8]), Pointer(&'a [u8]), Map(&'a [u8]), Report(u8, &'a [u8]) }
 
 pub const UP_KEYS: u8 = 1;
 pub const UP_KEYBOARD: u8 = 2;
 pub const UP_POINTER: u8 = 3;
+pub const UP_MAP: u8 = 4;
+pub const UP_REPORT: u8 = 5;
+/// The longest upcall: a report map and its kind.
+pub const UP_MAX: usize = 1 + crate::le::MAP_MAX;
 
-pub struct Ups { pub queue: Queue<2048> }
+pub struct Ups { pub queue: Queue<4096> }
 
 impl Default for Ups { fn default() -> Self { Self { queue: Queue::new() } } }
 
 impl Ups {
     pub fn push(&mut self, kind: u8, data: &[u8]) { self.queue.push(&[&[kind], data]); }
     /// The next upcall, decoded from `out`.
-    pub fn take<'a>(&mut self, out: &'a mut [u8; 64]) -> Option<Up<'a>> {
+    pub fn take<'a>(&mut self, out: &'a mut [u8; UP_MAX]) -> Option<Up<'a>> {
         let n = self.queue.take(out)?;
         let (kind, data) = (out[0], &out[1..n]);
-        Some(match kind { UP_KEYS => Up::Keys, UP_KEYBOARD => Up::Keyboard(data), _ => Up::Pointer(data) })
+        Some(match kind {
+            UP_KEYS => Up::Keys, UP_KEYBOARD => Up::Keyboard(data), UP_MAP => Up::Map(data),
+            UP_REPORT if !data.is_empty() => Up::Report(data[0], &data[1..]), _ => Up::Pointer(data),
+        })
     }
 }
 
@@ -157,7 +167,7 @@ impl Stack {
                 if outgoing { self.paging = None; }
                 if status != 0 { self.page_failed(addr, status); return; }
                 if link != 1 { return; }
-                self.link_up(handle, addr, false, outgoing, encrypted);
+                self.link_up(handle, addr, false, false, outgoing, encrypted);
             }
             hci::EV_DISCONNECTION_COMPLETE if p.len() >= 4 => {
                 let (handle, reason) = (le16(p, 1), p[3]);
@@ -279,20 +289,21 @@ impl Stack {
     fn page_failed(&mut self, addr: Addr, status: u8) {
         let Some(d) = self.devices.get_mut(addr) else { return };
         d.failures += 1;
-        let wait = (RETRY_MS << (d.failures - 1).min(2)).min(RETRY_MAX_MS);
+        // An LE device is looked for again soon: the next attempt waits for its advertising.
+        let wait = if d.kind == Kind::LeHid { 2_000 } else { (RETRY_MS << (d.failures - 1).min(2)).min(RETRY_MAX_MS) };
         d.next_try = self.ctl.now + wait;
         // 04: page timeout, the device not there or not answering.
         self.ctl.say(format_args!("{}: NOT CONNECTED (STATUS {:02X}), TRIED AGAIN IN {} S", addr, status, wait / 1000));
     }
 
-    fn link_up(&mut self, handle: u16, addr: Addr, le: bool, outgoing: bool, encrypted: bool) {
+    fn link_up(&mut self, handle: u16, addr: Addr, le: bool, random: bool, outgoing: bool, encrypted: bool) {
         let Some(slot) = self.conns.iter().position(Option::is_none) else { self.ctl.command(hci::DISCONNECT, &[handle as u8, (handle >> 8) as u8, 0x13]); return };
         let kind = self.devices.get(addr).map(|d| d.kind);
         if let Some(d) = self.devices.get_mut(addr) { d.failures = 0; }
         self.ctl.link_up(handle, le);
         self.conns[slot] = Some(Conn { handle, addr, le, outgoing, step: Step::Up, encrypted, kind, since: self.ctl.now, started: false, repaired: false, used_key: false, pdu: Pdu::new() });
         self.say(format_args!("{} CONNECTED{}: HANDLE {:03X}, {}", addr, if le { " OVER LE" } else { "" }, handle, if outgoing { "WE PAGED IT" } else { "IT CAME TO US" }));
-        if le { self.le.link_up(&mut self.ctl, handle, addr, self.devices.get(addr).and_then(|d| d.ltk)); return; }
+        if le { self.le.link_up(&mut self.ctl, handle, addr, random, self.devices.get(addr).and_then(|d| d.ltk)); return; }
         if outgoing { self.secure(handle); }
     }
 
@@ -348,7 +359,7 @@ impl Stack {
         let c = self.conns[i].as_mut().unwrap();
         c.encrypted = status == 0 && on;
         let (addr, le) = (c.addr, c.le);
-        if le { self.le.encrypted(&mut self.ctl, handle, status, on); return; }
+        if le { self.le.encrypted(&mut self.ctl, &mut self.ups, &mut self.devices, handle, status, on); return; }
         if !c.encrypted {
             self.ctl.say(format_args!("{}: ENCRYPTION {} (STATUS {:02X}): DISCONNECTED", addr, if on { "ON" } else { "OFF" }, status));
             self.disconnect(handle);
@@ -477,12 +488,13 @@ impl Stack {
     fn le_event(&mut self, sub: u8, p: &[u8]) {
         match sub {
             hci::LE_CONNECTION_COMPLETE | hci::LE_ENHANCED_CONNECTION_COMPLETE if p.len() >= 11 => {
-                let (status, handle, role, addr) = (p[0], le16(p, 1), p[3], Addr::from_wire(&p[5..]));
-                let outgoing = self.paging.is_some_and(|(a, _)| a == addr);
-                if outgoing || status != 0 { self.paging = None; }
-                if status != 0 { if let Some(d) = self.devices.list.iter().flatten().find(|d| d.kind == Kind::LeHid) { let a = d.addr; self.page_failed(a, status); } return; }
-                if role != 0 { self.disconnect(handle); return; }
-                self.link_up(handle, addr, true, true, false);
+                let (status, handle, role, random, addr) = (p[0], le16(p, 1), p[3], p[4] & 1 != 0, Addr::from_wire(&p[5..]));
+                let paged = self.paging.map(|(a, _)| a);
+                // A failure names no peer: it is the connection we asked for (or the one cancelled, counted already).
+                if status != 0 { if let Some(a) = paged { self.paging = None; self.page_failed(a, status); } return; }
+                if paged == Some(addr) { self.paging = None; }
+                if role != 0 || self.devices.get(addr).is_none() { self.disconnect(handle); return; }
+                self.link_up(handle, addr, true, random, true, false);
             }
             hci::LE_CONNECTION_UPDATE_COMPLETE if p.len() >= 9 => {
                 self.say(format_args!("LE {:03X}: INTERVAL {} × 1.25 MS, LATENCY {}, TIMEOUT {} × 10 MS (STATUS {:02X})", le16(p, 1), le16(p, 3), le16(p, 5), le16(p, 7), p[0]));
@@ -502,9 +514,9 @@ impl Stack {
         self.scan.tick(&mut self.ctl, busy);
         // A page that never ended: cancelled.
         if let Some((addr, since)) = self.paging {
-            if now > since + PAGE_MS + 4_000 {
-                self.ctl.say(format_args!("{}: NO ANSWER TO THE PAGE: CANCELLED", addr));
-                let le = self.devices.get(addr).is_some_and(|d| d.kind == Kind::LeHid);
+            let le = self.devices.get(addr).is_some_and(|d| d.kind == Kind::LeHid);
+            if now > since + if le { LE_CONNECT_MS } else { PAGE_MS + 4_000 } {
+                self.ctl.say(format_args!("{}: {}: CANCELLED", addr, if le { "NOT ADVERTISING" } else { "NO ANSWER TO THE PAGE" }));
                 if le { self.ctl.command(hci::LE_CREATE_CONNECTION_CANCEL, &[]); } else { self.ctl.command(hci::CREATE_CONNECTION_CANCEL, &addr.0); }
                 self.paging = None;
                 self.page_failed(addr, 0x04);
