@@ -2497,3 +2497,87 @@ fn the_desk_over_two_screens() {
     assert_eq!(right.moved(Rect::new(400, 10, 80, 25), 0), Rect::new(106, 13, 80, 25));
     assert_eq!((Side::from_name("above"), Side::Below.name(), Side::from_name("up")), (Some(Side::Above), "below", None));
 }
+
+#[test]
+fn the_windows_on_two_screens() {
+    use screens::{layout, Side};
+    // 177-APP-0094: wm's desk over a 2560x1440 first screen and a 1920x1080 second on its right, 320x90 and 240x67 cells.
+    let mut desk = Desk::new(320, 90);
+    desk.add(text(1, "one"));
+    desk.arrange(layout((320, 90), Some(((240, 67), Side::Right))));
+    assert_eq!((desk.cols, desk.rows, desk.area(), desk.screen_area(1)), (560, 90, Rect::new(0, 1, 320, 88), Rect::new(320, 0, 240, 67)), "the bars are the first screen's");
+    assert_eq!(rect(&desk, 1), (0, 1, 160, 44), "a window keeps its screen and its place when a second comes");
+    assert!(desk.status().ends_with(" SCREENS=2"));
+    // Maximized, halves and quarters within the window's own screen.
+    desk.add(text(2, "two"));
+    desk.place(2, Rect::new(400, 10, 80, 25));
+    assert_eq!(desk.area_of(2), Rect::new(320, 0, 240, 67));
+    desk.maximize(2);
+    assert_eq!(rect(&desk, 2), (320, 0, 240, 67));
+    assert!(desk.listing().iter().any(|(id, state)| *id == 2 && state.contains("maximized")));
+    desk.maximize(2);
+    assert_eq!(rect(&desk, 2), (400, 10, 80, 25), "back where it was");
+    desk.half(2, 1);
+    assert_eq!(rect(&desk, 2), (440, 0, 120, 67));
+    desk.quarter(2, 3);
+    assert_eq!(rect(&desk, 2), (320, 33, 120, 34));
+    // A window across the edge stays across it; one over the top bar or the corner neither screen covers goes inside.
+    desk.place(2, Rect::new(300, 10, 60, 20));
+    assert_eq!(rect(&desk, 2), (300, 10, 60, 20), "across the two screens");
+    desk.place(2, Rect::new(100, 0, 40, 10));
+    assert_eq!(rect(&desk, 2), (100, 1, 40, 10), "below the top bar");
+    desk.place(2, Rect::new(300, 70, 60, 10));
+    assert_eq!(rect(&desk, 2), (320, 57, 60, 10), "out of the corner under the second screen, onto it");
+    desk.place(2, Rect::new(540, 10, 60, 20));
+    assert_eq!(rect(&desk, 2), (500, 10, 60, 20), "inside the second screen's right edge");
+    // Moved by keys across the edge.
+    desk.place(2, Rect::new(290, 10, 40, 10));
+    desk.move_by(2, 20, 0);
+    assert_eq!(rect(&desk, 2), (310, 10, 40, 10));
+    desk.move_by(2, 30, 0);
+    assert_eq!(rect(&desk, 2), (340, 10, 40, 10));
+    desk.resize_by(2, 400, 400);
+    assert_eq!(rect(&desk, 2), (340, 10, 220, 57), "as large as its screen holds");
+    // An edge with a screen beyond is crossed, not stuck to; the outer one snaps.
+    desk.place(2, Rect::new(280, 10, 40, 10));
+    desk.snap(2);
+    assert_eq!(rect(&desk, 2), (280, 10, 40, 10));
+    desk.place(2, Rect::new(520, 10, 40, 10));
+    desk.snap(2);
+    assert_eq!(rect(&desk, 2), (440, 0, 120, 67), "the second screen's right half");
+    // To the other screen: the same share of it, and [⇕]'s frame with it.
+    assert!(desk.to_screen(2, Side::Left));
+    assert_eq!(rect(&desk, 2), (160, 1, 160, 88), "the first screen's right half");
+    desk.restore(2);
+    assert_eq!(rect(&desk, 2), (266, 14, 40, 10), "its frame before the snap, carried: 200 of 240 columns in is 266 of 320");
+    assert!(!desk.to_screen(2, Side::Left), "nothing on the left of the first");
+    assert!(desk.to_screen(2, Side::Right));
+    assert_eq!(rect(&desk, 2), (519, 9, 40, 10), "at the same place in proportion");
+    desk.place(1, Rect::new(0, 1, 300, 80));
+    assert!(desk.to_screen(1, Side::Right));
+    assert_eq!(rect(&desk, 1), (320, 0, 240, 67), "a window larger than the second screen fits it");
+    // Full screen on its own screen: the other keeps the desk, and the mouse reaches it.
+    desk.place(1, Rect::new(10, 10, 60, 20));
+    desk.raise(2);
+    desk.toggle_full(2);
+    assert_eq!(desk.content(2), Rect::new(320, 0, 240, 67));
+    assert_eq!((desk.hit(400, 30), desk.hit(20, 20)), (Hit::Content(2), Hit::Content(1)));
+    assert!(!desk.covered(0), "a window on the other screen is not under it");
+    let mut cells = vec![Cell::BLANK; 560 * 90];
+    let mut grid = Grid::new(&mut cells, 560, 90);
+    desk.draw(&mut grid, &DARK, &mut |id, x, y| Some((if id == 2 && (x, y) == (0, 0) { 'F' } else { '.' }, 0xFFFFFF, 0)));
+    assert_eq!((grid.get(320, 0).ch, grid.get(11, 11).ch), ('F', '.'), "the full window from its screen's corner, the other window still drawn");
+    assert_ne!(grid.get(100, 50).ch, '.', "the first screen's desktop is still there");
+    // Alt+Shift+arrows in wm; with no screen on that side it says so.
+    let mut wm = Wm::new(320, 90);
+    wm.desk.arrange(layout((320, 90), Some(((240, 67), Side::Right))));
+    wm.desk.add(text(5, "five"));
+    wm.desk.place(5, Rect::new(10, 10, 40, 10));
+    assert_eq!(wm.key(Key(event(KEY_RIGHT, 0, MOD_ALT | MOD_SHIFT))), Action::Redraw);
+    assert_eq!(rect(&wm.desk, 5), (327, 6, 40, 10), "10 of 320 columns in is 7 of 240; 9 of 88 rows is 6 of 67");
+    wm.key(Key(event(KEY_RIGHT, 0, MOD_ALT | MOD_SHIFT)));
+    assert_eq!(wm.notice.as_deref(), Some("To another screen: no screen is to the right of this one"));
+    // Back to one screen: the second's windows come onto the first at their place and share of it.
+    wm.desk.arrange(layout((320, 90), None));
+    assert_eq!((wm.desk.cols, rect(&wm.desk, 5)), (320, (9, 8, 53, 13)));
+}

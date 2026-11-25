@@ -4,6 +4,7 @@
 use crate::keys::{Code, Key};
 use crate::background::{hours, Config, Power};
 use crate::menu::{self, Menu};
+use crate::screens::{self, Layout, Side};
 use crate::settings::{Outcome, Settings};
 use crate::tui::widgets::{message, Edit, History, InputLine};
 use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
@@ -77,24 +78,40 @@ pub struct Desk {
     pub background: bool,
     /// The window the pointer holds by its title or corner: drawn marked until the button is released (211-APP-0037).
     pub held: Option<u32>,
+    /// The screens the desk lies over (177-APP-0094), the first with the bars; one screen of `cols` × `rows` until
+    /// the compositor offers a second.
+    pub screens: Layout,
 }
 
 impl Desk {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), background: false, held: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), background: false, held: None, screens: screens::layout((cols, rows), None) } }
 
-    /// Where windows go: below the top bar, above the status line.
-    pub fn area(&self) -> Rect { Rect::new(0, 1, self.cols, self.rows.saturating_sub(2)) }
+    /// Where windows go on the first screen: below the top bar, above the status line.
+    pub fn area(&self) -> Rect { self.screen_area(0) }
+    /// Where windows go on screen `s` (177-APP-0094): the first's area, or another screen whole.
+    pub fn screen_area(&self, s: usize) -> Rect { screens::area(&self.screens, s) }
+    /// The screen a frame is on: the one under its middle, or the nearest.
+    pub fn screen_of(&self, r: Rect) -> usize { self.screens.screen_of(r.x + r.w / 2, r.y + r.h / 2) }
+    /// The area of the screen window `id` is on.
+    pub fn area_of(&self, id: u32) -> Rect { self.get(id).map_or(self.area(), |w| self.screen_area(self.screen_of(w.rect))) }
 
-    /// A grid of `cols` × `rows` after wm's scale changed (000-APP-0061): each frame keeps its place and its share of
-    /// the screen, within the new area; a maximized one stays maximized. Every frame counts as changed.
-    pub fn rescale(&mut self, cols: usize, rows: usize) {
-        let (old_cols, old_rows, old_area) = (self.cols.max(1), self.rows.max(1), self.area());
-        (self.cols, self.rows) = (cols, rows);
-        let area = self.area();
+    /// One screen of `cols` × `rows` after wm's scale changed (000-APP-0061), as `arrange` lays them out.
+    pub fn rescale(&mut self, cols: usize, rows: usize) { self.arrange(screens::layout((cols, rows), None)); }
+
+    /// The screens laid out anew (177-APP-0094), or their cells changed with the scale: each frame keeps its screen
+    /// (the last one when its own is gone), its place and its share of it, within the new area; one maximized there
+    /// stays maximized. Every frame counts as changed.
+    pub fn arrange(&mut self, layout: Layout) {
+        let old = core::mem::replace(&mut self.screens, layout);
+        (self.cols, self.rows) = (self.screens.cols, self.screens.rows);
         let frames: Vec<(u32, Rect)> = self.windows.iter().map(|w| (w.id, w.rect)).collect();
         for (id, r) in frames {
-            let rect = if r == old_area { area } else {
-                Rect::new(r.x * cols / old_cols, r.y * rows / old_rows, (r.w * cols / old_cols).max(MIN.0), (r.h * rows / old_rows).max(MIN.1))
+            let s = old.screen_of(r.x + r.w / 2, r.y + r.h / 2);
+            let to = s.min(self.screens.screens.len() - 1);
+            let (from, dest) = (old.screens[s], self.screens.screens[to]);
+            let rect = if r == screens::area(&old, s) { self.screen_area(to) } else {
+                let along = |at: usize, start: usize, len: usize, to_start: usize, to_len: usize| to_start + at.saturating_sub(start) * to_len / len.max(1);
+                Rect::new(along(r.x, from.x, from.w, dest.x, dest.w), along(r.y, from.y, from.h, dest.y, dest.h), (r.w * dest.w / from.w.max(1)).max(MIN.0), (r.h * dest.h / from.h.max(1)).max(MIN.1))
             };
             let rect = self.fit(rect);
             if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) { w.rect = rect; }
@@ -108,9 +125,9 @@ impl Desk {
     pub fn focus(&self) -> Option<u32> { self.focused().map(|w| w.id) }
     /// The window on the whole screen: the one in front, if it is full screen.
     pub fn full_screen(&self) -> Option<u32> { self.focused().filter(|w| w.full).map(|w| w.id) }
-    /// Where a window's content is drawn: inside its frame, or the whole screen.
+    /// Where a window's content is drawn: inside its frame, or the whole of its screen.
     pub fn content(&self, id: u32) -> Rect {
-        if self.full_screen() == Some(id) { return Rect::new(0, 0, self.cols, self.rows); }
+        if self.full_screen() == Some(id) { return self.get(id).map_or(Rect::default(), |w| self.screens.screens[self.screen_of(w.rect)]); }
         self.get(id).map_or(Rect::default(), |w| w.rect.inner())
     }
 
@@ -127,14 +144,13 @@ impl Desk {
     pub fn covered(&self, index: usize) -> bool {
         let Some(w) = self.windows.get(index) else { return false };
         let above = &self.windows[index + 1..];
-        if above.iter().any(|a| a.full && a.id == self.focus().unwrap_or(u32::MAX)) { return true; }
+        if above.iter().any(|a| a.full && a.id == self.focus().unwrap_or(u32::MAX) && self.screen_of(a.rect) == self.screen_of(w.rect)) { return true; }
         let r = w.rect;
         (r.y..r.bottom()).all(|y| (r.x..r.right()).all(|x| above.iter().any(|a| x >= a.rect.x && x < a.rect.right() && y >= a.rect.y && y < a.rect.bottom())))
     }
 
     /// The windows as the list shows them (211-APP-0014): in the order they opened, each with its state.
     pub fn listing(&self) -> Vec<(u32, String)> {
-        let area = self.area();
         let mut ids: Vec<u32> = self.windows.iter().map(|w| w.id).collect();
         ids.sort_unstable();
         ids.iter().map(|&id| {
@@ -143,7 +159,7 @@ impl Desk {
             let mut state = Vec::new();
             state.push(if Some(id) == self.focus() { "in front" } else if self.covered(index) { "hidden" } else { "behind" });
             if w.full { state.push("full screen"); }
-            if w.rect == area { state.push("maximized"); }
+            if w.rect == self.screen_area(self.screen_of(w.rect)) { state.push("maximized"); }
             (id, state.join(", "))
         }).collect()
     }
@@ -168,13 +184,27 @@ impl Desk {
         if let Some(index) = self.index(id) { let w = &mut self.windows[index]; w.restore = restore; w.before_max = None; }
     }
 
-    /// `rect` made at least `MIN`, at most the area, and moved inside it.
+    /// `rect` made at least `MIN` and at most the area of its screen; left where it is when every cell of it is on a
+    /// screen's area (a window across two screens, 177-APP-0094), else moved inside the area of its screen.
     pub fn fit(&self, rect: Rect) -> Rect {
-        let area = self.area();
+        let area = self.screen_area(self.screen_of(rect));
         let (w, h) = (rect.w.clamp(MIN.0.min(area.w), area.w.max(1)), rect.h.clamp(MIN.1.min(area.h), area.h.max(1)));
-        let x = rect.x.min(area.right().saturating_sub(w));
+        if self.screens.screens.len() > 1 && self.on_screens(Rect::new(rect.x, rect.y, w, h)) { return Rect::new(rect.x, rect.y, w, h); }
+        let x = rect.x.clamp(area.x, area.right().saturating_sub(w).max(area.x));
         let y = rect.y.clamp(area.y, area.bottom().saturating_sub(h).max(area.y));
         Rect::new(x, y, w, h)
+    }
+
+    // Whether every cell of `r` is on some screen's area: each row walked through the areas that hold it.
+    fn on_screens(&self, r: Rect) -> bool {
+        let count = self.screens.screens.len();
+        (r.y..r.bottom()).all(|y| {
+            let mut x = r.x;
+            for _ in 0..count {
+                for a in (0..count).map(|s| self.screen_area(s)) { if a.contains(x, y) { x = a.right(); } }
+            }
+            x >= r.right()
+        })
     }
 
     /// The first four windows take the quarters in turn, text ones filling them; later ones cascade from the top left.
@@ -217,39 +247,52 @@ impl Desk {
         self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
-        self.set(id, Rect::new(r.x.saturating_add_signed(dx), r.y.saturating_add_signed(dy).max(self.area().y), r.w, r.h));
+        self.set(id, Rect::new(r.x.saturating_add_signed(dx), r.y.saturating_add_signed(dy), r.w, r.h));
     }
     pub fn resize_by(&mut self, id: u32, dw: isize, dh: isize) {
         self.leave_full(id);
         self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
-        let area = self.area();
-        let (width, height) = (r.w.saturating_add_signed(dw).min(area.right() - r.x), r.h.saturating_add_signed(dh).min(area.bottom().saturating_sub(r.y)));
+        let area = self.area_of(id);
+        let (width, height) = (r.w.saturating_add_signed(dw).min(area.right().saturating_sub(r.x)), r.h.saturating_add_signed(dh).min(area.bottom().saturating_sub(r.y)));
         self.set(id, Rect::new(r.x, r.y, width, height));
     }
     /// Moves a window's frame to `rect` (kept inside the area), as a hand does: it is no longer snapped.
     pub fn place(&mut self, id: u32, rect: Rect) { self.leave_full(id); self.forget_restore(id); self.set(id, rect); }
 
-    /// Half the area: 0 left, 1 right, 2 top, 3 bottom.
-    pub fn half_rect(&self, side: usize) -> Rect {
-        let a = self.area();
-        match side { 0 => Rect::new(a.x, a.y, a.w / 2, a.h), 1 => Rect::new(a.x + a.w / 2, a.y, a.w - a.w / 2, a.h), 2 => Rect::new(a.x, a.y, a.w, a.h / 2), _ => Rect::new(a.x, a.y + a.h / 2, a.w, a.h - a.h / 2) }
-    }
-    /// A quarter: 1 top left, 2 top right, 3 bottom left, 4 bottom right.
-    pub fn quarter_rect(&self, n: usize) -> Rect {
-        let a = self.area();
-        let (w, h) = (a.w / 2, a.h / 2);
-        let (right, bottom) = (n == 2 || n == 4, n >= 3);
-        Rect::new(if right { a.x + w } else { a.x }, if bottom { a.y + h } else { a.y }, if right { a.w - w } else { w }, if bottom { a.h - h } else { h })
-    }
-    pub fn half(&mut self, id: u32, side: usize) { let r = self.half_rect(side); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
-    pub fn quarter(&mut self, id: u32, n: usize) { let r = self.quarter_rect(n); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
+    /// Half the first screen's area: 0 left, 1 right, 2 top, 3 bottom.
+    pub fn half_rect(&self, side: usize) -> Rect { half_of(self.area(), side) }
+    /// A quarter of the first screen's area: 1 top left, 2 top right, 3 bottom left, 4 bottom right.
+    pub fn quarter_rect(&self, n: usize) -> Rect { quarter_of(self.area(), n) }
+    /// Alt+arrow: half the area of the window's screen.
+    pub fn half(&mut self, id: u32, side: usize) { let r = half_of(self.area_of(id), side); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
+    /// Alt+1…4: a quarter of the area of the window's screen.
+    pub fn quarter(&mut self, id: u32, n: usize) { let r = quarter_of(self.area_of(id), n); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
 
-    /// Alt+Enter: the whole area, or back to where it was maximized from.
+    /// Alt+Shift+arrow (177-APP-0094): window `id` to the screen on `side` of its own, at the same place there in
+    /// proportion, its size kept as far as that screen holds it; one that fills a half, a quarter or the whole of its
+    /// area fills the same share there, and a full-screen one stays full screen. The frame `[⇕]` gives back goes with
+    /// it. False when no screen lies on that side.
+    pub fn to_screen(&mut self, id: u32, side: Side) -> bool {
+        let Some(w) = self.get(id) else { return false };
+        let from = self.screen_of(w.rect);
+        let Some(to) = self.screens.beside(from, side) else { return false };
+        let (a, b, r) = (self.screen_area(from), self.screen_area(to), w.rect);
+        let filled = r == a || (0..4).any(|side| r == half_of(a, side)) || (1..=4).any(|n| r == quarter_of(a, n));
+        let rect = if filled { screens::scaled(r, a, b) } else { screens::carried(r, a, b) };
+        if let Some(index) = self.index(id) {
+            let w = &mut self.windows[index];
+            (w.restore, w.before_max) = (w.restore.map(|r| screens::carried(r, a, b)), w.before_max.map(|r| screens::carried(r, a, b)));
+        }
+        self.set(id, rect);
+        true
+    }
+
+    /// Alt+Enter: the whole area of its screen, or back to where it was maximized from.
     pub fn maximize(&mut self, id: u32) {
         self.leave_full(id);
-        let area = self.area();
+        let area = self.area_of(id);
         let Some(index) = self.index(id) else { return };
         let w = &mut self.windows[index];
         if w.rect == area {
@@ -290,23 +333,26 @@ impl Desk {
         if self.get(id).is_some_and(|w| w.restore.is_some()) { self.restore(id); } else { self.maximize(id); }
     }
 
-    /// After a move: a window within `SNAP` cells of an edge sticks to it — a corner takes that quarter, a side half
-    /// the area, the top the whole area.
+    /// After a move: a window within `SNAP` cells of an edge of its screen's area sticks to it — a corner takes that
+    /// quarter, a side half the area, the top the whole area. An edge another screen lies beyond is crossed, not stuck
+    /// to (177-APP-0094).
     pub fn snap(&mut self, id: u32) {
         let Some(w) = self.get(id) else { return };
-        let (r, a) = (w.rect, self.area());
-        let (left, right) = (r.x <= a.x + SNAP, r.right() + SNAP >= a.right());
-        let (top, bottom) = (r.y <= a.y + SNAP, r.bottom() + SNAP >= a.bottom());
+        let (r, s) = (w.rect, self.screen_of(w.rect));
+        let a = self.screen_area(s);
+        let open = |side: Side| self.screens.beside(s, side).is_none();
+        let (left, right) = (open(Side::Left) && r.x <= a.x + SNAP, open(Side::Right) && r.right() + SNAP >= a.right());
+        let (top, bottom) = (open(Side::Above) && r.y <= a.y + SNAP, open(Side::Below) && r.bottom() + SNAP >= a.bottom());
         let target = match (left, right, top, bottom) {
             (true, true, ..) | (_, _, true, true) => return, // it already spans the area that way
-            (true, false, true, false) => self.quarter_rect(1),
-            (false, true, true, false) => self.quarter_rect(2),
-            (true, false, false, true) => self.quarter_rect(3),
-            (false, true, false, true) => self.quarter_rect(4),
-            (true, false, false, false) => self.half_rect(0),
-            (false, true, false, false) => self.half_rect(1),
+            (true, false, true, false) => quarter_of(a, 1),
+            (false, true, true, false) => quarter_of(a, 2),
+            (true, false, false, true) => quarter_of(a, 3),
+            (false, true, false, true) => quarter_of(a, 4),
+            (true, false, false, false) => half_of(a, 0),
+            (false, true, false, false) => half_of(a, 1),
             (false, false, true, false) => { if let Some(index) = self.index(id) { self.windows[index].before_max = Some(r); } a }
-            (false, false, false, true) => self.half_rect(3),
+            (false, false, false, true) => half_of(a, 3),
             (false, false, false, false) => return,
         };
         self.keep_restore(id);
@@ -315,8 +361,11 @@ impl Desk {
 
     /// What is at cell (x, y): the front-most window there decides.
     pub fn hit(&self, x: usize, y: usize) -> Hit {
-        if let Some(id) = self.full_screen() { return Hit::Content(id); }
+        if let Some(id) = self.full_screen() {
+            if self.content(id).contains(x, y) || self.screens.screens.len() == 1 { return Hit::Content(id); }
+        }
         for w in self.windows.iter().rev() {
+            if w.full && self.full_screen() == Some(w.id) { continue; }
             let r = w.rect;
             if x < r.x || x >= r.right() || y < r.y || y >= r.bottom() { continue; }
             return if y == r.y {
@@ -336,30 +385,17 @@ impl Desk {
     pub fn draw(&self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>) -> Vec<u16> {
         let (cols, rows) = (self.cols.min(grid.cols), self.rows.min(grid.rows));
         let mut owner = alloc::vec![0u16; cols * rows];
-        if let Some(id) = self.full_screen() {
-            let (index, w) = (self.index(id).unwrap_or(0), self.focused().unwrap());
-            let area = Rect::new(0, 0, cols, rows);
-            let visible = if self.held == Some(id) {
-                // Placement overlays the frame while full-screen content keeps its size and coordinates.
-                grid.frame_titled(area, Line::Double, &w.title, Style::new(theme.accent.fg, theme.panel.bg), theme.selected.inverse());
-                area.inner()
-            } else { area };
-            for y in 0..rows {
-                for x in 0..cols {
-                    if !visible.contains(x, y) { continue; }
-                    match w.content {
-                        Content::Text => { let (ch, fg, bg) = if x < w.size.0 && y < w.size.1 { cell(id, x, y).unwrap_or((' ', 0, 0)) } else { (' ', theme.panel.fg, 0) }; grid.put(x, y, ch, Style::new(fg, bg)); }
-                        Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
-                    }
-                }
-            }
-            return owner;
+        let full = self.full_screen();
+        // On one screen a full-screen window is all there is; on two, the other screen keeps the desk (177-APP-0094).
+        if let (Some(id), 1) = (full, self.screens.screens.len()) { self.draw_full(id, Rect::new(0, 0, cols, rows), grid, theme, cell, &mut owner); return owner; }
+        for s in 0..self.screens.screens.len() {
+            let area = self.screen_area(s);
+            if self.background { grid.fill(area, BACKGROUND.ch, BACKGROUND.style); } else { grid.fill(area, '░', Style::new(0x30485C, 0x182430)); }
         }
-        if self.background { grid.fill(self.area(), BACKGROUND.ch, BACKGROUND.style); } else { grid.fill(self.area(), '░', Style::new(0x30485C, 0x182430)); }
         let top = self.windows.len().saturating_sub(1);
         for (index, w) in self.windows.iter().enumerate() {
             let r = w.rect;
-            if r.w < 2 || r.h < 2 { continue; }
+            if r.w < 2 || r.h < 2 || full == Some(w.id) { continue; }
             let focused = index == top;
             // A window being dragged or resized: its frame in the accent colour and its title inverted (211-APP-0037).
             let held = self.held == Some(w.id);
@@ -389,7 +425,33 @@ impl Desk {
                 for x in r.x..r.right().min(cols) { if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() { owner[y * cols + x] = 0; } }
             }
         }
+        if let Some(id) = full { let screen = self.content(id); self.draw_full(id, screen, grid, theme, cell, &mut owner); }
         owner
+    }
+
+    // A full-screen window over `area`, its content from the area's corner; while it is placed, its frame over it.
+    fn draw_full(&self, id: u32, area: Rect, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>, owner: &mut [u16]) {
+        let (cols, rows) = (self.cols.min(grid.cols), self.rows.min(grid.rows));
+        let (Some(index), Some(w)) = (self.index(id), self.get(id)) else { return };
+        let visible = if self.held == Some(id) {
+            // Placement overlays the frame while full-screen content keeps its size and coordinates.
+            grid.frame_titled(area, Line::Double, &w.title, Style::new(theme.accent.fg, theme.panel.bg), theme.selected.inverse());
+            area.inner()
+        } else { area };
+        for y in area.y..area.bottom().min(rows) {
+            for x in area.x..area.right().min(cols) {
+                if !visible.contains(x, y) { continue; }
+                let (cx, cy) = (x - area.x, y - area.y);
+                match w.content {
+                    Content::Text => {
+                        let (ch, fg, bg) = if cx < w.size.0 && cy < w.size.1 { cell(id, cx, cy).unwrap_or((' ', 0, 0)) } else { (' ', theme.panel.fg, 0) };
+                        grid.put(x, y, ch, Style::new(fg, bg));
+                        owner[y * cols + x] = 0;
+                    }
+                    Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
+                }
+            }
+        }
     }
 
     /// One line of state for the log (tests follow it): the windows bottom to top as `id@x,y,wxh`.
@@ -397,8 +459,21 @@ impl Desk {
         let windows: Vec<String> = self.windows.iter().map(|w| format!("{}@{},{},{}x{}", w.id, w.rect.x, w.rect.y, w.rect.w, w.rect.h)).collect();
         let full = self.full_screen().map_or(String::new(), |id| format!(" FULL={}", id));
         let held = self.held.map_or(String::new(), |id| format!(" DRAG={}", id));
-        format!("FOCUS={} WINDOWS={}{}{}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "), full, held)
+        let screens = if self.screens.screens.len() > 1 { format!(" SCREENS={}", self.screens.screens.len()) } else { String::new() };
+        format!("FOCUS={} WINDOWS={}{}{}{}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "), full, held, screens)
     }
+}
+
+/// Half of area `a`: 0 left, 1 right, 2 top, 3 bottom.
+pub fn half_of(a: Rect, side: usize) -> Rect {
+    match side { 0 => Rect::new(a.x, a.y, a.w / 2, a.h), 1 => Rect::new(a.x + a.w / 2, a.y, a.w - a.w / 2, a.h), 2 => Rect::new(a.x, a.y, a.w, a.h / 2), _ => Rect::new(a.x, a.y + a.h / 2, a.w, a.h - a.h / 2) }
+}
+
+/// A quarter of area `a`: 1 top left, 2 top right, 3 bottom left, 4 bottom right.
+pub fn quarter_of(a: Rect, n: usize) -> Rect {
+    let (w, h) = (a.w / 2, a.h / 2);
+    let (right, bottom) = (n == 2 || n == 4, n >= 3);
+    Rect::new(if right { a.x + w } else { a.x }, if bottom { a.y + h } else { a.y }, if right { a.w - w } else { w }, if bottom { a.h - h } else { h })
 }
 
 /// What the window manager does after a key or a mouse event.
@@ -449,7 +524,7 @@ pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect>, ful
 
 pub const HELP: [&str; 20] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
-    "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
+    "Alt+← → ↑ ↓ — half the screen (Shift: to the screen on that side); Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+F — full screen for the window in front, without the frame or the bars; Alt+F again: its frame back",
     "Alt+0 or a double click on the title — the frame back to its content's first size (a camera's picture pixel for pixel)",
     "Alt+L — the list of windows: arrows and Enter or a click bring one to the front, Alt+W closes it",
@@ -700,6 +775,13 @@ impl Wm {
         let letter = key.letter();
         match (key.code(), letter) {
             (Code::Tab, _) => { self.next(key.shift()); Action::Redraw }
+            (Code::Left | Code::Right | Code::Up | Code::Down, _) if key.shift() => {
+                let side = match key.code() { Code::Left => Side::Left, Code::Right => Side::Right, Code::Up => Side::Above, _ => Side::Below };
+                if let Some(id) = self.window_for("To another screen") {
+                    if !self.desk.to_screen(id, side) { self.notice = Some(format!("To another screen: no screen is {} this one", side.words())); }
+                }
+                Action::Redraw
+            }
             (Code::Left | Code::Right | Code::Up | Code::Down, _) => {
                 let side = match key.code() { Code::Left => 0, Code::Right => 1, Code::Up => 2, _ => 3 };
                 if let Some(id) = self.window_for("Half the screen") { self.desk.half(id, side); }
@@ -873,7 +955,7 @@ impl Wm {
                     self.desk.place(id, Rect::new(now.x, now.y, old.w, old.h));
                 }
                 self.drag = Some(Drag::Move { id, dx, dy, from: None, unsnap: false });
-                if let Some(w) = self.desk.get(id) { let r = w.rect; self.desk.place(id, Rect::new(x.saturating_sub(dx), y.saturating_sub(dy).max(self.desk.area().y), r.w, r.h)); }
+                if let Some(w) = self.desk.get(id) { let r = w.rect; self.desk.place(id, Rect::new(x.saturating_sub(dx), y.saturating_sub(dy), r.w, r.h)); }
                 if released { self.desk.snap(id); self.drag = None; }
                 Action::Redraw
             }
