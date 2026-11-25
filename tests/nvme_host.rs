@@ -1,6 +1,7 @@
 //! `nvme`'s instance rule (213-DRV-0060): init's argument names the instance, the first alone writes, and any other one
-//! sends its controller only Identify, the I/O queues' creation and Read; every other opcode of either queue is refused,
-//! the medium-changing ones named among them. Refusals are said one line each up to a bound, then counted.
+//! sends its controller only Identify, the I/O queues' bring-up (Set Features for their number alone, unsaved; their
+//! creation) and Read; every other opcode of either queue is refused, the medium-changing ones named among them. Refusals
+//! are said one line each up to a bound, then counted.
 #[path = "../nvme/src/guard.rs"]
 mod guard;
 
@@ -29,18 +30,25 @@ fn only_the_first_instance_writes() {
 #[test]
 fn the_first_instance_sends_what_it_always_sent() {
     for opcode in 0..=u8::MAX {
-        assert!(guard::allowed(true, Queue::Admin, opcode));
-        assert!(guard::allowed(true, Queue::Io, opcode));
+        assert!(guard::allowed(true, Queue::Admin, opcode, 0));
+        assert!(guard::allowed(true, Queue::Io, opcode, 0));
     }
 }
 
 #[test]
 fn a_read_only_instance_sends_identify_queue_creation_and_read_alone() {
-    let admin: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Admin, op)).collect();
-    let io: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Io, op)).collect();
-    assert_eq!(admin, [guard::OP_CREATE_SQ, guard::OP_CREATE_CQ, guard::OP_IDENTIFY]);
-    assert_eq!(io, [guard::OP_READ]);
-    assert!(!guard::allowed(false, Queue::Io, guard::OP_WRITE) && !guard::allowed(false, Queue::Io, guard::OP_FLUSH));
+    // With any dword 10 but the Number of Queues', Set Features is refused with the rest.
+    for cdw10 in [0, 0x01, 0x06, 0x08, 0x0C, 0x8000_0007, 0x0107] {
+        let admin: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Admin, op, cdw10)).collect();
+        let io: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Io, op, cdw10)).collect();
+        assert_eq!(admin, [guard::OP_CREATE_SQ, guard::OP_CREATE_CQ, guard::OP_IDENTIFY], "dword 10 {cdw10:#x}");
+        assert_eq!(io, [guard::OP_READ], "dword 10 {cdw10:#x}");
+    }
+    let admin: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Admin, op, guard::QUEUES_FEATURE)).collect();
+    assert_eq!(admin, [guard::OP_CREATE_SQ, guard::OP_CREATE_CQ, guard::OP_IDENTIFY, guard::OP_SET_FEATURES], "the number of queues, unsaved");
+    let io: Vec<u8> = (0..=u8::MAX).filter(|&op| guard::allowed(false, Queue::Io, op, guard::QUEUES_FEATURE)).collect();
+    assert_eq!(io, [guard::OP_READ], "no I/O command by the queues' dword");
+    assert!(!guard::allowed(false, Queue::Io, guard::OP_WRITE, 0) && !guard::allowed(false, Queue::Io, guard::OP_FLUSH, 0));
     // What changes the medium or the controller's kept state, by name (NVMe 1.4, figures 139 and 346).
     for (queue, opcode, name) in [
         (Queue::Io, 0x00, "FLUSH"), (Queue::Io, 0x01, "WRITE"), (Queue::Io, 0x04, "WRITE UNCORRECTABLE"), (Queue::Io, 0x08, "WRITE ZEROES"),
@@ -50,7 +58,7 @@ fn a_read_only_instance_sends_identify_queue_creation_and_read_alone() {
         (Queue::Admin, 0x84, "SANITIZE"), (Queue::Admin, 0x81, "SECURITY SEND"), (Queue::Admin, 0x14, "DEVICE SELF-TEST"),
         (Queue::Admin, 0x02, "GET LOG PAGE"), (Queue::Admin, 0x0C, "ASYNCHRONOUS EVENT REQUEST"), (Queue::Admin, 0x00, "DELETE I/O SUBMISSION QUEUE"),
     ] {
-        assert!(!guard::allowed(false, queue, opcode), "{name} sent by a read-only instance");
+        assert!(!guard::allowed(false, queue, opcode, 0), "{name} sent by a read-only instance");
         assert_eq!(guard::name(queue, opcode), name);
     }
     assert_eq!(guard::name(Queue::Io, 0x7F), "ANOTHER COMMAND");
