@@ -3,14 +3,16 @@
 
 //! bt_hci (700-BLT-0001): a Bluetooth controller's HCI over USB. It claims the controller usb_host gives its badge
 //! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C or RTL8852B (700-BLT-0004) from
-//! data/firmware/rtl_bt/, says its
-//! version and address, then, when the disk asks with `data/bt-listen.txt`, listens: an LE scan and a BR/EDR inquiry
-//! at start and every five minutes, each device heard logged once a round. Without it the controller stays quiet: a
-//! controller that shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its
-//! inquiries until the Wi-Fi driver restarted (700-BLT-0003). The stack (bt_host) and its devices come after.
+//! data/firmware/rtl_bt/, says its version and address, then runs the host stack (bt_host, linked in for the testing
+//! stage, 700-BLT-0005 and on): events from the interrupt endpoint, ACL data both ways on the bulk pair, commands as
+//! class requests. The stack pages, pairs and serves only the devices `data/bluetooth/devices.txt` lists; without it
+//! the radio stays quiet but for the listening rounds `data/bt-listen.txt` asks for (700-BLT-0003): a controller that
+//! shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its inquiries.
 
 use bt_hci::{hci, rtl};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DEV0, SLOT_VFS};
+use bt_host::acl;
+use bt_host::stack::{Stack, Up};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_INPUT, SLOT_DEV0, SLOT_FILE, SLOT_PRIV, SLOT_VFS};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 use mind::usb::{Host, Interface};
@@ -31,15 +33,19 @@ const IMAGE_MAX: usize = 128 * 1024;
 /// How long a controller may take to enumerate, and a command to be answered.
 const CLAIM_MS: u64 = 30_000;
 const COMMAND_MS: u64 = 2_000;
-const SCAN_MS: u64 = 10_000;
-const ROUND_MS: u64 = 300_000;
 /// The file that turns the listening rounds on (700-BLT-0003).
 const LISTEN: &str = "data/bt-listen.txt";
-/// The default event mask with Extended Inquiry Result (bit 46) and the LE meta event (bit 61).
-const EVENT_MASK: u64 = 0x0000_1FFF_FFFF_FFFF | 1 << 46 | 1 << 61;
-/// The general inquiry access code, 0x9E8B33, and 8 × 1.28 s.
-const INQUIRY: [u8; 5] = [0x33, 0x8B, 0x9E, 8, 0];
-const HEARD_MAX: usize = 64;
+/// The devices the stack may page, accept and pair, and the keys it keeps for them (bt_host::devices): the testing
+/// stage's place, a directory of the boot volume's data area. They are written only through a writable client of that
+/// directory, which init does not grant yet (asked of KRN); without it the keys of one boot are kept in memory alone.
+const BLUETOOTH_DIR: &str = "data/bluetooth";
+const DEVICES: &str = "data/bluetooth/devices.txt";
+const KEYS: &str = "data/bluetooth/keys.txt";
+/// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
+const BULK_OUT_AT: usize = 0x8000;
+/// How often the loop runs while a link is up, and while none is.
+const BUSY_MS: usize = 2;
+const IDLE_MS: usize = 20;
 
 fn say(args: core::fmt::Arguments) { mind::println!("[BT] {}", args); }
 fn now() -> u64 { mind::time::uptime_ms() as u64 }
@@ -50,46 +56,18 @@ fn now() -> u64 { mind::time::uptime_ms() as u64 }
 enum Fail { Usb(mind::sys::Error), Timeout(u16), Status(u16, u8), File(&'static str), Patch(rtl::Error) }
 
 /// The controller as claimed: its HCI interface, its event endpoint, the events joined, the last command's answer.
-struct Hci { host: Host, handle: u32, number: u8, events_ep: u8, events: hci::Events, ret: [u8; hci::EVENT_MAX], ret_len: usize, heard: Heard }
-
-/// Devices heard in a round, each logged once.
-struct Heard { seen: [([u8; 6], bool); HEARD_MAX], count: usize, le: u32, bredr: u32 }
-
-impl Heard {
-    fn note(&mut self, h: hci::Heard) {
-        if self.seen[..self.count].iter().any(|&(a, le)| a == h.addr && le == h.le) { return; }
-        if self.count < HEARD_MAX { self.seen[self.count] = (h.addr, h.le); self.count += 1; }
-        if h.le { self.le += 1 } else { self.bredr += 1 }
-        let a = h.addr;
-        let mut name = [b' '; 34];
-        let shown = h.name.map_or(0, |n| { let n = &n[..n.len().min(32)]; name[0] = b'"'; for (i, &c) in n.iter().enumerate() { name[1 + i] = if (0x20..0x7F).contains(&c) { c } else { b'?' }; } name[1 + n.len()] = b'"'; n.len() + 2 });
-        let name = core::str::from_utf8(&name[..shown]).unwrap_or("");
-        if h.le {
-            say(format_args!("LE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} APPEARANCE {:04X} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, name));
-        } else {
-            say(format_args!("BR/EDR {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} CLASS {:06X} {} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, hci::major_class(h.kind), name));
-        }
-    }
-}
+struct Hci { host: Host, handle: u32, number: u8, events_ep: u8, events: hci::Events, ret: [u8; hci::EVENT_MAX], ret_len: usize }
 
 impl Hci {
-    /// The events that came since the last call; a device heard is noted, a command's answer kept.
+    /// The events that came since the last call.
     fn poll(&mut self, mut each: impl FnMut(u8, &[u8])) -> Result<(), Fail> {
-        let (events, heard) = (&mut self.events, &mut self.heard);
-        self.host.reports(self.handle, self.events_ep, |packet| events.feed(packet, |code, params| {
-            match code {
-                hci::EV_LE_META if params.first() == Some(&hci::LE_ADVERTISING_REPORT) => hci::le_reports(&params[1..], |h| heard.note(h)),
-                hci::EV_EXTENDED_INQUIRY_RESULT => if let Some(h) = hci::extended_inquiry(params) { heard.note(h) },
-                hci::EV_INQUIRY_RESULT_RSSI => hci::inquiry_rssi(params, |h| heard.note(h)),
-                _ => {}
-            }
-            each(code, params);
-        })).map_err(Fail::Usb)?;
+        let events = &mut self.events;
+        self.host.reports(self.handle, self.events_ep, |packet| events.feed(packet, |code, params| each(code, params))).map_err(Fail::Usb)?;
         Ok(())
     }
 
     /// Sends a command and waits for its Command Complete (its return parameters in `ret`) or, for one answered by a
-    /// Command Status, that status.
+    /// Command Status, that status. Used for the bring-up, before the stack runs.
     fn command(&mut self, opcode: u16, params: &[u8]) -> Result<&[u8], Fail> {
         let n = hci::command(opcode, params, self.host.buffer_mut());
         self.host.control(self.handle, 0x20, 0, 0, self.number as u16, n as u16).map_err(Fail::Usb)?;
@@ -118,40 +96,6 @@ impl Hci {
     fn version(&mut self) -> Result<hci::Version, Fail> {
         let ret = self.command(hci::READ_LOCAL_VERSION, &[])?;
         hci::Version::parse(ret).ok_or(Fail::Status(hci::READ_LOCAL_VERSION, 0xFF))
-    }
-
-    /// Listens for `ms`, noting the devices heard; stops early when `until` sees the event it waits for.
-    /// Returns the number of events that came.
-    fn listen(&mut self, ms: u64, mut until: impl FnMut(u8, &[u8]) -> bool) -> Result<u32, Fail> {
-        let deadline = now() + ms;
-        let (mut over, mut events) = (false, 0);
-        while !over && now() < deadline {
-            self.poll(|code, p| { events += 1; if until(code, p) { over = true } })?;
-            let _ = mind::time::sleep(10);
-        }
-        Ok(events)
-    }
-
-    /// One round: an active LE scan, then a general inquiry; each device heard is logged once.
-    fn round(&mut self) -> Result<(), Fail> {
-        (self.heard.count, self.heard.le, self.heard.bredr) = (0, 0, 0);
-        // Active, every 60 ms for 30 ms, the public address, every advertiser.
-        self.command(hci::LE_SET_SCAN_PARAMETERS, &[1, 0x60, 0, 0x30, 0, 0, 0])?;
-        self.command(hci::LE_SET_SCAN_ENABLE, &[1, 1])?;
-        let le_events = self.listen(SCAN_MS, |_, _| false)?;
-        self.command(hci::LE_SET_SCAN_ENABLE, &[0, 0])?;
-        self.command(hci::INQUIRY, &INQUIRY)?;
-        let started = now();
-        let mut ended: Option<u8> = None;
-        let inquiry_events = self.listen(SCAN_MS + 2_000, |code, p| { if code == hci::EV_INQUIRY_COMPLETE { ended = Some(p.first().copied().unwrap_or(0xFF)); } ended.is_some() })?;
-        // What the controller gave: its events in each part, and how the inquiry ended (00 after its 10.24 s is a full one).
-        say(format_args!("ROUND: {} LE AND {} BR/EDR DEVICES HEARD; {} EVENTS IN THE LE SCAN, {} IN THE INQUIRY; {} EVENT PACKETS DROPPED",
-            self.heard.le, self.heard.bredr, le_events, inquiry_events, self.events.dropped));
-        match ended {
-            Some(status) => say(format_args!("INQUIRY COMPLETE AFTER {} MS, STATUS {:02X}", now() - started, status)),
-            None => say(format_args!("NO INQUIRY COMPLETE IN {} MS", SCAN_MS + 2_000)),
-        }
-        Ok(())
     }
 }
 
@@ -224,8 +168,7 @@ fn main(_info: &'static BootInfo) {
     };
     let Some(events_ep) = events_endpoint(&info) else { say(format_args!("{:04X}:{:04X}: NO EVENT ENDPOINT", info.vendor, info.product)); idle() };
     say(format_args!("CONTROLLER {:04X}:{:04X}, INTERFACE {}, EVENTS ON {:02X}", info.vendor, info.product, info.number, events_ep));
-    let mut hci = Hci { host, handle, number: info.number, events_ep, events: hci::Events::new(), ret: [0; hci::EVENT_MAX], ret_len: 0,
-                        heard: Heard { seen: [([0; 6], false); HEARD_MAX], count: 0, le: 0, bredr: 0 } };
+    let mut hci = Hci { host, handle, number: info.number, events_ep, events: hci::Events::new(), ret: [0; hci::EVENT_MAX], ret_len: 0 };
     let up = (|| -> Result<(), Fail> {
         // The first call starts the event endpoint's polling.
         hci.poll(|_, _| {})?;
@@ -242,21 +185,91 @@ fn main(_info: &'static BootInfo) {
         }
         let a = hci::bd_addr(hci.command(hci::READ_BD_ADDR, &[])?).ok_or(Fail::Status(hci::READ_BD_ADDR, 0xFF))?;
         say(format_args!("ADDRESS {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", a[0], a[1], a[2], a[3], a[4], a[5]));
-        hci.command(hci::SET_EVENT_MASK, &EVENT_MASK.to_le_bytes())?;
-        // Inquiry results with RSSI or extended data.
-        hci.command(hci::WRITE_INQUIRY_MODE, &[2])?;
         Ok(())
     })();
     if let Err(e) = up { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle(); }
-    if mind::fs::File::open(LISTEN).is_err() {
-        say(format_args!("UP: NOT LISTENING (NO {}): A SCAN TAKES THE RADIO A WI-FI MAY SHARE", LISTEN));
-        idle();
-    }
-    say(format_args!("UP: LISTENING EVERY {} S ({})", ROUND_MS / 1000, LISTEN));
+    run(hci, &info)
+}
+
+/// A text file whole into `buf`, if it is there and fits.
+fn read_text<'a>(path: &str, buf: &'a mut [u8]) -> Option<&'a str> {
+    let n = mind::idl::wire::with_timeout(2_000, || -> Result<usize, ()> {
+        let mut file = mind::fs::File::open(path).map_err(|_| ())?;
+        if file.size() > buf.len() { return Err(()); }
+        let mut at = 0;
+        while at < file.size() { let n = file.read(&mut buf[at..]).map_err(|_| ())?; if n == 0 { break; } at += n; }
+        Ok(at)
+    }).ok()?;
+    core::str::from_utf8(&buf[..n]).ok()
+}
+
+/// The keys file written whole; false when it could not be.
+fn write_keys(stack: &Stack) -> bool {
+    let mut text = [0u8; 2048];
+    let n = stack.devices.keys_text(&mut text);
+    mind::idl::wire::with_timeout(2_000, || -> Result<(), ()> {
+        let mut file = mind::fs::File::create(KEYS).map_err(|_| ())?;
+        if file.write(&text[..n]).map_err(|_| ())? != n { return Err(()); }
+        Ok(())
+    }).is_ok()
+}
+
+/// The host stack on the controller brought up: events and ACL data in, commands and ACL data out, its lines logged,
+/// its keys kept, its HID reports delivered as usb_hid delivers a USB keyboard's and mouse's.
+fn run(mut hci: Hci, info: &Interface) -> ! {
+    let bulk_in = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).copied();
+    let bulk_out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
+    let (Some(bulk_in), Some(bulk_out)) = (bulk_in, bulk_out) else { say(format_args!("NO BULK ENDPOINTS: NO ACL DATA")); idle() };
+    let listen = mind::fs::File::open(LISTEN).is_ok();
+    // A writable client of data/bluetooth when init grants one (asked of KRN): from here every file is in it.
+    let writable = mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT;
+    if writable { mind::fs::use_scope(Endpoint(SLOT_FILE), BLUETOOTH_DIR); }
+    let input = mind::dev::cap_info(SLOT_PRIV).0 == CAP_KIND_INPUT;
+    let mut stack = Stack::new();
+    let mut text = [0u8; 4096];
+    if let Some(t) = read_text(DEVICES, &mut text) { stack.devices.load(t, |n, line| say(format_args!("{} LINE {} NOT UNDERSTOOD: {}", DEVICES, n, line))); }
+    let mut keys = [0u8; 4096];
+    let kept = read_text(KEYS, &mut keys).map_or(0, |t| stack.devices.load_keys(t));
+    let listed = stack.devices.list.iter().flatten().count();
+    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({}), {} KEYS; KEYS {}; HID INPUT {}", bulk_in.address, bulk_out, listed, DEVICES, kept,
+        if writable { "KEPT IN data/bluetooth" } else { "KEPT FOR THIS BOOT ONLY (NO WRITABLE data/bluetooth)" }, if input { "DELIVERED" } else { "NOT DELIVERED (NO INPUT PRIVILEGE)" }));
+    for d in stack.devices.list.iter().flatten() { say(format_args!("DEVICE {} {}{}", d.addr, d.kind.name(), if d.key.is_some() || d.ltk.is_some() { ", PAIRED" } else { "" })); }
+    stack.scan.on = listen;
+    say(format_args!("UP: {}", if listen { "LISTENING EVERY 300 S (data/bt-listen.txt)" } else { "NOT LISTENING (NO data/bt-listen.txt): A SCAN TAKES THE RADIO A WI-FI MAY SHARE" }));
+    stack.start(now());
+    let mut stream = acl::Stream::new(bulk_in.packet.clamp(1, 64) as usize);
+    let mut keyboard = mind::hid::Keyboard::new();
+    let mut decoder = mind::keys::Ps2::new();
+    let pointer = mind::hid::Pointer::boot();
+    let mut out = [0u8; acl::PACKET_MAX];
+    let mut line = [0u8; bt_host::buf::LINE];
+    let mut up = [0u8; 64];
+    let mut complained = false;
     loop {
-        if let Err(e) = hci.round() { say(format_args!("ROUND FAILED: {:?}", e)); }
-        // The kernel ends one wait at 60 s at most, so the round's wait is made of several (700-BLT-0002).
-        let next = now() + ROUND_MS;
-        while now() < next { let _ = mind::time::sleep((next - now()).min(60_000) as usize); }
+        let t = now();
+        let events = hci.poll(|code, p| stack.event(code, p));
+        let data = hci.host.reports(hci.handle, bulk_in.address, |packet| stream.feed(packet, |p| stack.acl(p)));
+        // Said once: usb_host gone or the controller unplugged leaves this instance without a controller.
+        if let (Some(e), false) = (events.err().or(data.err().map(Fail::Usb)), complained) { complained = true; say(format_args!("USB: {:?}", e)); }
+        stack.tick(t);
+        while let Some(n) = stack.ctl.next_command(&mut out) {
+            hci.host.buffer_mut()[..n].copy_from_slice(&out[..n]);
+            if let Err(e) = hci.host.control(hci.handle, 0x20, 0, 0, hci.number as u16, n as u16) { say(format_args!("COMMAND {:02X}{:02X} NOT SENT: {:?}", out[1], out[0], e)); }
+        }
+        while let Some(n) = stack.ctl.next_acl(&mut out) {
+            hci.host.buffer_mut()[BULK_OUT_AT..BULK_OUT_AT + n].copy_from_slice(&out[..n]);
+            if let Err(e) = hci.host.bulk(hci.handle, bulk_out, BULK_OUT_AT, n) { say(format_args!("ACL PACKET NOT SENT: {:?}", e)); }
+        }
+        while let Some(l) = stack.ctl.log.take(&mut line) { say(format_args!("{}", l)); }
+        while let Some(u) = stack.ups.take(&mut up) {
+            match u {
+                Up::Keys if writable => if !write_keys(&stack) { say(format_args!("{} NOT WRITTEN", KEYS)); },
+                Up::Keys => {}
+                Up::Keyboard(r) => keyboard.feed(r, t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); }),
+                Up::Pointer(r) => pointer.events(r, &mut |e| { let _ = mind::dev::input_key(e, e, false); }),
+            }
+        }
+        keyboard.repeat(t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); });
+        let _ = mind::time::sleep(if stack.links() > 0 { BUSY_MS } else { IDLE_MS });
     }
 }

@@ -1,6 +1,7 @@
 //! HCI commands and events (Bluetooth Core 5.3, Vol 4 Part E): what bt_hci sends and reads to bring a controller up
-//! and hear the devices around. Over USB a command goes in a control transfer and an event comes in interrupt packets
-//! (Vol 4 Part B), which `Events` joins.
+//! and hear the devices around, and what the host stack (bt_host) uses for links. Over USB a command goes in a control
+//! transfer and an event comes in interrupt packets (Vol 4 Part B), which `Events` joins. Self-contained: tests include
+//! it by its path.
 
 pub const RESET: u16 = 0x0C03;
 pub const SET_EVENT_MASK: u16 = 0x0C01;
@@ -12,6 +13,39 @@ pub const LE_SET_EVENT_MASK: u16 = 0x2001;
 pub const LE_SET_SCAN_PARAMETERS: u16 = 0x200B;
 pub const LE_SET_SCAN_ENABLE: u16 = 0x200C;
 
+// The host stack's commands (bt_host, 700-BLT-0005 and on): link control (OGF 1), link policy (2), controller and
+// baseband (3), information (4) and LE (8).
+pub const CREATE_CONNECTION: u16 = 0x0405;
+pub const DISCONNECT: u16 = 0x0406;
+pub const CREATE_CONNECTION_CANCEL: u16 = 0x0408;
+pub const ACCEPT_CONNECTION: u16 = 0x0409;
+pub const REJECT_CONNECTION: u16 = 0x040A;
+pub const LINK_KEY_REPLY: u16 = 0x040B;
+pub const LINK_KEY_NEGATIVE_REPLY: u16 = 0x040C;
+pub const PIN_CODE_REPLY: u16 = 0x040D;
+pub const PIN_CODE_NEGATIVE_REPLY: u16 = 0x040E;
+pub const AUTHENTICATION_REQUESTED: u16 = 0x0411;
+pub const SET_CONNECTION_ENCRYPTION: u16 = 0x0413;
+pub const REMOTE_NAME_REQUEST: u16 = 0x0419;
+pub const IO_CAPABILITY_REPLY: u16 = 0x042B;
+pub const USER_CONFIRMATION_REPLY: u16 = 0x042C;
+pub const USER_PASSKEY_NEGATIVE_REPLY: u16 = 0x042F;
+pub const IO_CAPABILITY_NEGATIVE_REPLY: u16 = 0x0434;
+pub const WRITE_DEFAULT_LINK_POLICY: u16 = 0x080F;
+pub const WRITE_LOCAL_NAME: u16 = 0x0C13;
+pub const WRITE_PAGE_TIMEOUT: u16 = 0x0C18;
+pub const WRITE_SCAN_ENABLE: u16 = 0x0C1A;
+pub const WRITE_CLASS_OF_DEVICE: u16 = 0x0C24;
+pub const WRITE_SIMPLE_PAIRING_MODE: u16 = 0x0C56;
+pub const WRITE_LE_HOST_SUPPORTED: u16 = 0x0C6D;
+pub const READ_LOCAL_FEATURES: u16 = 0x1003;
+pub const READ_BUFFER_SIZE: u16 = 0x1005;
+pub const LE_READ_BUFFER_SIZE: u16 = 0x2002;
+pub const LE_CREATE_CONNECTION: u16 = 0x200D;
+pub const LE_CREATE_CONNECTION_CANCEL: u16 = 0x200E;
+pub const LE_CONNECTION_UPDATE: u16 = 0x2013;
+pub const LE_START_ENCRYPTION: u16 = 0x2019;
+
 pub const EV_INQUIRY_COMPLETE: u8 = 0x01;
 pub const EV_COMMAND_COMPLETE: u8 = 0x0E;
 pub const EV_COMMAND_STATUS: u8 = 0x0F;
@@ -19,6 +53,31 @@ pub const EV_INQUIRY_RESULT_RSSI: u8 = 0x22;
 pub const EV_EXTENDED_INQUIRY_RESULT: u8 = 0x2F;
 pub const EV_LE_META: u8 = 0x3E;
 pub const LE_ADVERTISING_REPORT: u8 = 0x02;
+
+pub const EV_CONNECTION_COMPLETE: u8 = 0x03;
+pub const EV_CONNECTION_REQUEST: u8 = 0x04;
+pub const EV_DISCONNECTION_COMPLETE: u8 = 0x05;
+pub const EV_AUTHENTICATION_COMPLETE: u8 = 0x06;
+pub const EV_REMOTE_NAME: u8 = 0x07;
+pub const EV_ENCRYPTION_CHANGE: u8 = 0x08;
+pub const EV_HARDWARE_ERROR: u8 = 0x10;
+pub const EV_ROLE_CHANGE: u8 = 0x12;
+pub const EV_NUMBER_OF_COMPLETED_PACKETS: u8 = 0x13;
+pub const EV_PIN_CODE_REQUEST: u8 = 0x16;
+pub const EV_LINK_KEY_REQUEST: u8 = 0x17;
+pub const EV_LINK_KEY_NOTIFICATION: u8 = 0x18;
+pub const EV_DATA_BUFFER_OVERFLOW: u8 = 0x1A;
+pub const EV_ENCRYPTION_KEY_REFRESH: u8 = 0x30;
+pub const EV_IO_CAPABILITY_REQUEST: u8 = 0x31;
+pub const EV_IO_CAPABILITY_RESPONSE: u8 = 0x32;
+pub const EV_USER_CONFIRMATION_REQUEST: u8 = 0x33;
+pub const EV_USER_PASSKEY_REQUEST: u8 = 0x34;
+pub const EV_SIMPLE_PAIRING_COMPLETE: u8 = 0x36;
+pub const EV_USER_PASSKEY_NOTIFICATION: u8 = 0x3B;
+pub const LE_CONNECTION_COMPLETE: u8 = 0x01;
+pub const LE_CONNECTION_UPDATE_COMPLETE: u8 = 0x03;
+pub const LE_LONG_TERM_KEY_REQUEST: u8 = 0x05;
+pub const LE_ENHANCED_CONNECTION_COMPLETE: u8 = 0x0A;
 
 /// The longest event: its code, its length byte and 255 bytes of parameters.
 pub const EVENT_MAX: usize = 257;

@@ -6,8 +6,13 @@ version = 4
 name = "bt_hci"
 version = "0.1.0"
 dependencies = [
+ "bt_host",
  "libmind",
 ]
+
+[[package]]
+name = "bt_host"
+version = "0.1.0"
 
 [[package]]
 name = "libmind"

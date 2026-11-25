@@ -1,0 +1,15 @@
+[package]
+name = "bt_host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The Bluetooth host stack as a library (700-BLT-0005 and on): no libmind, no allocation, pure state machines and
+# parsers, so `cargo test` runs it on the host against constructed HCI traffic. bt_hci links it for now; a bt_host
+# service with its own capabilities is the hardening stage, not built yet.
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = 3
