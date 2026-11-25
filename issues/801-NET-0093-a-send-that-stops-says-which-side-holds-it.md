@@ -1,6 +1,6 @@
 # 801-NET-0093 — A TCP send that stops says which side holds it
 
-**Type:** network (instrument) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (made and checked in QEMU, 2026-11-23; the Ryzen run is DRV's) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-12.1, MC-12.2
+**Type:** network (instrument) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (landed in round 175; the Ryzen run is left) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -38,6 +38,10 @@ The record on the PC cannot tell apart the possible causes:
   - `held_upload_check` in the `netbench` suite: a host reader that stops for 25 s after its first 64 KiB of an 8 MiB upload. The stop is named with 8192 bytes queued and the window field 0, then acknowledged again, and the upload completes.
   - QEMU x86, 4 CPUs, locally (2026-11-23), on a tree that also held 000-KRN-0276, 0277, 213-KRN-0278 and 801-NET-0094: `net` (with `wlansim`) and `netbench` passed.
 - [ ] **On the Ryzen** (DRV, MC-12.1): a run of uploads shows the counts for the silences and for a stop if one comes.
+
+## Progress
+
+**2026-11-25:** landed in round 175 (main df11c5236d). DRV's bench run of uploads is left (asked in `DRV/2026-11-23T0536Z-NET-re-1955z-…`).
 
 ## Related
 

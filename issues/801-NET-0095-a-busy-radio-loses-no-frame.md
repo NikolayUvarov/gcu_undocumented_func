@@ -1,6 +1,6 @@
 # 801-NET-0095 — A radio that answers `busy` loses no frame and moves no rate
 
-**Type:** network (`wlan`, `dot11`) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (made, 2026-11-23) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-6.2, MC-12.1, MC-12.2
+**Type:** network (`wlan`, `dot11`) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (landed in round 175; the Ryzen run is left) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-6.2, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -33,6 +33,10 @@ So one hold drops every frame offered meanwhile. Each drop steps the rate down, 
   - Before this change, the join failed: the handshake's frames were dropped.
   - With it, the station joins, leases and answers every ping (`busy_radio_check`, the `net` suite).
 - [ ] **On the Ryzen** (DRV, MC-12.1): on a busy afternoon, uploads of a log go through, and the rate does not step down at each hold.
+
+## Progress
+
+**2026-11-25:** landed in round 175 (main df11c5236d). The Ryzen run on a busy channel is left.
 
 ## Related
 

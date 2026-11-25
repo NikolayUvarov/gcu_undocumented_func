@@ -1,6 +1,6 @@
 # 000-KRN-0276 — Timed waits that end late on an idle machine: counted by where the time goes, then mended
 
-**Type:** kernel (scheduler) · **Owner:** `KRN` (the kernel session), for DRV's report · **Priority:** P1 · **Status:** in progress (counters made, 2026-11-23) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.1, MC-12.2
+**Type:** kernel (scheduler) · **Owner:** `KRN` (the kernel session), for DRV's report · **Priority:** P1 · **Status:** in progress (landed in round 175; the Ryzen run is left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -54,6 +54,8 @@ The reading does not name the fault. The 18 to 21 ms ceiling is two of `QUANTUM_
   - About 13 000 waits ended a minute.
   - Almost all the late ones were behind a busy task, up to 60 and 68 ms. This is TCG under a load made for the test, not a measurement of the Ryzen (MC-12.1).
 - `dmesg -s init` did not show the line: see the plan's first step.
+
+**2026-11-25:** landed in round 175 (main df11c5236d), with the kernel budget raised to 8100 for its 41 lines (MC-1.2). The Ryzen's lines are DRV's (asked in `DRV/2026-11-23T0515Z-KRN-correction-…`); none has come yet.
 
 ## Related
 
