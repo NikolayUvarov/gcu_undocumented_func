@@ -382,7 +382,7 @@ offered the second screen, and the compositor took it.**
   off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
 - [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md): table 12's cold path on the Ryzen, by
   213-DRV-0086's procedure.
-- [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md): the stages at start without the survey's
+- [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done): the stages at start without the survey's
   pauses: a production order, and how many seconds it takes.
 - [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md): the committed default (everything off) against a
   machine that should simply come up with both screens.
