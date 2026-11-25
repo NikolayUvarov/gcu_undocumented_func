@@ -56,6 +56,16 @@
 - [ ] The `usb`, `keys` and `link` QEMU suites pass with this `bt_hci` (no controller: it waits and says none).
 - [ ] On the Ryzen, with a device of the maintainer's: a link made and an L2CAP channel opened (the bench, see 700-BLT-0007 and 0008).
 
+## Progress (2026-11-25, UTC)
+
+- **QEMU.** The `usb`, `keys` and `link` suites pass on x86 (4 CPUs, LEG9, `tests/qemu_smoke.py --suites usb,keys,link`) with this `bt_hci` at e05c89e10. QEMU has no controller, and `bt_hci` sleeps in its claim loop.
+- **The DEXP, a release of this branch** (202611252251, tree bcb794384 on main 219b9da78, no device listed), through the Effector server's `update_agent`:
+  - The agent took the operation at 22:51:53 and downloaded the bundle.
+  - Its last heartbeat was at 22:57:58, with `shutting_down` (the apply's restart).
+  - It had not answered the server again by 23:14, so the run was stopped there and reported to the owner session (manageability first).
+  - Whether the trial boot or the fallback to slot A is what does not come back is unknown from here. No log of either boot has been read.
+- **Delivery to the DEXP.** An empty device list was delivered to its `data/inbox/bt-devices.txt` (22:49). The server refuses `data/bluetooth/`.
+
 ## Related
 
 [700](700-bluetooth.md), [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md) (pairing), [700-BLT-0007](700-BLT-0007-a2dp-source.md) (A2DP), [700-BLT-0008](700-BLT-0008-classic-hid-host.md) (HID), [700-BLT-0009](700-BLT-0009-le-pairing-and-hid-over-gatt.md) (LE), [700-DRV-0043](700-DRV-0043-usb-host-hands-out-bluetooth-controllers.md) (the bulk IN endpoint polled).
