@@ -53,6 +53,30 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 
 **Neither is the phone:** what passes there is evidence for that emulator only (MC-12.1).
 
+## Ready for the phone (2026-11-25)
+
+The maintainer (2026-11-25): «подготовить все для деплоя на аппаратный телефон pinephone». The phone is not at hand yet, so the goal is that its first boot needs only a card written and the cable plugged in.
+- **Stage 0's criteria are met in QEMU and on the host:**
+  - the PinePhone's tree in `tests/fdt_host.rs`;
+  - the `devicetree` suite;
+  - the 16550's host tests.
+  It stays open for the phone's runs.
+- **Asked of `MOB`** ([requests-MOB.md](requests-MOB.md), requests 2 and 3):
+  - the phone's card from `board_image.py`;
+  - where Tow-Boot lives and what the card leaves free;
+  - `docs/phones/pinephone.md`;
+  - a run script that checks stage 1 through Effector;
+  - the profile's skeleton;
+  - the boards' first boots as the rehearsal.
+- **The kernel session's:**
+  - the shell's console on a 16550 ([100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md));
+  - random bytes without RNDR ([100000-KRN-0279](100000-KRN-0279-random-bytes-on-a-cpu-without-rndr.md), opened today);
+  - the card's check against the release's manifest ([352-UPD-0049](352-UPD-0049-images-for-arm-boards-and-phones.md)).
+- **Other tracks':**
+  - the console through Effector: [100000-EFF-0026](100000-EFF-0026-serial-ports-through-effector.md);
+  - link over the console UART: [100000-LNK-0038](100000-LNK-0038-link-over-the-boards-console-uart.md).
+- **The maintainer's:** the phone, its cable and cards, Tow-Boot, and the cable on an Effector host ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)).
+
 ## Plan
 
 ### Stage 0: in QEMU and on the host, started once the phone is at hand
