@@ -390,6 +390,21 @@ offered the second screen, and the compositor took it.**
 - **Closed at once:** [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done), the
   vertical blank for a display.wit 1.4. The maintainer saw no tearing, so KRN keeps 1.3.
 
+## Boot 94: stage 10's picture seen during the watch (recorded 2026-11-26)
+
+On boot 94 (2026-11-22, the release of 15:40 UTC, the production order, 3440x1440 in HDMI by the log; 213-DRV-0096's
+run) the maintainer took HDMI-A-1's cable out and in, then switched its monitor off and on at its button. Each time the
+stages were taken back and all 16 run again. His words, at about 16:03 UTC:
+- «при отключении hdma и выключении монитора в обоих случаях через некоторое время появилось изображение заставки
+  mind-core-os, а затем и отобразился обычный экран»: in both cases, after a while, MIND Core's splash appeared, then
+  the usual screen;
+- «первый экран не мограл, сейчас на них одно и тоже исзображение»: the first screen did not blink, and both now show
+  the same picture.
+
+What he calls the splash is stage 10's picture, which pipe 1 shows through stage 15's watch before stage 16's offer.
+So HDMI-A-1 showed it through pipe 1 and DP-2 did not blink, by his word, at 3440x1440. He has not judged its edges, so
+criterion 3's straight edges are still to be seen.
+
 ## Acceptance criteria
 
 - [x] Stages 9 to 15 exist, switched off by default, each logged before it writes and undone on failure; host cases on
@@ -401,7 +416,8 @@ offered the second screen, and the compositor took it.**
   screen through stages 11 to 15; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
   Boot 75's log shows stage 15 clean and the firmware's pipe unchanged. The maintainer saw the same picture on both
   screens with stage 16's mirror up, but did not report on stage 15's own picture, and DP-2 was not watched by eye
-  through the stages.
+  through the stages. Boot 94 (above): he saw stage 10's picture during the watch and DP-2 not blinking, at 3440x1440; its
+  edges not judged.
 - [x] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's. Boot
   76's log shows the compositor taking the second screen, and the maintainer saw the same picture on both, the second
   following the first, with the marks and no tearing seen. This is his look on the Ryzen with its two monitors
