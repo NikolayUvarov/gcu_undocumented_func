@@ -1037,6 +1037,8 @@ impl Init {
                 grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_BLUETOOTH)?, CLIENT);
                 // A reader's client of vfs_server for the controller's patch and configuration in data/firmware/rtl_bt/.
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
+                // BENCH ONLY (700-BLT-0008, asked of KRN): the input privilege, as usb_hid has it, for a Bluetooth keyboard and mouse.
+                grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
@@ -2547,6 +2549,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         "httpd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data/releases", false, false)],
         // The SSH server's files and its keys (112-NET-0072): data/, writable; sshd itself keeps SFTP off data/ssh/.
         "sshd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data", true, false)],
+        // BENCH ONLY (700-BLT-0006, asked of KRN): bt_hci's device list and link keys, writable, made if missing.
+        "bt_hci" => &[(SLOT_FILE, mind::fs::BADGE_USER, "data/bluetooth", true, true)],
         _ => &[],
     }
 }
