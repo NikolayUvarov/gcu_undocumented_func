@@ -1,6 +1,6 @@
 # 213-KRN-0278 — The second screen's lines refill, and a host case runs a plug, an unplug and another plug
 
-**Type:** compositor · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0096 · **Priority:** P2 · **Status:** in progress (made, 2026-11-23) · **Blocked by:** — · **Main task:** 213 · **Constitution:** MC-12.2
+**Type:** compositor · **Owner:** `KRN` (the kernel session), for DRV's 213-DRV-0096 · **Priority:** P2 · **Status:** in progress (landed in round 175; the Ryzen run is left) · **Blocked by:** — · **Main task:** 213 · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -31,6 +31,10 @@ After about a dozen plugs the compositor would fall silent. On a bench run, or o
 - [x] The host cases pass, and `tests/compositor_mirror_host.rs` still does.
 - [x] The `display` suite passes (the shell's `screen second`, no driver offers a screen in QEMU): QEMU x86, 4 CPUs, locally (2026-11-23), on a tree of main 96d9b7ae00 with 000-KRN-0276, 0277, 213-KRN-0278, 801-NET-0093 and 0094.
 - [ ] On the Ryzen with 213-DRV-0096 (DRV, the maintainer at the plug, MC-12.1): each plug and unplug has its line, with the new size.
+
+## Progress
+
+**2026-11-25:** landed in round 175 (main df11c5236d). The Ryzen run at the plug is left, with DRV's 213-DRV-0096.
 
 ## Related
 

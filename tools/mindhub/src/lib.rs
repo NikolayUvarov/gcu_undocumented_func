@@ -15,3 +15,4 @@ pub mod pages;
 pub mod server;
 pub mod updates;
 pub mod util;
+pub mod verify;
