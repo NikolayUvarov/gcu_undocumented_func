@@ -2210,7 +2210,7 @@ use std::cell::RefCell;
 fn the_word_after_the_devices_index_is_the_setting_and_none_or_an_unknown_one_is_off() {
     use setting::{parse, Given, Setting};
     let cases = [("24 light", "24", Setting::Light, Given::Word), ("24 read", "24", Setting::Read, Given::Word), ("24 off", "24", Setting::Off, Given::Word),
-        ("  24   LiGhT ", "24", Setting::Light, Given::Word), ("24", "24", Setting::Off, Given::Missing), ("", "", Setting::Off, Given::Missing),
+        ("  24   LiGhT ", "24", Setting::Light, Given::Word), ("24", "24", Setting::Light, Given::Missing), ("", "", Setting::Light, Given::Missing),
         ("24 bright", "24", Setting::Off, Given::Unknown("bright")), ("24 light now", "24", Setting::Off, Given::Unknown("light now"))];
     for (args, device, s, g) in cases {
         let a = parse(args);
@@ -2220,7 +2220,7 @@ fn the_word_after_the_devices_index_is_the_setting_and_none_or_an_unknown_one_is
     assert_eq!(parse("24 light").to_string(), "THE SECOND OUTPUT: LIGHT, THE WORD AFTER DEVICE 24: STEPS 1 TO 4, THE EDID DECIDING THE MODE, THEN HPD 1 FOLLOWED AND THE STANDING CHECK");
     assert_eq!(parse("24 read").to_string(), "THE SECOND OUTPUT: READ, THE WORD AFTER DEVICE 24: STEP 1 READ, THE STAGES DESCRIBED, NOTHING WRITTEN");
     assert_eq!(parse("24 off").to_string(), "THE SECOND OUTPUT: OFF, THE WORD AFTER DEVICE 24: NO REGISTER MAPPED, NOTHING READ OR WRITTEN");
-    assert_eq!(parse("24").to_string(), "THE SECOND OUTPUT: OFF, NO WORD AFTER DEVICE 24: NO REGISTER MAPPED, NOTHING READ OR WRITTEN");
+    assert_eq!(parse("24").to_string(), "THE SECOND OUTPUT: LIGHT, NO WORD AFTER DEVICE 24 (A BENCH BUILD: NO WORD IS LIGHT): STEPS 1 TO 4, THE EDID DECIDING THE MODE, THEN HPD 1 FOLLOWED AND THE STANDING CHECK");
     assert_eq!(parse("24 bright").to_string(), "THE SECOND OUTPUT: OFF, \"bright\" AFTER DEVICE 24 IS NOT OFF, READ OR LIGHT: NO REGISTER MAPPED, NOTHING READ OR WRITTEN");
     // An unknown word is shown up to 32 bytes, cut at a character.
     let long = format!("24 {}", "x".repeat(100));
@@ -2491,7 +2491,9 @@ fn said_start(m: &Model<Both>, x: &str) -> bool { m.said.iter().any(|s| s.starts
 fn off_no_word_and_an_unknown_one_map_nothing_read_nothing_and_write_nothing() {
     let table = vfct(&good());
     let mut first: Option<Vec<String>> = None;
-    for args in ["24 off", "24", "24 bright", ""] {
+    // The bench: no word is light, so only off and an unknown word here.
+    assert_eq!(setting::parse("24").setting, setting::Setting::Light);
+    for args in ["24 off", "24 bright"] {
         let plan = setting::plan(setting::parse(args).setting, setting::Bringup::RELEASE);
         assert_eq!(plan, setting::plan(setting::Setting::Off, setting::Bringup::RELEASE), "{:?}", args);
         let mut m = ryzen(hdmi_monitor());

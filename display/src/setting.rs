@@ -35,7 +35,8 @@ pub fn parse(args: &str) -> Args<'_> {
     let known = [("off", Setting::Off), ("read", Setting::Read), ("light", Setting::Light)];
     match known.iter().find(|(w, _)| w.eq_ignore_ascii_case(word)) {
         Some(&(_, setting)) => Args { device, setting, given: Given::Word },
-        None if word.is_empty() => Args { device, setting: Setting::Off, given: Given::Missing },
+        // Bench only, not for landing: until init passes the word, no word is light on the bench.
+        None if word.is_empty() => Args { device, setting: Setting::Light, given: Given::Missing },
         None => Args { device, setting: Setting::Off, given: Given::Unknown(word) },
     }
 }
@@ -53,7 +54,7 @@ impl fmt::Display for Args<'_> {
         let name = match self.setting { Setting::Off => "OFF", Setting::Read => "READ", Setting::Light => "LIGHT" };
         match self.given {
             Given::Word => write!(f, "THE SECOND OUTPUT: {}, THE WORD AFTER DEVICE {}: {}", name, self.device, what),
-            Given::Missing => write!(f, "THE SECOND OUTPUT: OFF, NO WORD AFTER DEVICE {}: {}", self.device, what),
+            Given::Missing => write!(f, "THE SECOND OUTPUT: {}, NO WORD AFTER DEVICE {} (A BENCH BUILD: NO WORD IS LIGHT): {}", name, self.device, what),
             Given::Unknown(word) => {
                 let end = (0..=WORD_SHOWN.min(word.len())).rev().find(|&at| word.is_char_boundary(at)).unwrap_or(0);
                 write!(f, "THE SECOND OUTPUT: OFF, \"{}{}\" AFTER DEVICE {} IS NOT OFF, READ OR LIGHT: {}", &word[..end], if end < word.len() { "..." } else { "" }, self.device, what)
