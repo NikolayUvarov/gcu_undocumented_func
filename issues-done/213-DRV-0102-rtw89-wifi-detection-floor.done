@@ -356,4 +356,4 @@ The driver's side of whatever NET answers is the successor's.
 
 ## Related
 
-[213-DRV-0091](../issues/213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the starts series), [213-DRV-0090](../issues/213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the busy channel), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (the driver; DIG, EDCCA and AIFS left).
+[213-DRV-0091](../issues/213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the starts series), [213-DRV-0090](../issues/213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md) (the busy channel), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done) (the driver; DIG, EDCCA and AIFS left).

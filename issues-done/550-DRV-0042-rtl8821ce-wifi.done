@@ -141,4 +141,4 @@ Done on 2026-10-30 by the `DRV` track. Evidence for the DEXP only (MC-12.1).
 
 ## Related
 
-[213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (`rtw89_wifi`), [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) (`bcm_wifi`), [211-DRV-0041](../issues/211-DRV-0041-the-dexps-rtl8168h.md), [211-DRV-0040](211-DRV-0040-more-scratchpad-pages.done).
+[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done) (`rtw89_wifi`), [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) (`bcm_wifi`), [211-DRV-0041](../issues/211-DRV-0041-the-dexps-rtl8168h.md), [211-DRV-0040](211-DRV-0040-more-scratchpad-pages.done).

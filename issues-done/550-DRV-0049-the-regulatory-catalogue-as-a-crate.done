@@ -55,4 +55,4 @@ The request is taken from `requests-DRV.md`. `wlan`'s dependency on `regdb` is s
 
 ## Related
 
-[550-NET-0035](550-NET-0035-the-stations-country.done), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), [hwdocs/rtl8852be-regulatory.md](../hwdocs/rtl8852be-regulatory.md).
+[550-NET-0035](550-NET-0035-the-stations-country.done), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), [hwdocs/rtl8852be-regulatory.md](../hwdocs/rtl8852be-regulatory.md).

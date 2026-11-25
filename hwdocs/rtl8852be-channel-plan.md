@@ -1,7 +1,7 @@
 # RTL8852BE channel and RFK implementation dependencies
 
 This is the remaining implementation plan for
-[213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), not a claim that the
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), not a claim that the
 Ryzen radio can select a channel or transmit. The first implementation target
 is single-band PHY0, 2.4 GHz, 20 MHz. This limits code scope; it does not assert
 that any particular channel is permitted for the actual board or location.

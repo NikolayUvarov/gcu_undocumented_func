@@ -1,6 +1,6 @@
 # RTL8852BE country catalog and 2G20 selection
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This is a pure bounded `no_std` library. It performs no RF, firmware, PCI, IPC,
 persistence, association or channel-switch operation.
 

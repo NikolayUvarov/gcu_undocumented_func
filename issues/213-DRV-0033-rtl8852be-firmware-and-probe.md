@@ -21,11 +21,11 @@ The PCI ID `10ec:b852` establishes the adapter family, but not its silicon cut, 
 - Synthetic tests reject every truncated prefix, oversized counts/sections, overlapping or header-aliasing image ranges, duplicate selection keys, malformed dynamic lengths, unsupported security pools and future header versions. Selection does not silently use manufacturing/WoWLAN or a newer cut.
 - Both available CE variants of the pinned personal firmware pass a separate explicit local validation; those bytes are not committed test fixtures.
 - The actual Ryzen report records `SYS_CFG1`, a usable digital cut or a precise read failure, and the compatible CE image selection. No successful-radio claim follows from the probe.
-- Radio bring-up dependencies are captured in [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md); licence notices and project host-test integration accompany the change.
+- Radio bring-up dependencies are captured in [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done); licence notices and project host-test integration accompany the change.
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [RTL8852BE source and format notes](../hwdocs/rtl8852be.md), [THIRD_PARTY.md](../THIRD_PARTY.md), `rtw89_wifi/src/`, `scripts/firmware/rtl8852be.py`, `tests/rtw89_firmware_host.rs`, `tests/rtl8852be_fetch_test.py`.
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [RTL8852BE source and format notes](../hwdocs/rtl8852be.md), [THIRD_PARTY.md](../THIRD_PARTY.md), `rtw89_wifi/src/`, `scripts/firmware/rtl8852be.py`, `tests/rtw89_firmware_host.rs`, `tests/rtl8852be_fetch_test.py`.
 
 ## Progress (2026-10-15)
 

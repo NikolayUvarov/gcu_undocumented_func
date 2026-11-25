@@ -1,6 +1,6 @@
 # RTL8852BE initial channel register stage
 
-This continues [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+This continues [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 The code is a private, bounded initial 2.4 GHz/20 MHz managed-channel engine.
 It is not called by the native service and does not authorize packet or
 calibration transmission. Physical channel tuning, power accuracy, RFK and

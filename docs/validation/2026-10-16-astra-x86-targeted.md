@@ -1,6 +1,6 @@
 # ASTRA targeted x86 integration — 2026-10-16
 
-Task: [213-DRV-0032](../../issues/213-DRV-0032-rtl8852be-wifi.md), with
+Task: [213-DRV-0032](../../issues-done/213-DRV-0032-rtl8852be-wifi.done), with
 [213-DRV-0031](../../issues/213-DRV-0031-rtl8168-wired-network.md).
 Evidence boundaries: MC-12.1, MC-12.2, MC-12.3 and MC-12.9.
 

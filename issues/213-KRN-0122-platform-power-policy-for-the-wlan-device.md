@@ -80,4 +80,4 @@ The third criterion is met for that machine and build (MC-12.1). The line names 
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).

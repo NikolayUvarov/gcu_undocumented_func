@@ -1,6 +1,6 @@
 # RTL8852BE serial H2C host validation — 2026-10-16
 
-Task: [213-DRV-0032](../../issues/213-DRV-0032-rtl8852be-wifi.md).
+Task: [213-DRV-0032](../../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 Contract and firmware trust boundary:
 [serial H2C](../../hwdocs/rtl8852be-h2c-runtime.md).
 

@@ -1,6 +1,6 @@
 # RTL8852BE retained RX dispatch prerequisite
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This changes library ownership, not native activation or the service ABI.
 The single `btc_session::Session` retains exclusive access to both RX rings,
 including during command receipt/DONE waits. A private TX engine no longer

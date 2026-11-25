@@ -555,3 +555,19 @@ Evidence: that machine and build only (MC-12.1), plus every `rtw89` host test. C
 Three register readbacks the chip does not give were dropped or narrowed to the bits it keeps, each written unread in Linux's `rtw8852b_rfk.c`.
 
 Evidence: that machine and build only (MC-12.1), plus every `rtw89` host test. Transmission, calibration, association and RF performance are not reached. They wait for the platform power policy (213-KRN-0122) and a country configuration (213-KRN-0123).
+
+**The Ryzen's RTL8852BE joined and carrying the machine's traffic (2026-11-08 to 2026-11-22).** Later than the two notes above: transmission, calibration and association are reached on that machine.
+
+What its runs show ([213-DRV-0032](../../issues-done/213-DRV-0032-rtl8852be-wifi.done), with the dates of each):
+- The station joins a WPA2-PSK network with CCMP on channel 8 of 2.4 GHz, 20 MHz wide, at 802.11b and 802.11g rates, and takes its address by DHCP.
+- With no Ethernet cable the Effector agent holds its TLS session to the server over it, and since 2026-11-21 the machine's releases (bundles of about 30 MB) arrive over it.
+- 6 MB from the LAN arrived at 252 to 353 KB/s on 2026-11-21, and ten log uploads went through in 151 s. Linux on the same machine, access point and channel had 480 to 826 KB/s.
+
+What is not there, each named so that no guarantee is read into the above (MC-12.3):
+- **Bands and widths:** 5 GHz is written with host cases and has not joined a network yet (213-DRV-0087). No HT, VHT or aggregation, and no channel wider than 20 MHz.
+- **Security modes:** the station joins open networks and WPA2-PSK with CCMP. WPA3, enterprise networks, TKIP and WEP are not joined.
+- **Known faults:** the firmware recovers from an error a few times in ten minutes, each outlasted, the cause not known; the receiver has holes of seconds on a busy channel (213-DRV-0090); the uplink is far under Linux's (213-DRV-0104).
+- **Not as Linux:** the firmware is not told of the link and the port's clock is not synchronised to the access point's (213-DRV-0091); the EDCA parameters are the hardware's defaults; no CFO, DPK or TSSI tracking; the coexistence with a connected Bluetooth device is not written (213-DRV-0052).
+- **The bring-up's debug modes are on** (`KEEP_SENDING`, `OUTLAST_SER`, `RPQ_ALONE`, `DROP_UNACKED`, `REPORT_EACH`, `SEND_TRIES`, `OWN_DEADLINES`, `KEEP_LATE`, `RESTART_AFTER_FAILURE`): each turns a strict stop into a logged continue. `KEEP_SENDING` lets the data mode go on sending where a new country's limits would stop it. Deciding them is the hardening stage's (174-DRV-0109), not done.
+
+Evidence: that machine, that access point, its channel and those days only (MC-12.1), plus every `rtw89` host test. The figures are of runs, not of a proof (MC-12.2).

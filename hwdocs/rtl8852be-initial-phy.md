@@ -1,6 +1,6 @@
 # RTL8852BE native initial PHY diagnostic
 
-Issue [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md); roadmap H / 213,
+Issue [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done); roadmap H / 213,
 D / 550; Constitution MC-6.1, MC-12.1, MC-12.3. This is initial hardware setup,
 not a completed WLAN service or evidence of physical-device operation.
 

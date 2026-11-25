@@ -1,6 +1,6 @@
 # RTL8852BE pinned firmware table provenance
 
-Task: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Task: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This records the absence of appended firmware override elements in one
 hash-pinned file. It does not authorize a channel, establish platform or
 SAR/EIRP limits, attest current hardware readiness, or permit transmission.
