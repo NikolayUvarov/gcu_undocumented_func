@@ -1,6 +1,6 @@
 # 801-NET-0094 — `wlan` picks up the radio's frames without its idle wait
 
-**Type:** network (`wlan`) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (made, 2026-11-23) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-12.1, MC-12.2
+**Type:** network (`wlan`) · **Owner:** `NET` (the kernel session), for DRV's Ryzen report · **Priority:** P1 · **Status:** in progress (landed in round 175; the Ryzen run is left) · **Blocked by:** — · **Main task:** 801 · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -22,6 +22,10 @@ DRV timed the Ryzen's sends (`NET/2026-11-22T1800Z-DRV-where-the-uplinks-time-go
 - [x] `wlan` builds for x86 and aarch64.
 - [x] QEMU: the `net` suite with `wlansim` passes (join, DHCP, traffic over `wlan`): QEMU x86, 4 CPUs, locally (2026-11-23), on a tree with 000-KRN-0276, 0277, 213-KRN-0278 and 801-NET-0093. `wlansim` is not the Ryzen's radio: this says nothing of the gap DRV measured (MC-12.1).
 - [ ] **On the Ryzen** (DRV, MC-12.1): the 10 to 12 ms peak of the gap between sends shrinks, and uploads are no slower.
+
+## Progress
+
+**2026-11-25:** landed in round 175 (main df11c5236d). The Ryzen's measure of the gap between sends is left.
 
 ## Related
 

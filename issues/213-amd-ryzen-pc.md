@@ -43,6 +43,24 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
   - the maintainer says when it is ready.
 - **Switching to MIND Core** (the maintainer's word, 2026-10-25): the kernel session sets `BootNext` to the stick with `scripts/boot_switch.py` as root and reboots, and uses root for nothing else, once the maintainer says the stick and `effector485` are ready. Each run is recorded in docs/effector.md, section 6. While the machine runs MIND Core it runs no gate: the gates go to i9 and PCU.
 
+## What is left (2026-11-25)
+
+The maintainer (2026-11-25): «закончить с поддержкой аппаратных устройств на Ryzen». Against the acceptance criteria below:
+- **Done:** the shell on the screen ([213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done)); the first NVMe disk and the log partition; both xHCI controllers ([213-KRN-0099](../issues-done/213-KRN-0099-a-usb-host-for-every-xhci.done)); the screen mirrored on the second output ([213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done)).
+- **Left for the criteria, `DRV`'s:**
+  - the keyboard, [213-DRV-0061](213-DRV-0061-the-ryzens-usb-keyboard.md);
+  - the analog sound, [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md).
+- **Left for "each finding a closed task", `DRV`'s:**
+  - the wired card: [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md);
+  - Wi-Fi: [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [0087](213-DRV-0087-rtl8852be-on-5-ghz.md), [0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md), [0091](213-DRV-0091-the-firmware-told-of-the-link.md), [0102](213-DRV-0102-rtw89-wifi-detection-floor.md) and [0104](213-DRV-0104-the-sends-answer-the-drivers-side.md);
+  - the second output: [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) and the tasks split from it.
+  - `DRV` is asked (2026-11-25) which of these close 213 and which go on under [174](174-full-use-of-pc-hardware.md).
+- **Left, the kernel session's,** each waiting for one run on the Ryzen from `main`:
+  - [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), [0125](213-KRN-0125-the-amd-fch-watchdog.md), [0273](213-KRN-0273-the-second-screen-stretched.md) and [0278](213-KRN-0278-the-second-screens-lines-refill-and-a-host-case-for-a-second-offer.md);
+  - [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md) and [000-KRN-0276](000-KRN-0276-late-ends-of-timed-waits-counted.md);
+  - [550-NET-0061](550-NET-0061-a-restarted-radio-gets-its-country-again.md), [801-NET-0093](801-NET-0093-a-send-that-stops-says-which-side-holds-it.md), [0094](801-NET-0094-wlan-picks-up-the-radios-frames-without-its-idle-wait.md) and [0095](801-NET-0095-a-busy-radio-loses-no-frame.md).
+- **Later, by the maintainer's order:** Bluetooth ([700](700-bluetooth.md)).
+
 ## Acceptance criteria
 
 The shell shows on this machine's screen; its keyboard, its first NVMe disk and its log partition work; sound plays through its analog output; each finding above is a closed task or a numbered one.

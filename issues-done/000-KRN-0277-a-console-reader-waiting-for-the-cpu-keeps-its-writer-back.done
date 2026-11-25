@@ -1,6 +1,6 @@
-# 000-KRN-0277 — A console reader that waits for the CPU still holds its writer back
+# 000-KRN-0277 — A console reader that waits for the CPU still holds its writer back — done
 
-**Type:** kernel (console) · **Owner:** `KRN` (the kernel session), for DRV's report · **Priority:** P2 · **Status:** in progress (made, 2026-11-23) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.2
+**Type:** kernel (console) · **Owner:** `KRN` (the kernel session), for DRV's report · **Priority:** P2 · **Status:** done (2026-11-25) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.2
 
 ## Problem
 
@@ -32,6 +32,13 @@ Such a reader is slow, not gone. 000-KRN-0030's bound still holds for one that w
 - [x] The `shell` suite passes: background programs still print (QEMU x86, 4 CPUs, locally (2026-11-23), on a tree of main 96d9b7ae00 with 000-KRN-0276, 0277, 213-KRN-0278, 801-NET-0093 and 0094).
 - [x] The `vfs` suite passes (the same run). The failure DRV saw once in six was not reproduced: this says the change breaks nothing, not that it mends the failure.
 - [x] `docs/api` describes the `LOG` row as it now is.
+
+## Resolution
+
+Landed in round 175 (main df11c5236d, LANDING/2026-11-23T0838Z-KRN-landed-df11c523.md), with the kernel budget raised to 8100 in a commit of its own (MC-1.2).
+- `CONSOLE_READ` records its reader and that reader's CPU time (`kernel/src/scheduler.rs`). `LOG` holds the writer back while that reader is ready and has had under a second of CPU since its read. `docs/api`'s `LOG` row says so.
+- Tested: `services` on 4 CPUs and 1 CPU, `shell` and `vfs` in QEMU x86 (locally), then round 175's gate (61 runs, no failure).
+- The cause is inferred from the failure's shape. DRV's one failure in six was not reproduced, so this shows the change breaks nothing, not that it mends that failure. If the check fails again the same way, this task is reopened.
 
 ## Related
 
