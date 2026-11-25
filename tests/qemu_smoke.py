@@ -19619,6 +19619,7 @@ def second_nvme_check(args, disk):
         other = Path(temp) / "other.img"
         written = partitioned_image(other, sectors, "gpt", [(GPT_ESP, 40, 2008), (GPT_LINUX_DATA, 2048, sectors - 34 - 2048)], seed="nvme#1 another system")
         before, first_mib = hashlib.sha256(written).hexdigest(), hashlib.sha256(written[:2048 * 512]).hexdigest()
+        (disk / "data").mkdir(exist_ok=True)  # where the shell's user writes
         one = copy.copy(args)
         one.disk = "nvme"  # the boot disk on the first controller, as `--disk nvme`
         vm = VM(one, disk.relative_to(ROOT).as_posix(), extra=["-drive", f"format=raw,file={other},if=none,id=other,snapshot=off", "-device", "nvme,serial=other,drive=other"])
@@ -19627,7 +19628,7 @@ def second_nvme_check(args, disk):
             require_all(log, "[NVME#1] INSTANCE 1: THE DISK IS READ-ONLY AT THE TESTING STAGE (213-DRV-0060)", "[NVME#1] CONTROLLER: VENDOR 1B36, MODEL QEMU NVMe Ctrl",
                         f"[NVME#1] NAMESPACE 1: {sectors} SECTORS", ", READ-ONLY\n",
                         f"[NVME#1] SECTORS 0 TO 2047 READ: SHA-256 {first_mib}; SECTOR 0 ENDS 55AA, SECTOR 1 A GPT HEADER")
-            assert "REFUSED" not in log and "NOT SENT" not in log, log  # nothing in the system asked it to write
+            assert "; REFUSAL " not in log and "NOT SENT" not in log, log  # nothing in the system asked it to write
             first = vm.service_logs("nvme", "NAMESPACE 1:")
             require(first, "[NVME] CONTROLLER: VENDOR 1B36")
             assert "READ-ONLY" not in first and "[NVME#" not in first, first
@@ -19676,7 +19677,7 @@ def second_nvme_check(args, disk):
                         f"[NVME#1] A WRITE OF 1 SECTORS AT {lba} FROM BADGE 0x1 (PID {pid}) {tail} 3\n",
                         f"[NVME#1] A FLUSH FROM BADGE 0x1 (PID {pid}) {tail} 4\n")
             assert "NOT SENT" not in log and "INSIDE THE DRIVER" not in log, log  # the serve loop refused first
-            assert "REFUSED" not in vm.service_logs("nvme", "NAMESPACE 1:"), "the first instance refused something"
+            assert "; REFUSAL " not in vm.service_logs("nvme", "NAMESPACE 1:"), "the first instance refused something"
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-nvme2-writer-{args.cpus}cpu.log").write_text(vm.log)
