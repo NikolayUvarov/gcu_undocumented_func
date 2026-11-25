@@ -1,10 +1,10 @@
-# 213-DRV-0086 — `display`: the Ryzen's second output lit, first with the engine's own test pattern
+# 213-DRV-0086 — `display`: the Ryzen's second output lit, first with the engine's own test pattern — done
 
-**Type:** driver (a new `display` service) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-21) · **Blocked by:** [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md) (the route), KRN (the device's grant; later the compositor) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (a new `display` service) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — (it was [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)'s route and KRN's grant, both given) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
-The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)). This task is the first light on the second output, by the route [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md) writes down.
+The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)). This task is the first light on the second output, by the route [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md) writes down.
 
 ## Plan
 
@@ -27,13 +27,18 @@ Each step ends with something a person or a log can check, and none of it is pro
   are this criterion:
   - [x] the HDMI monitor shows the colour squares at 1920x1080 (CTA VIC 16, 148.5 MHz, DVI signalling), and the DP
     monitor shows MIND Core's screen after the stages; the maintainer saw both (2026-11-22, below);
-  - [ ] the DP monitor keeps MIND Core's screen through every stage, with no flicker, blank or loss of signal. On
-    2026-11-22 it was not watched during the stages: open.
+  - [x] the DP monitor keeps MIND Core's screen through every stage, with no flicker, blank or loss of signal. On
+    2026-11-22 it was not watched during the stages. Boot 94 (2026-11-22, 16:03 UTC; 213-DRV-0096): the stages were
+    taken back and run again twice, all 16 of them each time (first light's 1 to 8 among them) in the production
+    order at 3440x1440 in HDMI, and the maintainer said «первый экран не мограл»: DP-2 did not blink. His words, not
+    the registers; that machine and its two monitors (MC-12.1).
 - [x] Host cases cover the mode's timing arithmetic, the EDID parser and the order of the register writes against a
   model of the blocks (`tests/display_host.rs`, `display_light_host.rs`; on the Ryzen's tables, the watched run's 95
   writes in its order).
-- [ ] With KRN's part: MIND Core's screen on both monitors. Step 4 is its own task since 2026-11-22:
-  [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
+- [x] With KRN's part: MIND Core's screen on both monitors. Step 4 is its own task since 2026-11-22:
+  [213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md). Met there: boot 76, the compositor
+  mirroring DP-2 onto HDMI-A-1, and the maintainer's «На обоих экранах изображение одинаковое (второе следует за
+  первым)» (0092's fourth criterion).
 
 ## Progress (2026-11-21)
 
@@ -62,7 +67,7 @@ MSI-X bytes. Two cases: every offset of the range refused, every register of eve
 step of first light inside the engine.
 
 Tested on LEG9 only: the 15 cases pass, and the three modules build as `#![no_std]` with `-D warnings`. Nothing of it
-has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md)),
+has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)),
 not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command tables need an interpreter (or their
 writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core
 (step 1, with KRN's grant).
@@ -784,6 +789,30 @@ First as a mirror: the compositor copies the same changed pixels into both scree
 extended: a second screen of its own, for which `wm` (APP) needs its size and place from the compositor, to be asked
 of APP then. `display` writes its side against KRN's interface.
 
+## Resolution
+
+- **What was built:** `display`, the Radeon's display engine driver, steps 1 and 3:
+  - step 1, the firmware's state read in batches (`display/src/batches.rs`), all of them read-only, the DMCUB's state
+    in batch 8;
+  - the ATOM interpreter (`display/src/atom.rs`), which runs the VBIOS's tables 12, 4 and 76 on the CPU;
+  - step 3, first light on HDMI-A-1 in eight stages through a guard that refuses the firmware's pipe and everything
+    off the route, each stage undone on a failure (`display/src/light.rs`, `dcn.rs`).
+- **Where:** in `main` through its landings, the last cfc5694b8 ("Land claude/213-DRV-0086-display-reads-the-engine
+  (f3b2633c8d72) through the landing queue"). Steps 2 and 4 and what came after are their own tasks: 213-DRV-0092
+  (the picture and the compositor), 0095 (the EDID's mode), 0096 (hot-plug), 0098 (the production order), 0103 (the
+  standing check), 0099 (the machine's setting, open).
+- **Host cases:** `tests/display_host.rs`, `display_atom_host.rs`, `display_batches_host.rs` and
+  `display_light_host.rs`; with the Ryzen's tables, the watched run's 95 writes in its order (MC-12.2).
+- **On the Ryzen,** that machine with its two monitors (MC-12.1):
+  - step 1 read without a hang from 2026-11-21 (runs 1 to 7, then batch 8: the DMCUB held in reset);
+  - first light watched on 2026-11-22 (boot 66, release 202611220438): the colour squares on HDMI-A-1 at 1920x1080 in
+    DVI, and MIND Core's screen on DP-2 after the stages, by the maintainer's eye;
+  - DP-2 through the stages: boot 94, «первый экран не мограл», through two take-backs and relights of all 16 stages,
+    in the production order at 3440x1440 in HDMI (213-DRV-0096). Not by eye through the 1920x1080 DVI first light of
+    boot 66, which he did not watch.
+- **Not shown:** table 12's long path (PHY A cold), which needs a start not through Linux: 213-DRV-0097, the
+  maintainer's decision; another machine or monitor (MC-12.9).
+
 ## Related
 
-[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
+[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
