@@ -35,7 +35,16 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
   undriven one "hdmi1".
 - Nothing of PHY B, of DIG back end B, of DDC2 or of HPD 2 has been read on this machine by MIND Core. What the
   firmware leaves there is not known.
-- There is one spare pipe: the firmware's picture takes one, the second screen the other. So one HDMI socket at a time.
+- **Corrected 2026-11-27:** this line said there is "one spare pipe", and that is wrong. The engine has four pipes:
+  - DCN 2.1 has four timing generators, OPPs, HUBPs and DPPs and five stream encoders (`dcn21_resource.c`, `res_cap`;
+    `pipe_count` is four less any pipe fused off);
+  - the firmware leaves all four HUBPs and DPPs powered, HUBP1 to HUBP3 blanked on their own idle OTGs (the survey's
+    "Power");
+  - Linux drove two monitors on all four.
+
+  The firmware's picture takes one pipe and the second screen another. That `display` lights one HDMI socket at a time is
+  its own limit, for now: one second pipe, and one second screen offered (`display.wit` 1.3). Both at once is
+  [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
 
 ## Plan
 
@@ -47,7 +56,7 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
    follower of the plug (`start.rs`), in the guard of what may be written, and in the tables' parameters. Each takes
    the output, with host cases for both.
 3. **Which socket.** `display` follows both senses and lights the socket that has a monitor. With a monitor in each,
-   the first lit stays; the other is named in the log as not driven, with the reason (one spare pipe).
+   the first lit stays; the other is named in the log as not driven, with the reason (one socket lit at a time, for now).
 4. **The guard.** The registers of the second socket's PHY, back end, DDC and HPD join what may be written only for
    that output; the firmware's pipe and the other socket's blocks stay refused. A host case for each refusal.
 5. **On the Ryzen, in stages as HDMI-A-1 was:** the read-only run; the EDID read; first light with the test pattern;
@@ -55,8 +64,8 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 
 ## Acceptance criteria
 
-- [ ] Step 1 reads the second socket's blocks, with host cases that it writes nothing; its values from the Ryzen
-  recorded here.
+- [x] Step 1 reads the second socket's blocks, with host cases that it writes nothing; its values from the Ryzen
+  recorded here (boot 108, the socket empty and with the monitor in it).
 - [ ] The EDID read over DDC2, with host cases on the model of the engine; on the Ryzen its checksums good and the
   engine left as found.
 - [x] Host cases: the stages on a model with the monitor on the second socket; the guard's refusals for the first
@@ -84,7 +93,7 @@ and no value of the second socket has been read on the machine yet.
   - The tables' parameters come from the choice's output (`dcn::first_light`, `Light::off_call`), as before.
 - **Which socket** (`start.rs`, `choose`, `Follower`; `hpd.rs`, `Settle`, `Pair`):
   - Steps 2 to 4 take the socket whose HPD senses a monitor. With a monitor in each, HDMI-A-1 is taken first and
-    HDMI-A-2 is named as not driven, with the reason (one spare pipe).
+    HDMI-A-2 is named as not driven, with the reason (`display` lights one HDMI socket at a time, for now).
   - After them both senses are followed. The lit socket's unplug takes it back, and the other socket lights if its
     monitor is in. A plug while none is lit lights its socket; a plug into the socket not lit is named.
   - HDMI-A-2's plug or unplug while it is not driven reads batch 12 again.
@@ -159,10 +168,10 @@ The DDC2 fields lie where DDC1's do. `DC_I2C_DDC_SELECT` is 1 for DDC2: its engi
 - The choice and the follower log, as the case is:
   ```
   HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)
-  HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND THERE IS ONE SPARE PIPE
+  HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW
   HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 READ): SENSE s; THE SECOND OUTPUT <Lit|Dark|Stopped> ON HDMI-A-1
   HPD 2 IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED
-  HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND THERE IS ONE SPARE PIPE
+  HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW
   HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN
   HDMI-A-1: ITS MONITOR TAKEN OUT, NOT DRIVEN        (only while HDMI-A-2 is lit)
   ```
@@ -245,7 +254,7 @@ session's.
      `A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`.
    - With a monitor in each socket:
      - at start: `HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; ...`;
-     - while HDMI-A-2 is lit: `HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND THERE IS ONE SPARE PIPE`;
+     - while HDMI-A-2 is lit: `HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`;
      - HDMI-A-2 lit once HDMI-A-1's monitor is out.
 
 **Open questions, and what was not written for lack of evidence.**
@@ -362,6 +371,138 @@ bits 18-19 are `RDPCS_PHY_DP_MPLLB_V2I` (`dpcs_2_1_0_sh_mask.h`).
   20 and 21, not the field in question.
 - The real image was fetched from the machine's own log volume to the owner session's private directory for these
   host cases; it is not in the repository.
+
+## The read-only run, first part: nothing in the second socket (boot 108, 2026-11-26)
+
+Release 202611262015, boot 108: `claude/DRV-ryzen-bench-42-hdmi2` abe47faa4, which is `main` 9d6feac696 with this
+branch, 213-DRV-0111 and the bench-only line of `init`. `HDMI_A_2` is `Read`. The monitor was in the first socket, the
+second empty. It holds for that machine and that release (MC-12.1). Through QEMU before it: "x86: keys, shell, tools",
+"x86: services, storage, audio" and the update from the release before.
+
+**Batch 12, as logged at 3.6 to 3.7 s, before step 3 wrote anything:**
+- `B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 0, ENABLED 1; INT_STATUS 00000000, CONTROL 10FA09C4`
+- `B12 HDMI-A-2 DIG B: FE FROM OTG 0, SYMCLK_FE_ON 0 (00000000); BE ENABLED 0, MODE 1, FROM FE MASK 0, SYMCLK_BE_ON 1 (00010000, 00000100)`
+- `B12 HDMI-A-2 PHYPLLB: PIXCLK_ENABLE 0, DEEP COLOR 0 (00000000)`
+- `B12 HDMI-A-2 DDC2: HW STATUS 0 (00000000); ENABLED 1, TIME LIMIT 48, PRESCALE 480, THRESHOLD 2 (SPEED 01E00002, SETUP 30000040)`
+- `B12 HDMI-A-2 DDC2 PADS: AUX MODE 0; CLOCK MASK 0 EN 0 A 0 Y 1; DATA MASK 0 EN 0 A 0 Y 1 (MASK 00000000)`
+- `B12 THE DDC PADS' I2C MODE: DDC1 1 DDC2 1; AUX PAD RXSEL 1:1 2:1 (DC_GPIO_AUX_CTRL_5 0001F2AA, PHY_AUX_CNTL 00155401)`
+- `B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN`
+
+**What they say:**
+- No read hung, and all 15 registers answered.
+- HPD 2 is enabled and senses no monitor, as the socket was empty.
+- DIG back end B is not enabled and PHY PLL B's pixel clock is off: nothing drives the second socket.
+- The I2C engine's DDC2 line is idle and set up (speed and setup hold values, not zeros).
+- **Open question 2 is answered for this start:** DDC pad 2 is in I2C mode already (`DDC2 1`, `AUX PAD RXSEL … 2:1`),
+  as pad 1 is. No write of those two registers is needed before an EDID read over DDC2.
+- All of it is after a start out of Linux, as every boot of this machine so far.
+
+**HDMI-A-1 beside it, unchanged:** `STEP 1 DONE: 11 OF 11 BATCHES READ, 143 REGISTERS`, the second screen offered
+2012.8 ms after step 3 began, `HPD 1 FOLLOWED …: SENSE 1, THE SECOND OUTPUT Lit`, and
+`HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 READ): SENSE 0; THE SECOND OUTPUT Lit ON HDMI-A-1`.
+
+**The second part, the same boot: the monitor moved into the second socket and back** (the maintainer's hands, about
+21:11 UTC; uptime in seconds).
+- 3186.310 `STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR`, taken back in 29.9 ms.
+- 3191.412 `HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)`
+- Batch 12 with the monitor there, 15 of 15 read, nothing written:
+  - `B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS FF000013, CONTROL 10FA09C4`
+  - DIG B, PHY PLL B, DDC2 and the pads exactly as with the socket empty: `BE ENABLED 0`, `PIXCLK_ENABLE 0`,
+    `HW STATUS 0`, both pad lines read high (`Y 1`), `DDC1 1 DDC2 1`.
+- 3200.342 `HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN`, after 8.9 s there; `SENSE 0`, `INT_STATUS FF0FF001`.
+- 3205.881 `A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`, on HDMI-A-1 again.
+
+**What it settles:**
+- **The socket the maintainer calls the second one is HDMI-A-2**, VBIOS path 1: HPD 2 sensed his monitor there.
+- A monitor there changes nothing in DIG B, PHY PLL B or the DDC2 engine by itself: the firmware and Linux have set up
+  nothing for it on a boot where Linux did not see a monitor in that socket.
+- Nothing was written for the second socket, and HDMI-A-1 lit again afterwards as before.
+
+**Seen again, the second time of two:** when the cable goes into the second socket, the hub on xHCI 1's port 1
+(05E3:0608) drops and comes back, with the mouse's receiver and the serial converter behind it (3190.902 s `THE
+CONVERTER IS GONE`, 3191.067 s `PORT 1: CONNECTED`), half a second before HPD 2's sense. On boot 107 it was 2054.3 s.
+Whether that hub is in the monitor is still asked of the maintainer. It costs the serial link about a second.
+
+**Before first light there, known and not known:**
+- **PHY B is most likely cold.** Table 12 then takes its long path (530 steps, 111 writes on the model with the real
+  image), which has never run on this hardware for any PHY ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
+  Whether it is cold is said by stage 2's own line; step 1 does not read RDPCS.
+- So first light on the second socket is to be made with a person at the machine, in the survey's order and undone
+  after its stages on the first run.
+
+## Third round (2026-11-27): the true reason, the socket not taken read, the socket taken first
+
+After boot 108's read-only run, with the maintainer's second monitor in HDMI-A-1 and a third in HDMI-A-2.
+
+**1. The reason a socket is not driven, corrected.**
+- "One spare pipe" was wrong. DCN 2.1 has four pipes (`dcn21_resource.c` `res_cap`), the firmware leaves all four HUBPs
+  and DPPs powered, and Linux drove two monitors on all four.
+- The lines now say `... AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`: `display`'s own limit, one second pipe
+  and one second screen (`display.wit` 1.3).
+- Both at once is [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), a design for now.
+
+**2. The EDID of a socket with a monitor but not taken** (`start.rs`: `untaken_edid`, `engine_now`, `Naming`;
+`batches.rs`: `read_one`).
+- **When it is read:**
+  - from level `Edid` on, where HPD senses a monitor in the socket steps 3 and 4 do not take (a monitor in each socket,
+    or one plugged into the socket not lit);
+  - over its DDC line as step 2 reads one, the engine given back as found, every line named for the socket.
+- **At start** it is read right after the taken socket's own step 2, before any stage.
+- **At a plug** into the socket not lit, the engine is read again first: batches 1 and 11, and batch 12 for HDMI-A-2,
+  read only.
+- **At level `Read` there is no transaction.**
+- **What a transaction on line 1 touches:**
+  - the engine's shared `DC_I2C_CONTROL`, `ARBITRATION` and `TRANSACTION0/1`, put back as batch 11 found them, the engine
+    released;
+  - its `DATA` buffer;
+  - line 1's own `DDC2_SPEED`, `DDC2_SETUP` and `DC_GPIO_DDC2_MASK`, put back as batch 12 found them.
+- **What it does not touch:**
+  - line 0's registers, which step 2's guard refuses;
+  - nothing a lit TMDS output reads: the DIG, PHY, OTG, OPP, HUBP and HPD blocks;
+  - SCDC is not used (no scrambling at or below 340 MHz).
+  - Line 0's own set-up, and with it its EDID detection, is never written.
+  - A correction to commit 2429a1343's message: the `0x30000040` it gives is DDC2's `SETUP` from boot 108, not DDC1's.
+- **The failures:** an engine held by the hardware is refused before any write; a NACK or a timeout gives the engine
+  back as any failure does.
+- **Host cases:**
+  - a monitor in each at `Edid`: HDMI-A-1's writes and offer the same as without the second monitor, DDC2's read before
+    any stage, only DDC2's registers written and all as found;
+  - `Read`: no transaction;
+  - a monitor plugged into HDMI-A-2 while HDMI-A-1 is lit, with an EDID, a NACK and a held engine: no engine write,
+    HDMI-A-1 still lit, eleven minutes of the standing check clean, the engine as found.
+
+**3. `HDMI_FIRST`, the socket taken when both have a monitor** (`setting.rs` `HdmiFirst`, `main.rs`):
+- committed `HdmiA1`, as before;
+- with `HdmiA2`, HDMI-A-2 is taken first where `HDMI_A_2` lets display take it, and HDMI-A-1 stays dark, named, its EDID
+  read as a socket not taken;
+- with `HDMI_A_2` at `Read` it cannot take HDMI-A-2, and HDMI-A-1 is taken.
+- Host cases both ways.
+
+**The lines at level `Edid` with a monitor in each socket** (production order, `HDMI_FIRST` `HdmiA1`):
+```
+HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW
+D STEP 2 DONE: ...                                    (HDMI-A-1's own EDID, as before)
+HDMI-A-2 NOT TAKEN: ITS EDID READ OVER DDC2 ALL THE SAME, THE I2C ENGINE GIVEN BACK AS FOUND; NOTHING ELSE OF IT WRITTEN
+HDMI-A-2: D STEP 2 DONE: n BLOCKS READ (m BYTES) IN ... US, ...; k WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCHES 11 AND 12 READ THEM
+HDMI-A-2: D EDID v.r, FNV-1A ...: MMM PRODUCT pppp, yyyy, "NAME"; ...
+HDMI-A-2: D PREFERRED: WxH AT f HZ, k KHZ, IN ...
+HDMI-A-2: D AN HDMI SINK: ...                         (or HDMI-A-2: D NO HDMI BLOCK: ...)
+```
+- A failure reads `HDMI-A-2: D STEP 2 NOT DONE: <why>; STEPS 3 AND 4 GO ON WITHOUT IT`. Its detail comes first in the
+  production order: `HDMI-A-2: D STOPPED: ...`.
+- A monitor plugged into HDMI-A-2 while HDMI-A-1 is lit gives the `NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS
+  LIT, AND DISPLAY LIGHTS ...` line, then the `B1`, `B11` and `B12` reads (the B12 notes logged), and the same
+  `HDMI-A-2 NOT TAKEN` and `HDMI-A-2: D ...` lines.
+- With `HDMI_FIRST` `HdmiA2` the roles swap: `HDMI-A-1 NOT DRIVEN: HPD 1 SENSES A MONITOR THERE TOO; HDMI-A-2 IS TAKEN
+  FIRST (HDMI_FIRST HDMI-A-2), ...`, then `HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, TAKEN FIRST; HDMI_A_2 <LEVEL>: ...`,
+  and `HDMI-A-1 NOT TAKEN: ITS EDID READ OVER DDC1 ...` with `HDMI-A-1: D ...` lines.
+
+**How the bench tree sets them**, in `display/src/main.rs`, uncommitted, as the other switches are:
+- `const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Edid;`
+- `const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA2;` (to take HDMI-A-2 first)
+
+The build's first line then names them: `A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 EDID HDMI_FIRST HDMI-A-2; ONLY WHAT
+LIGHT DOES CHANGES`.
 
 ## Related
 

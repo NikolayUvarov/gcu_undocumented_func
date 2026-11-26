@@ -426,7 +426,7 @@ What the model showed about the undo, with the Ryzen's tables:
 ## HDMI-A-2, the second HDMI socket (213-DRV-0112)
 
 `display` takes HDMI-A-2 (path 1: PHY B, DIG back end B, DDC line 1, HPD 2) when its HPD alone senses a monitor, as far
-as the build's `HDMI_A_2` switch lets it; HDMI-A-1 is taken first when both do (one spare pipe). Host cases only: none of
+as the build's `HDMI_A_2` switch lets it; HDMI-A-1 is taken first when both do: display lights one HDMI socket at a time, for now. That is display's own limit (one second pipe, one second screen in `display.wit` 1.3), not the engine's: DCN 2.1 has four pipes (`dcn21_resource.c`: four timing generators, OPPs, HUBPs and DPPs), and the firmware powers all four ("Power" above). Host cases only: none of
 it has run on the Ryzen, and nothing of the second socket has been read there yet.
 
 - **Read first: step 1's batch 12**, after the eleven, whole in either order, never written: HPD1_ `DC_HPD_INT_STATUS` and

@@ -468,6 +468,30 @@ pub fn read_second(bus: &mut impl Bus, allowed: bool, out: &mut dyn Out, store: 
     report
 }
 
+/// One batch read on its own in `order`, its values kept in `store` and the batches' count left as it is (213-DRV-0112:
+/// HPD 1 and the I2C engine as they are now, before an EDID read of a socket not taken). Read only.
+pub fn read_one(bus: &mut impl Bus, batch: u8, order: Order, out: &mut dyn Out, store: &mut Store) -> Report {
+    out.part();
+    let mut known = Known::default();
+    let list = plan(batch, &known);
+    let list = if order == Order::Production { list.used() } else { list };
+    let mut report = Report::default();
+    out.line(format_args!("B{} {}: READING {} REGISTERS NEXT", batch, title(batch), list.len()));
+    out.pause(PAUSE_BEFORE_READ_MS);
+    let mut values = Values::new();
+    for n in list.iter() {
+        let v = bus.read(n.reg);
+        match v {
+            Some(v) => { out.line(format_args!("B{} {} = {:08X}", batch, n, v)); report.registers_read += 1; store.set(n.r, n.inst, v); }
+            None => out.note(format_args!("B{} {}: NOT MAPPED, NOT READ", batch, n)),
+        }
+        values.push(n, v);
+    }
+    summarize(batch, &values, &mut known, out);
+    report.batches_read = 1;
+    report
+}
+
 fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut dyn Out) {
     if batch == 4 && known.hubp_powered.is_none() {
         let all = every_hubp();
