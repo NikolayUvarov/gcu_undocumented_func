@@ -126,7 +126,7 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 
 ## Acceptance criteria
 
-- [ ] NET's answer on steps 1 to 3, and this note revised to it.
+- [x] NET's answer on steps 1 to 3, and this note revised to it. (2026-11-26: the section "NET's answer" below.)
 - [x] LATE_ANSWER in, the driver unchanged with it committed.
 - [x] SEND_BEHIND_LATE in with its host cases; the rtw89 host files and the release build pass.
 - [ ] If run on the bench: compared by paired minutes on the Ryzen (MC-12.1), with what it shows and does not.
@@ -388,9 +388,29 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 - **With no typing at all,** the link's shell runs `ping`: `ping -f -s 1472 -c 500 <host>` sends the next request at its reply, one full frame at a time. That gives a frame's round trip, not a stream's rate (boot 99's runs: medians 6 to 25 ms). Whether this PC answers ICMP echo through Windows' firewall is not known; the gateway 192.168.2.1 does.
 - **Not a tool to write:** netbench is the smallest that measures a stream. Only its driver count wants changing, and that is NET's.
 
+## NET's answer (2026-11-23 to 2026-11-25), and what it changes here
+
+NET answered in `DRV/2026-11-23T0536Z-NET-…` on `internal-dev-messages` and in its tasks:
+
+| Asked | NET's answer | State |
+|---|---|---|
+| Step 1: a `busy` answer is not a failed frame | [801-NET-0095](801-NET-0095-a-busy-radio-loses-no-frame.md): `wlan` holds the frame and those after it in order, up to 16 for up to 1 s each, offers them again every millisecond, and counts no rate for a frame not sent | in `main` since round 175; the Ryzen's run is left |
+| `wlan`'s 10 ms wait between frames (DRV's message of 18:00 UTC) | [801-NET-0094](801-NET-0094-wlan-picks-up-the-radios-frames-without-its-idle-wait.md): the next frame at once when a send was just answered and another is ready | in `main` since round 175; the Ryzen's run is left |
+| Where a stopped upload waits | [801-NET-0093](801-NET-0093-a-send-that-stops-says-which-side-holds-it.md): `NOTHING ACKNOWLEDGED` and the card's minute line | in `main` since round 175; the Ryzen's run is left |
+| Step 2: a late answer says `pending` (a minor of `wlanhw.wit`) | later, not in 801-NET-0095 | no task yet |
+| Step 3: a window of frames in flight (a major of `wlanhw.wit`) | later, not in 801-NET-0095 | no task yet |
+
+**What that changes in the driver's side:**
+- **Step 1 needed nothing of the driver,** as written above, and nothing was changed.
+- **`LATE_ANSWER` stays `NotAcknowledged`** until `wlanhw.wit` has the outcome (step 2).
+- **`SEND_BEHIND_LATE` has less to mend.** It was written to spare the frames a hold cost while every refused send was a lost frame: 135 refusals fell to 19 of about 6400 in the bench minutes of 2026-11-22. With 801-NET-0095 a refused send is no longer lost. What the switch still gives, if anything, is the time a frame waits behind a held one. That is the bench comparison of the last criterion, to be made on a boot with NET's three changes in.
+- **`BEGIN_LIGHT`** (branch `claude/213-DRV-0104-begin-light`, not in `main`) is not run yet either.
+
+**The next run on the Ryzen** (one boot from `main`, the lines to NET): uploads as on 2026-11-22 (4 MiB and 2 MiB to the LAN: 63, 63 and 61 KiB/s then, and one that stopped; the table in `NET/2026-11-22T1955Z-DRV-…`), `[NETSTACK] CARD … IN THE LAST MINUTE` and any `NOTHING ACKNOWLEDGED`, and `wlan`'s drop lines over a download. Only then the switches of this task, by paired minutes.
+
 ## For a successor (state on 2026-11-22, 19:15 UTC)
 
-`S` is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad. Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s and [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md)'s sections "For a successor".
+`S` is the session's scratchpad: /tmp/claude-1000/-mnt-c-common-virtual-Culture-gcu-undocumented-func/4c527436-e074-4262-82a9-b8ea9d807c88/scratchpad. Everything before this afternoon is in [213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md)'s and [213-DRV-0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done)'s sections "For a successor".
 
 **Branches** (both pushed):
 - `claude/213-DRV-0102-floor-and-answer` (worktree S/a-wifi2): main 7346ab3d5 merged at afb343dfc; MINUTE_DETAIL at 4abae4eaa; then text only (this section, boot 99's figures, the LAN uplink). The landing candidate. On 4abae4eaa, LEG9: `02_build.sh` success; the full `scripts/host_tests.sh` with MIND_SSHD exit 0, 265 Rust result lines, 6687 passed, 0 failed, 22 ignored (its log: /home/un/.local/share/mind-bench/wifi/full-4abae4eaa.log). The owner posts the landing request.
@@ -422,4 +442,4 @@ Linux does 480 to 826 KB/s on the same channel in the same room (213-DRV-0102).
 
 ## Related
 
-[213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](213-DRV-0102-rtw89-wifi-detection-floor.md) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.
+[213-DRV-0091](213-DRV-0091-the-firmware-told-of-the-link.md) (the held frames, the six steps), [213-DRV-0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done) (the detection floor, boot 93's paired minutes), DRV's message to NET of 2026-11-22 14:40 UTC on `internal-dev-messages`.

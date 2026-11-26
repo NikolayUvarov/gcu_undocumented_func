@@ -52,7 +52,7 @@ The maintainer (2026-11-25): «закончить с поддержкой апп
   - the analog sound, [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md).
 - **Left for "each finding a closed task", `DRV`'s:**
   - the wired card: [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md);
-  - Wi-Fi: [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [0087](213-DRV-0087-rtl8852be-on-5-ghz.md), [0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md), [0091](213-DRV-0091-the-firmware-told-of-the-link.md), [0102](213-DRV-0102-rtw89-wifi-detection-floor.md) and [0104](213-DRV-0104-the-sends-answer-the-drivers-side.md);
+  - Wi-Fi: [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [0087](213-DRV-0087-rtl8852be-on-5-ghz.md), [0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md), [0091](213-DRV-0091-the-firmware-told-of-the-link.md), [0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done) and [0104](213-DRV-0104-the-sends-answer-the-drivers-side.md);
   - the second output: [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) and the tasks split from it.
   - `DRV` is asked (2026-11-25) which of these close 213 and which go on under [174](174-full-use-of-pc-hardware.md).
 - **Left, the kernel session's,** each waiting for one run on the Ryzen from `main`:

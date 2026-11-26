@@ -61,6 +61,7 @@ The maintainer (2026-11-25): «подготовить все для деплоя
   - the `devicetree` suite;
   - the 16550's host tests.
   It stays open for the phone's runs.
+- **The maintainer (2026-11-26):** «MOB будет делать работу на стенде - это не телефон, а плата разработки с добавленными компонентами». `MOB`'s work is on the bench's development board first, and what is the phone's alone waits for the phone ([requests-MOB.md](requests-MOB.md), the word on requests 2 and 3).
 - **Asked of `MOB`** ([requests-MOB.md](requests-MOB.md), requests 2 and 3):
   - the phone's card from `board_image.py`;
   - where Tow-Boot lives and what the card leaves free;
