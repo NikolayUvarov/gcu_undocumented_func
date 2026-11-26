@@ -41,7 +41,7 @@
 - [x] QEMU: the audio suites (`services,ahci,audio,tts,listen,hda,usbaudio,usbload,link,modes`) pass as before, and no client holds the sink there.
   - On the bench branch (`claude/700-BLT-bench` b1b4488a9 = this code with `init`'s three bench lines), "x86: services, storage, audio" PASSed in 1189 s (LEG9, x86, 4 CPUs, `scripts/ci_local.sh --only x86 --group ...`, 2026-11-26).
   - On the task branch at 0d5a11595, the same group PASSed in 1060 s (LEG9, x86, 4 CPUs, 2026-11-26).
-- [ ] On the Ryzen, with KRN's grant: `say` heard in the maintainer's headphones, then on the machine's own output once they are off.
+- [x] On the Ryzen, with the bench branch's grant (KRN's not in `main` yet): with the speaker listed as `audio`, `audio_gw: [AUDIO] THE OUTPUT GOES TO THE BLUETOOTH SINK (PID 77)`, then `A2DP: THE MACHINE'S OUTPUT GOES TO THE HEADPHONES`. The maintainer heard `say`'s phrase in his JBL Flip 5 (2026-11-26). *The way back to the machine's own output once the speaker is off was not tried there.*
 
 ## Related
 

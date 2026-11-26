@@ -35,8 +35,17 @@ A headset, a keyboard or a mouse accepts profile channels only on an authenticat
   - strangers refused;
   - the keys file read and written;
   - no key in the log.
-- [ ] On the Ryzen: the maintainer's headphones or keyboard pair (`PAIRING DONE`, `LINK KEY OF TYPE n KEPT`, `ENCRYPTED`).
-- [ ] With KRN's grant: the key survives a restart (`1 KEYS` at the next start, no pairing).
+- [x] On the Ryzen: the maintainer's speaker, a JBL Flip 5, paired (2026-11-26, 6954-6955 s): `SECURE SIMPLE PAIRING, ITS IO CAPABILITY 3, AUTHENTICATION 04`, `CONFIRMED 868820`, `PAIRING DONE (STATUS 00)`, `LINK KEY OF TYPE 4 KEPT`, `ENCRYPTED`.
+- [x] With the writable `data/bluetooth`: the key survived `bt_hci`'s restarts (`2 KEYS`, both devices `PAIRED`, the speaker connected and encrypted with its kept key, no pairing). *That was the bench branch's own `init` line; KRN's grant is not in `main` yet.*
+
+## Progress (2026-11-26)
+
+On the Ryzen, as the criteria say. The first pages were refused with `PAIRING FAILED (STATUS 18)` while the speaker was not in pairing mode.
+
+**Not tried:**
+- the passkey for a keyboard (`TYPE nnnnnn ON IT`);
+- legacy PIN pairing;
+- a key refused and paired again.
 
 ## Related
 

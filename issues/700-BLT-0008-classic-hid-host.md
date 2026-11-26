@@ -31,6 +31,12 @@ A Bluetooth keyboard or mouse is a HID device on L2CAP. Its input has to reach t
   - a mouse that reconnects and opens its own channels, and its report.
 - [ ] With KRN's grant, on the Ryzen: the maintainer's keyboard types in the shell, and a mouse moves the cursor.
 
+## Progress (2026-11-26)
+
+- **The report path is shown through LE, not through a classic device.** The maintainer's mouse is LE, so this task's classic HID host was not tried. With the bench branch's input privilege, its reports went through `bt_hci`'s path to the input (700-BLT-0009): `HID: n REPORTS …; INPUT CALLS … OK, 0 FAILED`, and the pointer and both buttons moved for the maintainer.
+- **For `main`:** the first report delivered is logged, then a tally once a minute (e4f5c307f).
+- **Not tried:** a classic Bluetooth keyboard or mouse, and the maintainer's Apple keyboard.
+
 ## Related
 
 [700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md), [700-BLT-0009](700-BLT-0009-le-pairing-and-hid-over-gatt.md) (HID over GATT).

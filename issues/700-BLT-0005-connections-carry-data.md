@@ -52,9 +52,9 @@
   - a page that fails and is tried again;
   - strangers refused.
 - [x] `bt_hci` builds for x86_64 and aarch64 with the stack linked.
-- [ ] On the DEXP: the stack's setup is accepted (`BR/EDR BUFFERS: …`, `LE BUFFERS: …`, `FEATURES …`), and no command fails. A page to an address that does not exist fails and is tried again.
-- [ ] The `usb`, `keys` and `link` QEMU suites pass with this `bt_hci` (no controller: it waits and says none).
-- [ ] On the Ryzen, with a device of the maintainer's: a link made and an L2CAP channel opened (the bench, see 700-BLT-0007 and 0008).
+- [ ] On the DEXP: the stack's setup is accepted (`BR/EDR BUFFERS: …`, `LE BUFFERS: …`, `FEATURES …`), and no command fails. A page to an address that does not exist fails and is tried again. *Not met: the DEXP did not come back from the release, as below.*
+- [x] The `usb`, `keys` and `link` QEMU suites pass with this `bt_hci`; no controller, so it waits and says none (LEG9, x86, 4 CPUs, at e05c89e10 and on the bench branch).
+- [x] On the Ryzen, with the maintainer's devices: links made, L2CAP channels opened (2026-11-26, below).
 
 ## Progress (2026-11-25, UTC)
 
@@ -104,6 +104,29 @@
 - The sequences recorded there:
   - **quiet:** `RESET`, `READ_LOCAL_VERSION`, `READ_ROM_VERSION`, n × `DOWNLOAD`, `RESET`, `READ_LOCAL_VERSION`, `READ_BD_ADDR`, `SET_EVENT_MASK`, `WRITE_INQUIRY_MODE`, then nothing;
   - **active:** `1003 1005 0C01 0C56 0C45 0C24 0C13 080F 0C18 0C1A 2001 0C6D 2002`, then `0405` for a device listed. Events are polled at 50 a second, the bulk IN endpoint never without a link.
+
+## Progress (2026-11-26): the Ryzen, the maintainer's JBL Flip 5 and Logitech MX Vertical
+
+**The setting.**
+- The Ryzen (MIND agent `mind_bc5d2f3b851df7a6`), its RTL8852B (`0BDA:B85B`) patched as before.
+- Release 202611260856 = `claude/DRV-ryzen-bench-38-bt` a97b4fc9e: main 6230e1fdb, this branch at 6c19f818d, and the bench-only `init` lines for the input privilege, `data/bluetooth` and the audio sink.
+- Then `bt_hci` replaced over the cable by the diag builds (diag1 to diag4, a97b4fc9e with this branch's later commits), by the owner session. The Wi-Fi was on channel 100 (5 GHz) for most of the runs.
+- The devices list held the maintainer's two devices only: `28:FA:19:5C:A3:B7 audio` (tone, then not) and `C4:E7:E1:93:0C:C4 le-hid random`. The logs are the owner session's (`S/win/bt-*.txt`, `bt-diag*.txt`, `S/handoff/bench-log.txt`).
+- Evidence for that machine, that controller and those two devices only (MC-12.1).
+
+**What it showed for 0005.**
+- The setup was accepted: `BR/EDR BUFFERS: 6 OF 1021 BYTES`, `LE BUFFERS: 8 OF 251 BYTES`, `FEATURES […]: SECURE SIMPLE PAIRING true, LE true`.
+- Pages and LE connections went to the devices listed only, and were tried again: `NOT CONNECTED (STATUS 04), TRIED AGAIN IN 15 S`, `NOT ADVERTISING: CANCELLED`.
+- Links were made both ways, L2CAP channels opened both ways (PSM 0x0019 ours, 0x0001 and 0x0017 the speaker's), and an LE parameter request was applied.
+- The listening rounds ran for hours.
+
+**Mended from the bench.**
+- **No role switch** (2df560c70). The speaker had taken the central's role at every connection, so the controller was a peripheral to it and the central of the mouse's 7.5 ms link. The sound then crackled while the mouse moved, with 5 of 6 buffers held. The source now stays the central: link policy 0, no role switch in its page, an audio sink that pages us accepted as central. Under diag4 the maintainer: «не трещит» (no crackle) with the mouse moving; the page connected in 0.15 s with no `ROLE PERIPHERAL`.
+- **No sniff, and the mode logged** (9fee4ce8b).
+
+**Not shown.**
+- **A page after `bt_hci` is ended.** On the release build three pages over 75 s went unanswered. The speaker answered at the third try, 2 min 20 s after. Under the diag builds (no sniff) the first page after each of three kills connected. The cause is not shown.
+- **The DEXP.** It did not come back from this branch's earlier release (above), and has not been tried again.
 
 ## Related
 

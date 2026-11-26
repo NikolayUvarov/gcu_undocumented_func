@@ -134,9 +134,9 @@ The RTL8852B Bluetooth controller's `rtl_bt/rtl8852bu_fw.bin` (`bt_hci`, 700-BLT
 
 ### Bluetooth: specification data in the host stack
 
-`bt_host` (700-BLT-0005 and on) is written from the Bluetooth SIG's public specifications: Core 5.3, A2DP 1.3.2, AVDTP 1.3, HID 1.1. No code of BlueZ, Linux or libsbc was taken. Two tables are the specification's own data:
+`bt_host` (700-BLT-0005 and on) is written from the Bluetooth SIG's public specifications: Core 5.3, A2DP 1.3.2, AVDTP 1.3, AVRCP 1.6.2 with AVCTP 1.4, HID 1.1. No code of BlueZ, Linux or libsbc was taken. Two tables are the specification's own data:
 - **The SBC encoder's prototype filters** (`bt_host/src/sbc.rs`) are tables 12.23 and 12.24 of the A2DP 1.3.2 specification (Appendix B), scaled by 2^30. They were read from the specification's text, not typed by hand.
-- **The SDP record of the A2DP source** (`bt_host/src/sdp.rs`) uses the Assigned Numbers' UUIDs and the profile's version numbers.
+- **The SDP records** (`bt_host/src/sdp.rs`) of the A2DP source (A2DP 1.3.2 figure 5.1) and of AVRCP's controller (AVRCP 1.6.2 table 8.1) use the Assigned Numbers' UUIDs and the profiles' version numbers.
 
 The SBC test vectors (`bt_host/tests/data/sbc_*.hex`) are this encoder's output. They were checked once by decoding with `sbcdec` from Ubuntu's `sbc-tools` 2.0 (libsbc, LGPL/GPL), used as a tool only and never part of the repository or an image.
 

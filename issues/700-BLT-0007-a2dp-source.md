@@ -48,8 +48,30 @@ Headphones need the A2DP profile, its codec SBC (mandatory for every sink), AVDT
   - AVDTP as initiator, down to a second of paced media packets;
   - AVDTP as acceptor, with a refusal and general reject;
   - SDP searches, attributes, continuation and errors (`bt_host/tests/sdp_hid.rs`).
-- [ ] On the Ryzen: the maintainer's headphones play the tone (`A2DP: STREAMING`, `A2DP: SBC … BITPOOL …`, heard in both ears).
-- [ ] With DRV's sink: `say` in the headphones.
+- [x] On the Ryzen: the maintainer's JBL Flip 5 played the tone ("слышны гудки") once AVRCP's absolute volume was there (diag3, 2026-11-26).
+- [x] With DRV's sink (700-DRV-0110): the machine's output in the speaker. The maintainer heard `say`'s phrase («да было слышно… Фраза прозвучала»). *This was with the bench branch's `init` line for the sink client; KRN's grant is not in `main` yet.*
+
+## Progress (2026-11-26): the Ryzen and the JBL Flip 5
+
+**The speaker took the stream and played nothing, until it had AVRCP.**
+- The stream itself was right. Once a second (diag1): 54 packets of 7 frames, all completed, none held, 0 late.
+- The exact bytes for its capability `FF FF 02 28` decode with `sbcdec` to the tone (440 Hz left, 660 Hz right, −12 dBFS).
+- Every AVDTP signal was accepted (diag2). The speaker's capabilities, `010007060000FFFF022804020200`, offer SCMS-T. Content protection is the source's to configure, and is not configured.
+- The speaker opened AVCTP (PSM 0x0017) 3 s into the stream and registered for the playback status. The maintainer: its volume has to be given to it, and it gives its own back.
+
+**The mend: AVRCP (avrcp.rs).**
+- **Controller, category 2:** its events (`[0D]`); RegisterNotification of volume changes; SetAbsoluteVolume, 64 of 127 at first or `volume n` in the list.
+- **Target answers, as far as it asks:** the playback status INTERIM and CHANGED, GetCapabilities, GetPlayStatus.
+- **What it showed:** `THE SINK'S VOLUME 60 OF 127`, `THE SINK TOOK VOLUME 64 OF 127`, and its own button as `THE SINK'S VOLUME 68 OF 127 (CHANGED THERE)`, `72 …`.
+- **SDP:** a controller record, checked against AVRCP 1.6.2 table 8.1 (Bluetooth SIG, read 2026-11-26), but for its profile version, kept at 0x0104: AVRCP 1.4, whose absolute volume is what the stack does. The target record of diag3 and diag4 is dropped. Table 8.2 ties category 1 to the browsing channel and all of category 1's mandatory commands, which the stack lacks.
+- The bench runs had that target record. The final build, without it, is the bench's to check.
+
+**The crackle while the mouse moved:** mended by keeping the central's role (700-BLT-0005).
+
+**Not done.**
+- The machine's volume tied to the speaker's. It would be `audio_gw`'s levels; only the start value and the speaker's own changes are logged.
+- AVRCP browsing and metadata, HFP, and codecs other than SBC.
+- A stream beside a 2.4 GHz station: on channel 8 the Wi-Fi lost beacons while it ran. That is 213-DRV-0052's.
 
 ## Related
 

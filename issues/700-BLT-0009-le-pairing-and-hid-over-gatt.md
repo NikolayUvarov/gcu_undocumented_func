@@ -54,7 +54,23 @@ Written in `bt_host` (`smp_crypto.rs`, `le.rs`), linked into `bt_hci`.
   - a wrong confirm value and a short key refused;
   - GATT discovery down to a boot keyboard's notification;
   - a report map's keyboard ID.
-- [ ] On the Ryzen: an LE mouse or keyboard of the maintainer's works.
+- [x] On the Ryzen: the maintainer's Logitech MX Vertical works (2026-11-26).
+  - **Paired** in legacy Just Works (`ITS IO CAPABILITY 3, AUTHENTICATION 01, LEGACY PAIRING`), its LTK and identity kept.
+  - **HID over GATT** in the boot protocol (`HID SERVICE 0021-0037, 8 CHARACTERISTICS, BOOT PROTOCOL, REPORT MAP 97 BYTES`, `HID READY`).
+  - **Reconnected** with its key after a click woke it (`ENCRYPTING WITH ITS KEY`, `ENCRYPTED`).
+  - **Moved the pointer:** 24 to 125 reports a second, every input call OK; the maintainer confirms the pointer and both buttons. *That was with the bench branch's input privilege.*
+
+## Progress (2026-11-26): the bench
+
+**Mended:**
+- The link dropped (reason 08) 16 s into a stream. It no longer did once the source stayed central (700-BLT-0005).
+- The mouse asked its parameters again every 30 s while given a 5 s timeout for its 2.16 s. It is now given what it asks, raised only below 2 s.
+
+**Not done.**
+- **Resolving private addresses:** the IRK is not kept. The mouse used its static address.
+- **Our own keys:** no Identity Information is distributed by us.
+- **A sleeping mouse is found again only when a click wakes it,** as a bonded LE mouse behaves.
+- **Secure Connections on hardware:** the mouse paired legacy. Secure Connections is host-tested only.
 
 ## Related
 
