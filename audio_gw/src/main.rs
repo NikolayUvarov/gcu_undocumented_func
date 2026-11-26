@@ -13,6 +13,7 @@ use mind::ipc::Endpoint;
 use mind::sys::Error;
 use mind::mem::{self, Mapping};
 
+mod btsink;
 mod codec;
 mod hda;
 mod levels;
@@ -329,9 +330,14 @@ const POLL_MS: u32 = 20;
 // A headphone jack is looked at this often (551-DRV-0056).
 const JACK_MS: u64 = 1000;
 
+// The output's free buffers: the Bluetooth sink's while it holds the output (700-DRV-0110), else the device's.
+fn free_of(device: &mut Option<Device>, sink: &Option<btsink::Sink>) -> usize {
+    match sink { Some(s) => s.free(BUFFERS), None => device.as_mut().map_or(BUFFERS - 1, |d| d.free()) }
+}
+
 // Answers deferred `wait` calls whose space is now free (or all of them on stop).
-fn release(device: &mut Option<Device>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
-    let free = device.as_mut().map_or(BUFFERS - 1, |d| d.free());
+fn release(device: &mut Option<Device>, sink: &Option<btsink::Sink>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
+    let free = free_of(device, sink);
     for waiter in waiters.iter_mut() {
         if waiter.as_ref().is_some_and(|(_, want)| all || free >= *want as usize) { let (call, _) = waiter.take().unwrap(); let _ = audio::reply_wait(call, Ok(free as u32)); }
     }
@@ -377,12 +383,20 @@ fn main(_info: &'static BootInfo) {
     }
     // A USB audio device takes the codec's place while it is plugged in (000-DRV-0073); the codec waits in `internal`.
     let mut usb = usbaudio::Usb::open();
+    // The Bluetooth sink while it holds the output (700-DRV-0110): the output goes to it, the capture stays the device's.
+    let mut sink: Option<btsink::Sink> = None;
     let mut internal: Option<Device> = None;
     if usb.is_some() { mind::println!("[AUDIO] USB AUDIO CLIENT: LOOKING FOR A DEVICE EVERY {} MS", usbaudio::LOOK_MS); }
     let watching = device.as_ref().is_some_and(Device::watches);
     let mut jack_due = mind::time::uptime_ms() as u64 + JACK_MS;
     loop {
         let now = mind::time::uptime_ms() as u64;
+        // A sink no longer read (bt_hci gone or stopped): the machine's own output again.
+        if sink.as_ref().is_some_and(|s| s.silent(now)) {
+            sink = None;
+            mind::println!("[AUDIO] THE BLUETOOTH SINK WAS NOT READ FOR {} MS: THE MACHINE'S OWN OUTPUT AGAIN", btsink::SILENT_MS);
+            release(&mut device, &sink, &mut waiters, true);
+        }
         if watching && now >= jack_due { if let Some(d) = device.as_mut() { d.watch_jack(); } jack_due = now + JACK_MS; }
         // The USB device plugged in: the codec steps aside, its clients' waits answered; gone: the codec comes back.
         // A USB device set up after the one in use takes its place, and gives it back when it goes (000-DRV-0080).
@@ -394,12 +408,12 @@ fn main(_info: &'static BootInfo) {
             owner = None;
             set = device.as_ref().map(Device::levels);
             if let Some(l) = &set { l.say("USB DEVICE"); }
-            release(&mut device, &mut waiters, true);
+            release(&mut device, &sink, &mut waiters, true);
         } else if another {
             owner = None;
             set = device.as_ref().map(Device::levels);
             if let Some(l) = &set { l.say("USB DEVICE"); }
-            release(&mut device, &mut waiters, true);
+            release(&mut device, &sink, &mut waiters, true);
         } else if let Some(Device::Usb(u)) = device.as_ref().filter(|d| matches!(d, Device::Usb(u) if !u.attached())) {
             let _ = u;
             if let Some(Device::Usb(u)) = device.take() { usb = Some(u); }
@@ -407,10 +421,10 @@ fn main(_info: &'static BootInfo) {
             owner = None;
             set = device.as_ref().map(Device::levels);
             if let Some(l) = &set { l.say("THE CODEC AGAIN"); }
-            release(&mut device, &mut waiters, true);
+            release(&mut device, &sink, &mut waiters, true);
         }
         // A running HDA stream is looked at while it runs, so the buffers it played are cleared before it loops.
-        let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active);
+        let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active) || sink.is_some();
         let usb_streams = matches!(&device, Some(Device::Usb(u)) if u.active());
         let timeout = if usb_streams { usbaudio::PUMP_MS } else if waiting { POLL_MS } else if watching { jack_due.saturating_sub(now).clamp(1, JACK_MS) as u32 } else { 0 };
         // A USB device not plugged in yet is looked for now and then, and one plugged in is asked whether it is still there.
@@ -422,7 +436,7 @@ fn main(_info: &'static BootInfo) {
                 // No interrupt for a while: do what it would have done, and unmask the line again.
                 if let Some(device) = device.as_mut() { device.clear_status(); device.drain(); }
                 let _ = irq.ack();
-                release(&mut device, &mut waiters, false);
+                release(&mut device, &sink, &mut waiters, false);
                 continue;
             }
             Err(_) => continue,
@@ -434,7 +448,7 @@ fn main(_info: &'static BootInfo) {
                 if count % 64 == 1 { mind::println!("[AUDIO] IRQ COUNT {}", count); }
             }
             let _ = irq.ack();
-            release(&mut device, &mut waiters, false); // buffers finished playing: wake waiting clients
+            release(&mut device, &sink, &mut waiters, false); // buffers finished playing: wake waiting clients
             continue;
         }
         // idl/audio.wit. PCM and capture travel in the client's lent buffer, mapped only for the call.
@@ -444,6 +458,67 @@ fn main(_info: &'static BootInfo) {
         let foreign = owner.is_some_and(|pid| pid != sender);
         let (request, call) = match audio::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
         let lent = |slot: usize| Mapping::new(slot).map_err(|_| Error::Invalid);
+        // The Bluetooth sink (1.3): taken and given back by bt_hci's badged client alone, read by it; while it holds the
+        // output, playing, tones, stopping and waiting are its.
+        match request {
+            audio::Request::Sink { .. } | audio::Request::SinkRead { .. } if badge != mind::audio::BADGE_SINK => {
+                mind::println!("[AUDIO] SINK: PID {} HAS NO SINK BADGE: REFUSED", sender);
+                let _ = match request { audio::Request::Sink { .. } => audio::reply_sink(call, Err(Error::Rights)), _ => audio::reply_sink_read(call, Err(Error::Rights)) };
+                continue;
+            }
+            audio::Request::Sink { on: true } => {
+                if sink.as_ref().is_none_or(|s| s.reader != sender) {
+                    if let Some(d) = device.as_mut() { d.reset(); }
+                    let mut taken = btsink::Sink::new(sender, now, BUFFER_BYTES);
+                    // The output's level as set, in dB, on the samples.
+                    if let Some(l) = &set { taken.out_factor = levels::factor_q15(levels::qdb(l.output.setting, l.output.amp), l.output.switch); }
+                    sink = Some(taken);
+                    mind::println!("[AUDIO] THE OUTPUT GOES TO THE BLUETOOTH SINK (PID {})", sender);
+                    release(&mut device, &sink, &mut waiters, true);
+                }
+                let _ = audio::reply_sink(call, Ok(AUDIO_RATE as u32));
+                continue;
+            }
+            audio::Request::Sink { on: false } => {
+                if sink.take().is_some() { mind::println!("[AUDIO] THE BLUETOOTH SINK GAVE THE OUTPUT BACK: THE MACHINE'S OWN AGAIN"); }
+                release(&mut device, &sink, &mut waiters, true);
+                let _ = audio::reply_sink(call, Ok(AUDIO_RATE as u32));
+                continue;
+            }
+            audio::Request::SinkRead { capacity, buffer } => {
+                let result = match sink.as_mut() {
+                    None => Err(Error::Invalid),
+                    Some(s) => lent(buffer).map(|mut out| { let len = (capacity as usize).min(out.len()); s.read(&mut out.as_mut_slice()[..len], now) as u32 }),
+                };
+                let _ = audio::reply_sink_read(call, result);
+                release(&mut device, &sink, &mut waiters, false);
+                continue;
+            }
+            _ => {}
+        }
+        let output = matches!(request, audio::Request::Device | audio::Request::Play { .. } | audio::Request::Tone { .. } | audio::Request::Stop | audio::Request::Wait { .. });
+        if let (Some(s), true) = (sink.as_mut(), output) {
+            let _ = match request {
+                audio::Request::Device => audio::reply_device(call, Some(AUDIO_RATE as u32)),
+                audio::Request::Play { bytes, pcm } => audio::reply_play(call, lent(pcm).map(|data| { let len = (bytes as usize).min(data.len()); s.play(&data.as_slice()[..len]) as u32 })),
+                audio::Request::Tone { hz, ms } => audio::reply_tone(call, Ok(s.tone(hz as usize, ms as usize, AUDIO_RATE, sine) as u32)),
+                audio::Request::Stop => { s.reset(); let replied = audio::reply_stop(call, Ok(())); release(&mut device, &sink, &mut waiters, true); replied }
+                audio::Request::Wait { buffers } => {
+                    let want = (buffers as usize).clamp(1, BUFFERS - 1) as u8;
+                    let free = s.free(BUFFERS);
+                    if free >= want as usize { audio::reply_wait(call, Ok(free as u32)) } else {
+                        let mut call = call;
+                        match (waiters.iter().position(Option::is_none), call.defer()) {
+                            (Some(index), Ok(())) => { waiters[index] = Some((call, want)); Ok(()) }
+                            _ => audio::reply_wait(call, Err(Error::NoSlot)),
+                        }
+                    }
+                }
+                // Not an output request: `output` said which are.
+                _ => Ok(()),
+            };
+            continue;
+        }
         let _ = match (request, device.as_mut()) {
             (audio::Request::Device, d) => audio::reply_device(call, d.is_some().then_some(AUDIO_RATE as u32)),
             (audio::Request::Overflows, _) => audio::reply_overflows(call, overflows),
@@ -463,6 +538,7 @@ fn main(_info: &'static BootInfo) {
                 l.output.setting = levels::setting(percent, l.output.amp);
                 l.output.switch = muted;
                 d.set_volume(&l.output);
+                if let Some(s) = sink.as_mut() { s.out_factor = levels::factor_q15(levels::qdb(l.output.setting, l.output.amp), l.output.switch); }
                 l.say("SET");
                 audio::reply_set_volume(call, Ok(&l.answer()))
             }
@@ -493,7 +569,7 @@ fn main(_info: &'static BootInfo) {
             (audio::Request::Play { .. }, None) => audio::reply_play(call, Err(Error::NotFound)),
             (audio::Request::RecordRead { .. }, None) => audio::reply_record_read(call, Err(Error::NotFound)),
             (audio::Request::Tone { hz, ms }, Some(d)) => audio::reply_tone(call, Ok(d.tone(hz as usize, ms as usize) as u32)),
-            (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&mut device, &mut waiters, true); replied }
+            (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&mut device, &sink, &mut waiters, true); replied }
             (audio::Request::RecordStart, Some(_)) if foreign => audio::reply_record_start(call, Err(Error::Other(ERR_BUSY))),
             (audio::Request::RecordStop, Some(_)) if foreign => audio::reply_record_stop(call, Err(Error::Other(ERR_BUSY))),
             (audio::Request::RecordRead { .. }, Some(_)) if foreign => audio::reply_record_read(call, Err(Error::Other(ERR_BUSY))),
@@ -520,6 +596,8 @@ fn main(_info: &'static BootInfo) {
                 let result = lent(pcm).map(|data| { let len = (bytes as usize).min(data.len()); d.play(&data.as_slice()[..len]) as u32 });
                 audio::reply_play(call, result)
             }
+            // Answered above.
+            (audio::Request::Sink { .. }, _) | (audio::Request::SinkRead { .. }, _) => Ok(()),
         };
     }
 }

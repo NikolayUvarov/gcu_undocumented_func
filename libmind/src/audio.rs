@@ -12,6 +12,9 @@ const CHUNK: usize = 16 * 1024;
 /// The badge of the audio_gw client that may change the levels: init gives it to the shell alone (audio.wit 1.2,
 /// 000-KRN-0118); programs get the loader's plain client.
 pub const BADGE_LEVELS: u16 = 1;
+/// The badge of the client that may take the gateway's output for a Bluetooth sink (audio.wit 1.3, 700-DRV-0110): init
+/// gives it to bt_hci alone.
+pub const BADGE_SINK: u16 = 2;
 
 struct Channel { pages: Pages, cap: usize }
 struct Shared(UnsafeCell<Option<Channel>>);
@@ -116,6 +119,21 @@ pub fn record_read(out: &mut [i16]) -> Result<(usize, bool)> {
     let data = channel.pages.as_slice();
     for (i, sample) in out[..samples].iter_mut().enumerate() { *sample = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]); }
     Ok((samples, overflow))
+}
+
+/// Takes the gateway's output for the Bluetooth sink, or gives it back (1.3); its rate. Err(Rights) without the badge.
+pub fn sink(on: bool) -> Result<usize> { idl::sink(Endpoint::AUDIO, on).map(|rate| rate as usize) }
+
+/// The output's interleaved L/R samples queued since the last call, into `out`; how many (1.3).
+pub fn sink_read(out: &mut [i16]) -> Result<usize> {
+    let channel = channel()?;
+    let capacity = (out.len() * 2).min(CHUNK) & !3;
+    if capacity == 0 { return Ok(0); }
+    let bytes = lend(channel, true, |buffer| idl::sink_read(Endpoint::AUDIO, capacity as u32, buffer))? as usize;
+    let samples = (bytes / 2).min(out.len());
+    let data = channel.pages.as_slice();
+    for (i, sample) in out[..samples].iter_mut().enumerate() { *sample = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]); }
+    Ok(samples)
 }
 
 pub use idl::{Levels, Range};
