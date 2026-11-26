@@ -8,6 +8,7 @@ This profile states what the current implementation is, what it guarantees, unde
 |---|---|
 | [threat-model.md](threat-model.md) | Assets, adversaries, fault model, what is out of scope |
 | [aarch64/](aarch64/README.md) | The second platform, `aarch64/QEMU-virt-0` (issues 201–204): its own platform, TCB, threat model and evidence, as differences from this profile |
+| [aarch64-orangepi-zero-plus2/](aarch64-orangepi-zero-plus2/README.md), [aarch64-orangepi-zero3/](aarch64-orangepi-zero3/README.md) | `aarch64/OrangePi-ZeroPlus2-0` and `aarch64/OrangePi-Zero3-0`, the two Allwinner boards (main task 100004): skeletons, nothing tested; no statement of QEMU's carries over to them (100004-MOB-0013) |
 | [tcb.md](tcb.md) | Trusted computing base for each guarantee |
 | [kernel-objects.md](kernel-objects.md) | Kernel objects, capability kinds, limits and who pays for them |
 | [clocks.md](clocks.md) | Time sources, resolution, what is not provided |
