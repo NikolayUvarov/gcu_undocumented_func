@@ -1,0 +1,19 @@
+[package]
+name = "bt_host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The Bluetooth host stack as a library (700-BLT-0005 and on): no libmind, no allocation, pure state machines and
+# parsers, so `cargo test` runs it on the host against constructed HCI traffic. bt_hci links it for now; a bt_host
+# service with its own capabilities is the hardening stage, not built yet.
+[dependencies]
+# LE pairing (700-BLT-0009): AES-128 for c1/s1 and AES-CMAC for f4/f5/f6/g2, P-256 ECDH, as wpa/ and tls/ use them.
+aes = { version = "0.8", default-features = false }
+cmac = { version = "0.7", default-features = false }
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
