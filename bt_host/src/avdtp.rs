@@ -48,6 +48,8 @@ pub const BITPOOL: u8 = 53;
 pub const ANSWER_MS: u64 = 5_000;
 pub const IDLE_MS: u64 = 2_000;
 pub const LEAD_MS: u64 = 40;
+/// How often the stream says what it did, as the other drivers' minute lines.
+pub const STREAM_LINE_MS: u64 = 60_000;
 /// The longest media payload we make.
 pub const PACKET: usize = 1024;
 /// Packets queued for the controller beyond which a media packet waits.
@@ -180,7 +182,7 @@ pub struct Source {
     /// The machine's output is ours (the audio gateway's sink is held): its PCM is played, a gap as silence.
     pub output: bool,
     seq: u16, timestamp: u32, started: u64, pub sent: u64, played: u64, pub packets: u32, pub late: u32,
-    /// For the line said once a second while streaming: bytes sent, turns held back by the backlog, frames not queued,
+    /// For the line said once a minute while streaming: bytes sent, turns held back by the backlog, frames not queued,
     /// the counters at the last line.
     pub bytes: u64, pub waits: u32, pub refused: u32, said_at: u64, said: [u32; 6],
     rx: [u8; 512], rx_len: usize,
@@ -498,16 +500,16 @@ impl Source {
         }
     }
 
-    /// Once a second while streaming, what the stream did in it: packets and bytes given the controller's queue, what the
+    /// Once a minute while streaming, what the stream did in it: packets and bytes given the controller's queue, what the
     /// controller holds of its buffers and returned (Number Of Completed Packets), turns the backlog held back, frames not
     /// queued, seconds skipped, what plays.
     fn say_stream(&mut self, ctl: &mut Ctl, handle: u16, cfg: &Config, frames: usize) {
-        if ctl.now < self.said_at + 1_000 { return; }
+        if ctl.now < self.said_at + STREAM_LINE_MS { return; }
         let now = [self.packets, self.bytes as u32, ctl.acl_sent, ctl.completed_packets, ctl.completed_events, self.waits];
         let d: [u32; 6] = core::array::from_fn(|i| now[i].wrapping_sub(self.said[i]));
         if self.said_at != 0 {
             let (held, total, free) = (ctl.held(handle), ctl.bredr.total, ctl.bredr.free);
-            ctl.say(format_args!("A2DP: 1 S: {} PACKETS OF {} FRAMES ({} BYTES); ACL {} SENT, {} COMPLETED IN {} EVENTS, {} HELD OF {} ({} FREE); {} WAITS, {} NOT QUEUED, {} LATE; {} AT {} HZ BITPOOL {}",
+            ctl.say(format_args!("A2DP: 1 MIN: {} PACKETS OF {} FRAMES ({} BYTES); ACL {} SENT, {} COMPLETED IN {} EVENTS, {} HELD OF {} ({} FREE); {} WAITS, {} NOT QUEUED, {} LATE; {} AT {} HZ BITPOOL {}",
                 d[0], frames, d[1], d[2], d[3], d[4], held, total, free, d[5], self.refused, self.late,
                 if self.output { "OUTPUT" } else { "TONE" }, cfg.hz(), cfg.bitpool));
         }

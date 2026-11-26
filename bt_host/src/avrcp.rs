@@ -2,7 +2,8 @@
 //! - **Controller, category 2 (the sink's volume):** once a sink's control channel is open, GetCapabilities for its
 //!   events, RegisterNotification of EVENT_VOLUME_CHANGED (registered again after each change), and SetAbsoluteVolume
 //!   with the start value; the volume it reports (its own buttons) is kept and logged.
-//! - **Target, category 1 (a player, as far as a sink asks):** UNIT INFO and SUBUNIT INFO (a panel), PASS THROUGH (its
+//! - **Target answers (a player, as far as a sink asks; no target record is published, as a category 1 target owes
+//!   browsing and metadata this does not have):** UNIT INFO and SUBUNIT INFO (a panel), PASS THROUGH (its
 //!   buttons, accepted and logged), GetCapabilities (the company ID; the events: playback status, track),
 //!   RegisterNotification of those two (INTERIM now, CHANGED when the stream starts or stops), GetPlayStatus. Any
 //!   other PDU is REJECTED (invalid command), any other opcode NOT IMPLEMENTED, another profile ID gets IPID.

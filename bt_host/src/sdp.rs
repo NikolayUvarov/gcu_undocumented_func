@@ -1,5 +1,5 @@
 //! SDP (Core 5.3 Vol 3 Part B): data elements read and written, and a server that answers a peer's searches for the
-//! records we have: the A2DP source's (A2DP 5.3), and AVRCP's controller and target as far as the stack does them. A sink may look for it before it connects its own channels.
+//! records we have: the A2DP source's (A2DP 5.3), and AVRCP's controller for a sink's volume. A sink may look for it before it connects its own channels.
 use crate::buf::be16;
 use crate::ctl::Ctl;
 use crate::l2cap::Channels;
@@ -82,7 +82,10 @@ pub const A2DP_SOURCE: Record = Record {
 };
 
 /// AVRCP's controller, as the source that sets a sink's volume (AVRCP 1.4's absolute volume is a category 2 feature):
-/// A/V Remote Control and its Controller class, L2CAP PSM 0x0017 and AVCTP 1.4, AVRCP 1.4, category 2.
+/// A/V Remote Control and its Controller class, L2CAP PSM 0x0017 and AVCTP 1.4, AVRCP 1.4, category 2 (AVRCP 1.6.2
+/// table 8.1, but for the profile version: 1.4, whose absolute volume is what the stack does). No target record: a
+/// category 1 target owes the browsing channel and metadata the stack does not have (table 8.2, C1 and *3); a sink's
+/// target commands are answered all the same.
 pub const AVRCP_CONTROLLER: Record = Record {
     handle: 0x0001_0002,
     uuids: &[0x110E, 0x110F, 0x0100, 0x0017, 0x1002],
@@ -96,22 +99,7 @@ pub const AVRCP_CONTROLLER: Record = Record {
     ],
 };
 
-/// AVRCP's target, as far as a sink asks the source (category 1, a player: its play status and buttons): A/V Remote
-/// Control Target, PSM 0x0017 and AVCTP 1.4, AVRCP 1.4.
-pub const AVRCP_TARGET: Record = Record {
-    handle: 0x0001_0003,
-    uuids: &[0x110C, 0x0100, 0x0017, 0x1002, 0x110E],
-    attributes: &[
-        (0x0000, &[0x0A, 0x00, 0x01, 0x00, 0x03]),
-        (0x0001, &[0x35, 0x03, 0x19, 0x11, 0x0C]),
-        (0x0004, &[0x35, 0x10, 0x35, 0x06, 0x19, 0x01, 0x00, 0x09, 0x00, 0x17, 0x35, 0x06, 0x19, 0x00, 0x17, 0x09, 0x01, 0x04]),
-        (0x0005, &[0x35, 0x03, 0x19, 0x10, 0x02]),
-        (0x0009, &[0x35, 0x08, 0x35, 0x06, 0x19, 0x11, 0x0E, 0x09, 0x01, 0x04]),
-        (0x0311, &[0x09, 0x00, 0x01]),
-    ],
-};
-
-pub const RECORDS: &[Record] = &[A2DP_SOURCE, AVRCP_CONTROLLER, AVRCP_TARGET];
+pub const RECORDS: &[Record] = &[A2DP_SOURCE, AVRCP_CONTROLLER];
 
 /// The attribute ID ranges of a request's list, as (first, last).
 fn ranges(list: &[u8], out: &mut [(u16, u16); 16]) -> Option<usize> {
