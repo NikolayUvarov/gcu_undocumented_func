@@ -43,4 +43,4 @@
 
 ## Related
 
-[550-NET-0061](550-NET-0061-a-restarted-radio-gets-its-country-again.md), [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md).
+[550-NET-0061](550-NET-0061-a-restarted-radio-gets-its-country-again.md), [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-DRV-0033](../issues-done/213-DRV-0033-rtl8852be-firmware-and-probe.done).
