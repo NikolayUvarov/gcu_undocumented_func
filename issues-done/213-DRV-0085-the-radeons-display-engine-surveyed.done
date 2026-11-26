@@ -4,7 +4,7 @@
 
 ## Problem
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) needs a driver for the Cezanne Radeon's display engine (DCN 2.1) to light the Ryzen's second monitor. Nothing is known yet of what that driver must write. Linux on the same machine drives **both** monitors (`DP-2`, 2560x1600, and `HDMI-A-1`, 3440x1440), so it holds a working configuration of the very output MIND Core lacks.
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) needs a driver for the Cezanne Radeon's display engine (DCN 2.1) to light the Ryzen's second monitor. Nothing is known yet of what that driver must write. Linux on the same machine drives **both** monitors (`DP-2`, 2560x1600, and `HDMI-A-1`, 3440x1440), so it holds a working configuration of the very output MIND Core lacks.
 
 This task reads and writes no driver. **Reading is not harmless on this device:** on 2026-11-21 a survey script's register read hung the Ryzen in Linux and a person had to power-cycle it (Progress, below). Since then nothing reads its registers under Linux (BENCH rule); what Linux's own driver hands out as finished files is read instead, and a register read is only proposed, for MIND Core with KRN's grant.
 
@@ -97,8 +97,8 @@ register read; nothing hung, and the machine was returned to MIND Core (bench lo
 
 **Criterion 4 is not met and cannot be:** the register read under Linux hung the machine on 2026-11-21 and it needed a power cycle (Progress). No package was installed and no register written. What came of it is a rule in force on the bench: no register of this machine is read under Linux by mapping a BAR, `/dev/mem` or a raw debugfs file, and no unknown debugfs file is read.
 
-**Left to others:** the driver's own criteria are [213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)'s.
+**Left to others:** the driver's own criteria are [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done)'s.
 
 ## Related
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) (the driver), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.done) (first light), [213-DRV-0074](213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) (the driver), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.done) (first light), [213-DRV-0074](213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).

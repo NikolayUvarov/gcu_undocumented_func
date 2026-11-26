@@ -134,7 +134,7 @@ The RTL8852B Bluetooth controller's `rtl_bt/rtl8852bu_fw.bin` (`bt_hci`, 700-BLT
 
 ## The Allwinner boards' firmware (built from fetched sources; on a board's card, in no system image)
 
-`scripts/board_uboot.sh` builds U-Boot with TF-A's BL31 for the Orange Pi Zero Plus 2 H5 and the Orange Pi Zero 3 ([100004-MOB-0001](issues/100004-MOB-0001-the-boards-sd-card.md)), from the pinned tags below, each checked against its commit. Neither source is stored here. `scripts/board_image.py` writes the result at 8 KiB on the board's card, outside MIND Core's partitions. A card holds code from both, so one given to others must carry their notices, and U-Boot's source with it (GPL-2.0).
+`scripts/board_uboot.sh` builds U-Boot with TF-A's BL31 for the Orange Pi Zero Plus 2 H5 and the Orange Pi Zero 3 ([100004-MOB-0001](issues/100004-MOB-0001-the-boards-sd-card.md)), from the tags below, each checked against its commit. The catalog of devices, `scripts/boards.toml` ([352-MOB-0010](issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)), pins them, and `tests/board_image_test.py` checks this table against it. Neither source is stored here. `scripts/board_image.py` writes the result at 8 KiB on the board's card, outside MIND Core's partitions. A card holds code from both, so one given to others must carry their notices, and U-Boot's source with it (GPL-2.0).
 
 | Part | Version | Licence |
 |---|---|---|
