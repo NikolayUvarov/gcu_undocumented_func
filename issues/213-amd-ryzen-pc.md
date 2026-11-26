@@ -50,7 +50,7 @@ The maintainer (2026-11-25): «закончить с поддержкой апп
 - **Done since (2026-11-26):** the keyboard, [213-DRV-0061](../issues-done/213-DRV-0061-the-ryzens-usb-keyboard.done), closed on the maintainer's word that every keyboard at hand types.
 - **Done since (2026-11-26):** the Wi-Fi's bring-up, [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done): joined and carrying the machine's releases; what is left of it is in the tasks of the next list and in 174-DRV-0109.
 - **Left for the criteria, `DRV`'s:**
-  - the second NVMe disk, [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md). Its other half, the analog sound, was heard on 2026-11-13 (that issue's Progress).
+  - the second NVMe disk, [213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done). Its other half, the analog sound, was heard on 2026-11-13 (that issue's Progress).
 - **Left for "each finding a closed task", `DRV`'s:**
   - the wired card: [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md);
   - Wi-Fi: [0033](../issues-done/213-DRV-0033-rtl8852be-firmware-and-probe.done), [0087](213-DRV-0087-rtl8852be-on-5-ghz.md), [0090](213-DRV-0090-the-receiver-goes-deaf-on-a-busy-channel.md), [0091](213-DRV-0091-the-firmware-told-of-the-link.md), [0102](../issues-done/213-DRV-0102-rtw89-wifi-detection-floor.done) and [0104](213-DRV-0104-the-sends-answer-the-drivers-side.md);
