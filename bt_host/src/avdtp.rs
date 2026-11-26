@@ -177,6 +177,9 @@ pub struct Source {
     /// The machine's output is ours (the audio gateway's sink is held): its PCM is played, a gap as silence.
     pub output: bool,
     seq: u16, timestamp: u32, started: u64, pub sent: u64, played: u64, pub packets: u32, pub late: u32,
+    /// For the line said once a second while streaming: bytes sent, turns held back by the backlog, frames not queued,
+    /// the counters at the last line.
+    pub bytes: u64, pub waits: u32, pub refused: u32, said_at: u64, said: [u32; 6],
     rx: [u8; 512], rx_len: usize,
 }
 
@@ -188,7 +191,7 @@ impl Source {
     pub fn new() -> Self {
         let cfg = Config { rate: 3, blocks: 16, mode: Mode::Joint, snr: false, subbands: 8, bitpool: BITPOOL };
         Self { handle: None, sig: None, media: None, state: State::Idle, ours: false, remote: 0, candidates: [0; 8], tried: 0, found: 0, label: 0, pending: None,
-               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), output: false, seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0,
+               since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), output: false, seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0, bytes: 0, waits: 0, refused: 0, said_at: 0, said: [0; 6],
                late: 0, rx: [0; 512], rx_len: 0 }
     }
 
@@ -468,6 +471,8 @@ impl Source {
         if due > self.sent + cfg.hz() as u64 { self.late += 1; self.sent = due - per_packet; }
         let mut packet = [0u8; PACKET];
         let mut pcm = [0i16; 256];
+        self.say_stream(ctl, handle, &cfg, frames);
+        if self.sent + per_packet <= due && ctl.backlog(handle) >= BACKLOG { self.waits += 1; }
         while self.sent + per_packet <= due && ctl.backlog(handle) < BACKLOG {
             let rtp = rtp_header(self.seq, self.timestamp);
             let mut at = 0;
@@ -476,12 +481,29 @@ impl Source {
                 self.fill(&mut pcm[..n], cfg.channels(), cfg.hz(), ctl.now);
                 at += self.enc.frame(&pcm[..n], &mut packet[at..]);
             }
-            if !chans.send(ctl, handle, media, &[&rtp, &[frames as u8], &packet[..at]]) { break; }
+            if !chans.send(ctl, handle, media, &[&rtp, &[frames as u8], &packet[..at]]) { self.refused += 1; break; }
+            self.bytes += (13 + at) as u64;
             self.seq = self.seq.wrapping_add(1);
             self.timestamp = self.timestamp.wrapping_add(per_packet as u32);
             self.sent += per_packet;
             self.packets += 1;
         }
+    }
+
+    /// Once a second while streaming, what the stream did in it: packets and bytes given the controller's queue, what the
+    /// controller holds of its buffers and returned (Number Of Completed Packets), turns the backlog held back, frames not
+    /// queued, seconds skipped, what plays.
+    fn say_stream(&mut self, ctl: &mut Ctl, handle: u16, cfg: &Config, frames: usize) {
+        if ctl.now < self.said_at + 1_000 { return; }
+        let now = [self.packets, self.bytes as u32, ctl.acl_sent, ctl.completed_packets, ctl.completed_events, self.waits];
+        let d: [u32; 6] = core::array::from_fn(|i| now[i].wrapping_sub(self.said[i]));
+        if self.said_at != 0 {
+            let (held, total, free) = (ctl.held(handle), ctl.bredr.total, ctl.bredr.free);
+            ctl.say(format_args!("A2DP: 1 S: {} PACKETS OF {} FRAMES ({} BYTES); ACL {} SENT, {} COMPLETED IN {} EVENTS, {} HELD OF {} ({} FREE); {} WAITS, {} NOT QUEUED, {} LATE; {} AT {} HZ BITPOOL {}",
+                d[0], frames, d[1], d[2], d[3], d[4], held, total, free, d[5], self.refused, self.late,
+                if self.output { "OUTPUT" } else { "TONE" }, cfg.hz(), cfg.bitpool));
+        }
+        (self.said_at, self.said) = (ctl.now, now);
     }
 
     /// PCM while it is fed; else the tone, 0.4 s of every second, else silence.

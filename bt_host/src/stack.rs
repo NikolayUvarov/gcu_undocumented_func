@@ -19,6 +19,8 @@ pub const CONNS: usize = 4;
 pub const PAGE_MS: u64 = 8_000;
 /// An LE connection is waited for longer: a device advertises only while it is awake (a mouse moved, a key pressed).
 pub const LE_CONNECT_MS: u64 = 30_000;
+/// The LE supervision timeout given at least, in 10 ms: 5 s.
+pub const LE_TIMEOUT: u16 = 500;
 pub const RETRY_MS: u64 = 15_000;
 pub const RETRY_MAX_MS: u64 = 60_000;
 /// After a device connects to us, how long we leave it to open its channels before we open ours.
@@ -124,8 +126,8 @@ impl Stack {
         let mut name = [0u8; 248];
         name[..NAME.len()].copy_from_slice(NAME.as_bytes());
         self.ctl.command(hci::WRITE_LOCAL_NAME, &name);
-        // Role switch and sniff allowed.
-        self.ctl.command(hci::WRITE_DEFAULT_LINK_POLICY, &0x0005u16.to_le_bytes());
+        // Role switch allowed, sniff not: a link in sniff mode starves a stream (the testing stage keeps links active).
+        self.ctl.command(hci::WRITE_DEFAULT_LINK_POLICY, &0x0001u16.to_le_bytes());
         // 0x2000 slots: 5.12 s.
         self.ctl.command(hci::WRITE_PAGE_TIMEOUT, &0x2000u16.to_le_bytes());
         if !self.devices.is_empty() { self.ctl.command(hci::WRITE_SCAN_ENABLE, &[0x02]); }
@@ -237,6 +239,13 @@ impl Stack {
                 self.encryption(handle, status, on);
             }
             hci::EV_ENCRYPTION_KEY_REFRESH if p.len() >= 3 => {}
+            // Active 0, hold 1, sniff 2: logged; a link out of active mode while it streams is brought back.
+            hci::EV_MODE_CHANGE if p.len() >= 6 => {
+                let (status, handle, mode, interval) = (p[0], le16(p, 1), p[3], le16(p, 4));
+                self.say(format_args!("{:03X}: MODE {} ({}), INTERVAL {} × 0.625 MS (STATUS {:02X})", handle, mode, ["ACTIVE", "HOLD", "SNIFF"].get(mode as usize).unwrap_or(&"?"), interval, status));
+                if mode == 2 && self.a2dp.handle == Some(handle) && self.a2dp.state == avdtp::State::Streaming { self.ctl.command(hci::EXIT_SNIFF_MODE, &handle.to_le_bytes()); }
+            }
+            hci::EV_ROLE_CHANGE if p.len() >= 8 => self.say(format_args!("{}: ROLE {} (STATUS {:02X})", Addr::from_wire(&p[1..]), if p[7] == 0 { "CENTRAL" } else { "PERIPHERAL" }, p[0])),
             hci::EV_HARDWARE_ERROR => self.say(format_args!("CONTROLLER HARDWARE ERROR {:02X}", p.first().copied().unwrap_or(0))),
             hci::EV_DATA_BUFFER_OVERFLOW => self.say(format_args!("THE CONTROLLER'S ACL BUFFERS OVERFLOWED")),
             hci::EV_LE_META if !p.is_empty() => self.le_event(p[0], &p[1..]),
@@ -424,9 +433,13 @@ impl Stack {
             }
             l2cap::LE_SIGNALLING if le => {
                 if let Some(p) = l2cap::le_signal(&mut self.ctl, handle, payload) {
+                    // Its intervals and latency as asked, a supervision timeout of 5 s at least: a radio shared with a stream
+                    // and a Wi-Fi misses events, and the shortest timeout a peripheral asks drops the link (700-BLT-0009).
+                    let timeout = p.timeout.max(LE_TIMEOUT);
+                    self.say(format_args!("LE {:03X} ASKS: INTERVAL {}-{} × 1.25 MS, LATENCY {}, TIMEOUT {} × 10 MS: TIMEOUT {} GIVEN", handle, p.min, p.max, p.latency, p.timeout, timeout));
                     let mut b = [0u8; 14];
                     b[..2].copy_from_slice(&handle.to_le_bytes());
-                    for (k, v) in [p.min, p.max, p.latency, p.timeout].iter().enumerate() { b[2 + 2 * k..4 + 2 * k].copy_from_slice(&v.to_le_bytes()); }
+                    for (k, v) in [p.min, p.max, p.latency, timeout].iter().enumerate() { b[2 + 2 * k..4 + 2 * k].copy_from_slice(&v.to_le_bytes()); }
                     self.ctl.command(hci::LE_CONNECTION_UPDATE, &b);
                 }
             }

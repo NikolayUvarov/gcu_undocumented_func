@@ -31,13 +31,19 @@ pub struct Ctl {
     pub log: Log,
     pub now: u64,
     pub lost_commands: u32,
+    /// For the stream's line (700-BLT-0007): ACL packets given the controller, packets and events of Number Of Completed
+    /// Packets, frames not queued for want of room.
+    pub acl_sent: u32,
+    pub completed_packets: u32,
+    pub completed_events: u32,
+    pub not_queued: u32,
 }
 
 impl Default for Ctl { fn default() -> Self { Self::new() } }
 
 impl Ctl {
     pub const fn new() -> Self {
-        Self { credits: 1, waiting: None, cmds: Queue::new(), bredr: Pool { len: 0, total: 0, free: 0 }, le: Pool { len: 0, total: 0, free: 0 },
+        Self { credits: 1, waiting: None, cmds: Queue::new(), bredr: Pool { len: 0, total: 0, free: 0 }, le: Pool { len: 0, total: 0, free: 0 }, acl_sent: 0, completed_packets: 0, completed_events: 0, not_queued: 0,
                out: [Queue::new(), Queue::new()], links: [Link { handle: 0, le: false, held: 0, live: false }; LINKS], log: Log::new(), now: 0, lost_commands: 0 }
     }
 
@@ -93,12 +99,18 @@ impl Ctl {
 
     /// Number Of Completed Packets: `count` of `handle`'s packets left the controller.
     pub fn completed(&mut self, handle: u16, count: u16) {
+        let handle = handle & 0x0FFF;
+        self.completed_events += 1;
+        self.completed_packets += count as u32;
         let Some(l) = self.links.iter_mut().find(|l| l.live && l.handle == handle) else { return };
         let count = count.min(l.held);
         l.held -= count;
         let pool = if l.le && self.le.total != 0 { &mut self.le } else { &mut self.bredr };
         pool.free = (pool.free + count).min(pool.total);
     }
+
+    /// Packets of `handle` the controller holds.
+    pub fn held(&self, handle: u16) -> u16 { self.links.iter().find(|l| l.live && l.handle == handle).map_or(0, |l| l.held) }
 
     /// Packets of `handle` queued or held by the controller.
     pub fn backlog(&self, handle: u16) -> usize {
@@ -120,7 +132,7 @@ impl Ctl {
         if pool_len == 0 { return false; }
         let queue = &mut self.out[le as usize];
         let fragments = at.div_ceil(pool_len);
-        if queue.room() < at + fragments * (acl::HEADER + 2) { queue.dropped += 1; return false; }
+        if queue.room() < at + fragments * (acl::HEADER + 2) { queue.dropped += 1; self.not_queued += 1; return false; }
         for (i, chunk) in pdu[..at].chunks(pool_len).enumerate() {
             let pb = if i > 0 { acl::PB_CONTINUING } else if le { acl::PB_FIRST_NO_FLUSH } else { acl::PB_FIRST };
             queue.push(&[&acl::header(handle, pb, chunk.len()), chunk]);
@@ -140,6 +152,7 @@ impl Ctl {
                 if pool.free == 0 { break; }
                 pool.free -= 1;
                 self.links[i].held += 1;
+                self.acl_sent += 1;
                 let queue = &mut self.out[le as usize];
                 return queue.take(out);
             }
