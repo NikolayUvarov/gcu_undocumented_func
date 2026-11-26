@@ -4,8 +4,8 @@
 //! build with one set says so in its first line. `tests/display_light_host.rs` checks it.
 
 use crate::batches::{Order, BATCHES};
-use crate::dcn::STAGES;
-use crate::light::{SHORT_WATCH_FRAMES, WATCH_FRAMES};
+use crate::dcn::{Output, FIRST_LIGHT, STAGES};
+use crate::light::{HDMI_A_2, SHORT_WATCH_FRAMES, WATCH_FRAMES};
 use core::fmt;
 
 /// The machine's setting for its second output (HDMI-A-1).
@@ -83,6 +83,23 @@ impl fmt::Display for Bringup {
     }
 }
 
+/// How far display goes on HDMI-A-2, the second HDMI socket (213-DRV-0112): its blocks read only, as a release keeps it
+/// until the maintainer has seen them; then its EDID over DDC2 with its stages described; first light's eight stages;
+/// all sixteen. Each level does what the ones before it do; the build's STAGES_ALLOWED bounds both outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HdmiA2 { Read, Edid, FirstLight, Full }
+
+impl HdmiA2 {
+    pub fn word(self) -> &'static str { match self { HdmiA2::Read => "READ", HdmiA2::Edid => "EDID", HdmiA2::FirstLight => "FIRST_LIGHT", HdmiA2::Full => "FULL" } }
+    /// What it lets display do there, for the log.
+    pub fn what(self) -> &'static str {
+        match self {
+            HdmiA2::Read => "ITS BLOCKS READ ONLY", HdmiA2::Edid => "ITS EDID READ OVER DDC2, ITS STAGES DESCRIBED",
+            HdmiA2::FirstLight => "ITS EDID AND FIRST LIGHT'S 8 STAGES", HdmiA2::Full => "ITS EDID AND ALL 16 STAGES",
+        }
+    }
+}
+
 /// What display's start does, from the setting and the build's bring-up switches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
@@ -101,18 +118,31 @@ pub struct Plan {
     pub standing_check: bool,
     /// Stage 15's watch: the short one only together with the standing check.
     pub watch_frames: u32,
+    /// How far display goes on HDMI-A-2 (213-DRV-0112).
+    pub hdmi_a_2: HdmiA2,
 }
 
 impl Plan {
     /// Whether anything is written (step 2's I2C engine, or a stage): only then is a writer made.
     pub fn writes(&self) -> bool { self.edid || self.stages > 0 }
+    /// Whether steps 2 to 4 may take output `o` when its monitor is the one there (213-DRV-0112): HDMI-A-1 always;
+    /// HDMI-A-2 when the plan writes nothing (its stages only described), or from `HdmiA2::Edid` on.
+    pub fn takes(&self, o: &Output) -> bool { *o != HDMI_A_2 || !self.writes() || self.hdmi_a_2 >= HdmiA2::Edid }
+    /// Whether step 2 reads `o`'s EDID.
+    pub fn edid_on(&self, o: &Output) -> bool { self.edid && (*o != HDMI_A_2 || self.hdmi_a_2 >= HdmiA2::Edid) }
+    /// How many stages `o` may run.
+    pub fn stages_on(&self, o: &Output) -> u8 {
+        if *o != HDMI_A_2 { return self.stages; }
+        match self.hdmi_a_2 { HdmiA2::Read | HdmiA2::Edid => 0, HdmiA2::FirstLight => self.stages.min(FIRST_LIGHT), HdmiA2::Full => self.stages }
+    }
 }
 
 /// The plan for `setting`: `Off` and `Read` whatever the build; `Light` as boots 95 to 100 ran it on the Ryzen (11
 /// batches, the EDID, 16 stages, HPD 1 followed, the standing check, the watch of 60), less what a bring-up switch takes.
 pub fn plan(setting: Setting, b: Bringup) -> Plan {
     let order = if b.survey_order { Order::Survey } else { Order::Production };
-    let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES };
+    let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES,
+                      hdmi_a_2: HdmiA2::Read };
     match setting {
         Setting::Off => none,
         Setting::Read => Plan { batches: BATCHES, ..none },
