@@ -298,7 +298,7 @@ The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-
 - 6853.543 `[USB] STORAGE: WRITE REFUSED: SENSE KEY 3 ASC 03 ASCQ 00 (MEDIUM ERROR)`, the stick's own answer to a write.
 - `[UPDATER] INSTALL: REFUSED: Write`, then `EFFECTOR: FAILED … update_agent: io`. Nothing was installed, and the machine went on with the release it had.
 - The same release sent again two minutes later was written, started on trial and confirmed (202611262214, slot A, boot 109). No fault on that boot.
-- No other fault of the stick is in that boot's log or in the logs kept from 2026-11-21 on. Four other releases were written to it that day.
+- No other fault of the stick is in that boot's log or in the logs kept from 2026-11-21 on. Five other releases were written to it that day before this one (202611260804, 0856, 1618, 1722 and 2015).
 
 **What the software did:** the driver passed the stick's answer on, the updater refused the whole install, and the server was told `failed`. Nothing was retried by itself and no slot was touched.
 
