@@ -1,0 +1,48 @@
+# 700-DRV-0110 — A Bluetooth sink in the audio gateway: the machine's output to headphones while their stream runs
+
+**Type:** driver (`audio_gw`), interface (`idl/audio.wit` 1.3) · **Owner:** `DRV` (written by `BLT` at the owner's word, 2026-11-25) · **Priority:** P1 · **Status:** in progress (2026-11-25) · **Blocked by:** `KRN`: `bt_hci`'s client of `audio_gw` badged `BADGE_SINK` (asked on `internal-dev-messages`) · **Main task:** [700](700-bluetooth.md), for [700-BLT-0007](700-BLT-0007-a2dp-source.md) · **Constitution:** MC-3.3, MC-12.1, MC-12.4
+
+## Problem
+
+`bt_hci`'s A2DP source (700-BLT-0007) plays a test tone. For `say`, `beep` and every other client to be heard in Bluetooth headphones, the audio gateway has to hand its output to `bt_hci`. Without a choice, the machine's own output must stay as it is.
+
+## Plan
+
+1. **`audio.wit` 1.3** adds two calls; 1.2's calls are unchanged.
+   - `sink(on)`: the client badged `mind::audio::BADGE_SINK` takes the gateway's output, or gives it back. It answers the rate.
+   - `sink-read(capacity, buffer)`: the output's PCM since the last call, 16-bit stereo at 48 kHz.
+   - Other clients get `rights`, and a read before `sink(true)` gets `invalid`.
+2. **`audio_gw`** (`btsink.rs`). While the sink holds the output:
+   - `play`, `tone`, `stop`, `wait` and `device` are the sink's. The ring holds as much as the gateway's own DMA ring (32 buffers of 4 KiB, 0.68 s), so waiters see the same room.
+   - The level as set (its dB) scales the samples.
+   - The capture stays the device's, so `listen` and `hear` go on with the machine's microphone.
+   - Given back, or not read for 2 s (`bt_hci` gone), the output is the machine's own again, and the waiters are answered.
+3. **How the sink is chosen.** Headphones must be listed as `audio` in `bt_hci`'s device list (`data/bluetooth/devices.txt` or `data/inbox/bt-devices.txt`), and their A2DP stream must run.
+   - `bt_hci` then calls `sink(true)` and reads the output a tenth of a second ahead.
+   - When the stream stops, it calls `sink(false)`.
+   - `audio tone` in the list keeps the test tone and leaves the output alone.
+   - Without headphones listed, or with no stream, `say` and `beep` go to the machine's own output as before.
+4. **`init` (KRN's):** `bt_hci`'s client of `audio_gw` in `SLOT_AUDIO`, badged `BADGE_SINK`, when `audio_gw` runs. Asked; carried on the bench branch until it lands. Without it `bt_hci` plays the tone, and says so.
+
+**Not done.**
+- Resampling for a 44.1 kHz stream is `bt_host`'s linear interpolation.
+- Mixing: the gateway plays one client at a time, as before.
+- Both outputs at once.
+
+## Acceptance criteria
+
+- [x] Host tests: `tests/audio_btsink_host.rs`.
+  - Order kept around the ring, whole frames only, room and free buffers, the level, a tone.
+  - A sink not read for 2 s.
+- [x] `bt_host` (`bt_host/tests/a2dp.rs`):
+  - headphones listed as `audio` want the output, and `audio tone` does not;
+  - held, silence until PCM comes, then the PCM;
+  - suspended, given back.
+- [x] QEMU: the audio suites (`services,ahci,audio,tts,listen,hda,usbaudio,usbload,link,modes`) pass as before, and no client holds the sink there.
+  - On the bench branch (`claude/700-BLT-bench` b1b4488a9 = this code with `init`'s three bench lines), "x86: services, storage, audio" PASSed in 1189 s (LEG9, x86, 4 CPUs, `scripts/ci_local.sh --only x86 --group ...`, 2026-11-26).
+  - On the task branch at 0d5a11595, the same group PASSed in 1060 s (LEG9, x86, 4 CPUs, 2026-11-26).
+- [ ] On the Ryzen, with KRN's grant: `say` heard in the maintainer's headphones, then on the machine's own output once they are off.
+
+## Related
+
+[700-BLT-0007](700-BLT-0007-a2dp-source.md), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).

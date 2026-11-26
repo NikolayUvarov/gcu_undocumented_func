@@ -3,7 +3,10 @@
 //! has one owner at a time (issue 079): while a client records, the capture requests of others fail with busy, so
 //! `listen`, `hear` and `voice` never mix streams; a capture whose owner ended can be taken over. 1.2: the levels
 //! (000-DRV-0057): the output's volume and the capture's gain, read by every client, set only by the shell's
-//! (badged `BADGE_LEVELS` by init).
+//! (badged `BADGE_LEVELS` by init). 1.3 (700-DRV-0110): a Bluetooth sink. The client badged `BADGE_SINK` (bt_hci's, by
+//! init) takes the gateway's output while its A2DP stream runs: what clients play and the tones then go to it, read
+//! with `sink-read`, instead of to the machine's own output, which gets them again once the sink is given back or not
+//! read for 2 s. The calls of 1.2 are unchanged; a 1.2 gateway rejects the new ones.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:audio";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// A level's settings, as HD Audio describes an amplifier: `steps` settings, each `step-qdb` quarter dB above the
@@ -160,6 +163,26 @@ pub fn set_gain(endpoint: Endpoint, percent: u8, boost: bool) -> Result<Levels> 
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Levels as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(Error::Invalid)? })
 }
 
+/// Takes the output for the Bluetooth sink (`on`) or gives it back; answers the PCM's rate (16-bit stereo). Rights
+/// for a client without the sink badge (1.3).
+pub fn sink(endpoint: Endpoint, on: bool) -> Result<u32> {
+    let words = [13 | MAJOR << 8 | ((on) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_error(&reply)?;
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 32) as u32)
+}
+
+/// Copies the output's PCM queued since the last call into the lent buffer (at most `capacity` bytes, whole frames);
+/// returns the bytes copied. Rights without the sink badge, invalid while the sink has not taken the output (1.3).
+pub fn sink_read(endpoint: Endpoint, capacity: u32, buffer: usize) -> Result<u32> {
+    let words = [14 | MAJOR << 8 | ((capacity) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, Some((buffer, false)))?;
+    wire::check_error(&reply)?;
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 32) as u32)
+}
+
 /// A request to the `audio` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -175,6 +198,8 @@ pub enum Request {
     Levels,
     SetVolume { percent: u8, muted: bool },
     SetGain { percent: u8, boost: bool },
+    Sink { on: bool },
+    SinkRead { capacity: u32, buffer: usize },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -245,6 +270,14 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SetGain { percent, boost }, call))
         }
+        13 => {
+            wire::body(request, cap, [0x10000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Sink { on: wire::field(&words, 0, 16, 1) != 0 }, Call::words(request, cap)))
+        }
+        14 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
+            Ok((Request::SinkRead { capacity: wire::field(&words, 0, 16, 32) as u32, buffer: cap }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -295,4 +328,12 @@ pub fn reply_set_volume(call: Call, value: Result<&Levels>) -> Result<()> {
 pub fn reply_set_gain(call: Call, value: Result<&Levels>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_sink(call: Call, value: Result<u32>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_sink_read(call: Call, value: Result<u32>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [((value) as usize) << 16, 0])
 }
