@@ -2,6 +2,7 @@
 // control and bulk transfers, interrupt IN endpoints kept polling with their reports queued (issue 164), and
 // isochronous endpoints streaming, IN and OUT (000-DRV-0073).
 use core::sync::atomic::{fence, Ordering};
+use crate::close::{self, Counted};
 use crate::spill::Spill;
 use mind::dev::{Dma, Mmio};
 
@@ -96,6 +97,8 @@ pub struct Stream {
     // said (uptime ms, ns), those two then, and the transfer usb_host waited for (000-DRV-0094); the time with no TD on
     // the ring in all and at most, and the times said.
     end_ns: u64, call_ns: u64, dry_seen: Option<Dry>, empty_ns: u64, longest_ns: u64, said: u32,
+    // Its close begun, the device told (000-DRV-0081): the TDs that ended in error since, and the last one's code.
+    closing: bool, in_close: u32, close_code: u32,
 }
 
 // A ring that ran dry, until its next TD (000-DRV-0094).
@@ -107,7 +110,7 @@ struct Dry { at_ms: u64, at_ns: u64, end_ns: u64, call_ns: u64, wait: Option<Wai
 struct Wait { slot: u8, dci: u8, since_ns: u64 }
 
 // A time in ms with a tenth.
-struct Ms(u64);
+pub struct Ms(pub u64);
 impl core::fmt::Display for Ms {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { write!(f, "{}.{}", self.0 / 1_000_000, self.0 / 100_000 % 10) }
 }
@@ -522,7 +525,7 @@ impl Xhci {
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input, bulk: false, halted: false, ring, packet: bytes, size, pages, tds, state: [Td::Free; STREAM_TDS], next: 0, oldest: 0,
             missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1 << interval.min(15), spill: input.then(|| Spill::new(ISO_SPILL_BYTES)),
-            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0 });
+            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0, closing: false, in_close: 0, close_code: 0 });
         Some(ring)
     }
     /// A bulk IN stream on endpoint `dci` of `slot` (158-DRV-0082), on `ring`, the endpoint's own, which its context
@@ -538,7 +541,7 @@ impl Xhci {
         let now = mind::time::uptime_ms() as u64;
         self.streams[at] = Some(Stream { slot, dci, interface, input: true, bulk: true, halted: false, ring, packet: PAGE, size: PAGE, pages, tds, state: [Td::Free; STREAM_TDS],
             next: 0, oldest: 0, missed: 0, dry: 0, damaged: 0, moved: 0, reported: false, ended_ms: now, codes: 0, said_ms: 0, uframe: None, step: 1, spill: Some(Spill::new(SPILL_BYTES)),
-            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0 });
+            end_ns: mind::time::monotonic_ns(), call_ns: mind::time::monotonic_ns(), dry_seen: None, empty_ns: 0, longest_ns: 0, said: 0, closing: false, in_close: 0, close_code: 0 });
         self.take_stream(at, &mut []);
         Some(tds)
     }
@@ -578,6 +581,11 @@ impl Xhci {
     pub fn bulk_streams_of(&self, slot: u8, interface: u8) -> u32 {
         self.streams.iter().flatten().filter(|t| t.slot == slot && t.bulk && t.interface == interface).fold(0, |m, t| m | 1 << t.dci)
     }
+    /// The streams of `slot`'s interface `interface` begin their close, the device about to be told (000-DRV-0081): an
+    /// error from then on is counted apart from the stream's errors.
+    pub fn close_streams(&mut self, slot: u8, interface: u8) {
+        for t in self.streams.iter_mut().flatten().filter(|t| t.slot == slot && !t.bulk && t.interface == interface) { t.closing = true; }
+    }
     /// Ends the streams of `slot`'s interface `interface` (all with None): their pages back to the pool. The endpoints
     /// themselves are dropped by the caller's Configure Endpoint, or with the slot.
     pub fn end_streams(&mut self, slot: u8, interface: Option<u8>) {
@@ -588,6 +596,8 @@ impl Xhci {
             let spilled = Spilled(t.spill.as_ref());
             mind::println!("[USB] {}SLOT {} ENDPOINT {}: STREAM ENDED: {} {}, {} MISSED, {} TIMES DRY ({} MS WITHOUT A TD, AT MOST {}), {} WITH ERRORS{}", Tag(self.number), t.slot, t.dci,
                 t.moved, if t.input { "BYTES" } else { "PACKETS SENT" }, t.missed, t.dry, Ms(t.empty_ns), Ms(t.longest_ns), t.damaged, spilled);
+            // The TDs that ended in error once the device was told to close are said apart (000-DRV-0081).
+            if t.in_close > 0 { mind::println!("[USB] {}SLOT {} ENDPOINT {}: {} TDS ENDED IN ITS CLOSE, THE DEVICE TOLD (COMPLETION {}) (000-DRV-0081)", Tag(self.number), t.slot, t.dci, t.in_close, t.close_code); }
             if !bulk { self.release(ring); }
             pages.iter().filter(|&&p| p != 0).for_each(|&p| self.release(p));
             self.streams[at] = None;
@@ -599,8 +609,10 @@ impl Xhci {
     fn stream_event(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(t) = self.streams[index].as_mut() else { return };
         let code = status >> 24;
-        // Each completion code other than success is said once a stream, with what the controller's status says.
-        if !matches!(code, SUCCESS | SHORT_PACKET) && code < 64 && t.codes & 1 << code == 0 {
+        let counted = if t.bulk { Counted::Good } else { close::counted(code, t.closing) };
+        // Each completion code other than success is said once a stream, with what the controller's status says; an error
+        // in its close is counted and said at its end (000-DRV-0081).
+        if !matches!(code, SUCCESS | SHORT_PACKET) && counted != Counted::InClose && code < 64 && t.codes & 1 << code == 0 {
             t.codes |= 1 << code;
             let (slot, dci, usbsts) = (t.slot, t.dci, self.mmio.read32(self.op + 4));
             mind::println!("[USB] {}SLOT {} ENDPOINT {}: {} TD ENDED WITH COMPLETION {}; USBSTS {:08X}", Tag(self.number), slot, dci, if t.bulk { "A BULK" } else { "AN ISOCHRONOUS" }, code, usbsts);
@@ -627,7 +639,7 @@ impl Xhci {
         (t.ended_ms, t.end_ns) = (mind::time::uptime_ms() as u64, mind::time::monotonic_ns());
         let Some(k) = (0..t.tds).find(|&k| t.state[k] == Td::Armed(pointer)) else { return };
         let good = matches!(code, SUCCESS | SHORT_PACKET);
-        if code == MISSED_SERVICE { t.missed += 1; } else if !good { t.damaged += 1; }
+        match counted { Counted::Missed => t.missed += 1, Counted::Error => t.damaged += 1, Counted::InClose => (t.in_close, t.close_code) = (t.in_close + 1, code), _ => {} }
         if !t.reported && good {
             t.reported = true;
             mind::println!("[USB] {}SLOT {} ENDPOINT {}: FIRST ISOCHRONOUS {} DONE ({} BYTES)", Tag(self.number), t.slot, t.dci, if t.input { "PACKET" } else { "SEND" }, t.packet.saturating_sub((status & 0xFF_FFFF) as usize));
