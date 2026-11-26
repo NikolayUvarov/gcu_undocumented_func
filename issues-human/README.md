@@ -218,6 +218,7 @@ Main task [100004](../issues/100004-two-allwinner-boards-before-the-phone.md): t
     - agents may power-cycle the bench's devices: «стендовые устройства по питанию можно будет перезагружать» ([100004-MOB-0009](../issues/100004-MOB-0009-the-benchs-power-switched-by-agents.md)).
   - [ ] **When it is found,** name the device, how it is controlled (USB serial, HID, network) and what is on each channel.
   - **One thing to wire:** with the power cut, a USB-UART adapter's TX (3.3 V when idle) can feed the board through its RX and keep it half on. A resistor of about 1 kΩ in series with the adapter's TX prevents it.
+- [ ] **The bench's board** (the maintainer, 2026-11-26: «MOB будет делать работу на стенде - это не телефон, а плата разработки с добавленными компонентами»): name the board and each component added to it, with the bus it is on (I2C, SPI, UART, USB, GPIO), so that `MOB` checks them against the board's device tree.
 - [ ] **Two or more microSD cards** for each board.
 - [ ] **Writing the card** with the image of [100004-MOB-0001](../issues/100004-MOB-0001-the-boards-sd-card.md), when it is ready. Writing a card stays the maintainer's act.
 
@@ -279,10 +280,10 @@ Main task [100003](../issues/100003-mind-hub-requests-conversation-check-and-upd
 - [ ] **Build and run:** `cargo build --release --manifest-path tools/mindhub/Cargo.toml`; then `mindhub serve hub --listen 0.0.0.0:443 --cert chain.pem --key key.pem` as a systemd service. Note the `SPKI SHA-256` line it prints.
 - [ ] **Keys** (`mindhub key FILE` prints the public half; the file is 0600):
   - the admin's key stays with you;
-  - one key for intake, one per track that will take requests, one for the integrator;
+  - one key for intake (`SUP`), one per track that will take requests, one for the integrator;
   - each public half goes into `hub/hub.conf` as `admin maintainer <key>` or `agent <TRK> intake|track|integrator <key>`;
   - the private files go to the agents the way the Effector key does, never into the repository or a message.
-- [ ] **Which track handles incoming requests:** `APP` (intake by design 7.2) until you name a new track for it.
+- [x] **Which track handles incoming requests:** `SUP`, opened on 2026-11-26 («заводи трек SUP для приёма заявок»; main task [102000](../issues/102000-incoming-requests-read-sorted-and-answered.md)). Its key's line is `agent SUP intake <key>`; the key goes to the session that takes `SUP`.
 - [ ] **The cloud environment:** add the hub's name to the environment's allowed hosts. The kernel session can propose that change once the name exists; you approve it.
 - [ ] **Backups** of the hub's directory (`journal.jsonl`, `attachments/`).
 
