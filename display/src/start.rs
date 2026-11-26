@@ -81,10 +81,20 @@ fn step1<D: Device>(d: &mut D, plan: &Plan, id: u32, engine: usize, store: &mut 
     if id != RADEON { d.say(format_args!("NOT THE RADEON 1002:1638: STEP 1 NOT RUN")); return (0, None); }
     if engine < dcn::DCN_BYTES.end as usize { d.say(format_args!("THE ENGINE'S WINDOW IS BELOW {:#X} BYTES: STEP 1 NOT RUN", dcn::DCN_BYTES.end)); return (0, None); }
     if plan.order == Order::Survey { out.pause(START_PAUSE_MS); }
-    if plan.batches == 0 { return (batches::read_into(&mut Unmapped, 0, plan.order, out, store).registers_read, None); }
+    if plan.batches == 0 {
+        let read = batches::read_into(&mut Unmapped, 0, plan.order, out, store).registers_read;
+        batches::read_second(&mut Unmapped, false, out, store);
+        return (read, None);
+    }
     let Some(mut window) = d.map() else { d.say(format_args!("THE ENGINE'S WINDOW NOT MAPPED: STEP 1 NOT RUN")); return (0, None) };
-    let read = batches::read_into(&mut window, plan.batches, plan.order, out, store).registers_read;
+    let read = read_all(&mut window, plan, out, store);
     (read, Some(window))
+}
+
+/// Step 1's batches as the plan asks, then batch 12, HDMI-A-2's (213-DRV-0112), when all eleven are read: the registers read.
+fn read_all(bus: &mut impl Bus, plan: &Plan, out: &mut dyn Out, store: &mut Store) -> usize {
+    let read = batches::read_into(bus, plan.batches, plan.order, out, store).registers_read;
+    read + batches::read_second(bus, plan.batches >= batches::BATCHES, out, store).registers_read
 }
 
 /// Step 2 (213-DRV-0095): the EDID over DDC1, on the writer, and what it says.
@@ -189,7 +199,7 @@ impl<'a> Follower<'a> {
             hpd::Action::LightUp => {
                 drop(self.run.take()); // the last run's journal and interpreter let go before the next is made
                 let mut store = Store::default();
-                batches::read_into(w, plan.batches, plan.order, out, &mut store);
+                read_all(w, plan, out, &mut store);
                 let edid = if plan.edid { ddc::read(&store, w, out).ok().and_then(|r| ddc::describe(&r, out)) } else { None };
                 self.run = step3(d, plan, &store, Some(&mut *w), vfct, edid.as_ref(), build, out);
                 self.state = hpd::state_after(self.run.as_ref().map(|r| r.outcome));

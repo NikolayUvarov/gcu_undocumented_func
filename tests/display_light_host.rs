@@ -2833,3 +2833,39 @@ fn stage_9_and_the_watch_sleep_between_their_polls_and_a_late_wake_spoils_neithe
     let frame: u32 = first.split("AT FRAME ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
     assert!((18..=20).contains(&frame) && passed(&log) >= 1 && first.ends_with("; CLEARED 1 TIMES"), "{}; {} passed", first, passed(&log));
 }
+
+// --- the second socket, HDMI-A-2 (213-DRV-0112) ---
+
+// The Ryzen as step 1 finds it with the monitor in the second socket: HPD 2 sensing and enabled, HPD 1 enabled, sensing none.
+fn plugged_2() -> Engine {
+    let mut e = plugged();
+    e.regs.insert(reg(R::HpdIntStatus, 0), 0);
+    e.regs.insert(reg(R::HpdIntStatus, 1), 0b10);
+    e.regs.insert(reg(R::HpdControl, 1), 1 << 28);
+    e
+}
+fn ryzen_on(e: Engine, monitor: Vec<u8>) -> Model<Both> {
+    Model { at: Shared(Rc::new(RefCell::new(Both { e, i2c: I2c::new(monitor) }))), maps: 0, writers: 0, said: vec![] }
+}
+
+#[test]
+fn with_a_monitor_in_the_second_socket_alone_read_and_light_log_its_blocks_and_write_nothing() {
+    let table = vfct(&good());
+    for setting in [setting::Setting::Read, setting::Setting::Light] {
+        let plan = setting::plan(setting, setting::Bringup::RELEASE);
+        let mut m = ryzen_on(plugged_2(), hdmi_monitor());
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let s = start_with(&mut m, &plan, &table, &mut held);
+        let log = held.inner.0.clone();
+        // Batch 12's values, in the production order's log.
+        for x in ["B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS 00000002, CONTROL 10000000", "B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN"] {
+            assert!(log.iter().any(|l| l == x), "{:?}: no {:?} in {:#?}", setting, x, log);
+        }
+        // Not one write: of the engine, of the I2C engine; no offer.
+        let b = m.at.0.borrow();
+        assert!(device(&b.e).is_empty() && b.i2c.writes.is_empty(), "{:?}: {:?} {:?}", setting, device(&b.e), b.i2c.writes);
+        assert_eq!(s.written, 0);
+        assert!(s.read > 0 && said_start(&m, "NO SECOND SCREEN OFFERED"), "{:?}: {:#?}", setting, m.said);
+    }
+}
