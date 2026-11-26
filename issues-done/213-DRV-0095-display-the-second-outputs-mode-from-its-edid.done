@@ -1,6 +1,6 @@
-# 213-DRV-0095 — `display`: the second screen in its monitor's own mode, from its EDID
+# 213-DRV-0095 — `display`: the second screen in its monitor's own mode, from its EDID — done
 
-**Type:** driver (`display`, step 5) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`, step 5) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -334,7 +334,7 @@ the monitor's own mode went through at the first try.**
 
 ## For a successor (state on 2026-11-22)
 
-Superseded by the section of the same name in [213-DRV-0103](../issues-done/213-DRV-0103-display-a-standing-underflow-check.done), which adds
+Superseded by the section of the same name in [213-DRV-0103](213-DRV-0103-display-a-standing-underflow-check.done), which adds
 0098's production order, 0096's `HOTPLUG` and 0103's standing check. What follows is the state before them.
 
 - **Branch:** `claude/213-DRV-0095-display-the-monitors-own-mode`, made from 213-DRV-0092's head (3e68b77b9, in the
@@ -390,6 +390,22 @@ the mirror). The maintainer, after the cable out and in and the monitor's button
 He saw the picture come up and both screens alike. He has not read the monitor's own menu for the mode it shows, so his
 look at the mode, criterion 5's, is still to come.
 
+## Boot 107: the monitor's own menu read (2026-11-26)
+
+Boot 107 is release 202611261722: `main` 84401caf4 with the Bluetooth branch and 000-KRN-0283's mend; `display` and the
+compositor are `main`'s. It holds for that machine, that monitor (TRG "KQ34C144C") and that release (MC-12.1).
+
+- **At the start:** `STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING`, then
+  `[COMPOSITOR] SECOND SCREEN 3440X1440, PITCH 13824, Bgr, FROM PID 39: THE FIRST MIRRORED AT 2304X1440 FROM 568,0`.
+- **The plug taken out and put back by the maintainer** (1517.400 to 1527.127 s): `STEP 3 TAKEN BACK: HPD 1 SENSES NO
+  MONITOR`, the take-back in 26.3 ms, `SECOND SCREEN GONE`; then the EDID read again (`PREFERRED: 3440x1440 AT 60.000 HZ,
+  324000 KHZ`), the same mode, `S15 UNBLANK DONE … WATCHED 60 FRAMES IN 998 MS CLEAN`, the screen offered again, and
+  `A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`. Step 3 took 2011.0 ms.
+- **His look:** «Мышь движется, на обоих мониторах одинаковое изображение, на втором такое разрешение, как ты ожидаешь.»
+  He had been asked to read the HDMI monitor's own menu, with 3440x1440 at 60 Hz named as what to expect.
+- **What his words do not say:** the frequency by itself. He confirmed the resolution as expected; the 60 Hz is the
+  log's (`AT 60.000 HZ`, 60 frames watched in 998 ms).
+
 ## Acceptance criteria
 
 - [x] Batch 11 reads HDMI-A-1's DDC line and the I2C engine, read-only and never `DC_I2C_DATA`, with host cases; steps 3
@@ -399,16 +415,28 @@ look at the mode, criterion 5's, is still to come.
   every failure; host cases on a model of the engine (`display_ddc_host.rs`).
 - [x] Step 2 on the Ryzen: its checksums good, its preferred timing 3440x1440 at 324 MHz as Linux's mode says, the
   engine as found after; what it says of a mode within DVI recorded here (boot 78: none).
-- [ ] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
+- [x] HDMI-A-1 in its monitor's mode on the Ryzen, the mirror on it, stage 15's watch clean, and the maintainer's look
   (MC-12.1).
-  Boot 81's log shows the mode, the mirror at 2304x1440 from x 568 and the watch clean; the maintainer's look is still
-  to come. Boot 94 (above): he saw both screens alike with the second in 3440x1440 by the log; the monitor's own menu
-  not read.
+  Boot 81's log shows the mode, the mirror at 2304x1440 from x 568 and the watch clean. Boot 94 (above): he saw both
+  screens alike with the second in 3440x1440 by the log. Boot 107 (below): he read the monitor's own menu.
 
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror, the
-pitch), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light, table 12's two paths),
-[213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done) (the paths, the monitors, the survey's hang),
-[213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (hot-plug, which reads the EDID
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror, the
+pitch), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.done) (first light, table 12's two paths),
+[213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done) (the paths, the monitors, the survey's hang),
+[213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (hot-plug, which reads the EDID
 again).
+
+## Resolution
+
+Done on 2026-11-26. `display` lights the second output in the mode its monitor's EDID prefers, in `main` since the
+landing of this task's commits; on the Ryzen that is 3440x1440 at 324 MHz in HDMI signalling.
+
+- **Shown on the Ryzen** (MC-12.1, that machine and that monitor): the mode and the mirror by the log on boots 81, 94
+  and 107, stage 15's watch clean each time, the mode chosen again after a plug change, and the maintainer's reading of
+  the monitor's own menu on boot 107.
+- **Not shown:** any other monitor, a monitor whose preferred mode needs more than one pipe can give, and a mode within
+  DVI (this monitor offers none).
+- **The plug change on boot 104 that hung the whole machine** is not this task's: it is 213-KRN-0278, and boot 107's
+  plug change ran with 000-KRN-0283's mend in the kernel.
