@@ -264,14 +264,34 @@ fn a_scan_ends_with_its_tunes_and_the_frames_it_kept() { serve(true, vec![beacon
 });}
 
 #[test]
-fn a_networks_filter_narrows_the_hardware_and_a_scan_opens_it_again() { serve(true, Vec::new(), |service, phy, _, _, _, events| {
+fn a_networks_filter_narrows_the_hardware_when_a_send_admits_the_channel_and_a_scan_opens_it_again() {
+    serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
     let set = |service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>, all: bool, bssid: u64| {
         let id = ipc::buffer(3, &filter(all, bssid)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
     };
+    // US: 36 may be sent on; 100 is a DFS channel, listen-only.
+    let id = ipc::buffer(9, &country("US", &[(36, 23, false), (100, 24, true)])); step(service, phy, events); info(id);
     set(service, phy, events, true, 0); assert_eq!(service.take_narrowing(), None, "the start's filter is already a scan's");
-    set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), Some(true));
+    // A network's filter alone leaves the hardware open: narrowed, it would pass no beacon before a BSSID is set.
+    let id = ipc::words(2, 100); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
     set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), None);
+    // On the listen-only channel the refused send narrows nothing, so the access point's beacon still comes in.
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Failed);
+    assert_eq!((service.take_narrowing(), service.take_ask().is_none()), (None, true));
+    phy.bus_between_stages().device_for_test().inner.inject_packet(0, 0, &beacon());
+    step(service, phy, events);
+    // The send that admits the channel narrows the hardware with it, before the calibration; once.
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    assert_eq!(service.take_narrowing(), Some(true));
+    assert!(matches!(service.take_ask(), Some(Ask::Admit(100, Some(_)))));
+    set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), None);
+    // A scan opens it again at once; a channel sent on freely narrows it at its first send.
     set(service, phy, events, true, 0); assert_eq!(service.take_narrowing(), Some(false));
+    let id = ipc::words(2, 36); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    set(service, phy, events, false, 0x021122334455); assert_eq!(service.take_narrowing(), None);
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    assert_eq!(service.take_narrowing(), Some(true));
+    assert!(matches!(service.take_ask(), Some(Ask::Admit(36, None))));
 });}
 
 // 213-DRV-0087: the registers a band sets, read back from the modelled device.
