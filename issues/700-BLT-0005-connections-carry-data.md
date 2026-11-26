@@ -130,4 +130,4 @@
 
 ## Related
 
-[700](700-bluetooth.md), [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md) (pairing), [700-BLT-0007](700-BLT-0007-a2dp-source.md) (A2DP), [700-BLT-0008](700-BLT-0008-classic-hid-host.md) (HID), [700-BLT-0009](700-BLT-0009-le-pairing-and-hid-over-gatt.md) (LE), [700-DRV-0043](700-DRV-0043-usb-host-hands-out-bluetooth-controllers.md) (the bulk IN endpoint polled).
+[700](700-bluetooth.md), [700-BLT-0001](700-BLT-0001-bt-hci-the-rtl8821c-up.md), [700-BLT-0006](../issues-done/700-BLT-0006-classic-pairing-and-link-keys.done) (pairing), [700-BLT-0007](../issues-done/700-BLT-0007-a2dp-source.done) (A2DP), [700-BLT-0008](700-BLT-0008-classic-hid-host.md) (HID), [700-BLT-0009](../issues-done/700-BLT-0009-le-pairing-and-hid-over-gatt.done) (LE), [700-DRV-0043](700-DRV-0043-usb-host-hands-out-bluetooth-controllers.md) (the bulk IN endpoint polled).

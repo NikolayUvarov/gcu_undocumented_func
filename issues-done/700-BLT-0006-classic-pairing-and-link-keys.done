@@ -1,6 +1,6 @@
-# 700-BLT-0006 — Classic pairing: Secure Simple Pairing, PIN 0000 for old devices, link keys kept
+# 700-BLT-0006 — Classic pairing: Secure Simple Pairing, PIN 0000 for old devices, link keys kept — done
 
-**Type:** library (`bt_host`) and driver (`bt_hci`) · **Owner:** `BLT` · **Priority:** P1 · **Status:** in progress (2026-11-26) · **Blocked by:** `KRN`: a writable `data/bluetooth` for `bt_hci` (asked on `internal-dev-messages`, 2026-11-26), for keys kept across boots · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-10.1, MC-12.1, MC-12.3
+**Type:** library (`bt_host`) and driver (`bt_hci`) · **Owner:** `BLT` · **Priority:** P1 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-10.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -36,7 +36,7 @@ A headset, a keyboard or a mouse accepts profile channels only on an authenticat
   - the keys file read and written;
   - no key in the log.
 - [x] On the Ryzen: the maintainer's speaker, a JBL Flip 5, paired (2026-11-26, 6954-6955 s): `SECURE SIMPLE PAIRING, ITS IO CAPABILITY 3, AUTHENTICATION 04`, `CONFIRMED 868820`, `PAIRING DONE (STATUS 00)`, `LINK KEY OF TYPE 4 KEPT`, `ENCRYPTED`.
-- [x] With the writable `data/bluetooth`: the key survived `bt_hci`'s restarts (`2 KEYS`, both devices `PAIRED`, the speaker connected and encrypted with its kept key, no pairing). *That was the bench branch's own `init` line; KRN's grant is not in `main` yet.*
+- [x] With the writable `data/bluetooth`: the key survived `bt_hci`'s restarts (`2 KEYS`, both devices `PAIRED`, the speaker connected and encrypted with its kept key, no pairing). *That was the bench branch's own `init` line. With `main`'s own grant (700-KRN-0280) it was seen again on boots 106 and 107: see the resolution.*
 
 ## Progress (2026-11-26)
 
@@ -49,4 +49,18 @@ On the Ryzen, as the criteria say. The first pages were refused with `PAIRING FA
 
 ## Related
 
-[700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0007](700-BLT-0007-a2dp-source.md), [700-BLT-0008](700-BLT-0008-classic-hid-host.md).
+[700-BLT-0005](../issues/700-BLT-0005-connections-carry-data.md), [700-BLT-0007](700-BLT-0007-a2dp-source.done), [700-BLT-0008](../issues/700-BLT-0008-classic-hid-host.md).
+
+## Resolution
+
+Done on 2026-11-26. Classic pairing (Secure Simple Pairing with Just Works and a passkey, PIN 0000 for old devices) and
+the kept link keys are in `main` (round 179, `main` 9d6feac696, 2026-11-26; the branch's head fef042ee1).
+
+- **Shown on the Ryzen** (that machine, its RTL8852BE's Bluetooth, the maintainer's JBL Flip 5; MC-12.1):
+  - paired once by Secure Simple Pairing, the key kept in `data/bluetooth/keys.txt`;
+  - the key used at every later link with no pairing: across restarts of `bt_hci` on boot 105, and across boots 106 and
+    107, where the writable `data/bluetooth` is `main`'s own grant (700-KRN-0280, round 177). Boot 107: `2 KEYS; KEYS
+    KEPT IN data/bluetooth`, then `CONNECTED: HANDLE 001, IT CAME TO US` and `ENCRYPTED` 0.35 s later.
+- **By host cases only:** a device that shows a passkey, PIN 0000, a refused key forgotten and paired again.
+- **Not done here:** the keys lie in a file on the data volume. Their own protected store, and private addresses, are
+  for the hardening stage (the maintainer, 2026-11-26: working first).
