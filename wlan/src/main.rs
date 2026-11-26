@@ -356,7 +356,7 @@ impl Wlan {
             _ => None,
         };
         self.kept = self.chosen.is_some();
-        if let Some(code) = self.chosen.filter(|&c| regdb::select(c).is_ok()) { self.run_under(code, Source::Chosen); return; }
+        if let Some(code) = self.chosen.filter(|&c| catalogue::entry(c).is_some()) { self.run_under(code, Source::Chosen); return; }
         let plan = catalogue::listening(self.radio_channels());
         let mut out = Out::default();
         self.station.restrict(plan.allowed(), &mut out, &mut self.tx);
@@ -407,6 +407,7 @@ impl Wlan {
         self.running = Some((code, source));
         let (send, listen) = plan.counts();
         let why = match source {
+            Source::Chosen if code == *b"00" => alloc::format!("THE RULES EVERY COUNTRY ALLOWS, CHOSEN BY THE USER{}", if self.kept { ", KEPT BY KEYSTORE" } else { "" }),
             Source::Chosen => alloc::format!("CHOSEN BY THE USER{}", if self.kept { ", KEPT BY KEYSTORE" } else { "" }),
             Source::Detected { announced, heard } => alloc::format!("NONE CHOSEN; ANNOUNCED BY {} OF THE {} ACCESS POINTS THAT NAMED A COUNTRY", announced, heard),
             Source::World => alloc::format!("NONE CHOSEN, NONE ANNOUNCED: THE RULES EVERY COUNTRY ALLOWS"),
@@ -459,11 +460,11 @@ impl Wlan {
         Ok(list)
     }
 
-    // The user's country: the station leaves the network and drops the scan (`restrict`), runs under it, and `keystore`
-    // keeps it.
+    // The user's country, `00` too (the world rules, kept against the access points' announcements: 550-NET-0096): the
+    // station leaves the network and drops the scan (`restrict`), runs under it, and `keystore` keeps it.
     fn set_country(&mut self, code: &str) -> Result<wifi::CountryStatus, wifi::Error> {
-        let code = code_of(code, false)?;
-        regdb::select(code).map_err(|_| wifi::Error::NotFound)?;
+        let code = code_of(code, true)?;
+        catalogue::entry(code).ok_or(wifi::Error::NotFound)?;
         if !self.radio { return Err(wifi::Error::NoDevice); }
         self.first = false;
         self.chosen = Some(code);
