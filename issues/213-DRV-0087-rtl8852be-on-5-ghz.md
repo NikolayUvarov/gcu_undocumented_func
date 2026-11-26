@@ -1,6 +1,6 @@
 # 213-DRV-0087 — The RTL8852BE on 5 GHz: 20 MHz channels at 802.11a's rates
 
-**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-26: the join on channel 100 run under `00` on the Ryzen: the access point heard and chosen, one fault mended, the admission then refused by TSSI's power floor under the unknown country's cap; the maintainer's word on that cap awaited) · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-26: the station joins channel 100 under `00` on the Ryzen with `main`'s driver, holds it and comes back to channel 8; left: at a boot the station takes channel 8 first, which is `NET`'s, and the second Linux reference) · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -277,6 +277,20 @@ Release 202611260804 (`main` 6230e1fdb with DRV's pending requests; `rtw89_wifi`
 - **The maintainer's word, the same day:** «Да, делай», to the first. So `calibration_policy::Resolved::resolve` compares TSSI's 12 dBm with the channel's maximum under the world's rules (the cap's `maximum`), and the cap goes on holding every frame the station sends. Host cases: a maximum of 13 dBm admits (channel 6 at that EIRP, and channel 100), one of 11.5 dBm and channel 149's 7 dBm refuse, a known country is as before.
 
 **Not reached yet:** IQK, TSSI and DPK on 5 GHz, the association and any frame sent there. The order's steps 3 to 6 stay as they are, with one change: step 2 is followed by a restart of the radio.
+
+## Joined on channel 100 (the Ryzen, 2026-11-26)
+
+With the two changes of this task (the hardware filter open until admission; TSSI held to the channel's maximum), first as a driver replaced over the cable on release 202611260856 (boot 105), then as `main`'s own in release 202611261618 (boot 106: `main` 84401caf4 with the Bluetooth branch). It holds for that machine and that access point (MC-12.1). Raw lines: the owner session's `logs-2026-11-26/` (`5g-opt1-*.txt`, `5g-soak-ring.txt`, `boot-r3*.txt`).
+
+- **The join** (boot 105, 228.6 s): `LISTEN-ONLY CHANNEL 100: A0:36:BC:11:F8:8C HEARD 81 MS AFTER THE TUNE`, IQK and DPK `PASS` on both paths, `COUNTRY 00, UNKNOWN: POWER CAPPED AT 75 % OF THE MAXIMUM ON CHANNEL 100 …: 1 TX AT MOST 23 HALF-DBM OF ITS 26, 2 TX 17 OF 20`, `DATAPATH ADMITTED ON CHANNEL 100`, `THE FIRMWARE TOLD: CONNECTED TO A0:36:BC:11:F8:8C ON CHANNEL 100 AS AID 32`, `[WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 3)`, the address kept.
+- **33 minutes there:** `TRAFFIC ON 100: … 18718 BEACONS; 14737 SENT, 14737 ACKED, 0 LATE; 0 HOLES`, the firmware's error codes 0 in every minute line. Three transfers of 4 MiB: down at 229 and 306 KiB/s, up at 101 and 103 KiB/s, 500 of 500 UDP round trips. The agent stayed on the server over it.
+- **With `main`'s own driver** (boot 106, after one restart of the radio): `SCAN: 37 PASSIVE TUNES`, `HEARD 192 MS AFTER THE TUNE`, `DATAPATH ADMITTED ON CHANNEL 100`, `CONNECTED … AS AID 23`.
+- **Back to channel 8:** `wifi country UZ` in data mode says `CHANNEL 100 NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG MODE KEEPS SENDING` and the next join `Unsupported`; after a restart of the radio, `COUNTRY UZ AGAIN`, `DATAPATH ADMITTED ON CHANNEL 8`, joined.
+- **A Bluetooth stream beside it** (a speaker over A2DP for 13 minutes): no hole on channel 100; on channel 8 the same stream cost 21 one-second holes in a minute (213-DRV-0052).
+
+**What is not as the order of the run had it:**
+- **A country change moves nothing by itself:** in data mode the radio stays on its channel, so the scan that follows finds only that channel. Each move here took a restart of the radio (`kill`). Whether a country change should make the driver leave data mode is asked of `NET` (the station's side) and is this driver's to do if so.
+- **A boot under the kept `00` joined channel 8** (boot 106): the first scan ended after 17 passive tunes (2.4 GHz and channels 36 to 48), at the network's first hearing, before channel 100. That is the station's or the autorun's, told to `NET` (`KRN/2026-11-26T1626Z-DRV-for-net-at-boot-the-station-joins-channel-8-though-channel-100-is-there.md` on `internal-dev-messages`). So order step 5, "a restart comes up on channel 100 by itself", is not met.
 
 ## For a second Linux reference on channel 100 (asked by the owner session)
 
