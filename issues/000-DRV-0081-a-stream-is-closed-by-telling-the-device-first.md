@@ -1,6 +1,6 @@
 # 000-DRV-0081 — `usb_host`: a stream is closed by telling the device first, then ending its packets
 
-**Type:** driver (`usb_host`, `audio_gw`) · **Owner:** `DRV` · **Priority:** P3 · **Status:** in progress (2026-11-22: written on `claude/000-DRV-0081-a-close-tells-the-device-first`, from 000-DRV-0101's landing head; no hardware run: the speakerphone is not on the Ryzen) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver (`usb_host`, `audio_gw`) · **Owner:** `DRV` · **Priority:** P3 · **Status:** in progress (2026-11-26: in `main` since round 176; on the Ryzen three closes read from the log, two with short dry rings; the speakerphone's own counters left, for the maintainer's eyes) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
@@ -80,3 +80,17 @@ That is the order `usb_host` had. Whether the board counts lacking frames at a c
 ## Related
 
 [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md) (USB audio; its last criterion waits for this).
+
+## On the Ryzen (2026-11-26)
+
+`main`'s `usb_host` and `audio_gw` (6230e1fdb), the speakerphone behind the Genesys hub, three duplex streams closed. It holds for that machine, that board and those releases (MC-12.1).
+
+| The stream | Playback at the close | Feedback at the close |
+|---|---|---|
+| 300 s, boot 103 | `DRY 1 … NO TD 16.0 MS … WAITING ON A COMMAND FOR 30.9 MS` | `NO TD 15.6 MS … NOT WAITING`; 456 missed |
+| 900 s, boot 104 | none: `0 TIMES DRY` | none; 0 missed |
+| 300 s, boot 104 | `DRY 1 … NO TD 3.6 MS … NOT WAITING` | `NO TD 4.3 MS … NOT WAITING`; 176 missed |
+
+Capture's close left nothing in any of them. So a close can still leave the two OUT-side rings empty for a few milliseconds, once it fell in a command's wait. Whether the board counts that as an underrun is criterion 2: **the speakerphone's `USB P нед/пер` read after a five-minute stream from zero, by the maintainer.** Not asked yet.
+
+**Criterion 1:** QEMU's `usbaudio` suite passes with this change in the tree (2026-11-26, the group "x86: services, storage, audio" on d57b1aebf and a97b4fc9e); its stream's last line was not read for the close's error by hand.

@@ -1,6 +1,6 @@
 # 000-DRV-0101 — `usb_host` starts bulk transfers and answers from its loop instead of waiting on them
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: written on `claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop` at the owner session's word, and through the host tests and QEMU's suites; no hardware run before the owner session says) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-26: in `main` since round 176; on the Ryzen the streams stay full through a cable read and a write to the stick; the throughput's comparison left) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -142,3 +142,16 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
 ## Related
 
 [000-DRV-0094](../issues-done/000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.done), [000-LNK-0050](../issues-done/000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.done), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
+
+## On the Ryzen (2026-11-26)
+
+`main`'s `usb_host` (6230e1fdb) in releases 202611260804 and 202611260856, boots 103 and 104. It holds for that machine, that stick and those releases (MC-12.1). Raw lines: the owner session's `logs-2026-11-26/run0101-raw-lines.txt`.
+
+- **The minute tally, every minute of both boots:** all deferred transfers answered, none timed out. For example `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: 281 DEFERRED, 281 ANSWERED, 0 NOT FOUND, 0 TIMED OUT, 0 STOPPED, 0 WAITED ON; THE LONGEST 12 MS`, and under the run below 1161 in a minute, the longest 13 ms.
+- **The criterion's run** (boot 104, uptime 3625.9 to 3925.9 s; `apps/audiostub.elf duplex 300 0`; in its middle a log read over the cable, then a 1.1 MB file put over the cable, which `link` writes to the stick):
+  - capture: `0 MISSED, 0 TIMES DRY … SPILL AT MOST 3036 BYTES, FULL 0 TIMES`;
+  - playback: 0 times dry while it ran; one dry ring at the close (`DRY 1 AT 3925.950 S: NO TD 3.6 MS … NOT WAITING`);
+  - feedback: one dry ring at the close (4.3 ms), 176 missed;
+  - **the cable's read:** 231 145 bytes in 7.6 s, 30.3 KB/s, while the streams ran (33.3 KB/s on 2026-11-22 on an idle machine);
+  - **the put:** 1 136 440 bytes in 39.5 s, 28.8 KB/s: the cable's speed, not the stick's.
+- **So of the criterion:** "every stream's `TIMES DRY` 0 while they run" is shown; the dry rings at the close are 000-DRV-0081's. **Not shown:** the stick's own throughput (the put is bounded by the cable; a 4 MB delivery through the server was refused by the gateway's size bound), and a like-for-like comparison of the cable's (the two reads were not under the same load).
