@@ -2175,12 +2175,13 @@ fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
     }
 }
 
-// Every build the bring-up switches can make (213-DRV-0099).
+// Every build the bring-up switches can make (213-DRV-0099), HDMI-A-2's four levels among them (213-DRV-0112).
 fn bringups() -> Vec<setting::Bringup> {
+    use setting::HdmiA2::*;
     let mut all = vec![];
-    for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 {
-        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed });
-    } } }
+    for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 { for hdmi_a_2 in [Read, Edid, FirstLight, Full] {
+        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed, hdmi_a_2 });
+    } } } }
     all
 }
 
@@ -3324,4 +3325,47 @@ fn a_table_that_writes_the_other_sockets_phy_is_refused_and_everything_undone() 
         restored_but(&e, &before, &[]);
         assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 8 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED")));
     }
+}
+
+// --- the HDMI_A_2 switch (213-DRV-0112) ---
+
+#[test]
+fn hdmi_a_2_is_read_only_in_a_release_and_each_level_of_its_switch_plans_what_it_says_hdmi_a_1_unchanged() {
+    use setting::{plan, Bringup, HdmiA2::*, Setting};
+    use light::HDMI_A_2;
+    let r = Bringup::RELEASE;
+    assert_eq!(r.hdmi_a_2, Read);
+    let release = plan(Setting::Light, r);
+    // The release: HDMI-A-2 not taken, no EDID read over DDC2, no stage; HDMI-A-1 as before.
+    assert_eq!((release.hdmi_a_2, release.takes(&HDMI_A_2), release.edid_on(&HDMI_A_2), release.stages_on(&HDMI_A_2)), (Read, false, false, 0));
+    assert_eq!((release.takes(&HDMI_A_1), release.edid_on(&HDMI_A_1), release.stages_on(&HDMI_A_1)), (true, true, 16));
+    // Each level: what HDMI-A-2 may do, under STAGES_ALLOWED as it bounds HDMI-A-1; HDMI-A-1's plan the same at every level.
+    for (stages_allowed, levels) in [(16u8, [(Read, false, false, 0u8), (Edid, true, true, 0), (FirstLight, true, true, 8), (Full, true, true, 16)]),
+                                     (4, [(Read, false, false, 0), (Edid, true, true, 0), (FirstLight, true, true, 4), (Full, true, true, 4)]),
+                                     (12, [(Read, false, false, 0), (Edid, true, true, 0), (FirstLight, true, true, 8), (Full, true, true, 12)])] {
+        for (level, takes, edid, stages) in levels {
+            let b = Bringup { stages_allowed, hdmi_a_2: level, ..r };
+            let p = plan(Setting::Light, b);
+            assert_eq!((p.takes(&HDMI_A_2), p.edid_on(&HDMI_A_2), p.stages_on(&HDMI_A_2)), (takes, edid, stages), "{:?} {}", level, stages_allowed);
+            assert_eq!(setting::Plan { hdmi_a_2: Read, ..p }, plan(Setting::Light, Bringup { stages_allowed, ..r }), "{:?}: HDMI-A-1's plan changed", level);
+            // Off and read whatever the level; a level other than Read makes a bring-up build, named first.
+            for s in [Setting::Off, Setting::Read] { assert_eq!(plan(s, b), plan(s, r)); }
+            assert_eq!(b.is_release(), level == Read && stages_allowed >= 16);
+            assert_eq!(b.to_string().contains(&format!(" HDMI_A_2 {}", level.word())), level != Read, "{}", b);
+        }
+    }
+    assert_eq!(Bringup { hdmi_a_2: Edid, ..r }.to_string(), "A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 EDID; ONLY WHAT LIGHT DOES CHANGES");
+    assert_eq!(Bringup { hdmi_a_2: FirstLight, survey_order: true, ..r }.to_string(), "A BRING-UP BUILD, NOT A RELEASE: SURVEY_ORDER HDMI_A_2 FIRST_LIGHT; ONLY WHAT LIGHT DOES CHANGES");
+    // The read setting takes HDMI-A-2 to describe it, writing nothing; off takes nothing (it reads no HPD).
+    let read = plan(Setting::Read, r);
+    assert_eq!((read.takes(&HDMI_A_2), read.edid_on(&HDMI_A_2), read.stages_on(&HDMI_A_2), read.writes()), (true, false, 0, false));
+    // main.rs: the release's level committed, in the build's switches.
+    let main = include_str!("../display/src/main.rs");
+    for c in ["const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;", "stages_allowed: STAGES_ALLOWED, hdmi_a_2: HDMI_A_2 }"] { assert!(main.contains(c), "{}", c); }
+    // Through the switch, end to end on the model: HDMI-A-2's monitor alone lit in 16 stages at Full, refused nothing.
+    let table = vfct(&good_b());
+    let mut m = ryzen_2(plugged_2(), vec![], hdmi_monitor());
+    let s = start_with(&mut m, &plan(Setting::Light, Bringup { hdmi_a_2: Full, ..r }), &table, &mut Log(vec![]));
+    assert_eq!(s.run.as_ref().map(|x| (x.outcome, x.light.choice.output)), Some((Outcome::Stopped { done: 16 }, HDMI_A_2)));
+    assert!(said(&m, "HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 FULL: ITS EDID AND ALL 16 STAGES"), "{:#?}", m.said);
 }

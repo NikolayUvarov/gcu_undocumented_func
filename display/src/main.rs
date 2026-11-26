@@ -5,7 +5,8 @@
 // also with no word or one it does not know, maps no register; `read` runs step 1 (the firmware's display state read in
 // batches) and describes the stages; `light` runs steps 1 to 4 in the production order (213-DRV-0098: the EDID, first
 // light on HDMI-A-1 and MIND Core's picture, 213-DRV-0092 and 0095), then follows HPD 1 (213-DRV-0096) and reads both
-// pipes' underflow statuses (213-DRV-0103). start.rs is that order, on the Radeon's windows here.
+// pipes' underflow statuses (213-DRV-0103). HDMI-A-2, the second HDMI socket, is read and its HPD followed, and it is
+// driven as far as HDMI_A_2 below lets it (213-DRV-0112). start.rs is that order, on the Radeon's windows here.
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
@@ -29,11 +30,15 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// named and paused, every value, write and plan logged before it is made, 1 s before each stage's writes and 3 s after
 /// it; else the production order (213-DRV-0098). UNDO_AFTER_STAGES: the stages that ran are undone, last first, before
 /// display idles, and nothing follows them. STAGES_ALLOWED: at most this many of the 16 stages (1 to 8 first light, 9 to
-/// 16 the picture); below 15 no standing check, at 0 the stages only described.
+/// 16 the picture); below 15 no standing check, at 0 the stages only described. HDMI_A_2 (213-DRV-0112): how far display
+/// goes on the Ryzen's second HDMI socket when its monitor is the one there: Read (the release's) reads its blocks only
+/// (step 1's batch 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages,
+/// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED };
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
+const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED, hdmi_a_2: HDMI_A_2 };
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 

@@ -1,7 +1,8 @@
 //! 213-DRV-0099: what display does at start, by the word after the device's index in its argument (`24 light`), which
 //! init passes from the machine's `data/displays.txt` line `output second off|read|light`. No word, or one it does not
-//! know, is `off`, and the log says which. Three build switches stay for bring-up only (`Bringup`), off in a release; a
-//! build with one set says so in its first line. `tests/display_light_host.rs` checks it.
+//! know, is `off`, and the log says which. Three build switches stay for bring-up only (`Bringup`), off in a release, and
+//! a fourth says how far display goes on HDMI-A-2 (213-DRV-0112), its blocks read only in a release; a build with one set
+//! says so in its first line. `tests/display_light_host.rs` checks it.
 
 use crate::batches::{Order, BATCHES};
 use crate::dcn::{Output, FIRST_LIGHT, STAGES};
@@ -63,13 +64,14 @@ impl fmt::Display for Args<'_> {
 }
 
 /// The build switches kept for bring-up (213-DRV-0099), all off in a release: the survey's order (213-DRV-0098), the
-/// stages undone after they ran, and fewer stages than all 16. They change only what `Light` does.
+/// stages undone after they ran, fewer stages than all 16, and HDMI-A-2 driven further than its blocks read
+/// (213-DRV-0112). They change only what `Light` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8 }
+pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2 }
 
 impl Bringup {
-    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES };
-    pub fn is_release(&self) -> bool { !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES }
+    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Read };
+    pub fn is_release(&self) -> bool { !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES && self.hdmi_a_2 == HdmiA2::Read }
 }
 
 impl fmt::Display for Bringup {
@@ -79,6 +81,7 @@ impl fmt::Display for Bringup {
         if self.survey_order { f.write_str(" SURVEY_ORDER")?; }
         if self.undo_after_stages { f.write_str(" UNDO_AFTER_STAGES")?; }
         if self.stages_allowed < STAGES { write!(f, " STAGES_ALLOWED {} OF {}", self.stages_allowed, STAGES)?; }
+        if self.hdmi_a_2 != HdmiA2::Read { write!(f, " HDMI_A_2 {}", self.hdmi_a_2.word())?; }
         f.write_str("; ONLY WHAT LIGHT DOES CHANGES")
     }
 }
@@ -138,7 +141,8 @@ impl Plan {
 }
 
 /// The plan for `setting`: `Off` and `Read` whatever the build; `Light` as boots 95 to 100 ran it on the Ryzen (11
-/// batches, the EDID, 16 stages, HPD 1 followed, the standing check, the watch of 60), less what a bring-up switch takes.
+/// batches, the EDID, 16 stages, HPD 1 followed, the standing check, the watch of 60), less what a bring-up switch takes,
+/// and on HDMI-A-2 as far as the build's `HdmiA2` (213-DRV-0112).
 pub fn plan(setting: Setting, b: Bringup) -> Plan {
     let order = if b.survey_order { Order::Survey } else { Order::Production };
     let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES,
@@ -152,7 +156,7 @@ pub fn plan(setting: Setting, b: Bringup) -> Plan {
             let follows = stages > 0 && !b.undo_after_stages;
             let standing_check = follows && stages >= 15;
             Plan { batches: BATCHES, edid: true, stages, undo_after_stages: b.undo_after_stages && stages > 0, hotplug: follows, standing_check,
-                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, ..none }
+                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, ..none }
         }
     }
 }
