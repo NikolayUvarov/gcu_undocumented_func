@@ -1,6 +1,6 @@
 # 213-DRV-0060 — The Ryzen 9 5900HX's second NVMe disk, and its analog sound heard
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** for the second disk, `init`'s grant of a second `nvme` instance (KRN, to be asked when this starts) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** for the second disk, `init`'s `nvme#1` (KRN: the request of 2026-11-26), then the maintainer's run · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the kernel track's request of 2026-10-13 in `requests-DRV.md` ("The Ryzen 9 5900HX machine: sound, Ethernet, a second NVMe disk, a second xHCI"), from the maintainer's first run (`log:hw0003.txt`).
 
@@ -45,6 +45,52 @@ The machine is the maintainer's: the run needs it booted into MIND Core, and the
   - Linux lists a second one, a Netac 128 GB with Ubuntu, and MIND Core lists nothing of it.
   - The second and third criteria are left.
 
+## Progress (2026-11-26): `nvme` by instance, read-only past the first; init's part asked of KRN
+
+**Built** (`DRV`, this branch):
+- **The instance from init's argument** (`nvme/src/guard.rs`): none or `0` is the first, which writes as before. Any other number, or text that names none, is read-only.
+- **Read-only at the testing stage.** The second disk holds the Ubuntu install that the Ryzen's other users boot.
+  - The instance sends its controller only Identify, Set Features for the Number of Queues, Create I/O Completion Queue, Create I/O Submission Queue and Read.
+    - The Set Features is feature 07h, unsaved, which the queues' bring-up needs, as Linux sends it. The first instance still creates its queues without it.
+    - Every other opcode of either queue is refused in `submit` before the queue is touched: Write, Write Zeroes, Write Uncorrectable, Dataset Management, Flush, Format NVM, Sanitize, namespace management, firmware, any other Set Features, and the rest.
+  - An admin command that fails is said with its status. A namespace whose queues are not created still has its capacity said.
+  - It answers `writable` false, so the serve loop refuses its writes and flushes for every client badge.
+  - The drivers' serve loop (`libmind/src/block.rs`) now tells the driver of each such refusal, with the client's badge and PID (`Driver::refused`, a no-op for the other drivers). `nvme` says each one, one line each up to 64, then every 1024th with the count.
+  - At start it says that it is read-only, and logs the SHA-256 of its disk's first 2048 sectors (1 MiB) and whether sector 1 is a GPT header.
+- **Every instance logs its controller's vendor, model and firmware;** the first instance's other lines are as before.
+
+**Not built here:** `init`'s `nvme#1` (the second controller in PCI order, with the argument `1`) and its place in `STORE_DRIVERS` and in `vfs_server`'s drivers. These are KRN's, and the request was written on 2026-11-26. The DRV owner posts it.
+- For a QEMU run before that, the bench branch `claude/DRV-nvme-bench` carries them, in commits titled "Bench only, not for landing". It adds `nvme#1` to a list of init's own, not to `common/abi.rs`.
+- It also adds the QEMU check `--suites nvme2` (`second_nvme_check` in `tests/qemu_smoke.py`).
+
+**Tested** (on the maintainer's PC LEG9, WSL2, QEMU; no hardware):
+- `tests/nvme_host.rs` (7 tests): the argument's rule, the allow-list against all 256 opcodes of each queue, and the refusals' bound.
+- On the bench branch, `--suites nvme2`, x86, 4 CPUs, passed. It runs two machines:
+  - **Machine 1:** the system boots from the first NVMe disk. The second disk holds a GPT image of another system.
+    - `nvme#1` says it is read-only and lists 131072 sectors.
+    - The SHA-256 of its first MiB, read in MIND Core, is the image file's.
+    - init lists its 2 partitions and gives `vfs_server` none of the disk.
+    - A file written on the first disk is read back.
+  - **Machine 2:** the block stand-in for `vfs_server` (`tests/block_app.rs`) writes to every disk it is given.
+    - On the first NVMe disk its sectors land.
+    - On the second, its 3 writes and its flush are refused, and `nvme#1` says each one with badge `0x1` and the stand-in's PID.
+  - After each machine, the second image file's SHA-256 is unchanged.
+- **On this branch** (commits 74adcab39, the driver, and 8fdf73ec0, the queue pair asked for first):
+  - `bash ./02_build.sh` (x86_64) and `scripts/build_aarch64.sh` passed at both commits.
+  - `scripts/host_tests.sh`, all of it, passed at both commits.
+  - The x86 groups passed on 4 CPUs:
+    - "NVMe boot disk" and "files and block writes", at both commits;
+    - "services, storage, audio", `ahci` included, at 74adcab39.
+      - Its first run failed in `audio` on a timing bound, `0.55 < seconds < 0.65` against 0.662. That was while the host tests ran beside it.
+      - Rerun alone, the whole group passed.
+  - The aarch64 groups "NVMe boot disk" and "files and the block store" passed at 74adcab39.
+  - The bench branch with 8fdf73ec0 passed `nvme2`, the x86 group "NVMe boot disk" and the `services` suite.
+- These are QEMU runs. They are no evidence for the Ryzen (MC-12.1).
+
+**Not done:**
+- The second and third criteria on the Ryzen. They wait for KRN's grant, or the bench image, and the maintainer's run.
+- The second disk writable: split to [213-DRV-0105](213-DRV-0105-the-ryzens-second-nvme-disk-writable.md). No instance but the first writes.
+
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), [551](551-sound-on-pcs.md).
+[213](213-amd-ryzen-pc.md), [213-DRV-0105](213-DRV-0105-the-ryzens-second-nvme-disk-writable.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), [551](551-sound-on-pcs.md).
