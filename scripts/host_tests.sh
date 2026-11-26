@@ -81,6 +81,7 @@ python3 tests/build_jobs_test.py
 python3 tests/mirror_test.py
 python3 tests/usb_image_test.py
 python3 tests/board_image_test.py # a device's card from its catalog entry: the partitions moved past its firmware (100004-MOB-0001, 352-MOB-0010)
+python3 tests/board_stage1_test.py # stage 1's criteria from a board's console, on QEMU's recorded consoles and stand-ins of its sources (100004-MOB-0012)
 python3 tests/make_iso_test.py # the hybrid installer ISO: one boot volume for El Torito and the MBR (352-UPD-0047)
 python3 tests/media_test.py
 python3 tests/effector_server_test.py
