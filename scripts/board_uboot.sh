@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
 # U-Boot with TF-A's BL31 for an Allwinner board's card (100004-MOB-0001): pinned tags, built once into a cache, no root.
-# Usage: scripts/board_uboot.sh [--fetch-tools] orangepi-zero-plus2|orangepi-zero3   (prints u-boot-sunxi-with-spl.bin's path)
+# Usage: scripts/board_uboot.sh [--fetch-tools] <board>   (prints the firmware's path; the boards: board_image.py --list)
+# The board's defconfig, TF-A platform and file, the sources' tags, commits and URLs and the bytes known come from its entry in
+# scripts/boards.toml, the catalog of devices (352-MOB-0010); this script holds the build's settings.
 # U-Boot's network is off (CONFIG_NO_NET): no DHCP, PXE or TFTP boot runs before our loader (351-KRN-0195).
 # Its countdown stops only on the typed word `stop` (CONFIG_AUTOBOOT_KEYED): the console is also the link's line, whose
 # frames would stop it as any key does.
-# Needs aarch64-linux-gnu-gcc, make, bison, flex, swig, bc, python3 with setuptools and pyelftools, OpenSSL's headers.
+# Needs aarch64-linux-gnu-gcc, make, bison, flex, swig, bc, python3 (3.11 or later) with setuptools and pyelftools, OpenSSL's headers.
 # --fetch-tools: bison, swig and pyelftools as Ubuntu packages unpacked into the cache (apt-get download, no root).
 # MIND_BOARD_UBOOT=<file> uses that file instead; the cache is ${XDG_CACHE_HOME:-$HOME/.cache}/mind-board-uboot.
 set -euo pipefail
-TFA_TAG=v2.15.0 TFA_COMMIT=da738d5eae93af342fdc4995dd3c05acb4c9d757
-TFA_URLS=("https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git" "https://github.com/ARM-software/arm-trusted-firmware.git")
-UBOOT_TAG=v2026.10 UBOOT_COMMIT=5508406582f6f7120dce0c4b3059819a41788db2
-UBOOT_URLS=("https://source.denx.de/u-boot/u-boot.git" "https://github.com/u-boot/u-boot.git")
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SETTINGS=2  # the settings below; a new number builds again instead of taking the cached files
 
 FETCH_TOOLS=0
 [[ ${1:-} == --fetch-tools ]] && { FETCH_TOOLS=1; shift; }
 BOARD=${1:-}
-# The board: TF-A's platform, U-Boot's defconfig, and the bytes this script made on Ubuntu 24.04's cross gcc 13.3.0.
-case $BOARD in
-    orangepi-zero-plus2) PLAT=sun50i_a64 DEFCONFIG=orangepi_zero_plus2_defconfig
-                         KNOWN=eca0f636f497cd524bc1f6d1863517da700b8d5d598e9ea73124b702414f4c54 ;;
-    orangepi-zero3) PLAT=sun50i_h616 DEFCONFIG=orangepi_zero3_defconfig
-                    KNOWN=73bcdf3f7e0698f0983ff15a2026b28796fd87b93688543dbd6dff92d838d842 ;;
-    *) echo "usage: $0 [--fetch-tools] orangepi-zero-plus2|orangepi-zero3" >&2; exit 2 ;;
-esac
+usage() { echo "usage: $0 [--fetch-tools] <board>; the boards: $(python3 "$ROOT/scripts/board_image.py" --list | cut -f1 | tr '\n' ' ')" >&2; exit 2; }
+[[ $BOARD =~ ^[a-z0-9-]+$ ]] || usage
+# The board's entry: TF-A's platform, U-Boot's defconfig, the sources, and the bytes known from the toolchain it names.
+assignments=$(python3 "$ROOT/scripts/board_image.py" --board "$BOARD" --shell) || usage
+eval "$assignments"
 if [[ -n ${MIND_BOARD_UBOOT:-} ]]; then [[ -f $MIND_BOARD_UBOOT ]] || { echo "MIND_BOARD_UBOOT=$MIND_BOARD_UBOOT: no such file" >&2; exit 1; }; echo "$MIND_BOARD_UBOOT"; exit 0; fi
 CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/mind-board-uboot
 OUT=$CACHE/$UBOOT_TAG-$TFA_TAG-s$SETTINGS/$BOARD
-BIN=$OUT/u-boot-sunxi-with-spl.bin
+BIN=$OUT/$FILE
 [[ -f $BIN ]] && { echo "$BIN"; exit 0; }
 
 # The tools, fetched as packages into the cache when asked; the build then finds them first.
@@ -92,9 +88,9 @@ if grep -a -q -E '^boot_targets=.*\b(pxe|dhcp)\b' "$WORK/u-boot/u-boot-initial-e
 cp "$WORK/u-boot/.config" "$OUT/u-boot.config"
 cp "$WORK/u-boot/u-boot-initial-env" "$OUT/"
 cp "$BL31" "$OUT/bl31.bin"
-cp "$WORK/u-boot/u-boot-sunxi-with-spl.bin" "$BIN.new"
+cp "$WORK/u-boot/$FILE" "$BIN.new"
 got=$(sha256sum "$BIN.new" | cut -d' ' -f1)
-if [[ $got == "$KNOWN" ]]; then echo "board_uboot: $BOARD: the bytes known from Ubuntu 24.04's cross gcc 13.3.0" >&2
-else echo "board_uboot: $BOARD: SHA-256 $got, not the $KNOWN made on Ubuntu 24.04's cross gcc 13.3.0 (another toolchain?)" >&2; fi
+if [[ $got == "$KNOWN" ]]; then echo "board_uboot: $BOARD: the bytes known from $KNOWN_WITH" >&2
+else echo "board_uboot: $BOARD: SHA-256 $got, not the $KNOWN made with $KNOWN_WITH (another toolchain?)" >&2; fi
 mv "$BIN.new" "$BIN"
 echo "$BIN"

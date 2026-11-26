@@ -76,6 +76,8 @@ They show U-Boot, the loader and the kernel's first lines, and stop at `INIT STA
 
 **Left:** plan step 6 (`build_and_write.sh`'s board word with `link.conf`), and the boards' runs.
 
+**Since 2026-11-26** ([352-MOB-0010](352-MOB-0010-a-catalog-of-devices-for-board-image.md)), each board's facts are in the catalog of devices, `scripts/boards.toml`: the pins, the defconfig and TF-A platform, the bytes known, the offset and the boot partition's start. `board_uboot.sh` and `board_image.py` take them from there, and `board_image.py --board <name>` also makes a card from a release's image or boot volume.
+
 ## Related
 
 [100004-MOB-0002](100004-MOB-0002-the-first-boot-on-the-h5.md), [100004-MOB-0003](100004-MOB-0003-the-first-boot-on-the-h618.md), [scripts/fetch_uboot.sh](../scripts/fetch_uboot.sh), [scripts/make_usb_image.py](../scripts/make_usb_image.py), [100000](100000-a-phone-the-pinephone-first.md) (stage 1: Tow-Boot on the phone's eMMC and our card).
