@@ -13142,10 +13142,23 @@ def wifi_join_check(vm):
     # The world domain over the radio's 13: 11 to send on, 12 and 13 to listen on (550-NET-0059).
     channels = run("wifi channels 00", 30, "[WIFI] 13 CHANNELS UNDER 00 (the world domain)")
     assert re.search(r"CHANNEL +11 2\.4 GHZ SEND", channels) and re.search(r"CHANNEL +13 2\.4 GHZ LISTEN", channels), channels[-1500:]
+    # 550-NET-0096 (the maintainer, 2026-11-25: no tie to a country at the testing stage): 00 chosen and kept, and a
+    # scan that hears UZ announced does not move it. RU is chosen again for the checks that follow.
+    run("wifi country 00", 30, "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+    require(wlan_until("[WLAN] COUNTRY 00 (THE RULES EVERY COUNTRY ALLOWS, CHOSEN BY THE USER", 30),
+            "[WLAN] COUNTRY 00 (THE RULES EVERY COUNTRY ALLOWS, CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON, 2 TO LISTEN ON")
+    require(vm.service_logs("keystore", "WI-FI COUNTRY 00 KEPT"), "[KEYSTORE] WI-FI COUNTRY 00 KEPT FOR PID")
+    run("wifi scan", 60, "[WIFI] SCAN: ")
+    moved = vm.command(f"logs {vm.services()['wlan']}", raw=True)
+    assert "[WLAN] COUNTRY UZ" not in moved, moved[-2000:]
+    run("wifi country", 30, "[WIFI] COUNTRY 00 (the world domain) APPLIED")
+    run("wifi country RU", 30, "[WIFI] COUNTRY RU (Russia) APPLIED")
+    wlan_until("[WLAN] COUNTRY RU (CHOSEN BY THE USER", 30)
     print("PASS: the station's country (550-NET-0035): with none chosen the first scan sent nothing and the access point's UZ "
           "was applied; the user's US given to the radio, kept by keystore across a restart, and joined under it; a change to RU "
           "while joined left the access point, and the station joined again under RU by itself, the network held since the client's join (801-NET-0084). After the restart the radio named its own "
-          "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059)", flush=True)
+          "13 channels apart from US's 11, and RU and the world domain were planned over all 13 (550-NET-0059); 00 chosen, kept by "
+          "keystore and not moved by a scan's UZ (550-NET-0096)", flush=True)
     # 550-NET-0061: a radio that restarted (init starts wlansim again, as it starts rtw89_wifi again after its data mode
     # failed) has no channel set and no country, and sends nothing. Once the network is lost the station notices within
     # wlan's RESTART_CHECK_MS, gives the radio the country it ran under, and the automatic join joins again by itself.

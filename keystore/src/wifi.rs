@@ -169,7 +169,8 @@ impl Drop for Wifi {
 }
 
 // Two capital letters: a country of the catalogue's form (`00`, the world domain, is never one).
-fn country_code(code: &[u8]) -> Option<[u8; 2]> { <[u8; 2]>::try_from(code).ok().filter(|c| c.iter().all(u8::is_ascii_uppercase)) }
+// Two capital letters, or `00`, the world rules a user may choose (550-NET-0096).
+fn country_code(code: &[u8]) -> Option<[u8; 2]> { <[u8; 2]>::try_from(code).ok().filter(|c| *c == *b"00" || c.iter().all(u8::is_ascii_uppercase)) }
 
 /// The station's country, if one is kept.
 pub fn country() -> Option<[u8; 2]> {
@@ -180,7 +181,7 @@ pub fn country() -> Option<[u8; 2]> {
 
 /// Keeps `code` as the station's country, replacing the one kept.
 pub fn keep_country(pid: u64, code: &str) -> Result<(), Error> {
-    let Some(code) = country_code(code.as_bytes()) else { mind::println!("[KEYSTORE] REFUSED WI-FI COUNTRY FOR PID {}: NOT TWO CAPITAL LETTERS", pid); return Err(Error::Invalid) };
+    let Some(code) = country_code(code.as_bytes()) else { mind::println!("[KEYSTORE] REFUSED WI-FI COUNTRY FOR PID {}: NOT TWO CAPITAL LETTERS OR 00", pid); return Err(Error::Invalid) };
     let shown = core::str::from_utf8(&code).unwrap_or("");
     let result = fs::mkdir(stored::DIR).and_then(|_| File::create(COUNTRY)).and_then(|mut file| { file.write_at(0, &code)?; file.flush() });
     match result {
