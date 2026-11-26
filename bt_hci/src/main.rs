@@ -2,17 +2,22 @@
 #![no_main]
 
 //! bt_hci (700-BLT-0001): a Bluetooth controller's HCI over USB. It claims the controller usb_host gives its badge
-//! (`BADGE_BLUETOOTH`, 700-DRV-0043), resets it, patches a Realtek RTL8821C or RTL8852B (700-BLT-0004) from
-//! data/firmware/rtl_bt/, says its
-//! version and address, then, when the disk asks with `data/bt-listen.txt`, listens: an LE scan and a BR/EDR inquiry
-//! at start and every five minutes, each device heard logged once a round. Without it the controller stays quiet: a
-//! controller that shares its radio with the machine's Wi-Fi (the Ryzen's RTL8852BE) left the Wi-Fi deaf after its
-//! inquiries until the Wi-Fi driver restarted (700-BLT-0003). The stack (bt_host) and its devices come after.
+//! (`BADGE_BLUETOOTH`, 700-DRV-0043) and runs bt_host's driver (bt_host::driver, host-tested whole against a scripted
+//! controller) through this port: the bring-up (reset, a Realtek RTL8821C or RTL8852B patched from
+//! data/firmware/rtl_bt/, 700-BLT-0004, the address), then one of two paths.
+//! - With no device listed and no listening asked: main's bt_hci's last two commands, then idle, no more usb_host calls
+//!   (a controller that shares its radio with the machine's Wi-Fi, the Ryzen's RTL8852BE, left the Wi-Fi deaf after
+//!   inquiries, 700-BLT-0003; and a usb_host kept busy on the boot stick's xHCI looks like a hung machine).
+//! - Else the host stack (bt_host, linked in for the testing stage, 700-BLT-0005 and on): it pages, pairs and serves
+//!   only the devices `data/bluetooth/devices.txt` or a list delivered to `data/inbox/bt-devices.txt` names, and runs
+//!   the listening rounds `data/bt-listen.txt` (or `data/inbox/bt-listen.txt`) asks for.
 
-use bt_hci::{hci, rtl};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DEV0, SLOT_VFS};
+use bt_host::driver::{self, Bring, Firmware, Next, Port, PortError};
+use bt_host::stack::{Stack, Up};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_INPUT, SLOT_AUDIO, SLOT_DEV0, SLOT_FILE, SLOT_PRIV, SLOT_VFS};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
+use mind::sys::Error;
 use mind::usb::{Host, Interface};
 
 /// The controller's files, as scripts/firmware/rtl8821c_bt.py fetches them and proprietary.sh puts them on the disk.
@@ -26,189 +31,115 @@ const CONFIG: (&str, usize, [u8; 32]) = ("data/firmware/rtl_bt/rtl8821c_config.b
 const PATCH_8852B: (&str, usize, [u8; 32]) = ("data/firmware/rtl_bt/rtl8852bu_fw.bin", 127_301, [
     0xfa, 0x1a, 0x98, 0xb9, 0x62, 0x3e, 0xe1, 0xef, 0x90, 0x75, 0x41, 0x42, 0x9a, 0x48, 0x6c, 0x52,
     0xca, 0x12, 0x40, 0x62, 0xa6, 0x46, 0x55, 0x00, 0x55, 0x74, 0x95, 0xa6, 0xb3, 0xf1, 0x4c, 0xba]);
-/// The largest patch image: the RTL8852B's for ROM version 0 is 67,133 bytes.
-const IMAGE_MAX: usize = 128 * 1024;
-/// How long a controller may take to enumerate, and a command to be answered.
+/// How long a controller may take to enumerate.
 const CLAIM_MS: u64 = 30_000;
-const COMMAND_MS: u64 = 2_000;
-const SCAN_MS: u64 = 10_000;
-const ROUND_MS: u64 = 300_000;
 /// The file that turns the listening rounds on (700-BLT-0003).
 const LISTEN: &str = "data/bt-listen.txt";
-/// The default event mask with Extended Inquiry Result (bit 46) and the LE meta event (bit 61).
-const EVENT_MASK: u64 = 0x0000_1FFF_FFFF_FFFF | 1 << 46 | 1 << 61;
-/// The general inquiry access code, 0x9E8B33, and 8 × 1.28 s.
-const INQUIRY: [u8; 5] = [0x33, 0x8B, 0x9E, 8, 0];
-const HEARD_MAX: usize = 64;
+/// The devices the stack may page, accept and pair, and the keys it keeps for them (bt_host::devices): the testing
+/// stage's place, a directory of the boot volume's data area. They are written only through a writable client of that
+/// directory, which init does not grant yet (asked of KRN); without it the keys of one boot are kept in memory alone.
+const BLUETOOTH_DIR: &str = "data/bluetooth";
+const DEVICES: &str = "data/bluetooth/devices.txt";
+const KEYS: &str = "data/bluetooth/keys.txt";
+/// The same put in Effector's delivery root, so that a bench names its devices and asks for rounds from afar.
+const INBOX_DEVICES: &str = "data/inbox/bt-devices.txt";
+const INBOX_LISTEN: &str = "data/inbox/bt-listen.txt";
+/// The machine's output read from the audio gateway's sink a tenth of a second ahead, at least 10 ms at a time.
+const OUTPUT_FRAMES: usize = 4_800;
+const OUTPUT_LEAST: usize = 480;
+/// HID reports each logged, with what they gave the input, up to this many; then a line a minute (700-BLT-0008).
+const REPORTS_SHOWN: u32 = 1;
+const REPORTS_LINE_MS: u64 = 60_000;
+/// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
+const BULK_OUT_AT: usize = 0x8000;
 
 fn say(args: core::fmt::Arguments) { mind::println!("[BT] {}", args); }
 fn now() -> u64 { mind::time::uptime_ms() as u64 }
-
-/// Why a step failed. The fields are read through Debug, in the log.
-#[allow(dead_code)]
-#[derive(Debug)]
-enum Fail { Usb(mind::sys::Error), Timeout(u16), Status(u16, u8), File(&'static str), Patch(rtl::Error) }
-
-/// The controller as claimed: its HCI interface, its event endpoint, the events joined, the last command's answer.
-struct Hci { host: Host, handle: u32, number: u8, events_ep: u8, events: hci::Events, ret: [u8; hci::EVENT_MAX], ret_len: usize, heard: Heard }
-
-/// Devices heard in a round, each logged once.
-struct Heard { seen: [([u8; 6], bool); HEARD_MAX], count: usize, le: u32, bredr: u32 }
-
-impl Heard {
-    fn note(&mut self, h: hci::Heard) {
-        if self.seen[..self.count].iter().any(|&(a, le)| a == h.addr && le == h.le) { return; }
-        if self.count < HEARD_MAX { self.seen[self.count] = (h.addr, h.le); self.count += 1; }
-        if h.le { self.le += 1 } else { self.bredr += 1 }
-        let a = h.addr;
-        let mut name = [b' '; 34];
-        let shown = h.name.map_or(0, |n| { let n = &n[..n.len().min(32)]; name[0] = b'"'; for (i, &c) in n.iter().enumerate() { name[1 + i] = if (0x20..0x7F).contains(&c) { c } else { b'?' }; } name[1 + n.len()] = b'"'; n.len() + 2 });
-        let name = core::str::from_utf8(&name[..shown]).unwrap_or("");
-        if h.le {
-            say(format_args!("LE {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} APPEARANCE {:04X} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, name));
-        } else {
-            say(format_args!("BR/EDR {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} RSSI {} CLASS {:06X} {} {}", a[0], a[1], a[2], a[3], a[4], a[5], h.rssi, h.kind, hci::major_class(h.kind), name));
-        }
-    }
-}
-
-impl Hci {
-    /// The events that came since the last call; a device heard is noted, a command's answer kept.
-    fn poll(&mut self, mut each: impl FnMut(u8, &[u8])) -> Result<(), Fail> {
-        let (events, heard) = (&mut self.events, &mut self.heard);
-        self.host.reports(self.handle, self.events_ep, |packet| events.feed(packet, |code, params| {
-            match code {
-                hci::EV_LE_META if params.first() == Some(&hci::LE_ADVERTISING_REPORT) => hci::le_reports(&params[1..], |h| heard.note(h)),
-                hci::EV_EXTENDED_INQUIRY_RESULT => if let Some(h) = hci::extended_inquiry(params) { heard.note(h) },
-                hci::EV_INQUIRY_RESULT_RSSI => hci::inquiry_rssi(params, |h| heard.note(h)),
-                _ => {}
-            }
-            each(code, params);
-        })).map_err(Fail::Usb)?;
-        Ok(())
-    }
-
-    /// Sends a command and waits for its Command Complete (its return parameters in `ret`) or, for one answered by a
-    /// Command Status, that status.
-    fn command(&mut self, opcode: u16, params: &[u8]) -> Result<&[u8], Fail> {
-        let n = hci::command(opcode, params, self.host.buffer_mut());
-        self.host.control(self.handle, 0x20, 0, 0, self.number as u16, n as u16).map_err(Fail::Usb)?;
-        let deadline = now() + COMMAND_MS;
-        let mut done: Option<Result<usize, Fail>> = None;
-        let mut ret = [0u8; hci::EVENT_MAX];
-        while done.is_none() {
-            self.poll(|code, p| match code {
-                hci::EV_COMMAND_COMPLETE => if let Some((op, r)) = hci::complete(p) { if op == opcode { ret[..r.len()].copy_from_slice(r); done = Some(Ok(r.len())); } },
-                hci::EV_COMMAND_STATUS => if let Some((status, op)) = hci::status(p) { if op == opcode { done = Some(if status == 0 { Ok(0) } else { Err(Fail::Status(opcode, status)) }); } },
-                _ => {}
-            })?;
-            if done.is_none() {
-                if now() > deadline { return Err(Fail::Timeout(opcode)); }
-                let _ = mind::time::sleep(10);
-            }
-        }
-        let len = done.unwrap()?;
-        self.ret[..len].copy_from_slice(&ret[..len]);
-        self.ret_len = len;
-        // A Command Complete's first return byte is its status.
-        if len > 0 && self.ret[0] != 0 { return Err(Fail::Status(opcode, self.ret[0])); }
-        Ok(&self.ret[..len])
-    }
-
-    fn version(&mut self) -> Result<hci::Version, Fail> {
-        let ret = self.command(hci::READ_LOCAL_VERSION, &[])?;
-        hci::Version::parse(ret).ok_or(Fail::Status(hci::READ_LOCAL_VERSION, 0xFF))
-    }
-
-    /// Listens for `ms`, noting the devices heard; stops early when `until` sees the event it waits for.
-    /// Returns the number of events that came.
-    fn listen(&mut self, ms: u64, mut until: impl FnMut(u8, &[u8]) -> bool) -> Result<u32, Fail> {
-        let deadline = now() + ms;
-        let (mut over, mut events) = (false, 0);
-        while !over && now() < deadline {
-            self.poll(|code, p| { events += 1; if until(code, p) { over = true } })?;
-            let _ = mind::time::sleep(10);
-        }
-        Ok(events)
-    }
-
-    /// One round: an active LE scan, then a general inquiry; each device heard is logged once.
-    fn round(&mut self) -> Result<(), Fail> {
-        (self.heard.count, self.heard.le, self.heard.bredr) = (0, 0, 0);
-        // Active, every 60 ms for 30 ms, the public address, every advertiser.
-        self.command(hci::LE_SET_SCAN_PARAMETERS, &[1, 0x60, 0, 0x30, 0, 0, 0])?;
-        self.command(hci::LE_SET_SCAN_ENABLE, &[1, 1])?;
-        let le_events = self.listen(SCAN_MS, |_, _| false)?;
-        self.command(hci::LE_SET_SCAN_ENABLE, &[0, 0])?;
-        self.command(hci::INQUIRY, &INQUIRY)?;
-        let started = now();
-        let mut ended: Option<u8> = None;
-        let inquiry_events = self.listen(SCAN_MS + 2_000, |code, p| { if code == hci::EV_INQUIRY_COMPLETE { ended = Some(p.first().copied().unwrap_or(0xFF)); } ended.is_some() })?;
-        // What the controller gave: its events in each part, and how the inquiry ended (00 after its 10.24 s is a full one).
-        say(format_args!("ROUND: {} LE AND {} BR/EDR DEVICES HEARD; {} EVENTS IN THE LE SCAN, {} IN THE INQUIRY; {} EVENT PACKETS DROPPED",
-            self.heard.le, self.heard.bredr, le_events, inquiry_events, self.events.dropped));
-        match ended {
-            Some(status) => say(format_args!("INQUIRY COMPLETE AFTER {} MS, STATUS {:02X}", now() - started, status)),
-            None => say(format_args!("NO INQUIRY COMPLETE IN {} MS", SCAN_MS + 2_000)),
-        }
-        Ok(())
-    }
-}
-
-/// A file read whole and checked by its size and SHA-256.
-fn read((path, size, sha): (&'static str, usize, [u8; 32])) -> Result<Pages, Fail> {
-    mind::idl::wire::with_timeout(2_000, || {
-        let mut file = mind::fs::File::open(path).map_err(|_| Fail::File(path))?;
-        if file.size() != size { return Err(Fail::File(path)); }
-        let mut bytes = Pages::new(size).ok_or(Fail::File(path))?;
-        let mut at = 0;
-        while at < size {
-            let n = file.read(&mut bytes.as_mut_slice()[at..size]).map_err(|_| Fail::File(path))?;
-            if n == 0 { return Err(Fail::File(path)); }
-            at += n;
-        }
-        if mind::sha256::digest(&bytes.as_slice()[..size]) != sha { return Err(Fail::File(path)); }
-        Ok(bytes)
-    })
-}
-
-/// A Realtek controller's patch: its ROM version, the image from its files, the fragments downloaded, a reset.
-fn patch(hci: &mut Hci, chip: &rtl::Chip) -> Result<(), Fail> {
-    if mind::dev::cap_info(SLOT_VFS).0 != CAP_KIND_ENDPOINT { return Err(Fail::File("no file client")); }
-    let rom = *hci.command(rtl::READ_ROM_VERSION, &[])?.get(1).ok_or(Fail::Status(rtl::READ_ROM_VERSION, 0xFF))?;
-    let mut image = Pages::new(IMAGE_MAX).ok_or(Fail::File("no memory"))?;
-    let len = if *chip == rtl::RTL8852B {
-        let fw = read(PATCH_8852B)?;
-        let fw = &fw.as_slice()[..PATCH_8852B.1];
-        let e = rtl::parse_core(fw).map_err(Fail::Patch)?;
-        let len = rtl::image_core(fw, chip, rom, image.as_mut_slice()).map_err(Fail::Patch)?;
-        say(format_args!("ROM VERSION {}; PATCH {:016X} FOR PROJECT {} ({} OF {} SECTIONS): {} BYTES IN {} FRAGMENTS", rom, e.version, e.project, e.found, e.counted, len, rtl::fragments(len)));
-        len
-    } else {
-        let (fw, config) = (read(PATCH)?, read(CONFIG)?);
-        let e = rtl::parse(&fw.as_slice()[..PATCH.1]).map_err(Fail::Patch)?;
-        let len = rtl::image(&fw.as_slice()[..PATCH.1], &config.as_slice()[..CONFIG.1], chip, rom, image.as_mut_slice()).map_err(Fail::Patch)?;
-        say(format_args!("ROM VERSION {}; PATCH {:08X} FOR PROJECT {}: {} BYTES IN {} FRAGMENTS", rom, e.version, e.project, len, rtl::fragments(len)));
-        len
-    };
-    let started = now();
-    let mut params = [0u8; 1 + rtl::FRAGMENT];
-    for i in 0..rtl::fragments(len) {
-        let (index, range) = rtl::fragment(len, i);
-        let n = range.len();
-        params[0] = index;
-        params[1..1 + n].copy_from_slice(&image.as_slice()[range]);
-        hci.command(rtl::DOWNLOAD, &params[..1 + n])?;
-    }
-    say(format_args!("PATCH DOWNLOADED IN {} MS", now() - started));
-    hci.command(hci::RESET, &[])?;
-    Ok(())
-}
-
 fn idle() -> ! { loop { let _ = mind::time::sleep(60_000); } }
 
-/// The HCI interface's endpoints: events on the interrupt IN one.
-fn events_endpoint(info: &Interface) -> Option<u8> { info.endpoints().iter().find(|e| e.is_interrupt() && e.is_in()).map(|e| e.address) }
+/// HID reports as delivered: how many of each, the input calls made of them and how they ended.
+#[derive(Default)]
+struct Reports { all: u32, keyboard: u32, pointer: u32, events: u32, ok: u32, failed: u32, last_error: Option<Error>, said_at: u64, said: u32 }
+
+impl Reports {
+    /// One input call's result.
+    fn call(&mut self, r: mind::sys::Result<()>) { self.events += 1; match r { Ok(()) => self.ok += 1, Err(e) => { self.failed += 1; self.last_error = Some(e); } } }
+    /// A report delivered: logged while few, else counted for the line a second.
+    fn shown(&mut self, kind: &str, report: &[u8], events: u32, before_failed: u32) {
+        self.all += 1;
+        if self.all <= REPORTS_SHOWN {
+            say(format_args!("HID REPORT {} {}: {:02X?} -> {} INPUT EVENTS, {} REFUSED{}", self.all, kind, &report[..report.len().min(12)], events, self.failed - before_failed,
+                if self.failed > before_failed { " (THE INPUT CALL FAILED)" } else { "" }));
+        }
+    }
+    fn tick(&mut self, now: u64) {
+        if now < self.said_at + REPORTS_LINE_MS { return; }
+        if self.all > REPORTS_SHOWN && self.all != self.said {
+            say(format_args!("HID: {} REPORTS IN 1 MIN ({} IN ALL: {} KEYBOARD, {} POINTER); INPUT CALLS {} OK, {} FAILED, LAST {:?}", self.all - self.said, self.all, self.keyboard, self.pointer, self.ok, self.failed, self.last_error));
+        }
+        (self.said_at, self.said) = (now, self.all);
+    }
+}
+
+/// The controller as claimed, as bt_host's driver sees it.
+struct Usb { host: Host, handle: u32, number: u8, events_ep: u8, bulk_in: u8, bulk_out: u8 }
+
+fn port_error(e: Error) -> PortError { if matches!(e, Error::NotFound | Error::Peer) { PortError::Gone } else { PortError::Failed } }
+
+/// A file read whole into `out` and checked by its size and SHA-256.
+fn pinned((path, size, sha): (&'static str, usize, [u8; 32]), out: &mut [u8]) -> Option<usize> {
+    if mind::dev::cap_info(SLOT_VFS).0 != CAP_KIND_ENDPOINT || size > out.len() { return None; }
+    mind::idl::wire::with_timeout(2_000, || -> Result<usize, ()> {
+        let mut file = mind::fs::File::open(path).map_err(|_| ())?;
+        if file.size() != size { return Err(()); }
+        let mut at = 0;
+        while at < size { let n = file.read(&mut out[at..size]).map_err(|_| ())?; if n == 0 { return Err(()); } at += n; }
+        if mind::sha256::digest(&out[..size]) != sha { return Err(()); }
+        Ok(size)
+    }).ok()
+}
+
+impl Port for Usb {
+    fn now(&mut self) -> u64 { now() }
+    fn sleep(&mut self, ms: u64) { let _ = mind::time::sleep(ms.min(60_000) as usize); }
+    fn command(&mut self, packet: &[u8]) -> Result<(), PortError> {
+        self.host.buffer_mut()[..packet.len()].copy_from_slice(packet);
+        self.host.control(self.handle, 0x20, 0, 0, self.number as u16, packet.len() as u16).map(drop).map_err(port_error)
+    }
+    fn events(&mut self, each: &mut dyn FnMut(&[u8])) -> Result<(), PortError> { self.host.reports(self.handle, self.events_ep, |p| each(p)).map(drop).map_err(port_error) }
+    fn acl_in(&mut self, each: &mut dyn FnMut(&[u8])) -> Result<(), PortError> { self.host.reports(self.handle, self.bulk_in, |p| each(p)).map(drop).map_err(port_error) }
+    fn acl_out(&mut self, packet: &[u8]) -> Result<(), PortError> {
+        self.host.buffer_mut()[BULK_OUT_AT..BULK_OUT_AT + packet.len()].copy_from_slice(packet);
+        self.host.bulk(self.handle, self.bulk_out, BULK_OUT_AT, packet.len()).map(drop).map_err(port_error)
+    }
+    fn say(&mut self, line: core::fmt::Arguments) { say(line) }
+    fn firmware(&mut self, which: Firmware, out: &mut [u8]) -> Option<usize> {
+        pinned(match which { Firmware::Rtl8821cPatch => PATCH, Firmware::Rtl8821cConfig => CONFIG, Firmware::Rtl8852bPatch => PATCH_8852B }, out)
+    }
+}
+
+/// A text file whole into `buf`, if it is there and fits.
+fn read_text<'a>(path: &str, buf: &'a mut [u8]) -> Option<&'a str> {
+    let n = mind::idl::wire::with_timeout(2_000, || -> Result<usize, ()> {
+        let mut file = mind::fs::File::open(path).map_err(|_| ())?;
+        if file.size() > buf.len() { return Err(()); }
+        let mut at = 0;
+        while at < file.size() { let n = file.read(&mut buf[at..]).map_err(|_| ())?; if n == 0 { break; } at += n; }
+        Ok(at)
+    }).ok()?;
+    core::str::from_utf8(&buf[..n]).ok()
+}
+
+/// The keys file written whole; false when it could not be.
+fn write_keys(stack: &Stack) -> bool {
+    let mut text = [0u8; 2048];
+    let n = stack.devices.keys_text(&mut text);
+    mind::idl::wire::with_timeout(2_000, || -> Result<(), ()> {
+        let mut file = mind::fs::File::create(KEYS).map_err(|_| ())?;
+        if file.write(&text[..n]).map_err(|_| ())? != n { return Err(()); }
+        Ok(())
+    }).is_ok()
+}
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
@@ -222,41 +153,115 @@ fn main(_info: &'static BootInfo) {
             Err(_) => { let _ = mind::time::sleep(500); }
         }
     };
-    let Some(events_ep) = events_endpoint(&info) else { say(format_args!("{:04X}:{:04X}: NO EVENT ENDPOINT", info.vendor, info.product)); idle() };
-    say(format_args!("CONTROLLER {:04X}:{:04X}, INTERFACE {}, EVENTS ON {:02X}", info.vendor, info.product, info.number, events_ep));
-    let mut hci = Hci { host, handle, number: info.number, events_ep, events: hci::Events::new(), ret: [0; hci::EVENT_MAX], ret_len: 0,
-                        heard: Heard { seen: [([0; 6], false); HEARD_MAX], count: 0, le: 0, bredr: 0 } };
-    let up = (|| -> Result<(), Fail> {
-        // The first call starts the event endpoint's polling.
-        hci.poll(|_, _| {})?;
-        hci.command(hci::RESET, &[])?;
-        let v = hci.version()?;
-        say(format_args!("VERSION: HCI {} REVISION {:04X}, LMP {} SUBVERSION {:04X}, MANUFACTURER {:04X}", v.hci, v.hci_rev, v.lmp, v.lmp_subver, v.manufacturer));
-        let unpatched = [rtl::RTL8821C, rtl::RTL8852B].into_iter().find(|c| (v.manufacturer, v.lmp_subver, v.hci_rev) == (rtl::MANUFACTURER, c.lmp_subver, c.hci_rev));
-        if let Some(c) = unpatched {
-            patch(&mut hci, &c)?;
-            let v = hci.version()?;
-            say(format_args!("{} PATCHED: LMP SUBVERSION {:04X}, HCI REVISION {:04X}", c.name, v.lmp_subver, v.hci_rev));
-        } else {
-            say(format_args!("NOT AN UNPATCHED RTL8821C OR RTL8852B: NO PATCH"));
+    let endpoint = |info: &Interface, f: fn(&mind::usb::EndpointInfo) -> bool| info.endpoints().iter().find(|e| f(e)).copied();
+    let Some(events_ep) = endpoint(&info, |e| e.is_interrupt() && e.is_in()) else { say(format_args!("{:04X}:{:04X}: NO EVENT ENDPOINT", info.vendor, info.product)); idle() };
+    say(format_args!("CONTROLLER {:04X}:{:04X}, INTERFACE {}, EVENTS ON {:02X}", info.vendor, info.product, info.number, events_ep.address));
+    let (bulk_in, bulk_out) = (endpoint(&info, |e| e.is_bulk() && e.is_in()), endpoint(&info, |e| e.is_bulk() && !e.is_in()));
+    let mut usb = Usb { host, handle, number: info.number, events_ep: events_ep.address, bulk_in: bulk_in.map_or(0, |e| e.address), bulk_out: bulk_out.map_or(0, |e| e.address) };
+    let mut bring = Bring::new();
+    let local = {
+        let Some(mut scratch) = Pages::new(driver::SCRATCH) else { say(format_args!("NO MEMORY FOR THE PATCH")); idle() };
+        match bring.up(&mut usb, scratch.as_mut_slice()) {
+            Ok(a) => a,
+            Err(e) => { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle() }
         }
-        let a = hci::bd_addr(hci.command(hci::READ_BD_ADDR, &[])?).ok_or(Fail::Status(hci::READ_BD_ADDR, 0xFF))?;
-        say(format_args!("ADDRESS {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", a[0], a[1], a[2], a[3], a[4], a[5]));
-        hci.command(hci::SET_EVENT_MASK, &EVENT_MASK.to_le_bytes())?;
-        // Inquiry results with RSSI or extended data.
-        hci.command(hci::WRITE_INQUIRY_MODE, &[2])?;
-        Ok(())
-    })();
-    if let Err(e) = up { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle(); }
-    if mind::fs::File::open(LISTEN).is_err() {
-        say(format_args!("UP: NOT LISTENING (NO {}): A SCAN TAKES THE RADIO A WI-FI MAY SHARE", LISTEN));
-        idle();
-    }
-    say(format_args!("UP: LISTENING EVERY {} S ({})", ROUND_MS / 1000, LISTEN));
+    };
+    // What the stack is asked for: devices listed, listening. Without either, main's bt_hci's path: two commands, idle.
+    let listen = mind::fs::File::open(LISTEN).is_ok() || mind::fs::File::open(INBOX_LISTEN).is_ok();
+    let mut stack = Stack::new();
+    let mut text = [0u8; 4096];
+    let mut lists = 0;
+    let mut load = |stack: &mut Stack, path: &str, text: &mut [u8]| if let Some(t) = read_text(path, text) {
+        lists += 1;
+        stack.devices.load(t, |n, line| say(format_args!("{} LINE {} NOT UNDERSTOOD: {}", path, n, line)));
+    };
+    load(&mut stack, INBOX_DEVICES, &mut text);
+    // A writable client of data/bluetooth when init grants one (asked of KRN): from here every file is in it.
+    let writable = mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT;
+    if writable { mind::fs::use_scope(Endpoint(SLOT_FILE), BLUETOOTH_DIR); }
+    load(&mut stack, DEVICES, &mut text);
+    // Nothing asked: main's bt_hci's last two commands, then no more usb_host calls.
+    if stack.devices.is_empty() && !listen { let _ = driver::start(&mut usb, &mut bring, stack, false, 0).map_err(|e| say(format_args!("BRING-UP STOPPED: {:?}", e))); idle(); }
+    let (Some(bulk_in), Some(_)) = (bulk_in, bulk_out) else { say(format_args!("NO BULK ENDPOINTS: NO ACL DATA")); idle() };
+    let input = mind::dev::cap_info(SLOT_PRIV).0 == CAP_KIND_INPUT;
+    let mut keys = [0u8; 4096];
+    let kept = read_text(KEYS, &mut keys).map_or(0, |t| stack.devices.load_keys(t));
+    let listed = stack.devices.list.iter().flatten().count();
+    // The audio gateway's client badged for its sink (audio.wit 1.3, 700-DRV-0110), when init grants one (asked of KRN).
+    let gateway = mind::dev::cap_info(SLOT_AUDIO).0 == CAP_KIND_ENDPOINT;
+    say(format_args!("ACL ON {:02X} AND {:02X}; {} DEVICES LISTED ({} OF {} AND {}), {} KEYS; KEYS {}; HID INPUT {}; HEADPHONES PLAY {}", usb.bulk_in, usb.bulk_out, listed, lists, DEVICES, INBOX_DEVICES, kept,
+        if writable { "KEPT IN data/bluetooth" } else { "KEPT FOR THIS BOOT ONLY (NO WRITABLE data/bluetooth)" }, if input { "DELIVERED" } else { "NOT DELIVERED (NO INPUT PRIVILEGE)" },
+        if gateway { "THE MACHINE'S OUTPUT (OR A TONE FOR `audio tone`)" } else { "A TONE (NO CLIENT OF THE AUDIO GATEWAY'S SINK)" }));
+    for d in stack.devices.list.iter().flatten() { say(format_args!("DEVICE {} {}{}", d.addr, d.kind.name(), if d.key.is_some() || d.ltk.is_some() { ", PAIRED" } else { "" })); }
+    // LE pairing's random values: the stack's generator seeded from the processor's (without one, LE does not pair).
+    stack.le.local = local;
+    let mut seed = [0u8; 32];
+    if mind::random::fill(&mut seed) { stack.le.rng.seed(&seed); } else { say(format_args!("NO {}: LE DEVICES ARE NOT PAIRED", mind::random::SOURCE)); }
+    seed.fill(0);
+    let mut d = match driver::start(&mut usb, &mut bring, stack, listen, bulk_in.packet as usize) {
+        Ok(Some(d)) => d,
+        Ok(None) => idle(),
+        Err(e) => { say(format_args!("BRING-UP STOPPED: {:?}", e)); idle() }
+    };
+    let mut keyboard = mind::hid::Keyboard::new();
+    let mut decoder = mind::keys::Ps2::new();
+    let pointer = mind::hid::Pointer::boot();
+    // A HID over GATT device's layout, from its report map.
+    let mut mapped: Option<mind::hid::Pointer> = None;
+    // The gateway's sink while held, and its refusal said once.
+    let (mut held, mut refused) = (false, false);
+    let mut reports = Reports::default();
+    let mut output = [0i16; 2 * OUTPUT_FRAMES];
     loop {
-        if let Err(e) = hci.round() { say(format_args!("ROUND FAILED: {:?}", e)); }
-        // The kernel ends one wait at 60 s at most, so the round's wait is made of several (700-BLT-0002).
-        let next = now() + ROUND_MS;
-        while now() < next { let _ = mind::time::sleep((next - now()).min(60_000) as usize); }
+        let t = now();
+        let next = d.step(&mut usb, &mut |u| match u {
+            Up::Keyboard(r) => {
+                let (events, failed) = (reports.events, reports.failed);
+                reports.keyboard += 1;
+                keyboard.feed(r, t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); reports.events += 1; });
+                reports.shown("KEYBOARD", r, reports.events - events, failed);
+            }
+            Up::Pointer(r) => {
+                let (events, failed) = (reports.events, reports.failed);
+                reports.pointer += 1;
+                pointer.events(r, &mut |e| reports.call(mind::dev::input_key(e, e, false)));
+                reports.shown("POINTER", r, reports.events - events, failed);
+            }
+            Up::Map(m) => {
+                mapped = mind::hid::Pointer::parse(m);
+                say(format_args!("REPORT MAP OF {} BYTES: {}", m.len(), if mapped.is_some() { "A POINTER IN IT" } else { "NO POINTER IN IT" }));
+            }
+            // The report ID goes first where the map names IDs.
+            Up::Report(id, r) => if let Some(p) = mapped.as_ref() {
+                let mut with = [0u8; 64];
+                let n = r.len().min(63);
+                let report = if p.id != 0 { with[0] = id; with[1..1 + n].copy_from_slice(&r[..n]); &with[..1 + n] } else { r };
+                let (events, failed) = (reports.events, reports.failed);
+                reports.pointer += 1;
+                p.events(report, &mut |e| reports.call(mind::dev::input_key(e, e, false)));
+                reports.shown("POINTER BY ITS MAP", report, reports.events - events, failed);
+            },
+            Up::Keys => {}
+        });
+        // A stream to headphones listed for the machine's output takes the gateway's sink; its end gives it back.
+        let wanted = gateway && d.stack.wants_output();
+        if wanted != held {
+            match mind::audio::sink(wanted) {
+                Ok(_) => { held = wanted; d.stack.output(held); }
+                Err(e) => if !refused { refused = true; say(format_args!("THE AUDIO GATEWAY'S SINK {}: {:?}", if wanted { "NOT TAKEN" } else { "NOT GIVEN BACK" }, e)); },
+            }
+        }
+        if held {
+            if let Some(frames) = d.stack.audio_wanted().filter(|&f| f >= OUTPUT_LEAST) {
+                match mind::audio::sink_read(&mut output[..2 * frames.min(OUTPUT_FRAMES)]) {
+                    Ok(n) => d.stack.audio(&output[..n]),
+                    Err(e) => { held = false; d.stack.output(false); say(format_args!("THE AUDIO GATEWAY'S SINK NOT READ: {:?}", e)); }
+                }
+            }
+        }
+        if d.keys_changed { d.keys_changed = false; if writable && !write_keys(&d.stack) { say(format_args!("{} NOT WRITTEN", KEYS)); } }
+        keyboard.repeat(t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); });
+        reports.tick(t);
+        match next { Next::Sleep(ms) => usb.sleep(ms), Next::Idle => idle() }
     }
 }

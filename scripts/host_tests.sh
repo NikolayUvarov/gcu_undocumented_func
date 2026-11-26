@@ -28,6 +28,7 @@ cargo test --quiet --manifest-path improve/proto/Cargo.toml --target-dir "$OUT/i
 (cd improve/proto && cargo build --quiet --release --target x86_64-unknown-none --target-dir "$OUT/improve-proto-target") # and still no_std, as MIND Core's programs link it
 cargo test --quiet --manifest-path tests/tls_exporter/Cargo.toml --target-dir "$OUT/tls-exporter-target" # the TLS service's exporter against OpenSSL's (111-NET-0073)
 cargo test --quiet --manifest-path tests/nts/Cargo.toml --target-dir "$OUT/nts-target" # timed's NTS: AES-SIV against RFC 5297, NTS-KE, the fields, the parsers fuzzed (111-NET-0075)
+cargo test --quiet --manifest-path bt_host/Cargo.toml --target-dir "$OUT/bt-host-target" # the Bluetooth host stack: links, L2CAP, pairing, SDP, AVDTP, SBC, HID, LE (700-BLT-0005 to 0009)
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end and effector485, over a pty and TCP (800-LNK-0004, 0011)
 cargo test --quiet --manifest-path tools/httpd/Cargo.toml --target-dir "$OUT/httpd-target" # the release server: the layout, ranges, limits, the log (110-NET-0066)
