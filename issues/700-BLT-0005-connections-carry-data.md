@@ -85,7 +85,7 @@
   - event floods are bounded by usb_host's eight packets a call;
   - `sleep` returns early only with keyboard input queued, which a background service never has.
 - **The polled endpoints.** The DEXP's last log polls five endpoints at start (`usb_host`'s limit is eight); the bulk IN endpoint made six.
-- **The stack.** `PT_GNU_STACK` grew from 64 to 256 KiB (now 512 KiB), and `bt_hci.elf` from about 270 to 350 KiB.
+- **The stack and the image.** `PT_GNU_STACK` grew from the default 64 KiB to 256 KiB (now 512 KiB). `bt_hci.elf` grew from 132,896 bytes (main's, built alone from 219b9da78) to about 268,600 in the released build. With LE and the sink it is 365,528 now.
 
 **Could it have hung the DEXP?** I found no mechanism. `bt_hci` is a ring-3 client that sleeps between calls, and the kernel's trial restart (120 s) is beyond its reach. That the machine did not come back even through the fall-back to slot A points below it. This is a judgment, not shown.
 
