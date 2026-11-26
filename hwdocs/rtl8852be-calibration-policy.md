@@ -29,7 +29,9 @@ specified erased-field defaults. The advisory `power_k_valid` flag is not
 turned into a new certification requirement. Country conflicts, disabled,
 passive, unsupported channels, invalid power values and unknown inputs refuse
 admission. The actual TSSI HT20 MCS7/1TX/non-BF source table and both path/1TX
-platform ceilings must permit its maximum requested setting, 12 dBm.
+platform ceilings must permit its maximum requested setting, 12 dBm. Under the unknown
+country (`00`) the ceiling compared is the channel's maximum before the 75 % cap (801-DRV-0071): the cap is
+for the station's frames (the maintainer, 2026-11-26).
 
 `channel::run` retains the exact applied Policy, including raw and selected
 country, board channel-plan byte, effective caps, regulatory conducted/EIRP
