@@ -351,6 +351,18 @@ bits 18-19 are `RDPCS_PHY_DP_MPLLB_V2I` (`dpcs_2_1_0_sh_mask.h`).
 - **If the value is found otherwise**, letting the table set the field on a PHY A that drives nothing is a decision for
   the maintainer. It is what table 12 does first for PHY A itself; it is not done now.
 
+**Looked at since, by the owner session (2026-11-26): the saved survey-order logs.**
+- Eight boots of 2026-11-21 and 22 have the line, each of them a first light on HDMI-A-1: boots 66, 74, 75, 76, 77, 78,
+  79 and 81. In every one table 12's first write is `S2 T12 WROTE AT 1783C = B008003E (WAS B008003E)`: the register held
+  the value already, `MPLLB_V2I` 2, before `display` wrote anything.
+- So in those boots HDMI-A-2's stage 2 would have left the register as it is and gone on.
+- All eight were starts out of Linux (the machine starts MIND Core from Ubuntu). A start not through Linux is still not
+  known, as for table 12's cold path ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
+- The same logs show the register changed later in stage 2, on HDMI-A-1's own route (`= B038003E (WAS B008003E)`): bits
+  20 and 21, not the field in question.
+- The real image was fetched from the machine's own log volume to the owner session's private directory for these
+  host cases; it is not in the repository.
+
 ## Related
 
 [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (the mode from the EDID),
