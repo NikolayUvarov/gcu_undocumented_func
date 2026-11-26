@@ -38,7 +38,7 @@ use mind::dev::{cap_info, device_config, Mmio};
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Edid; // BENCH ONLY, NEVER TO LAND (213-DRV-0112's second level)
 const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
                                                      hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST };
