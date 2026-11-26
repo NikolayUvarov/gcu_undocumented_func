@@ -10,7 +10,7 @@
 
 ## Plan
 
-1. **`--board <name>`,** a name of the catalog (`scripts/boards.toml`, [352-MOB-0010](352-MOB-0010-a-catalog-of-devices-for-board-image.md)):
+1. **`--board <name>`,** a name of the catalog (`scripts/boards.toml`, [352-MOB-0010](../issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)):
    - `ARCH=aarch64 ./02_build.sh`, then `make_usb_image.py --arch aarch64`;
    - `board_image.py --board <name>`, whose entry's script gives the firmware, into `dist/boards/mind-<name>.img`;
    - with `--image <file>`, the card is made from that aarch64 image, its `MANIFEST` beside it, as `--image` asks today;

@@ -1,6 +1,6 @@
 # Requests for the phones and mobile devices track (MOB), not numbered yet
 
-**Owner:** `MOB` (the assessing session) · **Status:** open (two requests of 2026-11-25; request 1, of 2026-11-20, is [352-MOB-0010](352-MOB-0010-a-catalog-of-devices-for-board-image.md)) · **Recorded by:** the kernel session (`UPD`, `KRN`)
+**Owner:** `MOB` (the assessing session) · **Status:** open (two requests of 2026-11-25; request 1, of 2026-11-20, is [352-MOB-0010](../issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)) · **Recorded by:** the kernel session (`UPD`, `KRN`)
 
 The `MOB` track numbers its own tasks (`NNN-MOB-MMMM`), so requests from other tracks wait here. `MOB` turns each into a task and removes it from this file. The file is removed when it is empty.
 
@@ -17,7 +17,7 @@ The `MOB` track numbers its own tasks (`NNN-MOB-MMMM`), so requests from other t
 **Why.** The maintainer (2026-11-25): «подготовить все для деплоя на аппаратный телефон pinephone». The phone is not at hand yet ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)). The goal is that its first boot needs only a card written and the cable plugged in.
 
 **Asked, in this order:**
-1. **The PinePhone's entry in the catalog of devices now** (`scripts/boards.toml`, [352-MOB-0010](352-MOB-0010-a-catalog-of-devices-for-board-image.md)), not when the phone is at hand, and its card from `board_image.py --board pinephone`, with a host test of the layout.
+1. **The PinePhone's entry in the catalog of devices now** (`scripts/boards.toml`, [352-MOB-0010](../issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)), not when the phone is at hand, and its card from `board_image.py --board pinephone`, with a host test of the layout.
    - Where Tow-Boot lives on the original PinePhone (the eMMC's boot partition or SPI flash: 100000 and 352-UPD-0049 say different things), from Tow-Boot's documentation.
    - Whether the A64's boot ROM, finding no loader at 8 KiB on our card, goes on to Tow-Boot, and so what our card must leave free.
 2. **`docs/phones/pinephone.md`:** the first boot as the maintainer does it (Tow-Boot's installer, the card, the cable, the Effector host and its port), and as an agent does it (the console read through Effector, 100000-EFF-0026), with stage 1's criteria as the lines that show them.

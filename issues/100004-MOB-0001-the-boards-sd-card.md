@@ -76,7 +76,7 @@ They show U-Boot, the loader and the kernel's first lines, and stop at `INIT STA
 
 **Left:** the boards' runs. Plan step 6, `build_and_write.sh`'s board word with `link.conf`, is [100004-MOB-0011](100004-MOB-0011-the-boards-word-in-build-and-write.md) since 2026-11-26.
 
-**Since 2026-11-26** ([352-MOB-0010](352-MOB-0010-a-catalog-of-devices-for-board-image.md)), each board's facts are in the catalog of devices, `scripts/boards.toml`: the pins, the defconfig and TF-A platform, the bytes known, the offset and the boot partition's start. `board_uboot.sh` and `board_image.py` take them from there, and `board_image.py --board <name>` also makes a card from a release's image or boot volume.
+**Since 2026-11-26** ([352-MOB-0010](../issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)), each board's facts are in the catalog of devices, `scripts/boards.toml`: the pins, the defconfig and TF-A platform, the bytes known, the offset and the boot partition's start. `board_uboot.sh` and `board_image.py` take them from there, and `board_image.py --board <name>` also makes a card from a release's image or boot volume.
 
 ## Related
 
