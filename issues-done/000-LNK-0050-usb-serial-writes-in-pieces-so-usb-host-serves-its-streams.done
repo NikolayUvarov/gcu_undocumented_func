@@ -51,7 +51,7 @@ With 0094's step 2 the IN rings stay full through such waits, but the playback (
 ## Resolution (2026-11-26)
 
 **Run D again, on the Ryzen** (2026-11-26, 08:45 to 08:50 UTC, boot 103, release 202611260804 = `main` 6230e1fdb with 213-DRV-0060's pending request: `usb_serial` and `usb_host` are `main`'s; the board behind the Genesys hub, the cable's CH340 on the same hub; `apps/audiostub.elf duplex 300 0` by the cable's `run`, one log read of 180 148 bytes over the cable at 08:47:46 to 08:47:51, nobody else on the cable):
-- playback: `SLOT 3 ENDPOINT 2: STREAM ENDED: 301650 PACKETS SENT, 0 MISSED, 1 TIMES DRY (16.0 MS WITHOUT A TD, AT MOST 16.0), 0 WITH ERRORS`. Its one dry ring is at the close (`DRY 1 AT 2188.687 S … WAITING ON A COMMAND FOR 30.9 MS`), 148 s after the read: none in the read. On 2026-11-22 the same read cost playback 12;
+- playback: `SLOT 3 ENDPOINT 2: STREAM ENDED: 301650 PACKETS SENT, 0 MISSED, 1 TIMES DRY (16.0 MS WITHOUT A TD, AT MOST 16.0), 0 WITH ERRORS`. Its one dry ring is at the close (`DRY 1 AT 2188.687 S … WAITING ON A COMMAND FOR 30.9 MS`), about 145 s after the read ended: none in the read. On 2026-11-22 the same read cost playback 12;
 - capture: `0 MISSED, 0 TIMES DRY, SPILL AT MOST 2938 BYTES, FULL 0 TIMES`.
 
 It holds for that machine, that converter and that release (MC-12.1). The dry ring at the close is 000-DRV-0081's subject. The raw lines are kept by the owner session (`logs-2026-11-26/runD-raw-lines.txt`).
