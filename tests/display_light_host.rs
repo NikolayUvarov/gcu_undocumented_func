@@ -172,6 +172,12 @@ struct Engine {
     // Live bits, not latched: at the first offset, the second's bits read as set from the third microsecond to the fourth
     // (OPTC_UNDERFLOW_OCCURRED_CURRENT beside the latched OCCURRED_STATUS, 213-DRV-0103).
     window: Vec<(u32, u32, u64, u64)>,
+    // The time waited awake (delays under a millisecond) and asleep (a millisecond or more), as the service's clock
+    // takes them (213-DRV-0111).
+    awake_us: u64, slept_us: u64,
+    // A late wake, once: the first sleep that ends at this clock or later ends the second later. `late_after` sets it
+    // at a write to its first offset that clears the bits of its second, the third microseconds on.
+    late: Option<(u64, u64)>, late_after: Option<(u32, u32, u64, u64)>,
 }
 impl Engine { fn catch_up(&mut self) { if let Some(p) = &self.pace { self.clock += p.replace(0); } } }
 impl Screens for Engine {
@@ -237,11 +243,18 @@ impl Poke for Engine {
         if let Some((at, mask, len)) = self.stall { if at == o && v & mask == 0 { self.stalled = Some((4, len)); self.stall = None; } }
         for (at, status) in self.cut.clone() { if at == o { self.set.retain(|s| s.0 != status); self.follow.retain(|s| s.0 != status); self.derived.retain(|s| s.0 != status); } }
         if let Some((at, n)) = self.fail { if at == o { self.armed = Some(n); self.fail = None; } }
+        if let Some((at, mask, delay, extra)) = self.late_after { if at == o && v & mask == 0 { self.late = Some((self.clock + delay, extra)); self.late_after = None; } }
     }
 }
 impl Clock for Engine {
     fn now_us(&mut self) -> u64 { self.catch_up(); self.clock }
-    fn delay_us(&mut self, us: u32) { self.catch_up(); self.clock += us as u64; }
+    fn delay_us(&mut self, us: u32) {
+        self.catch_up();
+        self.clock += us as u64;
+        if us < 1000 { self.awake_us += us as u64; return; }
+        self.slept_us += us as u64;
+        if let Some((from, extra)) = self.late { if self.clock >= from { self.clock += extra; self.late = None; } }
+    }
 }
 
 struct Log(Vec<String>);
@@ -2763,4 +2776,60 @@ fn under_light_an_offer_the_compositor_does_not_take_leaves_the_picture_on_the_s
     let b = m.at.0.borrow();
     assert!(!b.e.ev.contains(&Ev::Gone));
     as_before(&b.e, &before, &[]);
+}
+
+// 213-DRV-0111: display shares its CPU with other services (on the Ryzen with usb_host and bt_hci, where the mouse moved
+// in jerks at each light-up), so stage 9 is awake only for its two edges and the watch sleeps between its looks. A wake
+// that comes late spoils neither: the count is longer by the frames slept through, and the watch marks them as passed.
+#[test]
+fn stage_9_and_the_watch_sleep_between_their_polls_and_a_late_wake_spoils_neither() {
+    const F: u64 = 16_674;
+    let l = step4(Some(boot70_reference()));
+    let run = |allowed: u8, set: &dyn Fn(&mut Engine)| {
+        let mut e = engine();
+        e.frame_us = F;
+        set(&mut e);
+        let (outcome, log) = run_light(&l, &good(), &mut e, allowed, false);
+        (outcome, log, e)
+    };
+    // Stage 9 on time: 30 frames between two edges, awake for no more than two of them.
+    let (_, _, e8) = run(8, &|_| {});
+    let (outcome, log, e9) = run(9, &|_| {});
+    assert_eq!(outcome, Outcome::Stopped { done: 9 });
+    let (awake, slept) = (e9.awake_us - e8.awake_us, e9.slept_us - e8.slept_us);
+    assert!(awake <= 2 * F && (28 * F..=30 * F).contains(&slept), "stage 9 awake {} us, asleep {} us", awake, slept);
+    let pixel = number_after(&log, "S9 OTG0 COUNTED 30 FRAMES", "ITS PIXEL CLOCK ");
+    // A wake 40 ms late near the count's end: more frames counted, from an edge to an edge as exactly as before.
+    let from = e9.clock - 25_000;
+    let (outcome, log, _) = run(9, &|e| e.late = Some((from, 40_000)));
+    assert_eq!(outcome, Outcome::Stopped { done: 9 });
+    let (counted, late_pixel) = (number_after(&log, "S9 OTG0 COUNTED ", "COUNTED "), number_after(&log, "S9 OTG0 COUNTED ", "ITS PIXEL CLOCK "));
+    assert!((31..=33).contains(&counted) && late_pixel.abs_diff(pixel) <= 40, "{} frames, {} against {} kHz", counted, late_pixel, pixel);
+    assert!(log.iter().any(|x| x.starts_with("S9 OTG0 COUNTED ") && x.ends_with("THE REFERENCE CLOCK 48000 KHZ")), "{:#?}", log.iter().filter(|x| x.starts_with("S9 OTG0")).collect::<Vec<_>>());
+    // The watch on time: asleep between its looks, every frame read, none passed between two reads.
+    let (_, _, e14) = run(14, &|_| {});
+    let (outcome, log, e15) = run(15, &|_| {});
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    let (awake, slept) = (e15.awake_us - e14.awake_us, e15.slept_us - e14.slept_us);
+    assert!(awake <= 3 * F && slept >= 280 * F, "stage 15 awake {} us, asleep {} us", awake, slept);
+    assert!(log.iter().any(|x| x.starts_with("S15 WATCHED 300 FRAMES OF OTG1 IN ") && x.contains(" WITH THE PATTERN OFF: 0 PASSED BETWEEN TWO READS")));
+    // A wake 40 ms late in the watch: the frames slept through are marked as passed and the gap is named; still clean.
+    let (dpg, cntl1) = (reg(R::DpgControl, 1), reg(R::HubpCntl, 1));
+    let passed = |log: &[String]| -> u32 {
+        let watched = log.iter().find(|x| x.starts_with("S15 WATCHED 300 FRAMES")).unwrap_or_else(|| panic!("{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>()));
+        watched.split("WITH THE PATTERN OFF: ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap()
+    };
+    let (outcome, log, _) = run(15, &|e| e.late_after = Some((dpg, 1, 100 * F, 40_000)));
+    assert_eq!(outcome, Outcome::Stopped { done: 15 });
+    let gap = number_after(&log, "S15 WATCHED 300 FRAMES", "THE LONGEST GAP BETWEEN READS ");
+    assert!((1..=2).contains(&passed(&log)) && (41_000..41_200).contains(&gap), "{} passed, the gap {} us", passed(&log), gap);
+    assert!(log.iter().any(|x| x == "S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 300 FRAMES"));
+    let marks: String = log.iter().filter(|x| x.starts_with("S15 FRAMES ")).map(|x| x.split(": ").nth(1).unwrap()).collect();
+    assert_eq!((marks.len(), marks.matches('-').count() as u32), (300, passed(&log)));
+    // An underflow while display sleeps late is found at its next look: the status is kept until it is cleared.
+    let (outcome, log, _) = run(15, &|e| { e.arm.push((dpg, 1, cntl1, 1 << 28, 17 * F + 8_000)); e.late_after = Some((dpg, 1, 16 * F + 5_000, 40_000)); });
+    assert!(matches!(outcome, Outcome::Failed { stage: 15, why: Failure::Underflow { offset, .. } } if offset == cntl1), "{:?}", outcome);
+    let first = log.iter().find(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 1 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME ")).unwrap_or_else(|| panic!("{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>()));
+    let frame: u32 = first.split("AT FRAME ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    assert!((18..=20).contains(&frame) && passed(&log) >= 1 && first.ends_with("; CLEARED 1 TIMES"), "{}; {} passed", first, passed(&log));
 }

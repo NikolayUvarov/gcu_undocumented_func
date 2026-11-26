@@ -40,4 +40,4 @@ The run needs the maintainer at the PC.
 
 ## Related
 
-[214](214-intel-core-i5-pc.md), [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md).
+[214](214-intel-core-i5-pc.md), [213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md).

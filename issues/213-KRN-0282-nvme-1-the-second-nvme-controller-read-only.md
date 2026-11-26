@@ -32,4 +32,4 @@ DRV's ask of 2026-11-26 (`KRN/2026-11-26T0013Z-DRV-213-drv-0060-…`), for the R
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md).
+[213](213-amd-ryzen-pc.md), [213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done).

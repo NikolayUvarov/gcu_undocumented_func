@@ -1,16 +1,16 @@
-# 213-DRV-0060 — The Ryzen 9 5900HX's second NVMe disk, and its analog sound heard
+# 213-DRV-0060 — The Ryzen 9 5900HX's second NVMe disk, and its analog sound heard — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** for the second disk, the maintainer's run (`init`'s `nvme#1`, [213-KRN-0282](213-KRN-0282-nvme-1-the-second-nvme-controller-read-only.md), is merged into this branch and lands with it) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the kernel track's request of 2026-10-13 in `requests-DRV.md` ("The Ryzen 9 5900HX machine: sound, Ethernet, a second NVMe disk, a second xHCI"), from the maintainer's first run (`log:hw0003.txt`).
 
 ## Problem
 
 What the request named, and where each part is now:
-- **The second xHCI** (05:00.4): done in [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done).
-- **Ethernet,** the RTL8168 at 02:00.0: [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md). It carried the machine's traffic and the Effector agent in November.
+- **The second xHCI** (05:00.4): done in [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.done).
+- **Ethernet,** the RTL8168 at 02:00.0: [213-DRV-0031](../issues/213-DRV-0031-rtl8168-wired-network.md). It carried the machine's traffic and the Effector agent in November.
 - **Sound.** `audio_gw` took the GPU's HDMI audio (05:00.1, 1002:1637), found no output path and gave up.
-  - It now tries a second HD Audio function when the first has none: `init`'s part is [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), and `audio_gw`'s `Device::open`.
+  - It now tries a second HD Audio function when the first has none: `init`'s part is [213-KRN-0127](../issues/213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), and `audio_gw`'s `Device::open`.
   - The analog controller (05:00.6, 1022:15E3) has not been heard on this machine yet.
 - **The second NVMe disk** (04:00.0, 1F40:1202): `init` lends `nvme` only the first controller (01:00.0), and `nvme` drives one.
 
@@ -89,7 +89,7 @@ The machine is the maintainer's: the run needs it booted into MIND Core, and the
 
 **Not done:**
 - The second and third criteria on the Ryzen. They wait for KRN's grant, or the bench image, and the maintainer's run.
-- The second disk writable: split to [213-DRV-0105](213-DRV-0105-the-ryzens-second-nvme-disk-writable.md). No instance but the first writes.
+- The second disk writable: split to [213-DRV-0105](../issues/213-DRV-0105-the-ryzens-second-nvme-disk-writable.md). No instance but the first writes.
 
 ## Progress (2026-11-26, later): with KRN's `nvme#1`, the suite `nvme2` in the gate
 
@@ -134,4 +134,17 @@ The machine is the maintainer's: the run needs it booted into MIND Core, and the
 
 ## Related
 
-[213](213-amd-ryzen-pc.md), [213-DRV-0105](213-DRV-0105-the-ryzens-second-nvme-disk-writable.md), [213-KRN-0127](213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), [213-DRV-0048](../issues-done/213-DRV-0048-usb-host-drives-every-xhci.done), [551](551-sound-on-pcs.md).
+[213](../issues/213-amd-ryzen-pc.md), [213-DRV-0105](../issues/213-DRV-0105-the-ryzens-second-nvme-disk-writable.md), [213-KRN-0127](../issues/213-KRN-0127-audio-gw-gets-a-second-hd-audio-function.md), [213-DRV-0031](../issues/213-DRV-0031-rtl8168-wired-network.md), [213-DRV-0048](213-DRV-0048-usb-host-drives-every-xhci.done), [551](../issues/551-sound-on-pcs.md).
+
+## Resolution (2026-11-26)
+
+**In `main` since round 178** (15:15 UTC): `nvme` by instance, every instance past the first read-only, with KRN's `nvme#1` in `init` (213-KRN-0282) and the suite `nvme2`.
+
+**Against the criteria, on the Ryzen:**
+- **A tone through its analog output:** heard by the maintainer on 2026-11-13 (Progress, above).
+- **The second disk listed with its capacity** (boot 102 of 2026-11-26, release 202611260804 = `main` 6230e1fdb with this task's branch e27484a7a, the commits that landed): `[INIT] STARTED nvme#1 PID=11`, `[NVME#1] INSTANCE 1: THE DISK IS READ-ONLY AT THE TESTING STAGE (213-DRV-0060): ONLY IDENTIFY, THE I/O QUEUES' CREATION AND READS REACH ITS CONTROLLER; EVERY WRITE AND FLUSH IS REFUSED`, `[NVME#1] CONTROLLER: VENDOR 1F40, MODEL Netac NVMe SSD 128GB, FIRMWARE H250424a`, `[NVME#1] NAMESPACE 1: 250069680 SECTORS, WRITE CACHE, READ-ONLY`. The first instance beside it: `[NVME] CONTROLLER: VENDOR 1ED0, MODEL Patriot M.2 P320 128GB`, and `[INIT] nvme: NO PARTITION VFS_SERVER MOUNTS: IT GETS NONE OF THE DISK`.
+- **Its first sectors read as Linux reads them:** `[NVME#1] SECTORS 0 TO 2047 READ: SHA-256 182256bf4bb61d43541352422f7a6280a21017f84295414f4aec98213c8b93d6; SECTOR 0 ENDS 55AA, SECTOR 1 A GPT HEADER`; under Ubuntu on the same machine two minutes later (08:12 UTC, the machine restarted into it), `dd` of sectors 0 to 2047 of the Netac disk hashed to the same value (and the Patriot's to another).
+
+It holds for that machine and that release (MC-12.1). The same lines came on boots 103 to 105.
+
+**Not this task's:** the second disk written to ([213-DRV-0105](../issues/213-DRV-0105-the-ryzens-second-nvme-disk-writable.md), later: it holds the Ubuntu install the machine's other users boot).

@@ -112,6 +112,16 @@ One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten i
 
 **Not run yet:** a page, a pairing or a stream beside the station (the maintainer's devices), on 2.4 GHz and on 5 GHz. The policy there is still `Station` with no TDMA.
 
+## A stream beside the station, 2026-11-26
+
+The Ryzen, boot 105 (release 202611260856 with `bt_hci` replaced by the Bluetooth branch's builds; `rtw89_wifi` with 213-DRV-0087's changes), the maintainer's JBL Flip 5 playing over A2DP (SBC, 48 kHz, 279 kbit/s). For that machine, that access point and that speaker (MC-12.1).
+
+- **On channel 8 (2.4 GHz, policy `Station`, no TDMA):** from the stream's first second, `HOLE n ON 8: NO BEACON OF A0:36:BC:11:F8:88 FOR 1000 MS`, 21 of them in a minute, `LONGEST 13316 MS`; the station sent one frame in that minute. The stream itself ran clean (54 packets a second, all completed).
+- **On channel 100 (5 GHz, `Station5g`):** 13 minutes of the same stream, no hole, the firmware's error codes 0.
+- **While `bt_hci` pages a device that does not answer and tries an LE one** (no stream): uploads over channel 8 at 23 to 26 KiB/s against 34 to 41 on a quiet radio; downloads the same.
+
+**So the open part of this task is now shown on the machine:** with Bluetooth busy, a 2.4 GHz station needs Linux's time-sharing policies (the TDMA branches named above as not ported). Until then a machine that streams over Bluetooth keeps its Wi-Fi only on 5 GHz.
+
 ## Related
 
 [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md), [700](700-bluetooth.md).
