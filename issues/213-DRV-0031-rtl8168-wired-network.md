@@ -1,6 +1,6 @@
 # 213-DRV-0031 — A wired RTL8168 path on the Ryzen for ordinary use and Effector
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (experimental executable and boot/net endpoint integrated; physical acceptance pending) · **Blocked by:** connected-link, load and recovery validation on the actual Ryzen · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (2026-11-26: on the Ryzen the wired link carries DHCP, ping outward and 30 minutes of transfers, and comes back after the driver's restart; left: the cable taken out and put back, an HTTPS request, and the echo from the LAN) · **Blocked by:** the maintainer's hands on the cable; `NET`'s word on the echo · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -71,3 +71,25 @@ branch and published through raw merge
 passed 22/22 host tests (no failures, ignores or filtering), including six
 new production-path cutoff regressions. No physical NIC mutation or traffic
 test was performed, and the hardware acceptance criteria remain open.
+
+## On the Ryzen with a cable (2026-11-26)
+
+The maintainer plugged a cable in during boot 103 (release 202611260804) and left it through boot 104 (202611260856). Both are `main` 6230e1fdb with DRV's pending requests; `rtl8168` and `netstack` are `main`'s. It holds for that machine, that switch and those releases (MC-12.1). The raw lines are kept by the owner session (`logs-2026-11-26/`: `wired30.txt`, `ping30.txt`, `benchsrv.log`).
+
+**Against the criteria:**
+1. **The variant:** `[RTL8168] XID=4C0 PHY=001CC800 LINK=DOWN MODE=MSI RINGS=256; EXPERIMENTAL BSD BASELINE` at each start, as before.
+2. **Address and route:** `[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP`, then `DHCP 192.168.2.241/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 0`; `ip` says `CARD 0 … WIRED DEFAULT` beside the Wi-Fi's card 2.
+   - **Ping outward:** the gateway 5 of 5 (10.5 to 12.9 ms on an idle machine), 8.8.8.8 3 of 3, the Effector server 3 of 3.
+   - **Ping inward is not answered:** an echo request from the LAN to 192.168.2.241 gets no reply, and none to the Wi-Fi's address either, while ARP resolves both. So it is the stack's or the policy's, not this card's: asked of `NET` (`KRN/2026-11-26T0903Z-DRV-the-ryzens-window-the-lines-you-wait-for-from-boots-102-to-104.md` on `internal-dev-messages`). "Bidirectional ping" stays open on that answer.
+   - **An HTTPS request is not made yet:** `get` to the server is not in its grant and asks the user at the machine's screen.
+3. **Thirty minutes of ping with transfers** (09:26 to 09:56 UTC; `ping -c 1800` to the gateway typed at the console, `netbench` to a server on the LAN over and over by the cable's `run`):
+   - **59 transfers:** 64 MiB downward each at 3539 to 5122 KiB/s, the median 4805. Upward each stops at 33 MB with `NETBENCH SEND FAILED: Denied`: that is the bench's own policy line (100 MB a flow), not the card; the server saw them at 1803 to 2776 KiB/s, the median 2111.
+   - **Ping:** 1800 sent, 1793 answered, 7 timed out (0.4 %). The least 331 us, the median 746 us; a tenth above 179 ms, a hundredth above 510 ms, the longest 823 ms; 236 above 100 ms.
+   - **What the pauses are, as the log reads:** every minute `[NETSTACK] CARD 0 IN THE LAST MINUTE: 53547 to 67091 FRAMES TAKEN, 0 to 4 REFUSED OR UNANSWERED, about 337000 VISITS PASSED OVER AS ITS 2000 MS OF DRIVER TIME IN 5 S WERE SPENT`. So the stack's budget of driver time for the card (550-NET-0031) is spent throughout the transfer, and a ping waits behind it. That bounds the throughput too. Whether the budget fits a wired gigabit card is `NET`'s; the driver reported no timeout, no DMA error and no fault in the run.
+   - **Counters after it:** `SENT=1912150 RECEIVED=3186068`.
+   - **Short transfers on the idle machine:** 4 MiB downward at 6427 KiB/s, upward at 2731 KiB/s, 500 of 500 UDP round trips at 355 a second.
+4. **The driver restarted once** (`kill`, uptime 3457.4 s): `[INIT] rtl8168 RESTARTED PID=115`, `LINK=DOWN`, `[NETSTACK] DEFAULT ROUTE: CARD 2`, 3 s later `CARD 0 LINK UP, ASKING DHCP WHETHER 192.168.2.241 IS STILL ITS ADDRESS`, `DEFAULT ROUTE: CARD 0`, `CARD 0 BACK ON ITS NETWORK AFTER 13054 MS: ADDRESS AND 0 CONNECTIONS KEPT`. A transfer after it: 4 MiB downward at 6464 KiB/s, upward at 2108 KiB/s, 500 of 500 round trips.
+   - **Not done:** the cable taken out and put back (the maintainer's hands), and a link that fails to negotiate.
+5. **No timeout, DMA error or hang** of the driver in these runs. `docs/profile` is not changed yet: it gets the numbers when the task closes.
+
+**Seen beside it:** with the cable plugged in after the start, the Effector agent's session stayed on the Wi-Fi (card 0 had sent 4 frames after 25 minutes of boot 104) though the wire was the default route. Told to `NET` in the same message.

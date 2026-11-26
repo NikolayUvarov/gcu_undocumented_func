@@ -766,6 +766,18 @@ impl Init {
         plan
     }
 
+    // display's second output by data/displays.txt (213-KRN-0281): its word, else off, and the log says which.
+    fn second_output(&mut self) -> mind::displays::Output {
+        let mut text = [0u8; mind::displays::MAX];
+        let length = self.read_boot_file(mind::displays::FILE, &mut text);
+        let read = core::str::from_utf8(&text[..length]).map_err(|_| Some("not UTF-8")).and_then(mind::displays::second_output);
+        match read {
+            Ok(output) => { mind::println!("[INIT] display: SECOND OUTPUT {} BY {}", output.word(), mind::displays::FILE); output }
+            Err(None) => { mind::println!("[INIT] display: NO `output second` LINE IN {}: off", mind::displays::FILE); mind::displays::Output::Off }
+            Err(Some(word)) => { mind::println!("[INIT] display: `output second {}` IN {} IS NOT off, read OR light: off", word, mind::displays::FILE); mind::displays::Output::Off }
+        }
+    }
+
     // A service's line of data/memory.conf, its MiB, read at each start; None without one.
     fn memory_line(&mut self, name: &str) -> Option<u16> {
         let mut text = [0u8; mind::memconf::MAX];
@@ -1037,6 +1049,8 @@ impl Init {
                 grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_BLUETOOTH)?, CLIENT);
                 // A reader's client of vfs_server for the controller's patch and configuration in data/firmware/rtl_bt/.
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
+                // The input privilege, as usb_hid's, for a Bluetooth keyboard's and mouse's reports (700-KRN-0280, for 700-BLT-0008).
+                grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
             }
             "bcm_wifi" => {
                 // The MacBook Pro's Broadcom BCM4331 (14E4:4331), or a Broadcom network controller of class 02:80:00: BAR0 only (550-KRN-0059).
@@ -1229,7 +1243,10 @@ impl Init {
                 }
                 // Its client of the compositor, to offer it the second screen (display.wit 1.3, 213-KRN-0272).
                 if self.running(service_index("compositor")) { grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_SCREEN)?, CLIENT); }
-                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
+                // The second output's word after the device's index (213-KRN-0281, for 213-DRV-0099): data/displays.txt's
+                // `output second off|read|light`, read at each start; with no line or another word, off, said which.
+                let output = self.second_output();
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{} {}", device, output.word()));
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => {
@@ -2547,6 +2564,8 @@ fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool, bool)] {
         "httpd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data/releases", false, false)],
         // The SSH server's files and its keys (112-NET-0072): data/, writable; sshd itself keeps SFTP off data/ssh/.
         "sshd" => &[(SLOT_VFS, mind::fs::BADGE_USER, "data", true, false)],
+        // Bluetooth's devices and link keys (700-KRN-0280, for 700-BLT-0006): data/bluetooth/ alone, writable, made at start.
+        "bt_hci" => &[(SLOT_FILE, mind::fs::BADGE_USER, "data/bluetooth", true, true)],
         _ => &[],
     }
 }

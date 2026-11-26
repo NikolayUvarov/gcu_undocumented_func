@@ -91,7 +91,7 @@ firmware versions, cold/warm boot history and test configuration. Record failure
    real heartbeat and command/result exchange, not the Linux build-host session.
 
 Keep [DRV-0031](../issues/213-DRV-0031-rtl8168-wired-network.md),
-[DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) and
+[DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done) and
 [KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md) open until their
 own acceptance criteria are met. Current experimental fast-test publication
 is not an assertion that both machines are ready for network acceptance.

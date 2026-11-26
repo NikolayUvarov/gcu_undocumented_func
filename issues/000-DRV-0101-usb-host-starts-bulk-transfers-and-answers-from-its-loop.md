@@ -1,6 +1,6 @@
 # 000-DRV-0101 — `usb_host` starts bulk transfers and answers from its loop instead of waiting on them
 
-**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-22: written on `claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop` at the owner session's word, and through the host tests and QEMU's suites; no hardware run before the owner session says) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
+**Type:** driver (`usb_host`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** in progress (2026-11-26: in `main` since round 176; on the Ryzen the streams stay full through a cable read and a write to the stick; the throughput's comparison left) · **Blocked by:** — · **Roadmap:** A · **Constitution:** MC-6.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -27,7 +27,7 @@
 
 ## Acceptance criteria
 
-- [ ] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer. (2026-11-22: answered from the loop in QEMU's `usbload`. The host cases for a halt, a timeout and a device or client gone are written on `claude/000-DRV-0101-usb-host-answers-bulk-from-its-loop` at 613434c46, which lands after this.)
+- [x] Host or QEMU cases: a bulk transfer answered from the loop, one that halts, one that times out, a client gone before its answer. (2026-11-22: answered from the loop in QEMU's `usbload`; the rules for a halt, a timeout, a device gone and a client's new instance in `tests/usb_pending_host.rs`. Their actions, the endpoint's reset or stop, are the synchronous path's as before.)
 - [x] QEMU's `usb`, `ehci`, `cameras`, `link`, `usbaudio` and the USB storage suites pass. (2026-11-22, LEG9, on 05bc8e92c: those, `iso` with its USB disk's boot, `vfs`, `block` with its USB part, and the new `usbload`.)
 - [ ] On the Ryzen: a duplex with a log read and a stick write in its middle, every stream's `TIMES DRY` 0 while they run, and the stick's and the cable's throughput no lower (MC-12.1).
 
@@ -68,9 +68,25 @@
   - the full `host_tests.sh` passed whole (263 groups);
   - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` (ATA, AHCI and USB) and `usbload`, which passed three times in all;
   - in `usbload` the first transfer answered from the loop was the stick's first command, `SLOT 1 ENDPOINT 02, 31 BYTES, 1 MS`.
-- **Criterion 1's rest, host cases (613434c46, on the task's branch, not in this landing):** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
+- **Criterion 1's rest, host cases:** `pending::answer` decides what a deferred transfer's client is answered: its bytes, a reset after a halt, its device or controller gone, a timeout, or its client's new instance. The loop and the new instance's attach act on that decision. `tests/usb_pending_host.rs` holds a case for each, and for which outweighs which.
   - **Not tested on any machine:** a real halt, a real timeout or a client's death while a transfer is deferred. QEMU's devices do not stall on demand.
 - **The tally** (3ad6e4d76): `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`, said once a minute when there were any, for the hardware run.
+- **The first landing's head bf9942b64 itself** (2026-11-22, LEG9, 18:51–20:19 UTC; outputs kept in `/home/un/.local/share/mind-bench/cam/runs/s13/`):
+  - the build and the fixtures passed;
+  - the full `host_tests.sh` with `MIND_SSHD` passed whole: 263 groups, none failed;
+  - QEMU gave 17 PASS, 0 FAIL and 0 SKIP: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` and `usbload`.
+  - `vfs`'s photo-pause check passed the first time.
+- **613434c46 and 49bd2fede** (2026-11-22, LEG9, on 05ac6a253, the same code; outputs kept in `/home/un/.local/share/mind-bench/cam/logs/s12-05ac6a253/`):
+  - the build and the fixtures passed;
+  - `usbload` alone passed, with a minute's tally of 10021 deferred and 10021 answered, the longest 26 ms;
+  - the full `host_tests.sh` passed whole: 263 groups, none failed;
+  - QEMU gave 17 PASS and 0 FAIL: `usb`, `ehci`, `iso`, `cameras`, `link`, `usbaudio` with the audiostub check, `vfs`'s eight, `block` and `usbload` (10023 deferred, 10023 answered, the longest 3 ms).
+  - `usbload` allows the two counts to differ by one, for a transfer deferred in one minute and answered in the next.
+- **What 613434c46 changes on a machine,** read from its diff:
+  - For every case the loop answers as 3ad6e4d76's did: the bytes, a reset after an error, not-found for a device gone, a timeout, a client's new instance.
+  - The only difference is the figure in the once-a-boot line `A BULK TRANSFER ANSWERED FROM THE LOOP: …, m MS`. It is now the wait up to the answer's copy, as the tally's longest already was.
+  - So the Ryzen's runs of 3ad6e4d76 stand for it by that reading, not by a run of its own (MC-12.1).
+  - `forget_bulks` takes a transfer before it asks the rule. The rule always answers `Stopped` there, so nothing is lost now. If the rule changed, a transfer would be dropped unanswered, so the order is worth turning round.
 
 **On the Ryzen** (release 202611221738, boot 97 from 17:42:50 UTC, the bench tree with 3ad6e4d76; read over the cable by the owner session and CAM):
 - The first transfer answered from the loop came at 3.533 s: `SLOT 3 ENDPOINT 81, 65536 BYTES, 3 MS`, a 64 KiB read of the stick.
@@ -89,16 +105,19 @@
 - **The frames:** camera 1 had 1769 good and 0 broken; camera 0 had 987 good and 1 broken (overflow, no error bit).
 - **The cable's reads** of the whole 118.7 KB log took 3.55 to 3.66 s, one 6.51: 33 KB/s with both cameras streaming.
 
-## For a successor (state on 2026-11-22, 18:50 UTC)
+## For a successor (state on 2026-11-22, 20:25 UTC)
 
-How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
+How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](../issues-done/000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.done#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
 
 - **The heads:**
   - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
-  - **This landing's head** (`claude/000-DRV-0101-landing`) is 3ad6e4d76 with this text on top.
+  - **The first landing's head** (`claude/000-DRV-0101-landing`, bf9942b64) is 3ad6e4d76 with the issue's text of then on top; this branch has it merged, so it lands after it.
   - **613434c46** changes no behaviour: `pending::answer` decides the loop's answers, and its host cases cover a halt, a timeout and a device or client gone.
   - **49bd2fede** makes `usbload` wait for and check the tally.
-  - Both stay on the task's branch and land after this, once they have run on the bench. Their own run, the full host tests and QEMU's suites on 05ac6a253 (`tests/s12-run.sh`), was going at 18:50.
+  - Neither has run on hardware. Their own run on 05ac6a253 (`tests/s12-run.sh`) ended green at 19:48 UTC: see the progress above.
+- **The USB agent took over at 18:50** (CAM's context ran out). Its runs, under the shared lock, write to `/home/un/.local/share/mind-bench/cam/runs/`, each with a `status` file:
+  - `s13`: the landing head bf9942b64 itself, ended green at 20:19 UTC (`tests/s13-run.sh`);
+  - `s14`: 000-DRV-0081 (`claude/000-DRV-0081-a-close-tells-the-device-first`, from the landing head). Only its fixtures and `usbaudio` ran before the maintainer asked, at 19:50 UTC, that nothing new be started on LEG9. `tests/s14-run.sh full` runs the rest.
 - **Reading a run:**
   - The once-a-boot line is `A BULK TRANSFER ANSWERED FROM THE LOOP: …`.
   - The minute's tally is `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: n DEFERRED, a ANSWERED, f NOT FOUND, t TIMED OUT, s STOPPED, w WAITED ON; THE LONGEST m MS`. What is right: a equals n, 0 in the four after, and the longest tens of ms at most.
@@ -122,4 +141,17 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
 
 ## Related
 
-[000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md), [000-LNK-0050](000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.md), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
+[000-DRV-0094](../issues-done/000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.done), [000-LNK-0050](../issues-done/000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.done), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
+
+## On the Ryzen (2026-11-26)
+
+`main`'s `usb_host` (6230e1fdb) in releases 202611260804 and 202611260856, boots 103 and 104. It holds for that machine, that stick and those releases (MC-12.1). Raw lines: the owner session's `logs-2026-11-26/run0101-raw-lines.txt`.
+
+- **The minute tally, every minute of both boots:** all deferred transfers answered, none timed out. For example `BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: 281 DEFERRED, 281 ANSWERED, 0 NOT FOUND, 0 TIMED OUT, 0 STOPPED, 0 WAITED ON; THE LONGEST 12 MS`, and under the run below 1161 in a minute, the longest 13 ms.
+- **The criterion's run** (boot 104, uptime 3625.9 to 3925.9 s; `apps/audiostub.elf duplex 300 0`; in its middle a log read over the cable, then a 1.1 MB file put over the cable, which `link` writes to the stick):
+  - capture: `0 MISSED, 0 TIMES DRY … SPILL AT MOST 3036 BYTES, FULL 0 TIMES`;
+  - playback: 0 times dry while it ran; one dry ring at the close (`DRY 1 AT 3925.950 S: NO TD 3.6 MS … NOT WAITING`);
+  - feedback: one dry ring at the close (4.3 ms), 176 missed;
+  - **the cable's read:** 231 145 bytes in 7.6 s, 30.3 KB/s, while the streams ran (33.3 KB/s on 2026-11-22 on an idle machine);
+  - **the put:** 1 136 440 bytes in 39.5 s, 28.8 KB/s: the cable's speed, not the stick's.
+- **So of the criterion:** "every stream's `TIMES DRY` 0 while they run" is shown; the dry rings at the close are 000-DRV-0081's. **Not shown:** the stick's own throughput (the put is bounded by the cable; a 4 MB delivery through the server was refused by the gateway's size bound), and a like-for-like comparison of the cable's (the two reads were not under the same load).

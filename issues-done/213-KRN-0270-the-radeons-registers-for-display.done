@@ -4,12 +4,12 @@
 
 ## Problem
 
-DRV's [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md) lights the Ryzen's second monitor through a new service, `display`, for the Cezanne Radeon's display engine. Its step 1 reads the engine's registers and logs what the firmware left. DRV named what it needs of KRN on 2026-11-21 (`KRN/2026-11-21T1259Z-DRV-a-notice-the-ryzens-display-engine-a-grant-memory-and-the-compositor.md` on `internal-dev-messages`):
+DRV's [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) lights the Ryzen's second monitor through a new service, `display`, for the Cezanne Radeon's display engine. Its step 1 reads the engine's registers and logs what the firmware left. DRV named what it needs of KRN on 2026-11-21 (`KRN/2026-11-21T1259Z-DRV-a-notice-the-ryzens-display-engine-a-grant-memory-and-the-compositor.md` on `internal-dev-messages`):
 - the device for a new service;
 - its register BAR;
 - `display` in the boot image.
 
-The maintainer asked the same day that the Ryzen's work go first, as the machine stays for two more days. So the grant is made before DRV's survey ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)) has its facts. It follows what `amdgpu` does on every chip since Bonaire: the registers are BAR 5.
+The maintainer asked the same day that the Ryzen's work go first, as the machine stays for two more days. So the grant is made before DRV's survey ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done)) has its facts. It follows what `amdgpu` does on every chip since Bonaire: the registers are BAR 5.
 
 **What must not happen.** This device is also the one whose output the firmware's GOP set up, the screen MIND Core draws on. So:
 - a grant that cleared its bus mastering, as the Realtek drivers' first grant does, could blank that output;
@@ -68,7 +68,7 @@ In main since round 166 (6b84acb734, `LANDING/2026-11-21T1745Z-KRN-landed-e09e26
 
 ## Resolution
 
-Done on the Ryzen by DRV's run 0 (2026-11-21 18:26 UTC, release 202611211819; recorded in [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), section "Run 0 on the Ryzen"). Its tree was DRV's bench build on round 167's candidate (5667eb9655), which carried this grant at 809d741c74. `kernel/src/pci.rs`, `kernel/src/pci_control.rs`, `kernel/src/scheduler.rs`, `init/src/main.rs` and `init/src/hardware.rs` are the same there as on `main` since round 168.
+Done on the Ryzen by DRV's run 0 (2026-11-21 18:26 UTC, release 202611211819; recorded in [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), section "Run 0 on the Ryzen"). Its tree was DRV's bench build on round 167's candidate (5667eb9655), which carried this grant at 809d741c74. `kernel/src/pci.rs`, `kernel/src/pci_control.rs`, `kernel/src/scheduler.rs`, `init/src/main.rs` and `init/src/hardware.rs` are the same there as on `main` since round 168.
 - `display` started: 228 `[DISPLAY]` lines, none dropped.
 - `init` logged `[INIT] display: RADEON 1002:1638 (DEVICE 24); COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; ...`. So the firmware's value is 0006 (memory decoding and bus mastering). `amdgpu`'s 0407 adds I/O decoding and turns INTx off.
 - `display` logged `PCI 1002:1638 (DEVICE 24), COMMAND 0006, BAR 5 AT FCB00000: 108 KIB OF ITS REGISTERS GRANTED`. This is BAR 5's window as [213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.done) narrowed it, in place of the whole BAR's size this task's stub logged. `display` replaced the stub in round 168 and keeps its lines.
@@ -78,4 +78,4 @@ This is evidence for that machine with those builds (MC-12.1).
 
 ## Related
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done), [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done) (the last image added).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done), [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done) (the last image added).

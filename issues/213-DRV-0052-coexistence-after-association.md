@@ -4,10 +4,10 @@
 
 ## Problem
 
-On the Ryzen (2026-11-08, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), build 8e3913fd) the station joined CoolNet2 and got an address over the RTL8852BE. **Six minutes later it lost the network:**
+On the Ryzen (2026-11-08, [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), build 8e3913fd) the station joined CoolNet2 and got an address over the RTL8852BE. **Six minutes later it lost the network:**
 - `bt_hci`'s round ran a 10-second inquiry (one every 320 s);
 - the station heard nothing from the access point for 10 s (`SILENCE_MS`) and began to scan;
-- its next frame timed out, and the data mode stopped (`Tx(Io(Timeout))`). The BB in reset and the host DMA stopped that the stop line showed then were the data mode's own shutdown, read after it (corrected 2026-11-08 evening, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)).
+- its next frame timed out, and the data mode stopped (`Tx(Io(Timeout))`). The BB in reset and the host DMA stopped that the stop line showed then were the data mode's own shutdown, read after it (corrected 2026-11-08 evening, [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)).
 
 **The cause.** `rtw89_wifi`'s coexistence keeps the `NoLink` policy and antenna after association, as at startup. It has only `ResetDefaults`, `NoLink` and `Rfk` (`btc_codec.rs`). Under `NoLink` the firmware gives the shared RF to Bluetooth whenever Bluetooth asks, a whole inquiry long.
 
@@ -50,7 +50,7 @@ One run on that machine (MC-12.1): this supports the cause, it does not prove it
 
 **What the source settled about the plan:**
 - **The antenna.** Linux's antenna is the same connected as not (`BTC_ANT_W2G`), so `Antenna` gains no `Connected`: plan step 3's second point is not needed.
-- **Leaving (step 4).** Linux too keeps the connected policy after a disconnect, and returns to no-link only at power-off. Here a data mode that stops ends the driver (`RESTART_AFTER_FAILURE`, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)).
+- **Leaving (step 4).** Linux too keeps the connected policy after a disconnect, and returns to no-link only at power-off. Here a data mode that stops ends the driver (`RESTART_AFTER_FAILURE`, [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)).
 
 **Not ported:** Linux's TDMA branches:
 - `FIX_TD7010` while linking;
@@ -62,7 +62,7 @@ The source and the layouts: [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852b
 **On the Ryzen** (`rtw89_conn1`, the cable out, `bt_hci` from its boot image with rounds every 300 s):
 - **The inquiry.** A whole 10-second inquiry (`INQUIRY COMPLETE AFTER 10263 MS`) passed with the station joined. Before, the first inquiry after six minutes lost the network.
 - **The gateway pings,** every 2 minutes: 0 to 33 % lost.
-- **After 9 minutes** the data mode stopped: one frame's release did not come in its time (`Tx(Io(Timeout))` after 5 submissions). That is [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s open problem, not the inquiry.
+- **After 9 minutes** the data mode stopped: one frame's release did not come in its time (`Tx(Io(Timeout))` after 5 submissions). That is [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)'s open problem, not the inquiry.
 
 **With `KEEP_LATE`** (`rtw89_late1`, 1b4e3942):
 - **About 20 minutes:** four inquiries passed, and five late frames were answered as not acknowledged, their releases coming in the extra second. The gateway pings lost 0 to 33 %.
@@ -99,6 +99,19 @@ So the reconcile now retries on any coexistence error during which a recovery is
 
 One machine and one AP (MC-12.1). The acceptance criterion, an hour across ten inquiries in one run, is not met yet.
 
+## With the Bluetooth stack's rounds, 2026-11-26
+
+**The run.** The Ryzen, boot 104, release 202611260856 (`main` 6230e1fdb with DRV's pending requests and the Bluetooth stack of `claude/700-BLT-0005-bt-connections` in `bt_hci`; `rtw89_wifi` is `main`'s). `bt_hci` listening every 300 s, each round an LE scan and a 10-second inquiry (`INQUIRY COMPLETE AFTER 10233 MS, STATUS 00`); the station joined to CoolNet2 on channel 8 under UZ; the wired card plugged in and the default route, the Effector agent's session staying on the Wi-Fi.
+
+**What the log shows, from uptime 500 to 7227 s (112 minutes, 21 rounds; the ring kept by the owner session, `logs-2026-11-26/bt-rounds-ring-500-7226s.txt`):**
+- no `CARD 2 LINK DOWN`, no rejoin, no `RECEIVE STALLED`, no restart of `rtw89_wifi`;
+- the last minute line: `[RTW89] TRAFFIC ON 8: 182251 FRAMES, 123858 KEPT … 68170 BEACONS; 17498 SENT, 17196 ACKED, 241 LATE; 0 HOLES, LONGEST 0 MS`, counted since the admission;
+- the firmware's error codes 0 in the lines read (`0 L0, 0 L1, 0 L2`).
+
+**Against the hardware criterion:** an hour across at least ten inquiries with no loss of the network: shown, for that machine, that access point and that release (MC-12.1). **"Ping answered" is not shown by a ping:** with the wire plugged in, a ping leaves by the wire. What stands for it here is the agent's session held over the Wi-Fi the whole time and 17 196 acknowledged sends. A ping over the Wi-Fi alone needs the wire taken out.
+
+**Not run yet:** a page, a pairing or a stream beside the station (the maintainer's devices), on 2.4 GHz and on 5 GHz. The policy there is still `Station` with no TDMA.
+
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md), [700](700-bluetooth.md).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [hwdocs/rtl8852be-btc-runtime.md](../hwdocs/rtl8852be-btc-runtime.md), [700](700-bluetooth.md).

@@ -4,7 +4,7 @@
 
 ## Problem
 
-DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeons-display`, in `hwdocs/cezanne-display.md` ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)). DRV asked on 2026-11-21 for what `display` needs of its grant (`KRN/2026-11-21T1525Z-DRV-request-what-display-needs-of-the-grant-and-the-firmwares-command-register.md` on `internal-dev-messages`). [213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done)'s grant falls short of it in four ways:
+DRV's survey of the Ryzen's display engine is on `claude/213-DRV-0085-the-radeons-display`, in `hwdocs/cezanne-display.md` ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done)). DRV asked on 2026-11-21 for what `display` needs of its grant (`KRN/2026-11-21T1525Z-DRV-request-what-display-needs-of-the-grant-and-the-firmwares-command-register.md` on `internal-dev-messages`). [213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done)'s grant falls short of it in four ways:
 
 - **It turns I/O decoding on.** A memory BAR's grant enabled every space the device implements. The Radeon has an I/O BAR, so the grant would write `0007` over the firmware's `0006`. DRV asks for the firmware's value. 0270's profile row said the grant keeps it, which was not true.
 - **It gives all of BAR 5**, with the MSI-X table and pending bits at 0x42000 and 0x43000, the graphics engine and the PSP. `display` uses two windows of it: the display engine's registers (bytes 0x48 to 0x1B000) and the SMU mailbox the display clocks go through (0x58A0C, 0x58A4C, 0x58A6C).
@@ -62,7 +62,7 @@ In main since round 168 (ee391287b7, `LANDING/2026-11-21T2340Z-KRN-landed-ee3912
 
 Made in `kernel/src/pci_control.rs` (`Mode::Memory`), `kernel/src/pci.rs`, `kernel/src/scheduler.rs` (`MEM_MAP` write-combining in the boot framebuffer's BAR) and `init` (the windows, `PLATFORM_ACPI_TABLE`'s VFCT copy). Landed in round 168.
 
-**On the Ryzen:** DRV's run 0 (2026-11-21 18:26 UTC, release 202611211819; recorded in [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), section "Run 0 on the Ryzen"). Its tree was DRV's bench build on round 167's candidate (5667eb9655), which carried this grant at 809d741c74. `kernel/src/pci.rs`, `kernel/src/pci_control.rs`, `kernel/src/scheduler.rs`, `init/src/main.rs` and `init/src/hardware.rs` are the same there as on `main` since round 168. Its lines:
+**On the Ryzen:** DRV's run 0 (2026-11-21 18:26 UTC, release 202611211819; recorded in [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), section "Run 0 on the Ryzen"). Its tree was DRV's bench build on round 167's candidate (5667eb9655), which carried this grant at 809d741c74. `kernel/src/pci.rs`, `kernel/src/pci_control.rs`, `kernel/src/scheduler.rs`, `init/src/main.rs` and `init/src/hardware.rs` are the same there as on `main` since round 168. Its lines:
 - `init`: `COMMAND 0006 BEFORE THE GRANT, 0006 AFTER; BAR 5 0x0+0x1B000 AND 0x58000+0x1000` and `VBIOS: THE VFCT TABLE, 55428 BYTES, READ-ONLY`;
 - `display`: `BAR 5 AT FCB00000: 108 KIB OF ITS REGISTERS GRANTED`, `THE SMU MAILBOX: 4096 BYTES GRANTED`, `BAR 0 FOR A SECOND SCREEN: 20480 KIB GRANTED`, `VBIOS: VFCT 55428 BYTES, AN IMAGE FOR 1002:1638 OF 55296 BYTES, ROM SIGNATURE 55AA` (the image is the 55,296 bytes Linux read);
 - `COMMAND 0006 AFTER STEP 1`.
@@ -81,4 +81,4 @@ This is evidence for that machine with those builds (MC-12.1).
 
 ## Related
 
-[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](../issues/213-DRV-0086-display-the-second-output-lit.md), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).
+[213-KRN-0270](213-KRN-0270-the-radeons-registers-for-display.done), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) (write-combining), [213](../issues/213-amd-ryzen-pc.md).

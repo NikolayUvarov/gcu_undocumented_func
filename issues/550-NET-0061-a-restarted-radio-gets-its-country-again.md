@@ -80,4 +80,4 @@ From DRV's run on the Ryzen, `fast-test` 92c2c6e9, 2026-11-19 (`KRN/2026-11-19T2
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the Ryzen's RTL8852BE), [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) (the country), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done) (the Ryzen's RTL8852BE), [550-NET-0035](../issues-done/550-NET-0035-the-stations-country.done) (the country), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join).

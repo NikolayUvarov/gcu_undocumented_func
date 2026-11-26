@@ -1,6 +1,6 @@
 # The Wi-Fi station: what joins by itself
 
-**Version:** 0.5 (2026-11-21) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues-done/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done) (the network a client joined, the access point a key joins) and [550-NET-0090](../../issues/550-NET-0090-the-station-on-5-ghz.md) (5 GHz first, a rejoin on a radar channel) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Version:** 0.6 (2026-11-26): `00` may be chosen as the country (550-NET-0096); 0.5 (2026-11-21) · **Track:** `NET`, tasks [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), [550-NET-0058](../../issues-done/550-NET-0058-a-read-only-wifi-client.done) (who may change the station) and [801-NET-0084](../../issues-done/801-NET-0084-the-station-joins-again-the-network-a-client-gave-it.done) (the network a client joined, the access point a key joins) and [550-NET-0090](../../issues/550-NET-0090-the-station-on-5-ghz.md) (5 GHz first, a rejoin on a radar channel) for main tasks [550](../../issues/550-network-on-real-hardware.md) and [801](../../issues/801-the-bench-stays-manageable.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 `wlan` is the 802.11 station, a boot service that runs when a radio does (`bcm_wifi`, or `wlansim` in the tests). A program joins a network through its `idl/wifi.wit` client (the `wifi` tool). The station also joins a network by itself, as this page describes. It is a boot service, so every release, including one put through the link, brings this behaviour with it. A script at the volume's root does not.
 
@@ -21,6 +21,12 @@
   - Otherwise the key `keystore` keeps, as `wifi join <name>` with no passphrase uses it. The station never holds a remembered network's PMK (MC-11.9).
 - **Which of its access points** (550-NET-0090). A 5 GHz access point of the network goes first when its signal is −70 dBm or stronger; otherwise the strongest, whatever its band. The same holds for `wifi join`.
 - **The access point** (801-NET-0084). A key, held or kept, joins a WPA2 access point of the name alone, and no key an open one alone. An open access point that takes a WPA2 network's name is never joined in its place, however strong. A client's passphrase, or a network `keystore` keeps, means WPA2.
+
+## The country it runs under
+
+- **Chosen, else announced, else `00`** (550-NET-0035, stage B): the country the user chose and `keystore` keeps; with none chosen, the one the access points heard announce; with none announced, `00`, the rules every country allows. An announcement moves only a country nobody chose.
+- **`00` may be chosen** (`wifi country 00`, `wifi.wit` 1.4, 550-NET-0096; the maintainer's word of 2026-11-25: at the testing stage the station is tied to no country). `keystore` keeps it, and no announcement moves the station from it. Under `00` a channel with radar or NO-IR rules is listen-only: the station sends there only to an access point whose beacon it heard on that channel (550-NET-0090).
+- **Not done:** the owner's rule beside the catalogue (550-DRV-0088), the hardening stage's.
 
 ## While the link is down
 

@@ -1,6 +1,6 @@
 # 700 — Bluetooth: the host stack and its devices (audio, keyboards and mice, others)
 
-**Type:** main task (track `BLT`) · **Owner:** — (the track is open for taking once its time comes) · **Priority:** P3 · **Status:** later: after Wi-Fi ([550](550-network-on-real-hardware.md), [550-DRV-0006](550-DRV-0006-broadcom-wifi.md)), the maintainer's order of 2026-10-09 · **Blocked by:** — · **Roadmap:** — (no roadmap step yet; the track was opened at the maintainer's request on 2026-10-09) · **Constitution:** MC-3.1, MC-3.5, MC-3.8 (each device and profile by its own capability), MC-7.1 (a radio link drops and comes back), MC-10.1, MC-10.3 (what goes out over the radio, and the audit of pairing), MC-11.4 (parsing what comes over the air apart from the keys)
+**Type:** main task (track `BLT`) · **Owner:** `BLT` (the session of `DRV`, `LNK` and `EFF`, claimed 2026-10-28) · **Priority:** P1 · **Status:** active (2026-11-25: the maintainer's word, «bluetooth в том числе надо закрыть тоже пока у нас есть Ryzen»; before it, later after Wi-Fi by the maintainer's order of 2026-10-09) · **Blocked by:** — · **Roadmap:** — (no roadmap step yet; the track was opened at the maintainer's request on 2026-10-09) · **Constitution:** MC-3.1, MC-3.5, MC-3.8 (each device and profile by its own capability), MC-7.1 (a radio link drops and comes back), MC-10.1, MC-10.3 (what goes out over the radio, and the audit of pairing), MC-11.4 (parsing what comes over the air apart from the keys)
 
 ## Problem
 

@@ -57,6 +57,7 @@ pub mod log;
 pub mod mask;
 pub mod mem;
 pub mod memconf;
+pub mod displays;
 pub mod network;
 pub mod parse;
 pub mod partition; // MBR and GPT, and the block store's own partition (307-KRN-0177)

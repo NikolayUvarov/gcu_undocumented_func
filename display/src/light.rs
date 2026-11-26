@@ -228,6 +228,14 @@ pub fn mode_from_edid(edid: Option<&crate::edid::Edid>, fallback: Timing, signal
     (p, Signal::Hdmi, ModeFrom::Edid)
 }
 
+/// The mode under the `light` setting (213-DRV-0099): the EDID decides. An HDMI sink gets its preferred timing in HDMI
+/// when it fits (`mode_from_edid`); anything else `fallback`, in HDMI for an HDMI sink and in DVI otherwise (no EDID read,
+/// or a sink with no HDMI block).
+pub fn mode_for(edid: Option<&crate::edid::Edid>, fallback: Timing) -> (Timing, Signal, ModeFrom) {
+    let signal = if edid.is_some_and(|e| e.hdmi.is_some()) { Signal::Hdmi } else { Signal::Dvi };
+    mode_from_edid(edid, fallback, signal)
+}
+
 /// The mark of stages in place, which a start of step 3 leaves in step 3's own OTG (OTG_VERTICAL_INTERRUPT2_POSITION, its
 /// interrupt off): a start of display again finds it and runs no stage. A failure's undo leaves it, so a failed stage
 /// is not tried again; an unplug's taking back clears it (213-DRV-0096), so that a monitor plugged in lights the output

@@ -60,7 +60,7 @@ QEMU against `wlansim` says nothing yet of a real radio (MC-12.1). The Ryzen's r
 
 ## Related
 
-[801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.done) (the restart found), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join), [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (remembered networks), [801-ASR-0015](../issues/801-ASR-0015-the-bench-join-remembers-its-network.md) (the bench join remembers its network), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) (the receive stall itself).
+[801-NET-0083](801-NET-0083-the-station-never-waits-silently-after-a-radio-restart.done) (the restart found), [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) (the automatic join), [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (remembered networks), [801-ASR-0015](../issues/801-ASR-0015-the-bench-join-remembers-its-network.md) (the bench join remembers its network), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done) (the receive stall itself).
 
 ## Resolution
 

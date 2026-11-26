@@ -1,6 +1,6 @@
 # RTL8852BE initial PHY DM tail
 
-Part of [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md). This is a
+Part of [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done). This is a
 crate-private register engine, not an integrated WLAN service, regulatory
 decision or permission to transmit. The actual BTC initialization and RFK
 interleaves remain mandatory before native integration.

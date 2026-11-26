@@ -164,13 +164,15 @@ says nothing of the firmware's), its HUBP surface address, `DCN_VM_FB_LOCATION_*
 (PHY E's PLL), DISPCLK, which pipes are powered, the HDMI connector's HPD sense under MIND Core, and whether the GOP
 left the DMCUB running. **Two ways to close it:**
 
-Closed by way 1 except for the DMCUB, which step 1 does not read (213-DRV-0086 step 1, runs 1 to 7, 2026-11-21).
+Closed by way 1 (213-DRV-0086 step 1: runs 1 to 7, then batch 8 for the DMCUB, 2026-11-21).
 - **The pipe:** OTG0 from OPP0, DIG front end E into PHY E's back end (DP, `DIG_MODE` 0, HPD 4), HUBP0 at
   0xF4_0000_0000.
 - **Clocks:** the pixel clock from OTG0's DP DTO, not a PHY PLL; DISPCLK and DPPCLK at divider id 0x14, settled.
 - **Power:** all four pipes' HUBP and DPP powered, HUBP1 to HUBP3 blanked on their own idle OTGs.
 - **Aperture:** `DCN_VM_FB_LOCATION` 0xF4_0000_0000 to 0xF4_1FFF_FFFF, `DCN_VM_FB_OFFSET` 0x8_1000_0000.
 - **HPD:** sensed on HPD 1 (HDMI-A-1) and HPD 4 (DP-2).
+- **The DMCUB:** on the board and held in reset, never started: `DMCUB_CNTL` 00020000 (`DMCUB_ENABLE` 0,
+  `DMCUB_SOFT_RESET` 1), its timer still, its scratch registers, mailboxes and GPINT registers 0 (batch 8, 20:38 UTC).
 
 The issue has each value.
 
@@ -183,7 +185,7 @@ The issue has each value.
 ## The DMUB question
 
 **Answer: a TMDS mode set on DCN 2.1 does not need the DMUB, by Linux's source; it needs the VBIOS command tables,
-which the host can run itself. Not shown on this machine.** The evidence:
+which the host can run itself. Shown on this machine since** (below). The evidence:
 
 1. Display Core uses the DMUB on DCN 2.1 for: ABM and PSR (`dmub_abm`, `dmub_psr`: eDP panels; this machine has none),
    the hardware lock manager (for PSR and replay links), and four VBIOS command tables when
@@ -200,9 +202,15 @@ which the host can run itself. Not shown on this machine.** The evidence:
 
 So the route runs the command tables on the CPU, as Linux did with early firmware, and leaves the DMUB alone. Its
 firmware (`amdgpu/green_sardine_dmcub.bin`, loaded through the PSP) would only be needed for PSR/ABM, which no monitor
-here uses. What is still missing to call it settled: (a) the route's own step 3 on this machine; (b) whether the GOP
-left the DMCUB running (not needed for the route, and left out of the proposed reads). Linux also requires the
-DMUB file to load its display driver at all (`AMDGPU_UCODE_REQUIRED`); that is Linux's choice, not the hardware's.
+here uses. Linux also requires the DMUB file to load its display driver at all (`AMDGPU_UCODE_REQUIRED`); that is
+Linux's choice, not the hardware's.
+
+**Shown on this machine since** (the two things this section named as missing on 2026-11-21; that machine, its
+firmware and its two monitors, MC-12.1):
+- **The DMCUB as the firmware leaves it:** held in reset, never started (213-DRV-0086, step 1's batch 8).
+- **The route's step 3:** first light on 2026-11-22 (boot 66, 213-DRV-0086), tables 12, 4 and 76 run to their end by
+  `display`'s own interpreter with the DMCUB left in reset; HDMI-A-1 showed the engine's squares, then MIND Core's
+  picture and the mirror (213-DRV-0092, boot 76) and the monitor's own mode (213-DRV-0095, boot 81).
 
 What running the tables on the CPU takes: an ATOM bytecode interpreter in `display` (Linux's `amdgpu/atom.c`, MIT, is
 some 1500 lines: opcodes for register, parameter, workspace, data-table and I/O accesses, jumps, calls to other
@@ -370,8 +378,8 @@ What follows for the route (plans, not guarantees):
 
 ## Step 3 as code: first light in eight stages (213-DRV-0086)
 
-`display/src/light.rs`, switched off (`STAGES_ALLOWED = 0` in `main.rs`): the route above as eight stages that a build
-lets go one at a time: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
+`display/src/light.rs`, run only under the machine's `light` setting (213-DRV-0099; written in the stages of a bring-up
+build one at a time at first): the route above as eight stages: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
 squares, 5 the OTG started and its frame count seen to move, 6 the DIG front end (table 4), 7 the back end in DVI
 mode, 8 the PHY (table 76) and the `DIG_START` pulse.
 

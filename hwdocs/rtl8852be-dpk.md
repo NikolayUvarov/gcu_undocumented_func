@@ -88,7 +88,7 @@ thermal DPK tracking, native RFK-power policy or real-device calibration-quality
 and traffic validation. The complete channel orchestrator also needs actual
 connection-RFK notifications, the source 30 ms BT-preservation gaps between
 IQK/TSSI/DPK and the final MCC notification; this entry does not fake them.
-[213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md)
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)
 remains open.
 
 ### Failed final STOP boundary
