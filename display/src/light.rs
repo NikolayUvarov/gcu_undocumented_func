@@ -441,16 +441,41 @@ fn blocks(otg: u8, opp: u8, fe: u8, phy: u8, add: &mut impl FnMut(u32, u32)) {
     add(seg1(0xA0 + p), seg1(0xA1 + p));
 }
 
+/// The blocks of HDMI socket `o` (213-DRV-0112), as byte ranges [start, end) of BAR 5: its DIG block (only its back
+/// end's DIG_BE_CNTL, DIG_BE_EN_CNTL and DIG_LANE_ENABLE when the chosen front end is that DIG, whose front end registers
+/// table 4 writes), its DP link registers, UNIPHY, DPCS/RDPCS, PLL resync and SYMCLK, its HPD block, and its DDC line's
+/// status, speed, set-up and pads (dcn_2_1_0_offset.h, dpcs_2_1_0_offset.h; the board's DDC line n is PHY n's).
+fn socket_blocks(o: &Output, fe_shared: bool, add: &mut impl FnMut(u32, u32)) {
+    let (p, h) = (o.phy as u32, o.hpd as u32);
+    if fe_shared {
+        add(seg2(0x20AF + 0x100 * p), seg2(0x20B1 + 0x100 * p));
+        add(seg2(0x20E1 + 0x100 * p), seg2(0x20E2 + 0x100 * p));
+    } else {
+        add(seg2(0x2068 + 0x100 * p), seg2(0x20F8 + 0x100 * p));
+    }
+    add(seg2(0x2108 + 0x100 * p), seg2(0x2109 + 0x100 * p));
+    add(seg2(0x2118 + 0x100 * p), seg2(0x2119 + 0x100 * p));
+    add(seg2(0x286D + 2 * p), seg2(0x286F + 2 * p));
+    add(seg2(0x2928 + 0xD8 * p), seg2(0x2928 + 0xD8 * (p + 1)));
+    add(seg2(0x1F14 + 8 * h), seg2(0x1F1C + 8 * h));
+    add(seg2(0x1E9C + p), seg2(0x1E9D + p));
+    add(seg2(0x1EA2 + 2 * p), seg2(0x1EA4 + 2 * p));
+    add(seg2(0x28D0 + 4 * p), seg2(0x28D4 + 4 * p));
+    add(seg1(0x40 + p), seg1(0x41 + p));
+    add(seg1(0xA0 + p), seg1(0xA1 + p));
+}
+
 /// PHY `p`'s DPCS/RDPCS block, whose sequence the VBIOS owns.
 pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x2928 + 0xD8 * (p as u32 + 1))) }
 
-/// What step 3 may write: the chosen pipe's and output's blocks, never one of the firmware's.
+/// What step 3 may write: the chosen pipe's and output's blocks, never one of the firmware's, nor one of the other HDMI
+/// socket's (213-DRV-0112), which is refused as off the route before the route's blocks are looked at.
 #[derive(Clone, Copy, Debug)]
-pub struct Guard { allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4] }
+pub struct Guard { allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4], other: [(u32, u32); 16], others: usize }
 
 impl Guard {
     pub fn new(firmware: &Firmware, choice: &Choice) -> Result<Guard, Refusal> {
-        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4] };
+        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4], other: [(0, 0); 16], others: 0 };
         let mut deny = |a: u32, b: u32| { if g.denies < 32 { g.deny[g.denies] = (a, b); g.denies += 1; } };
         blocks(firmware.otg, firmware.opp, firmware.dig_fe, firmware.phy, &mut deny);
         for n in 0..4u32 {
@@ -463,6 +488,10 @@ impl Guard {
         let (Pipe { otg, opp, dig_fe }, phy) = (choice.pipe, choice.output.phy);
         let mut allow = |a: u32, b: u32| { if g.allows < 16 { g.allow[g.allows] = (a, b); g.allows += 1; } };
         blocks(otg, opp, dig_fe, phy, &mut allow);
+        if let Some(o) = other(&choice.output) {
+            let mut refuse = |a: u32, b: u32| { if g.others < 16 { g.other[g.others] = (a, b); g.others += 1; } };
+            socket_blocks(&o, dig_fe == o.phy, &mut refuse);
+        }
         // Step 4's (from stage 11): pipe 1's HUBP, DPP and MPCC, and its OPP's output mux (the index of its OTG).
         let (q, o) = (otg as u32, opp as u32);
         g.late = [(seg2(0x5E5 + 0xDC * q), seg2(0x5E5 + 0xDC * (q + 1))), (seg2(0xCC5 + 0x16B * q), seg2(0xCC5 + 0x16B * (q + 1))),
@@ -474,15 +503,19 @@ impl Guard {
     /// A write to `reg` in stage `n`: as `check`, and from stage 11 pipe 1's HUBP, DPP, MPCC and output mux too.
     pub fn check_at(&self, reg: Reg, n: u8) -> Result<Writable, Refused> {
         match self.check(reg) {
-            Err(Refused::OffRoute(o)) if n >= dcn::PIPE_WRITES_FROM && self.late.iter().any(|&(a, b)| (a..b).contains(&o)) => Ok(Writable(reg)),
+            Err(Refused::OffRoute(o)) if n >= dcn::PIPE_WRITES_FROM && !self.others_(o) && self.late.iter().any(|&(a, b)| (a..b).contains(&o)) => Ok(Writable(reg)),
             other => other,
         }
     }
 
-    /// A write to `reg`: the firmware's blocks first, then the route's.
+    /// Whether byte `o` lies in the other HDMI socket's blocks.
+    fn others_(&self, o: u32) -> bool { self.other[..self.others].iter().any(|&(a, b)| (a..b).contains(&o)) }
+
+    /// A write to `reg`: the firmware's blocks first, then the other socket's, then the route's.
     pub fn check(&self, reg: Reg) -> Result<Writable, Refused> {
         let o = reg.offset();
         if self.deny[..self.denies].iter().any(|&(a, b)| (a..b).contains(&o)) { return Err(Refused::Firmware(o)); }
+        if self.others_(o) { return Err(Refused::OffRoute(o)); }
         if self.allow[..self.allows].iter().any(|&(a, b)| (a..b).contains(&o)) { Ok(Writable(reg)) } else { Err(Refused::OffRoute(o)) }
     }
 }

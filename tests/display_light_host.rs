@@ -3234,3 +3234,94 @@ fn a_monitor_moved_from_one_socket_to_the_other_and_back_is_lit_each_time_and_ea
     let again: Vec<Ev> = b.e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
     assert_eq!(again, first);
 }
+
+// --- the guard and the other socket (213-DRV-0112) ---
+
+// One register of each block of HDMI socket `o`: its DIG's front end, HDMI and back end registers, DP link, UNIPHY,
+// DPCS/RDPCS (its control register bus too), PLL resync, SYMCLK, HPD and DDC line (dcn_2_1_0_offset.h, dpcs_2_1_0_offset.h).
+fn socket_regs(o: dcn::Output) -> Vec<(&'static str, u32)> {
+    let (p, h) = (o.phy, o.hpd);
+    let d = p as u32;
+    vec![("DIG FE", reg(R::DigFeCntl, p)), ("DIG HDMI", reg(R::HdmiControl, p)), ("DIG BE", reg(R::DigBeCntl, p)), ("DIG BE EN", reg(R::DigBeEnCntl, p)),
+         ("DIG LANE ENABLE", seg(2, 0x20E1 + 0x100 * d)), ("DP LINK", seg(2, 0x2108 + 0x100 * d)), ("DP TRAINING PATTERN", seg(2, 0x2118 + 0x100 * d)),
+         ("UNIPHY LINK", seg(2, 0x286D + 2 * d)), ("UNIPHY XBAR", seg(2, 0x286E + 2 * d)), ("DPCS CLOCK", seg(2, 0x2928 + 0xD8 * d)),
+         ("RDPCS CR DATA", seg(2, 0x2935 + 0xD8 * d)), ("RDPCS PHY_CNTL0", seg(2, 0x2940 + 0xD8 * d)), ("PLL RESYNC", reg(R::PhypllPixclkResyncCntl, p)),
+         ("SYMCLK", seg(1, 0xA0 + d)), ("HPD SENSE", reg(R::HpdIntStatus, h)), ("HPD CONTROL", reg(R::HpdControl, h)), ("DDC HW STATUS", seg(2, 0x1E9C + d)),
+         ("DDC SPEED", seg(2, 0x1EA2 + 2 * d)), ("DDC SETUP", seg(2, 0x1EA3 + 2 * d)), ("DDC PADS MASK", seg(2, 0x28D0 + 4 * d)), ("DDC PADS Y", seg(2, 0x28D3 + 4 * d))]
+}
+
+#[test]
+fn each_outputs_guard_refuses_the_other_sockets_blocks_and_the_firmwares_and_lets_its_own_through() {
+    use light::{expected, name, HDMI_A_2};
+    for (o, theirs) in [(HDMI_A_1, HDMI_A_2), (HDMI_A_2, HDMI_A_1)] {
+        let (f, c) = expected(o);
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let g = l.guard();
+        // The other socket's: refused at every stage, step 4's too.
+        for (what, x) in socket_regs(theirs) {
+            for n in [1u8, 8, 11, 16] { assert_eq!(g.check_at(Reg::new(x).unwrap(), n).err(), Some(Refused::OffRoute(x)), "{}: {}'s {} {:05X} at stage {}", name(&o), name(&theirs), what, x, n); }
+        }
+        // Its own: through, but its HPD and DDC line, which no stage writes (step 2 has a guard of its own).
+        for (what, x) in socket_regs(o) {
+            let stage_writes = !what.starts_with("HPD") && !what.starts_with("DDC");
+            assert_eq!(g.check(Reg::new(x).unwrap()).is_ok(), stage_writes, "{}: its own {} {:05X}", name(&o), what, x);
+        }
+        // Step 2's guard: its line's speed, set-up and pads through, the other line's refused.
+        let (mine, other) = (light::ddc_writes(&o).unwrap(), light::ddc_writes(&theirs).unwrap());
+        for (what, x) in socket_regs(theirs).into_iter().filter(|(w, _)| w.starts_with("DDC")) {
+            assert!(light::ddc_writable_on(mine, Reg::new(x).unwrap()).is_err(), "{}: {}'s {} {:05X}", name(&o), name(&theirs), what, x);
+        }
+        for (r, i) in [(R::DcI2cDdc1Speed, 0), (R::DcI2cDdc2Speed, 0), (R::DcGpioDdc1Mask, 0), (R::DcGpioDdc2Mask, 0)] {
+            let x = r.at(i).unwrap();
+            assert_ne!(light::ddc_writable_on(mine, x).is_ok(), light::ddc_writable_on(other, x).is_ok(), "{}", r.name());
+        }
+        // The firmware's, first, as for HDMI-A-1 before: OTG 0, DIG E, PHY E's RDPCS, PHYPLLE, SYMCLKE, HUBP 0, MPCC 0.
+        for x in [reg(R::OtgControl, 0), reg(R::DigFeCntl, 4), reg(R::DigBeCntl, 4), seg(2, 0x2940 + 4 * 0xD8), reg(R::PhypllPixclkResyncCntl, 4),
+                  seg(1, 0xA4), reg(R::HubpCntl, 0), seg(2, 0x1271)] {
+            assert_eq!(g.check(Reg::new(x).unwrap()).err(), Some(Refused::Firmware(x)), "{}: the firmware's {:05X}", name(&o), x);
+        }
+    }
+}
+
+#[test]
+fn a_front_end_on_the_other_sockets_dig_opens_its_front_end_registers_but_not_its_back_end_or_phy() {
+    use light::{assess_for, name, HDMI_A_2};
+    // HDMI-A-1 with front end A busy takes B, as before 213-DRV-0112; HDMI-A-2 with B busy takes A.
+    for (o, theirs, s) in [(HDMI_A_1, HDMI_A_2, found()), (HDMI_A_2, HDMI_A_1, found_2())] {
+        let mut s = s;
+        s.set(R::DigFeCntl, o.phy, 1 << 24);
+        let (f, c) = assess_for(&s, o).unwrap();
+        assert_eq!(c.pipe.dig_fe, theirs.phy, "{}", name(&o));
+        let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+        let (g, p) = (l.guard(), theirs.phy as u32);
+        // What table 4 and the HDMI stream write on the front end's DIG: through.
+        for x in [reg(R::DigFeCntl, theirs.phy), reg(R::HdmiControl, theirs.phy), reg(R::AfmtGeneric0, theirs.phy), seg(2, 0x206B + 0x100 * p), seg(2, 0x20DA + 0x100 * p)] {
+            assert!(g.check(Reg::new(x).unwrap()).is_ok(), "{}: {:05X}", name(&o), x);
+        }
+        // That DIG's back end, and the rest of the other socket: refused.
+        for (what, x) in socket_regs(theirs).into_iter().filter(|(w, _)| !w.starts_with("DIG FE") && !w.starts_with("DIG HDMI")) {
+            assert_eq!(g.check(Reg::new(x).unwrap()).err(), Some(Refused::OffRoute(x)), "{}: {}'s {} {:05X}", name(&o), name(&theirs), what, x);
+        }
+        // Every write of first light's plan passes.
+        for n in 1..=STAGES { for st in l.stage(n) { if let Step::Update { reg, .. } = st { assert!(g.check_at(reg, n).is_ok(), "{}: stage {} {:05X}", name(&o), n, reg.offset()); } } }
+    }
+}
+
+#[test]
+fn a_table_that_writes_the_other_sockets_phy_is_refused_and_everything_undone() {
+    // HDMI-A-2's table 76 writing PHY A's RDPCS, HDMI-A-1's writing PHY B's: stage 8 refused, stages 8 to 1 undone.
+    let on_b = image(&[(12, [mov(seg(1, 0xA1), 1), vec![EOT]].concat()), (4, [mov(seg(2, 0x216B), 0x1F), vec![EOT]].concat()),
+                       (76, [mov(seg(2, 0x21B0), 1), mov(PHY_A_CNTL0, 0xDEAD), vec![EOT]].concat())]);
+    let on_a = tables([mov(seg(1, 0xA0), 1), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), mov(PHY_B_CNTL0, 0xDEAD), vec![EOT]].concat());
+    for (o, img, theirs) in [(light::HDMI_A_2, on_b, PHY_A_CNTL0), (HDMI_A_1, on_a, PHY_B_CNTL0)] {
+        let (f, c) = light::expected(o);
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let mut e = engine();
+        let before = e.regs.clone();
+        let (outcome, log) = run_light(&l, &img, &mut e, STAGES, false);
+        assert_eq!(outcome, Outcome::Failed { stage: 8, why: Failure::Refused(Refused::OffRoute(theirs)) }, "{}: {:#?}", light::name(&o), &log[log.len().saturating_sub(6)..]);
+        assert!(!writes(&e).iter().any(|w| w.0 == theirs), "{}: the refused write was made", light::name(&o));
+        restored_but(&e, &before, &[]);
+        assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 8 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED")));
+    }
+}
