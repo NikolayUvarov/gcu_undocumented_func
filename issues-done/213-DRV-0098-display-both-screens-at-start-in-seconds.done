@@ -1,6 +1,6 @@
-# 213-DRV-0098 — `display`: both screens at start, in seconds
+# 213-DRV-0098 — `display`: both screens at start, in seconds — done
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-22) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -267,6 +267,30 @@ pattern goes off, and nothing after.
   of the boot, each with `STEP 3'S TIMES` and the time from `display`'s start. This holds for that machine with its two
   monitors, started through Linux (MC-12.1, 12.9).
 
+## Resolution
+
+- **What was built:** the production order, behind `SURVEY_ORDER` (committed false, so the production order is the
+  default; true gives the survey's order of boots 70 to 81):
+  - `batches::Held`: no pause, a part's detail held and logged only if the part fails;
+  - step 1 reading only what steps 2 to 4 take (`batches::USED`), in the survey's order;
+  - one line a stage with its time and what it did, `STEP 3'S TIMES` and the time from `display`'s start to the offer;
+  - the `DIG_START` pulse held 10 us by a step of its own (`dcn::DIG_START_HOLD_US`), in either order.
+- **Where:** code e458838ac and a71a47b83 (stage 15's line names the frame of its longest gap); the series recorded at
+  598045d8f. In `main` since that head's landing, 8729f1ee3 ("Land claude/213-DRV-0098-display-both-screens-in-seconds
+  (598045d8fb4a) through the landing queue").
+- **Host cases:** `display_light_host.rs` (5 new, 38 then), `display_batches_host.rs` (3 new, 15), `display_ddc_host.rs`
+  (2 new, 7) and `display_host.rs` (the hold): the production order makes the survey's writes in the same order
+  (MC-12.2: a model, not the hardware).
+- **On the Ryzen** (the release of a71a47b83, started through Linux, boots 84 to 89): the second screen offered 6163 to
+  6184 ms after `display`'s start, at 9.55 to 9.66 s of the boot, against 137.6 s in the survey's order (boot 81); each
+  start with `STEP 3'S TIMES`. That machine with its two monitors (MC-12.1, 12.9).
+- **The watch:** 300 frames, as decided here. With 213-DRV-0103's standing check the owner session chose 60 for the
+  bench (2026-11-22, 16:10 UTC); boots 95 to 100 then offered it 2164.8 to 2178.8 ms after `display`'s start, each watch
+  clean (213-DRV-0103).
+- **The `DIG_START` hold:** in the code of every boot from 84 to 100, each with all 16 stages done. That the hardware
+  needs nothing more than 10 us there is shown only so far.
+- **Not shown:** the times on another machine, or after a start not through Linux.
+
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md).
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0099](../issues/213-DRV-0099-display-both-screens-by-default.md).

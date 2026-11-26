@@ -1,6 +1,6 @@
-# 213-DRV-0076 — `rtw89_wifi`: the WLAN scoreboard's high-LNA bit written as Linux writes it, not chasing Bluetooth's
+# 213-DRV-0076 — `rtw89_wifi`: the WLAN scoreboard's high-LNA bit written as Linux writes it, not chasing Bluetooth's — done
 
-**Type:** driver (`rtw89_wifi`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-11-20) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md), [700](700-bluetooth.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver (`rtw89_wifi`) · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md), [700](../issues/700-bluetooth.md) · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
@@ -30,6 +30,12 @@ On the Ryzen, once `bt_hci` patched the RTL8852B (700-BLT-0004), the Bluetooth s
 
   With the fix, one heartbeat had a transport error, and the agent was connected again 3 s later. One machine and one access point (MC-12.1).
 
+## Resolution
+
+- **What was done:** `btc_context::hi_lna` gives the bit to write only while Bluetooth's differs, as Linux's `_set_bt_rx_agc` does, and the coexistence reconcile uses it (c0ace439d, in `main` with 700-BLT-0004's landing of 2026-11-20).
+- **What was shown:** the three criteria above, each ticked with its run: the host case, and on the Ryzen the scoreboard quiet and 24 inquiries without a data-mode stop. One machine, one access point, 33 minutes (MC-12.1).
+- **What it does not cover:** the coexistence once a Bluetooth device is connected, which is [213-DRV-0052](../issues/213-DRV-0052-coexistence-after-association.md)'s.
+
 ## Related
 
-[213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (the coexistence), [700-BLT-0004](700-BLT-0004-bt-hci-patches-the-rtl8852b.md) (the patch that brought the rule into play).
+[213-DRV-0052](../issues/213-DRV-0052-coexistence-after-association.md) (the coexistence), [700-BLT-0004](../issues/700-BLT-0004-bt-hci-patches-the-rtl8852b.md) (the patch that brought the rule into play).

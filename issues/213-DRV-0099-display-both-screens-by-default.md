@@ -194,4 +194,4 @@ them), behind a device that counts its maps and writers:
 
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md).
+[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done).
