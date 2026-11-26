@@ -20,6 +20,14 @@ The `MOB` track numbers its own tasks (`NNN-MOB-MMMM`), so requests from other t
 
 **Not asked:** any change to U-Boot's or Tow-Boot's builds, or to the boards' runs of 100004-MOB-0002 and 0003.
 
+## The maintainer's word of 2026-11-26 on requests 2 and 3
+
+«MOB будет делать работу на стенде - это не телефон, а плата разработки с добавленными компонентами»: `MOB` works on the bench, a development board with components added to it, not on the phone. So:
+- **request 3 comes first,** on that board; the board and its components are to be named in [issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench);
+- **request 2's items 1 to 3** are made for the bench's board: its card, its first boot in `docs/phones/` (or the board's own page), its run script through Effector;
+  - what is the phone's alone (where Tow-Boot lives, the phone's card) waits for the phone;
+- **request 2's item 4** becomes the board's profile, with the components it carries; the phone's profile waits for the phone.
+
 ## 2. Everything ready for the PinePhone before it is at hand (for 100000)
 
 **Why.** The maintainer (2026-11-25): «подготовить все для деплоя на аппаратный телефон pinephone». The phone is not at hand yet ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)). The goal is that its first boot needs only a card written and the cable plugged in.
