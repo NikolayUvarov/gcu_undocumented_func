@@ -1,7 +1,7 @@
 //! 213-DRV-0099: display's start as the setting's plan asks (`setting::Plan`): step 1 on the engine's window, step 2 and
 //! steps 3 and 4 on its writer, what each part took and what was read and written; then what follows the stages, HPD 1
 //! (213-DRV-0096) and the standing check (213-DRV-0103). Steps 2 to 4 take the HDMI socket whose HPD senses a monitor,
-//! HDMI-A-1 first, and both senses are followed after them; one socket is lit at a time (one spare pipe), HDMI-A-2 as far
+//! HDMI-A-1 first, and both senses are followed after them; one socket is lit at a time (display drives one second pipe and offers one second screen; the engine has four pipes), HDMI-A-2 as far
 //! as the plan lets it (213-DRV-0112). main.rs runs it on the Radeon's windows, the host cases
 //! (`tests/display_light_host.rs`) on a model: a plan that reads nothing maps nothing, one that writes nothing makes no
 //! writer.
@@ -108,11 +108,11 @@ fn read_all(bus: &mut impl Bus, plan: &Plan, out: &mut dyn Out, store: &mut Stor
 }
 
 /// The socket steps 2 to 4 take (213-DRV-0112): the one whose HPD senses a monitor; HDMI-A-1 first when both do, the other
-/// named as not driven (one spare pipe); HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does, as before.
+/// named as not driven (display lights one socket at a time); HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does, as before.
 fn choose<D: Device>(d: &mut D, plan: &Plan, s: &Store) -> Output {
     let sensed = |o: &Output| s.field(R::HpdIntStatus, o.hpd, DC_HPD_SENSE) == Some(1);
     match (sensed(&light::HDMI_A_1), sensed(&light::HDMI_A_2)) {
-        (true, true) => { d.say(format_args!("HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND THERE IS ONE SPARE PIPE")); light::HDMI_A_1 }
+        (true, true) => { d.say(format_args!("HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW")); light::HDMI_A_1 }
         (false, true) if plan.takes(&light::HDMI_A_2) => {
             d.say(format_args!("HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 {}: {}", plan.hdmi_a_2.word(), plan.hdmi_a_2.what()));
             light::HDMI_A_2
@@ -169,7 +169,7 @@ fn done(r: &Run) -> u8 { match r.outcome { light::Outcome::Stopped { done } | li
 /// `hpd::POLL_MS`, and the standing check (213-DRV-0103), once a second while stage 15's picture is up. An unplug of the
 /// lit socket that holds takes its stages back (screen_gone first), and lights the other socket if its monitor is in; a
 /// monitor plugged in that holds, while none is lit, runs steps 1 to 4 again on its socket on the same writer, step 1 and
-/// the EDID read anew; one plugged into the socket not lit is named, not driven (one spare pipe). A new underflow or
+/// the EDID read anew; one plugged into the socket not lit is named, not driven (one socket at a time, for now). A new underflow or
 /// request timeout undoes the stages as the watch does; after a failure nothing more is tried.
 pub struct Follower<'a> {
     run: Option<Run<'a>>, state: hpd::State, f: Option<hpd::Pair>, account: light::Standing, next: u64, standing: bool,
@@ -272,7 +272,7 @@ impl<'a> Follower<'a> {
             }
             hpd::Event::Busy(i) => {
                 let (o, lit) = (light::SOCKETS[i], light::SOCKETS[pair.on()]);
-                d.say(format_args!("{} NOT DRIVEN: A MONITOR PLUGGED IN THERE; {} IS LIT, AND THERE IS ONE SPARE PIPE", light::name(&o), light::name(&lit)));
+                d.say(format_args!("{} NOT DRIVEN: A MONITOR PLUGGED IN THERE; {} IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW", light::name(&o), light::name(&lit)));
                 if i == 1 { batches::read_second(w, true, out, &mut Store::default()); }
             }
             // A monitor taken out of a socket not driven: said when it is HDMI-A-2's or the other socket is lit (HDMI-A-1

@@ -35,7 +35,16 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
   undriven one "hdmi1".
 - Nothing of PHY B, of DIG back end B, of DDC2 or of HPD 2 has been read on this machine by MIND Core. What the
   firmware leaves there is not known.
-- There is one spare pipe: the firmware's picture takes one, the second screen the other. So one HDMI socket at a time.
+- **Corrected 2026-11-27:** this line said there is "one spare pipe", and that is wrong. The engine has four pipes:
+  - DCN 2.1 has four timing generators, OPPs, HUBPs and DPPs and five stream encoders (`dcn21_resource.c`, `res_cap`;
+    `pipe_count` is four less any pipe fused off);
+  - the firmware leaves all four HUBPs and DPPs powered, HUBP1 to HUBP3 blanked on their own idle OTGs (the survey's
+    "Power");
+  - Linux drove two monitors on all four.
+
+  The firmware's picture takes one pipe and the second screen another. That `display` lights one HDMI socket at a time is
+  its own limit, for now: one second pipe, and one second screen offered (`display.wit` 1.3). Both at once is
+  [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
 
 ## Plan
 
@@ -47,7 +56,7 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
    follower of the plug (`start.rs`), in the guard of what may be written, and in the tables' parameters. Each takes
    the output, with host cases for both.
 3. **Which socket.** `display` follows both senses and lights the socket that has a monitor. With a monitor in each,
-   the first lit stays; the other is named in the log as not driven, with the reason (one spare pipe).
+   the first lit stays; the other is named in the log as not driven, with the reason (one socket lit at a time, for now).
 4. **The guard.** The registers of the second socket's PHY, back end, DDC and HPD join what may be written only for
    that output; the firmware's pipe and the other socket's blocks stay refused. A host case for each refusal.
 5. **On the Ryzen, in stages as HDMI-A-1 was:** the read-only run; the EDID read; first light with the test pattern;
@@ -84,7 +93,7 @@ and no value of the second socket has been read on the machine yet.
   - The tables' parameters come from the choice's output (`dcn::first_light`, `Light::off_call`), as before.
 - **Which socket** (`start.rs`, `choose`, `Follower`; `hpd.rs`, `Settle`, `Pair`):
   - Steps 2 to 4 take the socket whose HPD senses a monitor. With a monitor in each, HDMI-A-1 is taken first and
-    HDMI-A-2 is named as not driven, with the reason (one spare pipe).
+    HDMI-A-2 is named as not driven, with the reason (`display` lights one HDMI socket at a time, for now).
   - After them both senses are followed. The lit socket's unplug takes it back, and the other socket lights if its
     monitor is in. A plug while none is lit lights its socket; a plug into the socket not lit is named.
   - HDMI-A-2's plug or unplug while it is not driven reads batch 12 again.
@@ -159,10 +168,10 @@ The DDC2 fields lie where DDC1's do. `DC_I2C_DDC_SELECT` is 1 for DDC2: its engi
 - The choice and the follower log, as the case is:
   ```
   HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)
-  HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND THERE IS ONE SPARE PIPE
+  HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW
   HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 READ): SENSE s; THE SECOND OUTPUT <Lit|Dark|Stopped> ON HDMI-A-1
   HPD 2 IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED
-  HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND THERE IS ONE SPARE PIPE
+  HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW
   HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN
   HDMI-A-1: ITS MONITOR TAKEN OUT, NOT DRIVEN        (only while HDMI-A-2 is lit)
   ```
@@ -245,7 +254,7 @@ session's.
      `A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`.
    - With a monitor in each socket:
      - at start: `HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; ...`;
-     - while HDMI-A-2 is lit: `HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND THERE IS ONE SPARE PIPE`;
+     - while HDMI-A-2 is lit: `HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`;
      - HDMI-A-2 lit once HDMI-A-1's monitor is out.
 
 **Open questions, and what was not written for lack of evidence.**

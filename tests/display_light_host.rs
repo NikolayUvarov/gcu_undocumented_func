@@ -3215,7 +3215,7 @@ fn with_a_monitor_in_each_socket_hdmi_a_1_is_lit_the_other_named_and_lit_once_th
     let before = m.at.0.borrow().e.regs.clone();
     let mut log = Log(vec![]);
     let s = start_with(&mut m, &plan, &table, &mut log);
-    assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND THERE IS ONE SPARE PIPE"), "{:#?}", m.said);
+    assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW"), "{:#?}", m.said);
     assert_eq!(s.run.as_ref().map(|r| (r.outcome, r.light.choice.output)), Some((Outcome::Stopped { done: 16 }, HDMI_A_1)));
     assert!(!writes(&m.at.0.borrow().e).iter().any(|w| hdmi_a_2s(w.0)) && !m.at.0.borrow().i2c.writes.iter().any(|w| hdmi_a_2s(w.0)));
     let mut w = s.writer.unwrap();
@@ -3239,7 +3239,7 @@ fn with_a_monitor_in_each_socket_hdmi_a_1_is_lit_the_other_named_and_lit_once_th
     // HDMI-A-1's monitor back: named, not driven, nothing written.
     let made = device(&m.at.0.borrow().e).len();
     follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, true], 2000, &mut out);
-    assert!(said(&m, "HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND THERE IS ONE SPARE PIPE"), "{:#?}", m.said);
+    assert!(said(&m, "HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW"), "{:#?}", m.said);
     assert_eq!((device(&m.at.0.borrow().e).len(), f.output()), (made, Some(light::HDMI_A_2)));
     // Taken out again while HDMI-A-2 is lit: named, nothing written; then in again.
     follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 2000, &mut out);
