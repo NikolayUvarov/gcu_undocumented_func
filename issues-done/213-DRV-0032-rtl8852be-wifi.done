@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter — done
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** done (2026-11-26) · **Blocked by (while open):** [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](../issues/requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](../issues/requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), [NET country contract](../issues/requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog), [APP country selector](../issues/requests-APP.md#wifi-country-and-channel-selector), hardware calibration and radio bring-up · **Main task:** [213](../issues/213-amd-ryzen-pc.md), [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** done (2026-11-26) · **Blocked by (while open):** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](../issues/requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](../issues/requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), [NET country contract](../issues/requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog), [APP country selector](../issues/requests-APP.md#wifi-country-and-channel-selector), hardware calibration and radio bring-up · **Main task:** [213](../issues/213-amd-ryzen-pc.md), [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -10,7 +10,7 @@ The maintainer requests Wi-Fi first, with RTL8168 Ethernet work in parallel, the
 
 ## Plan
 
-1. Establish precise source/licence provenance, select a compatible official firmware, and collect the digital chip cut without RF/DMA initialization: [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+1. Establish precise source/licence provenance, select a compatible official firmware, and collect the digital chip cut without RF/DMA initialization: [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done).
 2. Implement a bounded MAC power lifecycle for RTL8852B, including rollback and explicit power-state diagnostics. Add the documented indirect XTAL/EFUSE reads only after that sequence is reviewed. Read the real MAC address, RFE type, crystal trim, country and board calibration; never invent defaults from PCI identity alone.
 3. Port the supported board's BB/RF/NCTL tables and calibration sequence from licence-compatible, pinned sources. Record every imported table and source in `THIRD_PARTY.md`. Respect country/regulatory power restrictions. Missing or unsupported calibration leaves transmission off.
 4. Implement firmware download and H2C/C2H transport with absolute deadlines, bounded retries, secure-boot policy and explicit status. Validate a pinned, hash-verified image before any device write. Structural parsing alone is not authentication, approval of download addresses or secure-boot support.
@@ -28,13 +28,13 @@ The maintainer requests Wi-Fi first, with RTL8168 Ethernet work in parallel, the
 
 ## Related
 
-[213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-DRV-0031](../issues/213-DRV-0031-rtl8168-wired-network.md), [550](../issues/550-network-on-real-hardware.md), [750](../issues/750-effector-agent.md), [RTL8852BE source/format notes](../hwdocs/rtl8852be.md), `wlan/`, `wpa/`, `init/src/main.rs`.
+[213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done), [213-DRV-0031](../issues/213-DRV-0031-rtl8168-wired-network.md), [550](../issues/550-network-on-real-hardware.md), [750](../issues/750-effector-agent.md), [RTL8852BE source/format notes](../hwdocs/rtl8852be.md), `wlan/`, `wpa/`, `init/src/main.rs`.
 
 ## Progress (2026-10-15)
 
 The first slice provides source pins, a firmware fetch/check helper and bounded, host-tested format/register helpers. It performs no radio, firmware-download, association or packet-transfer operation. The task remains open.
 
-On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done).
 
 ### Implemented slice: bounded native board access
 
@@ -1342,14 +1342,14 @@ The Ryzen's RTL8852BE is the machine's network under MIND Core. Since 2026-11-21
    - Linux on the same machine, access point and channel: 480 to 826 KB/s.
    - The measurements since then are in the split tasks named below.
 2. **Provenance and supported cuts explicit; unknown cuts, a missing firmware and a failed calibration stop with a diagnostic and no transmission.**
-   - The firmware's file, hash and source: [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md) and [hwdocs/rtl8852be.md](../hwdocs/rtl8852be.md). The board and calibration sources: the `hwdocs/rtl8852be-*.md` notes.
+   - The firmware's file, hash and source: [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done) and [hwdocs/rtl8852be.md](../hwdocs/rtl8852be.md). The board and calibration sources: the `hwdocs/rtl8852be-*.md` notes.
    - The driver accepts cut 1 alone; another cut or an unreadable register ends the start with `BOARD ACCESS FAILED … NO NETWORK LINK`, a missing or rejected file with `PRIVATE FILE … UNAVAILABLE/REJECTED … NO DEVICE START`, and a channel whose calibration fails is not admitted, so nothing is sent on it. Host cases cover each.
    - On the Ryzen only the last was seen (TSSI's failures of 2026-11-08, above). Its chip is cut 1 with its file present, so the first two rest on host cases there (MC-12.1).
 3. **Bounded waits and limits; a link lost or a restart does not corrupt ownership or block other services.**
    - Every wait in the driver has a deadline and every queue a bound; the host cases run them to their ends.
    - A failure stops the device, powers it off and quiesces it before the driver exits, and `init` starts a fresh one (`RESTART_AFTER_FAILURE`, 2026-11-08). It ran many times on the Ryzen before 2026-11-21's change, with the rest of the system up.
    - What the station does with a restarted radio is NET's [550-NET-0061](../issues/550-NET-0061-a-restarted-radio-gets-its-country-again.md), whose check on the Ryzen is still to run.
-4. **The firmware stays outside the repository and the images:** fetched into `proprietary/` and copied to `data/firmware/` on the written disk ([213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md), "Disk preparation integration").
+4. **The firmware stays outside the repository and the images:** fetched into `proprietary/` and copied to `data/firmware/` on the written disk ([213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.done), "Disk preparation integration").
 5. **Tests for each slice, gates and hardware evidence with their configuration, the limits documented.**
    - 40 `tests/rtw89_*_host.rs` files (4888 cases on 2026-11-22); each change came to `main` through the landing queue's gate.
    - [docs/profile/network.md](../docs/profile/network.md) says since 2026-11-26 what the Ryzen's runs show and what is not there: 5 GHz not yet joined, no HT or VHT, open and WPA2-PSK networks only.
