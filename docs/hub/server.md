@@ -1,6 +1,6 @@
 # The separate hub, `tools/mindhub`
 
-**Version:** 3 (2026-11-21): `hub-api 3`, the user's answer to a proposal (100003-APP-0155); 2 (2026-11-21): `hub-api 2`, export and deletion, attachments on messages, names on the board, the proof of work raised by itself, flags (100003-APP-0148); 1 (2026-11-21) · **Tasks:** [100003-APP-0146](../../issues-done/100003-APP-0146-the-separate-hub.done), [100003-APP-0148](../../issues-done/100003-APP-0148-the-hubs-remaining-parts.done) · **Design:** [README.md](README.md), sections 3 to 7 and 10 · **Owner:** tools track (`APP`)
+**Version:** 5 (2026-11-25): a client through a proxy, known by a CA bundle, and the hub deployed (100003-APP-0160); 4 (2026-11-25): the release tree under `/updates/` (100003-APP-0159); 3 (2026-11-21): `hub-api 3`, the user's answer to a proposal (100003-APP-0155); 2 (2026-11-21): `hub-api 2`, export and deletion, attachments on messages, names on the board, the proof of work raised by itself, flags (100003-APP-0148); 1 (2026-11-21) · **Tasks:** [100003-APP-0146](../../issues-done/100003-APP-0146-the-separate-hub.done), [100003-APP-0148](../../issues-done/100003-APP-0148-the-hubs-remaining-parts.done) · **Design:** [README.md](README.md), sections 3 to 7 and 10 · **Owner:** tools track (`APP`)
 
 `mindhub` is MIND Hub's first server, a host program for Linux. It takes users' requests and their conversation, registers devices with the admin's answer, keeps each user's trust and the anti-flood limits, shows the board, and serves the agents' API and the admin's pages, all over `hub-api 3`. The forms, bounds, states, trust bands, buckets and signatures are `improve/proto`'s, the same code MIND Core's programs link. TLS 1.3 is `tools/httpd`'s.
 
@@ -27,8 +27,65 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
 - **The admin pages,** `/hub/admin/`, open with a code: `mindhub admin-code --key admin.key --hub https://HOST:8443 --pin <SPKI SHA-256>`. The code works once, within 10 minutes. The admin's session lasts 12 hours.
 - **A user's pages,** `/hub/`, open with a pairing code from one of their approved devices (`POST /hub/v1/devices/pair`, `improve pair` from stage 4). The session lasts 30 days and ends when that device is revoked.
 - **The board** is `/hub/board`, and its JSON is `/hub/v1/board`.
+- **The release tree** (design 8; 100003-APP-0159): `--releases DIR` serves a tree `scripts/release.py publish` wrote, under `/updates/`.
+  - An updater's `source https://HOST:8443/updates` with the hub's pin fetches `channels/`, `releases/`, `blobs/`, `keys/`, `timestamps/` and `recovery/` there, as from `httpd`.
+  - Only the public channels: `--public NAME`, as many as given, `stable` alone when none is. Another channel's file is answered 404 with the reason: a restricted channel waits for the updater to sign its fetch (design 8.3).
+  - The names are checked and the file opened by `httpd`'s own `layout`, a byte range read by its `range`: what `httpd` refuses, the hub refuses alike. GET and HEAD alone, no query and no body.
+  - A blob, a manifest and a key's version are kept for a year by a client; a channel, its timestamp, its recovery order and the current key are fetched fresh. `If-None-Match` is answered 304.
+  - The file is sent as it is read, outside the hub's lock: a large blob holds no call of the API back.
+  - `--updates-per-minute N` (600 by default) requests a minute from one network, answered 429 with `Retry-After` past it. The hub's limits on connections apply too.
+  - At start: `MINDHUB: THE RELEASE TREE DIR, CHANNELS stable OFFERED UNDER /updates/`. Without `--releases`, `/updates/` answers 404 and says the hub serves no releases.
 
-## 2. Its data: one directory
+- **A client through a proxy** (100003-APP-0160): `mindhub call`, `admin-code` and `conformance` take `--ca BUNDLE.pem` in place of `--pin`.
+  - The hub's chain is then checked against that bundle's roots and named for the URL's host, as an agent in a cloud session needs: its HTTPS proxy ends TLS with a CA of its own, so no pin can match there.
+  - Every call is still signed over the hub's challenge, so whoever ends TLS on the way can neither forge an agent's call nor replay one.
+  - `HTTPS_PROXY` is used (CONNECT), unless `NO_PROXY` names the host or it is a loopback one; `--proxy http://HOST:PORT` names another, `--proxy none` uses none. A proxy with a user and a password, or one spoken to over TLS, is refused.
+  - With neither `--pin` nor `--ca`, an `https://` hub is refused as before.
+  - In a cloud session: `mindhub call --key FILE --hub https://HUB --ca /root/.ccr/ca-bundle.crt GET /hub/agent/v1/queue`. How an agent reads and answers its queue is [agents.md](agents.md), a draft of the rule for AGENTS.md.
+
+## 2. Deploying it
+
+On the maintainer's server ([issues-human/README.md](../../issues-human/README.md), section 18). Nothing here has run on such a server yet: it is the plan for it.
+
+- **The certificate: from a public CA, the key kept.**
+  - The cloud agents check a chain, so the hub's certificate comes from a public CA for its name (Let's Encrypt will do).
+  - Its key is ECDSA P-256 or Ed25519: the hub signs with no RSA key (`httpd`'s rule, RUSTSEC-2023-0071).
+  - Devices pin that key, so it is kept across renewals, as [351-UPD-0031](../../issues-done/351-UPD-0031-key-lifecycle-and-compromise-protocol.done) says for `httpd`: `certbot certonly --key-type ecdsa --elliptic-curve secp256r1 --reuse-key -d hub.example.org`.
+  - The hub loads a renewed certificate in place within 10 seconds.
+- **A user and a directory:** `useradd --system --home /var/lib/mindhub mindhub`, its data directory `/var/lib/mindhub/hub` (0700), `hub.conf` in it, and the certificate readable by that user alone.
+- **A systemd unit,** `/etc/systemd/system/mindhub.service`:
+
+```ini
+[Unit]
+Description=MIND Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mindhub
+ExecStart=/usr/local/bin/mindhub serve /var/lib/mindhub/hub --listen 0.0.0.0:443 --cert /etc/mindhub/chain.pem --key /etc/mindhub/key.pem
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mindhub
+PrivateTmp=true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+  - With a release tree, `--releases /srv/mind/releases` is added (section 1) and that directory made readable to the user; `release.py publish` still writes it over SSH, as UPD's.
+  - `journalctl -u mindhub` shows its start: the key's `SPKI SHA-256`, which goes into 100003 and into the devices' configuration.
+- **The firewall:** the hub's port (443, or 8443) open; nothing else of its own. The admin's pages are on the same port, behind the admin's signed one-time code.
+- **Backups:** `journal.jsonl` and `attachments/`, together and often. The journal is append-only and synced before each answer, so a copy taken while it runs ends at a whole line or a cut last one, which the next start drops.
+- **The keys:**
+  - each admin's and agent's private key is a 0600 file on that person's or agent's machine, outside git, as the Effector key is kept; `hub.conf` holds only the public halves;
+  - a cloud agent's key reaches its session the way the Effector key does, never through the chat or the repository;
+  - a key that leaks is removed from `hub.conf` and the hub restarted; a new one is made and added.
+- **Intake:** `agent APP intake <key>` until the maintainer names a track for incoming requests (design 7.2).
+
+## 3. Its data: one directory
 
 | File | What |
 |---|---|
@@ -44,7 +101,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
 - **Deleting rewrites the journal** (design 9). A request deleted by its user, or an account deleted, takes its texts out of the journal. The hub writes the journal again without them, in a file of its own that then takes the journal's place, so a crash leaves the old or the new one whole. A start does it again if a crash came between.
 - **`hub-api 3`'s journal.** A journal of `hub-api 1` or `hub-api 2` is refused at start with that name: the forms in its events are of a version before.
 
-## 3. What it does
+## 4. What it does
 
 - **Registration** (design 4.2, 4.3): `pending` with the device's first challenge.
   - The admin approves, asks or rejects, each with a message the device reads in `devices/me`. Several rounds of questions and answers are allowed.
@@ -77,7 +134,7 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
   - Each form carries its session's token. Cookies are `Secure`, `HttpOnly` and `SameSite=Strict`.
   - The pages load nothing from elsewhere (`Content-Security-Policy`).
 
-## 4. Its tests
+## 5. Its tests
 
 `scripts/host_tests.sh` runs them (`cargo test --manifest-path tools/mindhub/Cargo.toml`).
 
@@ -98,6 +155,9 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
   - 100003-APP-0155: a proposal refused an answer with no consent, accepted with no words while a question waits (which its answer still ends), answered once, and a second one corrected with no words refused and declined.
 - **`tests/conformance.rs`:** the conformance suite (`src/conformance.rs`, 20 checks, with deletion, export, an answer's attachment, a name on the board, an account deleted, and a proposal corrected by its user) against the hub on loopback, and over TLS 1.3 with an Ed25519 and a P-256 key, the hub known by its pin. A wrong pin is refused, and a second hub on the same data serves the same.
 - **`tests/pages.rs`:** a browser signed in by a pairing code sees a proposal waiting with its three answers; a correction with no words is refused, and an acceptance with none reaches the track.
+- **`tests/updates.rs`** (100003-APP-0159): a tree laid out as `release.py` publishes it. A channel, a manifest, a blob, the key and a timestamp fetched with their bytes and how long each is kept; HEAD; a range, one past the end, a tag held; a restricted channel's three files refused with the reason; a name outside the layout, a dot name, a query, a symbolic link, a name that is not a digest, POST, and HEAD on the API refused; the API answering while 32 MiB go to a reader that does not read; the rate's 429 and `Retry-After` while the API still answers; a hub with no tree.
+- **The QEMU suite `hubupdate`** (100003-APP-0159): MIND Core's updater, its `source` the hub's `/updates` with its pin, fetches release 6 from `tools/mindhub` and stages it in slot B; from the host the hub serves stable's channel as published and refuses a restricted one.
+- **`tests/proxy.rs`** (100003-APP-0160): a CONNECT proxy on loopback and a hub with a certificate from a test RSA CA, its key P-256 and then RSA (as the cloud proxy's is). Calls signed through the tunnel, a key that is no agent's refused, the conformance suite through the proxy known by the bundle; another CA, a name the certificate does not carry, a proxy that refuses, no pin and no bundle, a plain hub through a proxy and a bundle with no CA refused; the proxy chosen from `HTTPS_PROXY` and `NO_PROXY`, and a URL with no port given the scheme's.
 - **`tests/http.rs`:** heads out of form refused with their status, forms decoded strictly, networks, codes, versions, and the challenges of one network.
 
 **The conformance suite on another hub:** `mindhub conformance --hub URL --pin … --admin-key … --intake-key … --track-key … --track TRK --integrator-key …`.
@@ -105,10 +165,13 @@ mindhub serve hub --listen 0.0.0.0:8443 --cert chain.pem --key key.pem
 - It needs a network that registered no key on that hub within a day: it registers three, and checks that a rejection holds back the fourth.
 - MIND Core's QEMU checks (stage 4) and the native hub (stage 7) are to run it.
 
-## 5. Not done yet
+## 6. Not done yet
 
-- **Updates** (design 8), stage 3:
-  - the release tree, the channels by band, the delivery from the release itself;
-  - until then, the admin marks a release delivered.
+- **Updates** (design 8), the rest of stage 3:
+  - the restricted channels by band, which wait for the updater to sign its fetch (UPD);
+  - the modules' packages, when UPD's format names a signed index;
+  - the delivery from the release itself, which waits for `releases/<version>/COMMIT` (UPD); until then the admin marks a release delivered;
+  - a rate in bytes per user and per network: today the rate counts requests;
+  - MIND Core's updater on a real machine against a hub across a network: in QEMU it fetched a release from the hub (the `hubupdate` suite).
 - **The intake agent's rule in AGENTS.md** (7.3) waits for the maintainer's word (stage 8).
 - **The clients:** `improve` on MIND Core (stage 4) and on a host (stage 5). Until then the hub is driven by the conformance suite, the pages and the API.
