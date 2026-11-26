@@ -47,12 +47,38 @@ const INBOX_LISTEN: &str = "data/inbox/bt-listen.txt";
 /// The machine's output read from the audio gateway's sink a tenth of a second ahead, at least 10 ms at a time.
 const OUTPUT_FRAMES: usize = 4_800;
 const OUTPUT_LEAST: usize = 480;
+/// HID reports each logged, with what they gave the input, up to this many; then a line a second (700-BLT-0008).
+const REPORTS_SHOWN: u32 = 100;
 /// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
 const BULK_OUT_AT: usize = 0x8000;
 
 fn say(args: core::fmt::Arguments) { mind::println!("[BT] {}", args); }
 fn now() -> u64 { mind::time::uptime_ms() as u64 }
 fn idle() -> ! { loop { let _ = mind::time::sleep(60_000); } }
+
+/// HID reports as delivered: how many of each, the input calls made of them and how they ended.
+#[derive(Default)]
+struct Reports { all: u32, keyboard: u32, pointer: u32, events: u32, ok: u32, failed: u32, last_error: Option<Error>, said_at: u64, said: u32 }
+
+impl Reports {
+    /// One input call's result.
+    fn call(&mut self, r: mind::sys::Result<()>) { self.events += 1; match r { Ok(()) => self.ok += 1, Err(e) => { self.failed += 1; self.last_error = Some(e); } } }
+    /// A report delivered: logged while few, else counted for the line a second.
+    fn shown(&mut self, kind: &str, report: &[u8], events: u32, before_failed: u32) {
+        self.all += 1;
+        if self.all <= REPORTS_SHOWN {
+            say(format_args!("HID REPORT {} {}: {:02X?} -> {} INPUT EVENTS, {} REFUSED{}", self.all, kind, &report[..report.len().min(12)], events, self.failed - before_failed,
+                if self.failed > before_failed { " (THE INPUT CALL FAILED)" } else { "" }));
+        }
+    }
+    fn tick(&mut self, now: u64) {
+        if now < self.said_at + 1_000 { return; }
+        if self.all > REPORTS_SHOWN && self.all != self.said {
+            say(format_args!("HID: {} REPORTS IN 1 S ({} IN ALL: {} KEYBOARD, {} POINTER); INPUT CALLS {} OK, {} FAILED, LAST {:?}", self.all - self.said, self.all, self.keyboard, self.pointer, self.ok, self.failed, self.last_error));
+        }
+        (self.said_at, self.said) = (now, self.all);
+    }
+}
 
 /// The controller as claimed, as bt_host's driver sees it.
 struct Usb { host: Host, handle: u32, number: u8, events_ep: u8, bulk_in: u8, bulk_out: u8 }
@@ -183,12 +209,23 @@ fn main(_info: &'static BootInfo) {
     let mut mapped: Option<mind::hid::Pointer> = None;
     // The gateway's sink while held, and its refusal said once.
     let (mut held, mut refused) = (false, false);
+    let mut reports = Reports::default();
     let mut output = [0i16; 2 * OUTPUT_FRAMES];
     loop {
         let t = now();
         let next = d.step(&mut usb, &mut |u| match u {
-            Up::Keyboard(r) => keyboard.feed(r, t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); }),
-            Up::Pointer(r) => pointer.events(r, &mut |e| { let _ = mind::dev::input_key(e, e, false); }),
+            Up::Keyboard(r) => {
+                let (events, failed) = (reports.events, reports.failed);
+                reports.keyboard += 1;
+                keyboard.feed(r, t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); reports.events += 1; });
+                reports.shown("KEYBOARD", r, reports.events - events, failed);
+            }
+            Up::Pointer(r) => {
+                let (events, failed) = (reports.events, reports.failed);
+                reports.pointer += 1;
+                pointer.events(r, &mut |e| reports.call(mind::dev::input_key(e, e, false)));
+                reports.shown("POINTER", r, reports.events - events, failed);
+            }
             Up::Map(m) => {
                 mapped = mind::hid::Pointer::parse(m);
                 say(format_args!("REPORT MAP OF {} BYTES: {}", m.len(), if mapped.is_some() { "A POINTER IN IT" } else { "NO POINTER IN IT" }));
@@ -198,7 +235,10 @@ fn main(_info: &'static BootInfo) {
                 let mut with = [0u8; 64];
                 let n = r.len().min(63);
                 let report = if p.id != 0 { with[0] = id; with[1..1 + n].copy_from_slice(&r[..n]); &with[..1 + n] } else { r };
-                p.events(report, &mut |e| { let _ = mind::dev::input_key(e, e, false); });
+                let (events, failed) = (reports.events, reports.failed);
+                reports.pointer += 1;
+                p.events(report, &mut |e| reports.call(mind::dev::input_key(e, e, false)));
+                reports.shown("POINTER BY ITS MAP", report, reports.events - events, failed);
             },
             Up::Keys => {}
         });
@@ -220,6 +260,7 @@ fn main(_info: &'static BootInfo) {
         }
         if d.keys_changed { d.keys_changed = false; if writable && !write_keys(&d.stack) { say(format_args!("{} NOT WRITTEN", KEYS)); } }
         keyboard.repeat(t, &mut |byte| if let Some(e) = decoder.feed(byte) { mind::keyboard::deliver("BT", &decoder, e); });
+        reports.tick(t);
         match next { Next::Sleep(ms) => usb.sleep(ms), Next::Idle => idle() }
     }
 }
