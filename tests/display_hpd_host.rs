@@ -85,3 +85,90 @@ fn the_output_is_lit_while_stages_are_in_place_stopped_after_a_failure_and_dark_
     // The settle is past an HDMI sink's HPD pulse of 100 ms, and a few polls long.
     assert!(SETTLE_US > 100_000 && SETTLE_US >= 4 * POLL_US);
 }
+
+// --- both HDMI sockets (213-DRV-0112) ---
+
+use hpd::{Event, Pair};
+
+// Both sockets' senses, one read a poll from `t0`: the events, display acting on each as start.rs does (a take-back
+// leaves the output dark on its socket, a light-up lights the socket it names; busy and gone change nothing).
+fn trace2(p: &mut Pair, t0: u64, senses: &[([Option<bool>; 2], u64)]) -> Vec<(u64, Event)> {
+    let mut out = vec![];
+    let mut t = t0;
+    for &(s, for_us) in senses {
+        let end = t + for_us;
+        while t < end {
+            let e = p.feed(s, t);
+            match e { Event::TakeBack(i) => p.set(State::Dark, i), Event::LightUp(i) => p.set(State::Lit, i), _ => {} }
+            if e != Event::None { out.push((t, e)); }
+            t += POLL_US;
+        }
+    }
+    out
+}
+const S: u64 = 1_000_000;
+fn both(a: bool, b: bool) -> [Option<bool>; 2] { [Some(a), Some(b)] }
+
+#[test]
+fn a_monitor_in_the_second_socket_alone_lights_it_and_its_unplug_takes_it_back() {
+    let mut p = Pair::new(State::Dark, 0, both(false, false));
+    let got = trace2(&mut p, 0, &[(both(false, false), S), (both(false, true), 2 * S), (both(false, false), 2 * S)]);
+    assert_eq!(got, [(S + SETTLE_US, Event::LightUp(1)), (3 * S + SETTLE_US, Event::TakeBack(1))]);
+    assert_eq!((p.state(), p.on()), (State::Dark, 1));
+    // Plugged in at boot and not lit (the build only reads it): nothing until it changes; out, then in again, lights it.
+    let mut p = Pair::new(State::Dark, 0, both(false, true));
+    assert!(trace2(&mut p, 0, &[(both(false, true), 3 * S)]).is_empty());
+    assert_eq!(trace2(&mut p, 3 * S, &[(both(false, false), S), (both(false, true), S)]), [(3 * S + SETTLE_US, Event::Gone(1)), (4 * S + SETTLE_US, Event::LightUp(1))]);
+}
+
+#[test]
+fn with_a_monitor_in_each_the_lit_one_stays_the_other_is_busy_and_lights_once_the_first_is_taken_out() {
+    // Both in, HDMI-A-1 lit: its unplug takes it back, and HDMI-A-2 lights at the next poll.
+    let mut p = Pair::new(State::Lit, 0, both(true, true));
+    let got = trace2(&mut p, 0, &[(both(true, true), S), (both(false, true), 2 * S)]);
+    assert_eq!(got, [(S + SETTLE_US, Event::TakeBack(0)), (S + SETTLE_US + POLL_US, Event::LightUp(1))]);
+    // HDMI-A-1's monitor back: busy, not lit. HDMI-A-2's out: taken back, and HDMI-A-1 lights.
+    let got = trace2(&mut p, 3 * S, &[(both(true, true), 2 * S), (both(true, false), 2 * S)]);
+    assert_eq!(got, [(3 * S + SETTLE_US, Event::Busy(0)), (5 * S + SETTLE_US, Event::TakeBack(1)), (5 * S + SETTLE_US + POLL_US, Event::LightUp(0))]);
+    assert_eq!((p.state(), p.on()), (State::Lit, 0));
+    // HDMI-A-1 lit alone: a monitor plugged into HDMI-A-2 is busy, taken out gone; HDMI-A-1's unplug lights nothing after it.
+    let mut p = Pair::new(State::Lit, 0, both(true, false));
+    let got = trace2(&mut p, 0, &[(both(true, true), 2 * S), (both(true, false), 2 * S), (both(false, false), 2 * S)]);
+    assert_eq!(got, [(SETTLE_US, Event::Busy(1)), (2 * S + SETTLE_US, Event::Gone(1)), (4 * S + SETTLE_US, Event::TakeBack(0))]);
+    assert_eq!(p.state(), State::Dark);
+}
+
+#[test]
+fn a_monitor_moved_from_one_socket_to_the_other_and_back_is_lit_each_time() {
+    let mut p = Pair::new(State::Lit, 0, both(true, false));
+    let got = trace2(&mut p, 0, &[(both(false, false), 2 * S), (both(false, true), 2 * S), (both(false, false), 2 * S), (both(true, false), 2 * S)]);
+    assert_eq!(got, [(SETTLE_US, Event::TakeBack(0)), (2 * S + SETTLE_US, Event::LightUp(1)), (4 * S + SETTLE_US, Event::TakeBack(1)), (6 * S + SETTLE_US, Event::LightUp(0))]);
+    // Moved at once (out of one and into the other in the same poll): the lit socket's unplug first, then the other lights.
+    let mut p = Pair::new(State::Lit, 0, both(true, false));
+    let got = trace2(&mut p, 0, &[(both(false, true), 2 * S)]);
+    assert_eq!(got.iter().map(|g| g.1).collect::<Vec<_>>(), [Event::TakeBack(0), Event::LightUp(1)]);
+    assert!(got[1].0 > got[0].0 && got[1].0 <= got[0].0 + 2 * POLL_US, "{:?}", got);
+}
+
+#[test]
+fn a_bounce_on_either_socket_and_a_stopped_output_do_nothing_and_with_hpd_2_not_followed_the_pair_is_hpd_1s_follow() {
+    let away = SETTLE_US - POLL_US;
+    let mut p = Pair::new(State::Lit, 1, both(false, true));
+    assert!(trace2(&mut p, 0, &[(both(true, true), away), (both(false, false), away), (both(false, true), S)]).is_empty());
+    let mut p = Pair::new(State::Stopped, 0, both(true, false));
+    assert!(trace2(&mut p, 0, &[(both(false, false), 2 * S), (both(false, true), 2 * S), (both(true, true), 2 * S)]).is_empty());
+    // HPD 2 not followed: on every trace the cases above give `Follow`, the same actions at the same polls.
+    let traces: [(State, bool, Vec<(bool, u64)>); 5] = [
+        (State::Lit, true, vec![(true, S), (false, 2 * S), (true, 2 * S)]), (State::Dark, false, vec![(true, away), (false, POLL_US), (true, S)]),
+        (State::Dark, true, vec![(false, 2 * S)]), (State::Lit, false, vec![(true, 2 * S)]), (State::Stopped, true, vec![(false, 2 * S), (true, 2 * S)]),
+    ];
+    for (state, sense, senses) in traces {
+        let mut f = Follow::new(state, sense);
+        let want = trace(&mut f, 0, &senses, &mut display);
+        let mut p = Pair::new(state, 0, [Some(sense), None]);
+        let wide: Vec<([Option<bool>; 2], u64)> = senses.iter().map(|&(s, us)| ([Some(s), None], us)).collect();
+        let got: Vec<(u64, Action)> = trace2(&mut p, 0, &wide).into_iter().filter_map(|(t, e)| match e {
+            Event::TakeBack(0) => Some((t, Action::TakeBack)), Event::LightUp(0) => Some((t, Action::LightUp)), Event::Gone(0) => None, other => panic!("{:?}", other) }).collect();
+        assert_eq!(got, want, "{:?} {} {:?}", state, sense, senses);
+    }
+}

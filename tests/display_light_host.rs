@@ -87,8 +87,8 @@ fn step_3_refuses_what_it_cannot_tell() {
     assert_eq!(refuse(&|s| s.set(R::OtgControl, 0, 0)), Refusal::RunningOtgs(0));
     assert_eq!(refuse(&|s| s.set(R::DigBeEnCntl, 3, 1)), Refusal::BackEnds(2));
     assert_eq!(refuse(&|s| s.set(R::DigBeEnCntl, 4, 0)), Refusal::BackEnds(0));
-    assert_eq!(refuse(&|s| { s.set(R::DigBeEnCntl, 4, 0); s.set(R::DigBeEnCntl, 0, 1); }), Refusal::HdmiDriven);
-    assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 0, 0)), Refusal::NoMonitor);
+    assert_eq!(refuse(&|s| { s.set(R::DigBeEnCntl, 4, 0); s.set(R::DigBeEnCntl, 0, 1); }), Refusal::HdmiDriven(HDMI_A_1));
+    assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 0, 0)), Refusal::NoMonitor(HDMI_A_1));
     assert_eq!(refuse(&|s| { s.set(R::DigBeCntl, 4, 0); s.set(R::DigFeCntl, 4, 0); }), Refusal::FirmwareFrontEnd);
     assert_eq!(refuse(&|s| for d in 0..4 { s.set(R::DigFeCntl, d, 1 << 24); }), Refusal::NoFreeFrontEnd);
     // The DMCUB enabled and out of reset: it may own the PHY and the pixel clocks; enabled but held in reset is no bar.
@@ -2175,12 +2175,13 @@ fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
     }
 }
 
-// Every build the bring-up switches can make (213-DRV-0099).
+// Every build the bring-up switches can make (213-DRV-0099), HDMI-A-2's four levels among them (213-DRV-0112).
 fn bringups() -> Vec<setting::Bringup> {
+    use setting::HdmiA2::*;
     let mut all = vec![];
-    for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 {
-        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed });
-    } } }
+    for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 { for hdmi_a_2 in [Read, Edid, FirstLight, Full] {
+        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed, hdmi_a_2 });
+    } } } }
     all
 }
 
@@ -2328,26 +2329,34 @@ const I2C_PADS: u32 = 0x17640;
 const I2C_FOUND: [(u32, u32); 12] = [(I2C_ARBITRATION, 0), (I2C_CONTROL, 0x0000_0002), (I2C_SW_STATUS, 0), (0x14D70, 0), (0x14D88, 0x12C0_0102),
     (0x14D8C, 0x0300_0044), (I2C_TRANSACTION, 0x0001_1100), (I2C_TRANSACTION + 4, 0x0080_3101), (I2C_TRANSACTION + 8, 0), (I2C_TRANSACTION + 12, 0),
     (I2C_TIME_BASE, 0x0000_0130), (I2C_PADS, 0x0000_0101)];
-fn i2c_reg(o: u32) -> bool { (I2C_CONTROL..=I2C_DATA).contains(&o) || o == I2C_TIME_BASE || (I2C_PADS..=I2C_PADS + 12).contains(&o) }
+// DDC2's own registers as batch 12 finds them (213-DRV-0112): set up as DDC1's, its pads in GPIO mode.
+const I2C_PADS_2: u32 = 0x17650;
+const I2C_FOUND_2: [(u32, u32); 4] = [(0x14D74, 0), (0x14D90, 0x12C0_0102), (0x14D94, 0x0300_0044), (I2C_PADS_2, 0x0000_0101)];
+fn i2c_reg(o: u32) -> bool { (I2C_CONTROL..=I2C_DATA).contains(&o) || o == I2C_TIME_BASE || (I2C_PADS..=I2C_PADS + 12).contains(&o) || (I2C_PADS_2..=I2C_PADS_2 + 12).contains(&o) }
 
-struct I2c { regs: HashMap<u32, u32>, buf: [u8; 538], index: usize, reading: bool, monitor: Vec<u8>, pointer: usize, granted: bool, busy_until: u64, done: u32, reads: u64, writes: Vec<(u32, u32)> }
+struct I2c { regs: HashMap<u32, u32>, buf: [u8; 538], index: usize, reading: bool, monitor: Vec<u8>, pointer: usize, granted: bool, busy_until: u64, done: u32, reads: u64, writes: Vec<(u32, u32)>,
+    // The monitor on DDC2 (DC_I2C_DDC_SELECT 1), none when empty; `monitor` is DDC1's (213-DRV-0112).
+    monitor2: Vec<u8> }
 impl I2c {
     // No monitor answers when `monitor` is empty.
     fn new(monitor: Vec<u8>) -> I2c {
-        I2c { regs: I2C_FOUND.into_iter().collect(), buf: [0; 538], index: 0, reading: false, monitor, pointer: 0, granted: false, busy_until: 0, done: 0, reads: 0, writes: vec![] }
+        I2c { regs: I2C_FOUND.into_iter().chain(I2C_FOUND_2).collect(), buf: [0; 538], index: 0, reading: false, monitor, pointer: 0, granted: false, busy_until: 0, done: 0, reads: 0, writes: vec![],
+              monitor2: vec![] }
     }
     fn go(&mut self, now: u64) {
         if !self.granted { self.done = 1 << 4; return; }
         let count = ((self.regs[&I2C_CONTROL] >> 20) & 3) as usize + 1;
+        // The line's monitor: DDC1's or DDC2's, as DC_I2C_DDC_SELECT names it.
+        let monitor = if (self.regs[&I2C_CONTROL] >> 8) & 7 == 1 { self.monitor2.clone() } else { self.monitor.clone() };
         let mut p = 0;
         for t in 0..count {
             let tr = self.regs.get(&(I2C_TRANSACTION + 4 * t as u32)).copied().unwrap_or(0);
             let (read, n) = (tr & 1 == 1, ((tr >> 16) & 0x3FF) as usize);
             let address = self.buf[p];
             p += 1;
-            if self.monitor.is_empty() || address >> 1 != 0x50 { self.done = 1 << 8; self.busy_until = now + 300; return; }
+            if monitor.is_empty() || address >> 1 != 0x50 { self.done = 1 << 8; self.busy_until = now + 300; return; }
             if read {
-                for k in 0..n { self.buf[p + k] = self.monitor[(self.pointer + k) % self.monitor.len()]; }
+                for k in 0..n { self.buf[p + k] = monitor[(self.pointer + k) % monitor.len()]; }
                 self.pointer += n;
             } else {
                 self.pointer = self.buf[p] as usize;
@@ -2832,4 +2841,615 @@ fn stage_9_and_the_watch_sleep_between_their_polls_and_a_late_wake_spoils_neithe
     let first = log.iter().find(|x| x.starts_with("S15 HUBP1: UNDERFLOW IN 1 FRAMES, REQUEST TIMEOUT IN 0; ODM1 UNDERFLOW IN 0; THE FIRST AT FRAME ")).unwrap_or_else(|| panic!("{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>()));
     let frame: u32 = first.split("AT FRAME ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
     assert!((18..=20).contains(&frame) && passed(&log) >= 1 && first.ends_with("; CLEARED 1 TIMES"), "{}; {} passed", first, passed(&log));
+}
+
+// --- the second socket, HDMI-A-2 (213-DRV-0112) ---
+
+// The Ryzen as step 1 finds it with the monitor in the second socket: HPD 2 sensing and enabled, HPD 1 enabled, sensing none.
+fn plugged_2() -> Engine {
+    let mut e = plugged();
+    e.regs.insert(reg(R::HpdIntStatus, 0), 0);
+    e.regs.insert(reg(R::HpdIntStatus, 1), 0b10);
+    e.regs.insert(reg(R::HpdControl, 1), 1 << 28);
+    e
+}
+fn ryzen_on(e: Engine, monitor: Vec<u8>) -> Model<Both> {
+    Model { at: Shared(Rc::new(RefCell::new(Both { e, i2c: I2c::new(monitor) }))), maps: 0, writers: 0, said: vec![] }
+}
+
+#[test]
+fn with_a_monitor_in_the_second_socket_alone_read_and_light_log_its_blocks_and_write_nothing() {
+    let table = vfct(&good());
+    for setting in [setting::Setting::Read, setting::Setting::Light] {
+        let plan = setting::plan(setting, setting::Bringup::RELEASE);
+        let mut m = ryzen_on(plugged_2(), hdmi_monitor());
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let s = start_with(&mut m, &plan, &table, &mut held);
+        let log = held.inner.0.clone();
+        // Batch 12's values, in the production order's log.
+        for x in ["B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS 00000002, CONTROL 10000000", "B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN"] {
+            assert!(log.iter().any(|l| l == x), "{:?}: no {:?} in {:#?}", setting, x, log);
+        }
+        // Not one write: of the engine, of the I2C engine; no offer.
+        let b = m.at.0.borrow();
+        assert!(device(&b.e).is_empty() && b.i2c.writes.is_empty(), "{:?}: {:?} {:?}", setting, device(&b.e), b.i2c.writes);
+        assert_eq!(s.written, 0);
+        assert!(s.read > 0 && said_start(&m, "NO SECOND SCREEN OFFERED"), "{:?}: {:#?}", setting, m.said);
+    }
+}
+
+// Step 1's values with the monitor in the second socket: as `found`, HPD 1 sensing nothing, HPD 2 sensing.
+fn found_2() -> Store { let mut s = found(); s.set(R::HpdIntStatus, 0, 0); s.set(R::HpdIntStatus, 1, 0b10); s }
+
+#[test]
+fn hdmi_a_2s_pipe_is_chosen_from_what_step_1_found_with_its_own_front_end_and_refused_as_hdmi_a_1s_is() {
+    use light::{assess_for, expected, HDMI_A_2};
+    assert_eq!(HDMI_A_2, dcn::Output { phy: 1, hpd: 1, encoder_id: 0x1E, connector_id: 0x0C });
+    assert_eq!(expected(HDMI_A_1), EXPECTED);
+    let (f, c) = expected(HDMI_A_2);
+    assert_eq!((f, c.pipe, c.output, c.attached), (EXPECTED.0, dcn::Pipe { otg: 1, opp: 1, dig_fe: 1 }, HDMI_A_2, [false, true, false, false]));
+    assert_eq!(assess_for(&found_2(), HDMI_A_2), Ok(expected(HDMI_A_2)));
+    // HDMI-A-1's choice from the same values as before, its own front end A; each output refused without its monitor.
+    assert_eq!(assess_for(&found(), HDMI_A_1), Ok(EXPECTED));
+    assert_eq!(assess_for(&found(), HDMI_A_2), Err(Refusal::NoMonitor(HDMI_A_2)));
+    assert_eq!(assess_for(&found_2(), HDMI_A_1), Err(Refusal::NoMonitor(HDMI_A_1)));
+    assert_eq!(Refusal::NoMonitor(HDMI_A_2).to_string(), "HPD 2 SENSES NO MONITOR ON HDMI-A-2");
+    assert_eq!(Refusal::NoMonitor(HDMI_A_1).to_string(), "HPD 1 SENSES NO MONITOR ON HDMI-A-1");
+    // A monitor in each: either output's pipe can be told; which is lit is start.rs's choice.
+    let mut both = found(); both.set(R::HpdIntStatus, 1, 0b10);
+    assert_eq!((assess_for(&both, HDMI_A_1), assess_for(&both, HDMI_A_2)), (Ok(EXPECTED), Ok(expected(HDMI_A_2))));
+    // The firmware driving PHY B: HDMI-A-2 refused, as HDMI-A-1 is when it drives PHY A.
+    let mut on_b = found_2(); on_b.set(R::DigBeEnCntl, 4, 0); on_b.set(R::DigBeEnCntl, 1, 1);
+    assert_eq!(assess_for(&on_b, HDMI_A_2), Err(Refusal::HdmiDriven(HDMI_A_2)));
+    assert_eq!(Refusal::HdmiDriven(HDMI_A_2).to_string(), "PHY B (HDMI-A-2) IS ALREADY DRIVEN");
+    assert_eq!(Refusal::HdmiDriven(HDMI_A_1).to_string(), "PHY A (HDMI-A-1) IS ALREADY DRIVEN");
+    // Front end B busy: the lowest free one; every other refusal as for HDMI-A-1.
+    let mut busy = found_2(); busy.set(R::DigFeCntl, 1, 1 << 24);
+    assert_eq!(assess_for(&busy, HDMI_A_2).unwrap().1.pipe.dig_fe, 0);
+    let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found_2(); change(&mut s); assess_for(&s, HDMI_A_2).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set_batches(9)), Refusal::NotRead { batch: 10 });
+    assert_eq!(refuse(&|s| s.set(R::OtgControl, 2, 0x0001_0001)), Refusal::RunningOtgs(2));
+    assert_eq!(refuse(&|s| s.set(R::DmcubCntl, 0, 1 << 16)), Refusal::DmcubRuns);
+    assert_eq!(refuse(&|s| s.set(R::HubpCntl, 1, 1 << 4)), Refusal::AttachedHubp(1));
+    assert_eq!(refuse(&|s| for d in 0..4 { s.set(R::DigFeCntl, d, 1 << 24); }), Refusal::NoFreeFrontEnd);
+}
+
+// Stage `n`'s calls of a plan.
+fn calls(l: &Light, n: u8) -> Vec<dcn::Table> { l.stage(n).filter_map(|s| if let Step::Call(t) = s { Some(t) } else { None }).collect() }
+fn updates(l: &Light, n: u8) -> Vec<u32> { l.stage(n).filter_map(|s| if let Step::Update { reg, .. } = s { Some(reg.offset()) } else { None }).collect() }
+
+#[test]
+fn each_outputs_plan_gives_the_tables_its_own_pll_phy_hpd_and_front_end() {
+    use dcn::Table;
+    for (o, p, fe) in [(HDMI_A_1, 0u8, 0u8), (light::HDMI_A_2, 1, 1)] {
+        let (f, c) = light::expected(o);
+        let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+        // Table 12 on the PHY's own PLL (ATOM_COMBOPHY_PLL0 + p), the UNIPHY encoder, OTG 1; then that PHY's resync.
+        assert_eq!(calls(&l, 2), [Table::SetPixelClock { pixclk_100hz: 3_240_000, pll_id: 20 + p, encoder_id: 0x1E, encoder_mode: 3, crtc_id: 1, deep_color: 0, misc: 0 }]);
+        assert_eq!(updates(&l, 2), [reg(R::PhypllPixclkResyncCntl, p)]);
+        // Table 4 for the front end, its source and HDMI registers; the back end of the PHY fed by that front end.
+        assert_eq!(calls(&l, 6), [Table::DigEncoderStreamSetup { dig: fe, mode: 3, lanes: 4, pclk_10khz: 32_400, bpc: 2 }]);
+        assert!(updates(&l, 6).contains(&reg(R::DigFeCntl, fe)) && updates(&l, 6).contains(&reg(R::HdmiControl, fe)));
+        assert_eq!(updates(&l, 7), [reg(R::DigBeCntl, p)]);
+        assert!(l.stage(7).any(|s| matches!(s, Step::Update { value, .. } if value == (3 << 16 | (1 << fe) << 8))));
+        // Table 76 for the PHY: its HPD, the front end, the connector; the off calls on the same PHY and PLL.
+        assert_eq!(calls(&l, 8), [Table::DigTransmitter { phy: p, action: 1, mode: 3, lanes: 4, symclk_10khz: 32_400, hpd_sel: p + 1, dig_fe_sel: 1 << fe, connector_id: 0x0C }]);
+        let (bytes, len) = calls(&l, 8)[0].parameters();
+        assert_eq!((len, bytes[0], bytes[8], bytes[9], bytes[10]), (32, p, p + 1, 1 << fe, 0x0C));
+        assert_eq!(l.off_call(2), Some(Table::SetPixelClock { pixclk_100hz: 0, pll_id: 20 + p, encoder_id: 0, encoder_mode: 0, crtc_id: 0xFF, deep_color: 0, misc: 1 }));
+        assert_eq!(l.off_call(8), Some(Table::DigTransmitter { phy: p, action: 0, mode: 2, lanes: 0, symclk_10khz: 0, hpd_sel: p + 1, dig_fe_sel: 1 << fe, connector_id: 0x0C }));
+        // Every planned write passes the output's guard.
+        for n in 1..=STAGES { for s in l.stage(n) { if let Step::Update { reg, .. } = s { assert!(l.guard().check(reg).is_ok(), "{} {:05X}", light::name(&o), reg.offset()); } } }
+    }
+}
+
+#[test]
+fn hdmi_a_2s_guard_lets_through_phy_bs_blocks_and_refuses_phy_as_and_the_firmwares() {
+    let (f, c) = light::expected(light::HDMI_A_2);
+    let g = light::Guard::new(&f, &c).unwrap();
+    let check = |o: u32| g.check(Reg::new(o).unwrap());
+    // PHY B's: DIG B (front and back end), DP1's link registers, UNIPHYB, RDPCSTX1, PHYPLLB, SYMCLKB; OTG 1's pixel rate.
+    for o in [reg(R::DigFeCntl, 1), reg(R::DigBeCntl, 1), reg(R::DigBeEnCntl, 1), seg(2, 0x21E1), seg(2, 0x2208), seg(2, 0x2218), seg(2, 0x286F),
+              seg(2, 0x2870), seg(2, 0x2928 + 0xD8), seg(2, 0x2940 + 0xD8), reg(R::PhypllPixclkResyncCntl, 1), seg(1, 0xA1), reg(R::OtgPixelRateCntl, 1)] {
+        assert!(check(o).is_ok(), "{:05X}", o);
+    }
+    // HDMI-A-1's: DIG A, DP0, UNIPHYA, RDPCSTX0, PHYPLLA, SYMCLKA; off the route.
+    for o in [reg(R::DigFeCntl, 0), reg(R::DigBeCntl, 0), reg(R::DigBeEnCntl, 0), seg(2, 0x2108), seg(2, 0x286D), seg(2, 0x286E), seg(2, 0x2928),
+              seg(2, 0x2940), reg(R::PhypllPixclkResyncCntl, 0), seg(1, 0xA0), reg(R::HpdControl, 0), reg(R::HpdControl, 1)] {
+        assert_eq!(check(o).err(), Some(Refused::OffRoute(o)), "{:05X}", o);
+    }
+    // The firmware's, first.
+    for o in [reg(R::OtgControl, 0), reg(R::DigBeCntl, 4), seg(2, 0x2928 + 4 * 0xD8), reg(R::HubpCntl, 0)] { assert_eq!(check(o).err(), Some(Refused::Firmware(o)), "{:05X}", o); }
+}
+
+const PHY_B_CNTL0: u32 = (0x34C0 + 0x2940 + 0xD8) * 4; // RDPCSTX1_RDPCSTX_PHY_CNTL0
+// The synthetic tables of `good` for PHY B and front end B: SYMCLKB and PHY B's CNTL0, DIG B's clock pattern, DIG B's enable.
+fn good_b() -> Vec<u8> {
+    image(&[(12, [mov(seg(1, 0xA1), 1), mov(PHY_B_CNTL0, 0x0020_0001), vec![EOT]].concat()), (4, [mov(seg(2, 0x216B), 0x1F), vec![EOT]].concat()),
+            (76, [mov(seg(2, 0x21B0), 1), vec![EOT]].concat())])
+}
+// HDMI-A-1's blocks: DIG A's, DP0's, UNIPHYA, RDPCSTX0 and DPCSTX0, PHYPLLA, SYMCLKA, DDC1's.
+fn hdmi_a_1s(o: u32) -> bool {
+    (seg(2, 0x2068)..seg(2, 0x2068 + 0x100)).contains(&o) || (seg(2, 0x286D)..seg(2, 0x286F)).contains(&o) || (seg(2, 0x2928)..seg(2, 0x2928 + 0xD8)).contains(&o)
+        || o == seg(1, 0x40) || o == seg(1, 0xA0) || o == reg(R::DcI2cDdc1Speed, 0) || o == reg(R::DcI2cDdc1Setup, 0) || o == reg(R::DcGpioDdc1Mask, 0)
+}
+
+#[test]
+fn all_sixteen_stages_light_hdmi_a_2_on_the_model_from_step_1_and_an_unplug_takes_them_back() {
+    let img = good_b();
+    let mut e = plugged_2();
+    let before = e.regs.clone();
+    let mut store = Store::default();
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    batches::read_into(&mut e, batches::BATCHES, batches::Order::Production, &mut held, &mut store);
+    batches::read_second(&mut e, true, &mut held, &mut store);
+    let l = light::prepare_on(&store, light::HDMI_A_2, WIDE, dcn::Signal::Hdmi, "TESTBUILD").expect("step 3 refused");
+    assert_eq!((l.choice.output, l.choice.pipe), (light::HDMI_A_2, dcn::Pipe { otg: 1, opp: 1, dig_fe: 1 }));
+    let (outcome, mut lit, log) = light_up(l, &img, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(10)..]);
+    // Its own lines: the output, PHY B, HPD 2; the picture's text.
+    assert!(log.iter().any(|x| x == "STEP 3: FIRST LIGHT ON HDMI-A-2 IN 8 STAGES, STEP 4 IN 8 MORE (MIND CORE'S PICTURE); THIS BUILD MAY RUN 16"), "{:#?}", &log[..4]);
+    assert!(log.iter().any(|x| x == "S0 STEP 3'S PIPE: OTG1 OPP1 DIG B FRONT END, PHY B (HDMI-A-2), HPD 2; MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)"));
+    assert!(log.iter().any(|x| x == "S10 ITS TEXT: MIND CORE / DISPLAY / HDMI-A-2 3440X1440 / BUILD TESTBUILD"));
+    // Every write on HDMI-A-2's route, none of HDMI-A-1's blocks, the firmware's pipe unchanged, the screen offered.
+    let ws = writes(&e);
+    for (o, _) in &ws { assert!(lit.l.guard().check_at(Reg::new(*o).unwrap(), 16).is_ok(), "{:05X}", o); assert!(!hdmi_a_1s(*o), "HDMI-A-1's {:05X} written", o); }
+    for o in [PHY_B_CNTL0, seg(1, 0xA1), seg(2, 0x21B0), reg(R::DigBeCntl, 1), reg(R::PhypllPixclkResyncCntl, 1)] { assert!(ws.iter().any(|w| w.0 == o), "{:05X} not written", o); }
+    for o in watched(&lit.l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    assert!(e.ev.contains(&Ev::Offer(3440, 1440, 13824)));
+    // The picture's pixels: HDMI-A-2's text.
+    let lines = picture::Lines::on("HDMI-A-2", "TESTBUILD", lit.l.surface);
+    for (x, y) in picture::samples(lit.l.surface) { assert_eq!(e.surface[y * e.pitch + x], picture::pixel(&lines, x, y)); }
+    // Unplugged: HPD 2 named, every register as before step 3.
+    let (same, log) = take_back(&mut lit, &mut e, 16);
+    assert!(same && log[0].starts_with("STEP 3 TAKEN BACK: HPD 2 SENSES NO MONITOR; UNDOING STAGES 16 TO 1 ("), "{:#?}", log);
+    as_before(&e, &before, &[]);
+}
+
+// `answered` for PHY `p`: the same statuses at its RDPCSTX/DPCSTX instance (dpcs_2_1_0_offset.h, a stride of 0xD8).
+fn answered_on(p: u32) -> Engine {
+    let mut e = engine();
+    let at = |d: u32| phy(d + 0xD8 * p);
+    e.set.push((at(0x2940), 1 << 28));
+    e.follow.push((at(0x2943), 0x2020_2020));
+    e.derived.push((at(0x2928), 1 << 2, at(0x2928), 0b11));
+    e.follow.push((at(0x2931), 1 << 10));
+    e.derived.push((at(0x294C), 1 << 7, at(0x2946), 0x4444));
+    e
+}
+
+// PHY A's RDPCSTX_PHY_FUSE0, which the Ryzen's table 12 sets first for every PHY; its value on boot 66, as WARM holds it.
+const PHY_A_FUSE0: u32 = (0x34C0 + 0x294F) * 4;
+fn boot66(o: u32) -> u32 { WARM.iter().find(|w| w.0 == o).map(|w| w.1).unwrap() }
+const PHY_B_CR_ADDR: u32 = (0x34C0 + 0x2934 + 0xD8) * 4; // RDPCSTX1_RDPCS_TX_CR_ADDR
+const PHY_B_CR_DATA: u32 = (0x34C0 + 0x2935 + 0xD8) * 4; // RDPCSTX1_RDPCS_TX_CR_DATA
+
+#[test]
+fn the_ryzens_own_tables_on_phy_b_write_only_hdmi_a_2s_route() {
+    let skip = |why: String| { use std::io::Write; let _ = writeln!(std::io::stderr(), "the_ryzens_own_tables_on_phy_b_write_only_hdmi_a_2s_route SKIPPED: {}", why); };
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { skip("MIND_AMD_VBIOS is not set (the Ryzen's VBIOS image, not in the repository)".into()); return };
+    let Ok(bytes) = std::fs::read(&path) else { skip(format!("{} cannot be read", path)); return };
+    let (f, c) = light::expected(light::HDMI_A_2);
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    let run8 = |e: &mut Engine| { let mut interp = atom::Interpreter::new(atom::Image::new(&bytes).unwrap()); let mut journal = light::Journal::default(); let mut log = Log(vec![]);
+        let o = light::run(&l, e, &mut interp, &mut journal, STAGES, &mut log); (o, log.0) };
+    // First light's eight stages with PHY B's statuses answered and PHY A's FUSE0 as boot 66 read it: table 12's first write,
+    // PHY A's FUSE0 (its MPLLB_V2I set to 2, which it is already), left unmade; every other write on HDMI-A-2's route.
+    for (warm, t12, t76) in [(false, "S2 TABLE 12 DONE: 530 STEPS, 4 CALLS, 10 US OF DELAYS, 110 WRITES, 1 LEFT AS IT IS", "S8 TABLE 76 DONE: 286 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES"),
+                             (true, "S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 32 WRITES, 1 LEFT AS IT IS", "S8 TABLE 76 DONE: 238 STEPS, 9 CALLS, 420 US OF DELAYS, 18 WRITES")] {
+        let mut e = answered_on(1);
+        e.regs.insert(PHY_A_FUSE0, boot66(PHY_A_FUSE0));
+        if warm { e.regs.insert(phy(0x2937 + 0xD8), 0x300); } // PHY B set up already: RDPCSTX1_RDPCSTX_SCRATCH
+        let before = e.regs.clone();
+        let (outcome, log) = run8(&mut e);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "warm {}: {:#?}", warm, &log[log.len().saturating_sub(20)..]);
+        for x in [t12, "S6 TABLE 4 DONE: 31 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES", t76,
+                  "S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE (B008003E)"] {
+            assert!(log.iter().any(|y| y == x), "warm {}: no {:?} in {:#?}", warm, x, log.iter().filter(|y| y.contains("TABLE") || y.contains("FUSE0")).collect::<Vec<_>>());
+        }
+        let path = if warm { "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS" } else { "S2 THE PHY WAS NOT SET UP (SCRATCH 0x0): THE LONG PATH: 37 WRITES THROUGH ITS BUS (17 INTO THE PHY)" };
+        assert!(log.iter().any(|y| y == path), "warm {}: {:#?}", warm, log.iter().filter(|y| y.starts_with("S2 THE")).collect::<Vec<_>>());
+        for (w, _) in writes(&e) { assert!(l.guard().check(Reg::new(w).unwrap()).is_ok(), "{:05X}", w); assert!(!hdmi_a_1s(w), "HDMI-A-1's {:05X}", w); }
+        assert_eq!(e.regs[&PHY_A_FUSE0], before[&PHY_A_FUSE0]);
+        for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    }
+    // PHY A's FUSE0 not as boot 66 read it (0, as a PHY A no table has set up might hold it): the write would change it, so
+    // stage 2 is refused there and undone; PHY A's FUSE0 never written.
+    let mut e = answered_on(1);
+    let before = e.regs.clone();
+    let (outcome, log) = run8(&mut e);
+    assert_eq!(outcome, Outcome::Failed { stage: 2, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    assert!(log.iter().any(|y| y == "S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM 00000000 TO 00080000"), "{:#?}", log);
+    assert!(log.iter().any(|y| y.starts_with("U2 TABLE 12 DONE")), "the off call did not end");
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+    restored_but(&e, &before, &[]);
+    // All sixteen stages at 3440x1440 in HDMI on the Ryzen's tables, then an unplug: taken back whole but PHY B's control
+    // register bus (left by design, as PHY A's is); PHY A's FUSE0 never written.
+    let mut e = answered_on(1);
+    e.frame_us = DP2;
+    e.regs.insert(PHY_A_FUSE0, boot66(PHY_A_FUSE0));
+    let before = e.regs.clone();
+    let wide2 = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let (outcome, mut lit, log) = light_up(wide2, &bytes, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    assert!(e.ev.contains(&Ev::Offer(3440, 1440, 13824)));
+    for (w, _) in writes(&e) { assert!(!hdmi_a_1s(w), "HDMI-A-1's {:05X}", w); }
+    let (same, log) = take_back(&mut lit, &mut e, 16);
+    assert!(same, "{:#?}", log);
+    for t in ["U2 TABLE 12 DONE", "U8 TABLE 76 DONE"] { assert!(log.iter().any(|x| x.starts_with(t)), "{}", t); }
+    as_before(&e, &before, &[PHY_B_CR_ADDR, PHY_B_CR_DATA]);
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+}
+
+#[test]
+fn table_12s_write_of_phy_as_fuse0_off_the_route_is_left_unmade_where_it_holds_the_value_and_refused_otherwise() {
+    // Synthetic tables for HDMI-A-2 whose table 12 first writes PHY A's FUSE0 with boot 66's value, as the Ryzen's sets its field.
+    let fuse = boot66(PHY_A_FUSE0);
+    let img = |t12_first: Vec<u8>, t76: Vec<u8>| image(&[(12, [t12_first, mov(seg(1, 0xA1), 1), mov(PHY_B_CNTL0, 0x0020_0001), vec![EOT]].concat()),
+        (4, [mov(seg(2, 0x216B), 0x1F), vec![EOT]].concat()), (76, [mov(seg(2, 0x21B0), 1), t76, vec![EOT]].concat())]);
+    let (f, c) = light::expected(light::HDMI_A_2);
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    // It holds the value: the write is not made, the stages go on.
+    let mut e = engine();
+    e.regs.insert(PHY_A_FUSE0, fuse);
+    let (outcome, log) = run_light(&l, &img(mov(PHY_A_FUSE0, fuse), vec![]), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0) && e.regs[&PHY_A_FUSE0] == fuse);
+    assert!(log.iter().any(|x| x == "S2 TABLE 12 DONE: 4 STEPS, 1 CALLS, 0 US OF DELAYS, 2 WRITES, 1 LEFT AS IT IS"), "{:#?}", log.iter().filter(|x| x.contains("TABLE 12")).collect::<Vec<_>>());
+    // It does not: refused, stage 2 and stage 1 undone, PHY A's FUSE0 as it was.
+    let mut e = engine();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &img(mov(PHY_A_FUSE0, fuse), vec![]), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 2, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) });
+    assert!(log.iter().any(|x| x == &format!("S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM 00000000 TO {:08X}", fuse)));
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+    restored_but(&e, &before, &[]);
+    // Only table 12's: the same write from table 76, the value held, is refused as off the route.
+    let mut e = engine();
+    e.regs.insert(PHY_A_FUSE0, fuse);
+    let (outcome, _) = run_light(&l, &img(vec![], mov(PHY_A_FUSE0, fuse)), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 8, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) });
+    // On HDMI-A-1's route it is PHY A's own: made, as before.
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    let mut e = engine();
+    let one = tables([mov(PHY_A_FUSE0, fuse), mov(seg(1, 0xA0), 1), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), vec![EOT]].concat());
+    let (outcome, log) = run_light(&l, &one, &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 });
+    assert!(writes(&e).contains(&(PHY_A_FUSE0, fuse)) && !log.iter().any(|x| x.contains(" LEFT PHY A")));
+}
+
+// --- which socket (213-DRV-0112) ---
+
+// The Ryzen as step 1 finds it, with a monitor on each DDC line given (none where empty).
+fn ryzen_2(e: Engine, monitor: Vec<u8>, monitor2: Vec<u8>) -> Model<Both> {
+    let mut i2c = I2c::new(monitor);
+    i2c.monitor2 = monitor2;
+    Model { at: Shared(Rc::new(RefCell::new(Both { e, i2c }))), maps: 0, writers: 0, said: vec![] }
+}
+// A monitor in each socket: HPD 1 and HPD 2 sensing and enabled.
+fn plugged_both() -> Engine { let mut e = plugged(); e.regs.insert(reg(R::HpdIntStatus, 1), 0b10); e.regs.insert(reg(R::HpdControl, 1), 1 << 28); e }
+// Tables that write nothing of their own, so that either output's stages run on one image (`good` and `good_b` are each
+// written for one PHY).
+fn plain() -> Vec<u8> { image(&[(12, vec![EOT]), (4, vec![EOT]), (76, vec![EOT])]) }
+fn light_with(level: setting::HdmiA2) -> setting::Plan { setting::Plan { hdmi_a_2: level, ..setting::plan(setting::Setting::Light, setting::Bringup::RELEASE) } }
+// What follows the stages for `ms`, HPD 1 and HPD 2 sensing `senses`, display sleeping between polls as main.rs does.
+fn follow_2<'a>(m: &mut Model<Both>, w: &mut Shared<Both>, f: &mut start::Follower<'a>, plan: &setting::Plan, table: &'a [u8], senses: [bool; 2], ms: u64, out: &mut dyn Out) {
+    for (i, s) in senses.into_iter().enumerate() { m.at.0.borrow_mut().e.regs.insert(reg(R::HpdIntStatus, i as u8), (s as u32) << 1); }
+    let end = m.at.0.borrow().e.clock + ms * 1000;
+    while m.at.0.borrow().e.clock < end {
+        m.at.0.borrow_mut().e.clock += f.sleep_ms() as u64 * 1000;
+        f.poll(m, w, plan, Some(table), "TESTBUILD", out);
+    }
+}
+// HDMI-A-2's blocks: DIG B's, DP1's, UNIPHYB, RDPCSTX1 and DPCSTX1, PHYPLLB, SYMCLKB, DDC2's.
+fn hdmi_a_2s(o: u32) -> bool {
+    (seg(2, 0x2168)..seg(2, 0x2268)).contains(&o) || (seg(2, 0x286F)..seg(2, 0x2871)).contains(&o) || (seg(2, 0x2928 + 0xD8)..seg(2, 0x2928 + 2 * 0xD8)).contains(&o)
+        || o == seg(1, 0x41) || o == seg(1, 0xA1) || o == reg(R::DcI2cDdc2Speed, 0) || o == reg(R::DcI2cDdc2Setup, 0) || o == reg(R::DcGpioDdc2Mask, 0)
+}
+// Every register of the blocks `of` names that was ever written reads as before step 3 (the model's status bits aside).
+fn blocks_as_before(e: &Engine, before: &HashMap<u32, u32>, of: &dyn Fn(u32) -> bool) {
+    let status = |o: u32| e.set.iter().chain(e.follow.iter()).filter(|(at, _)| *at == o).fold(0, |m, (_, bits)| m | bits);
+    for (o, _) in writes(e).into_iter().filter(|w| of(w.0)) {
+        assert_eq!(e.regs.get(&o).copied().unwrap_or(0) & !status(o), before.get(&o).copied().unwrap_or(0) & !status(o), "{:05X} not as before", o);
+    }
+}
+
+#[test]
+fn under_light_a_monitor_in_the_second_socket_alone_goes_as_far_as_the_build_lets_hdmi_a_2_go() {
+    use setting::HdmiA2::*;
+    let table = vfct(&good_b());
+    for level in [Read, Edid, FirstLight, Full] {
+        let plan = light_with(level);
+        let mut m = ryzen_2(plugged_2(), vec![], hdmi_monitor());
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let s = start_with(&mut m, &plan, &table, &mut held);
+        let log = held.inner.0.clone();
+        let b = m.at.0.borrow();
+        let dev = device(&b.e);
+        // At no level is anything of HDMI-A-1's written, nor the I2C engine but on DDC2's line.
+        for x in &dev { if let Ev::Write(o, _) = x { assert!(!hdmi_a_1s(*o), "{:?}: HDMI-A-1's {:05X} written", level, o); } }
+        for &(o, _) in &b.i2c.writes { assert!(light::ddc_writable_on(&light::DDC2_WRITES, Reg::new(o).unwrap()).is_ok(), "{:?}: {:05X}", level, o); }
+        let run = s.run.as_ref().map(|r| (r.outcome, r.light.choice.output));
+        match level {
+            Read => {
+                assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)"), "{:#?}", m.said);
+                assert!(said(&m, "STEP 3 NOT RUN: HPD 1 SENSES NO MONITOR ON HDMI-A-1"), "{:#?}", m.said);
+                assert!(dev.is_empty() && b.i2c.writes.is_empty() && run.is_none());
+            }
+            Edid => {
+                assert!(said(&m, "HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 EDID: ITS EDID READ OVER DDC2, ITS STAGES DESCRIBED"), "{:#?}", m.said);
+                assert!(log.iter().any(|x| x.starts_with("D STEP 2 DONE: 2 BLOCKS READ (256 BYTES)") && x.ends_with("AS BATCHES 11 AND 12 READ THEM")), "{:#?}", log);
+                assert!(said(&m, "STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING"));
+                assert_eq!(log.last().unwrap(), &format!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", dcn::STAGES));
+                assert!(dev.is_empty() && !b.i2c.writes.is_empty() && run.is_none());
+                for (o, v) in I2C_FOUND.into_iter().chain(I2C_FOUND_2) { if o != I2C_SW_STATUS { assert_eq!(b.i2c.regs.get(&o).copied().unwrap_or(0), v, "{:05X}", o); } }
+            }
+            FirstLight => {
+                assert_eq!(run, Some((Outcome::Stopped { done: 8 }, light::HDMI_A_2)));
+                assert!(!dev.iter().any(|x| matches!(x, Ev::Offer(..))) && writes(&b.e).iter().any(|w| w.0 == PHY_B_CNTL0));
+            }
+            Full => {
+                assert_eq!(run, Some((Outcome::Stopped { done: 16 }, light::HDMI_A_2)), "{:#?}", &log[log.len().saturating_sub(8)..]);
+                assert!(dev.contains(&Ev::Offer(3440, 1440, 13824)));
+            }
+        }
+    }
+    // The read setting takes HDMI-A-2's monitor too, its stages only described: nothing written.
+    let mut m = ryzen_2(plugged_2(), vec![], hdmi_monitor());
+    let mut log = Log(vec![]);
+    let s = start_with(&mut m, &setting::plan(setting::Setting::Read, setting::Bringup::RELEASE), &table, &mut log);
+    assert!(said(&m, "HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 READ: ITS BLOCKS READ ONLY") && s.run.is_none(), "{:#?}", m.said);
+    assert!(log.0.iter().any(|x| x == "S0 STEP 3'S PIPE: OTG1 OPP1 DIG B FRONT END, PHY B (HDMI-A-2), HPD 2; MODE 1920x1080 AT 148.5 MHZ IN DVI SIGNALLING (CTA VIC 16)"), "{:#?}", log.0.iter().filter(|x| x.starts_with("S0")).collect::<Vec<_>>());
+    assert!(device(&m.at.0.borrow().e).is_empty() && m.at.0.borrow().i2c.writes.is_empty());
+}
+
+#[test]
+fn with_a_monitor_in_each_socket_hdmi_a_1_is_lit_the_other_named_and_lit_once_the_first_is_taken_out() {
+    let table = vfct(&plain());
+    let plan = light_with(setting::HdmiA2::Full);
+    let mut m = ryzen_2(plugged_both(), hdmi_monitor(), hdmi_monitor());
+    let before = m.at.0.borrow().e.regs.clone();
+    let mut log = Log(vec![]);
+    let s = start_with(&mut m, &plan, &table, &mut log);
+    assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND THERE IS ONE SPARE PIPE"), "{:#?}", m.said);
+    assert_eq!(s.run.as_ref().map(|r| (r.outcome, r.light.choice.output)), Some((Outcome::Stopped { done: 16 }, HDMI_A_1)));
+    assert!(!writes(&m.at.0.borrow().e).iter().any(|w| hdmi_a_2s(w.0)) && !m.at.0.borrow().i2c.writes.iter().any(|w| hdmi_a_2s(w.0)));
+    let mut w = s.writer.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, s.run, &plan).expect("nothing followed");
+    assert!(said(&m, "HPD 1 FOLLOWED EVERY 50 MS, A CHANGE COUNTED AFTER 500 MS: SENSE 1, THE SECOND OUTPUT Lit"));
+    assert!(said(&m, "HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 FULL): SENSE 1; THE SECOND OUTPUT Lit ON HDMI-A-1"), "{:#?}", m.said);
+    // HDMI-A-1's monitor taken out: its stages taken back, screen_gone, then HDMI-A-2's monitor lit.
+    let mut out = Log(vec![]);
+    let from = m.at.0.borrow().e.ev.len();
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 9000, &mut out);
+    assert!(said(&m, "A MONITOR ON HDMI-A-2: STEPS 1 TO 4 RAN AGAIN ON IT, THE SECOND OUTPUT Lit"), "{:#?}", m.said);
+    assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(light::HDMI_A_2)));
+    {
+        let b = m.at.0.borrow();
+        let after: Vec<Ev> = b.e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+        assert_eq!(after.first(), Some(&Ev::Gone));
+        assert!(after.contains(&Ev::Offer(3440, 1440, 13824)));
+        blocks_as_before(&b.e, &before, &hdmi_a_1s);
+        assert!(b.i2c.writes.iter().any(|w| w.0 == I2C_PADS_2), "HDMI-A-2's EDID not read");
+    }
+    // HDMI-A-1's monitor back: named, not driven, nothing written.
+    let made = device(&m.at.0.borrow().e).len();
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, true], 2000, &mut out);
+    assert!(said(&m, "HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND THERE IS ONE SPARE PIPE"), "{:#?}", m.said);
+    assert_eq!((device(&m.at.0.borrow().e).len(), f.output()), (made, Some(light::HDMI_A_2)));
+    // Taken out again while HDMI-A-2 is lit: named, nothing written; then in again.
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 2000, &mut out);
+    assert!(said(&m, "HDMI-A-1: ITS MONITOR TAKEN OUT, NOT DRIVEN"), "{:#?}", m.said);
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, true], 2000, &mut out);
+    assert_eq!((device(&m.at.0.borrow().e).len(), f.output()), (made, Some(light::HDMI_A_2)));
+    // HDMI-A-2's taken out: back to HDMI-A-1, HDMI-A-2's blocks as before.
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, false], 9000, &mut out);
+    assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(HDMI_A_1)));
+    assert!(said(&m, "A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit"));
+    blocks_as_before(&m.at.0.borrow().e, &before, &hdmi_a_2s);
+
+    // The release's level: HDMI-A-1 lit, and once its monitor is out HDMI-A-2's is named and its blocks read, not driven.
+    let plan = light_with(setting::HdmiA2::Read);
+    let mut m = ryzen_2(plugged_both(), hdmi_monitor(), hdmi_monitor());
+    let before = m.at.0.borrow().e.regs.clone();
+    let s = start_with(&mut m, &plan, &table, &mut Log(vec![]));
+    assert_eq!(s.run.as_ref().map(|r| r.outcome), Some(Outcome::Stopped { done: 16 }));
+    let mut w = s.writer.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, s.run, &plan).expect("nothing followed");
+    let mut out = Log(vec![]);
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 3000, &mut out);
+    assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)"), "{:#?}", m.said);
+    assert!(out.0.iter().any(|x| x == "B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN"), "{:#?}", out.0);
+    assert_eq!(f.state(), hpd::State::Dark);
+    let b = m.at.0.borrow();
+    as_before(&b.e, &before, &[]);
+    assert!(!writes(&b.e).iter().any(|w| hdmi_a_2s(w.0)) && !b.i2c.writes.iter().any(|w| hdmi_a_2s(w.0)));
+}
+
+#[test]
+fn a_monitor_moved_from_one_socket_to_the_other_and_back_is_lit_each_time_and_each_unplug_puts_every_register_back() {
+    let table = vfct(&plain());
+    let plan = light_with(setting::HdmiA2::Full);
+    let mut m = ryzen_2(plugged(), hdmi_monitor(), vec![]);
+    m.at.0.borrow_mut().e.regs.insert(reg(R::HpdControl, 1), 1 << 28);
+    let before = m.at.0.borrow().e.regs.clone();
+    let s = start_with(&mut m, &plan, &table, &mut Log(vec![]));
+    assert_eq!(s.run.as_ref().map(|r| (r.outcome, r.light.choice.output)), Some((Outcome::Stopped { done: 16 }, HDMI_A_1)));
+    let first = device(&m.at.0.borrow().e);
+    let mut w = s.writer.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, s.run, &plan).expect("nothing followed");
+    let mut out = Log(vec![]);
+    let moved = |m: &mut Model<Both>, to_second: bool| {
+        let mut b = m.at.0.borrow_mut();
+        let i2c = &mut b.i2c;
+        if to_second { i2c.monitor2 = std::mem::take(&mut i2c.monitor); } else { i2c.monitor = std::mem::take(&mut i2c.monitor2); }
+    };
+    // Out of HDMI-A-1: every register as before step 3.
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, false], 2000, &mut out);
+    assert_eq!(f.state(), hpd::State::Dark);
+    as_before(&m.at.0.borrow().e, &before, &[]);
+    // Into HDMI-A-2: its EDID over DDC2, its 16 stages, the screen offered; nothing of HDMI-A-1's written.
+    moved(&mut m, true);
+    let (from, i2c_from) = (m.at.0.borrow().e.ev.len(), m.at.0.borrow().i2c.writes.len());
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 9000, &mut out);
+    assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(light::HDMI_A_2)));
+    assert!(said(&m, "A MONITOR ON HDMI-A-2: STEPS 1 TO 4 RAN AGAIN ON IT, THE SECOND OUTPUT Lit"), "{:#?}", m.said);
+    {
+        let b = m.at.0.borrow();
+        let second: Vec<Ev> = b.e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+        assert!(second.contains(&Ev::Offer(3440, 1440, 13824)));
+        for x in &second { if let Ev::Write(o, _) = x { assert!(!hdmi_a_1s(*o), "HDMI-A-1's {:05X}", o); } }
+        assert!(b.i2c.writes[i2c_from..].iter().all(|w| light::ddc_writable_on(&light::DDC2_WRITES, Reg::new(w.0).unwrap()).is_ok()));
+        assert!(b.i2c.writes[i2c_from..].iter().any(|w| w.0 == I2C_PADS_2));
+    }
+    // Out of HDMI-A-2: every register as before step 3 again.
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, false], 2000, &mut out);
+    assert_eq!(f.state(), hpd::State::Dark);
+    as_before(&m.at.0.borrow().e, &before, &[]);
+    // Back into HDMI-A-1: the same writes and offer as at the start.
+    moved(&mut m, false);
+    let from = m.at.0.borrow().e.ev.len();
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, false], 9000, &mut out);
+    assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(HDMI_A_1)));
+    let b = m.at.0.borrow();
+    let again: Vec<Ev> = b.e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(again, first);
+}
+
+// --- the guard and the other socket (213-DRV-0112) ---
+
+// One register of each block of HDMI socket `o`: its DIG's front end, HDMI and back end registers, DP link, UNIPHY,
+// DPCS/RDPCS (its control register bus too), PLL resync, SYMCLK, HPD and DDC line (dcn_2_1_0_offset.h, dpcs_2_1_0_offset.h).
+fn socket_regs(o: dcn::Output) -> Vec<(&'static str, u32)> {
+    let (p, h) = (o.phy, o.hpd);
+    let d = p as u32;
+    vec![("DIG FE", reg(R::DigFeCntl, p)), ("DIG HDMI", reg(R::HdmiControl, p)), ("DIG BE", reg(R::DigBeCntl, p)), ("DIG BE EN", reg(R::DigBeEnCntl, p)),
+         ("DIG LANE ENABLE", seg(2, 0x20E1 + 0x100 * d)), ("DP LINK", seg(2, 0x2108 + 0x100 * d)), ("DP TRAINING PATTERN", seg(2, 0x2118 + 0x100 * d)),
+         ("UNIPHY LINK", seg(2, 0x286D + 2 * d)), ("UNIPHY XBAR", seg(2, 0x286E + 2 * d)), ("DPCS CLOCK", seg(2, 0x2928 + 0xD8 * d)),
+         ("RDPCS CR DATA", seg(2, 0x2935 + 0xD8 * d)), ("RDPCS PHY_CNTL0", seg(2, 0x2940 + 0xD8 * d)), ("PLL RESYNC", reg(R::PhypllPixclkResyncCntl, p)),
+         ("SYMCLK", seg(1, 0xA0 + d)), ("HPD SENSE", reg(R::HpdIntStatus, h)), ("HPD CONTROL", reg(R::HpdControl, h)), ("DDC HW STATUS", seg(2, 0x1E9C + d)),
+         ("DDC SPEED", seg(2, 0x1EA2 + 2 * d)), ("DDC SETUP", seg(2, 0x1EA3 + 2 * d)), ("DDC PADS MASK", seg(2, 0x28D0 + 4 * d)), ("DDC PADS Y", seg(2, 0x28D3 + 4 * d))]
+}
+
+#[test]
+fn each_outputs_guard_refuses_the_other_sockets_blocks_and_the_firmwares_and_lets_its_own_through() {
+    use light::{expected, name, HDMI_A_2};
+    for (o, theirs) in [(HDMI_A_1, HDMI_A_2), (HDMI_A_2, HDMI_A_1)] {
+        let (f, c) = expected(o);
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let g = l.guard();
+        // The other socket's: refused at every stage, step 4's too.
+        for (what, x) in socket_regs(theirs) {
+            for n in [1u8, 8, 11, 16] { assert_eq!(g.check_at(Reg::new(x).unwrap(), n).err(), Some(Refused::OffRoute(x)), "{}: {}'s {} {:05X} at stage {}", name(&o), name(&theirs), what, x, n); }
+        }
+        // Its own: through, but its HPD and DDC line, which no stage writes (step 2 has a guard of its own).
+        for (what, x) in socket_regs(o) {
+            let stage_writes = !what.starts_with("HPD") && !what.starts_with("DDC");
+            assert_eq!(g.check(Reg::new(x).unwrap()).is_ok(), stage_writes, "{}: its own {} {:05X}", name(&o), what, x);
+        }
+        // Step 2's guard: its line's speed, set-up and pads through, the other line's refused.
+        let (mine, other) = (light::ddc_writes(&o).unwrap(), light::ddc_writes(&theirs).unwrap());
+        for (what, x) in socket_regs(theirs).into_iter().filter(|(w, _)| w.starts_with("DDC")) {
+            assert!(light::ddc_writable_on(mine, Reg::new(x).unwrap()).is_err(), "{}: {}'s {} {:05X}", name(&o), name(&theirs), what, x);
+        }
+        for (r, i) in [(R::DcI2cDdc1Speed, 0), (R::DcI2cDdc2Speed, 0), (R::DcGpioDdc1Mask, 0), (R::DcGpioDdc2Mask, 0)] {
+            let x = r.at(i).unwrap();
+            assert_ne!(light::ddc_writable_on(mine, x).is_ok(), light::ddc_writable_on(other, x).is_ok(), "{}", r.name());
+        }
+        // The firmware's, first, as for HDMI-A-1 before: OTG 0, DIG E, PHY E's RDPCS, PHYPLLE, SYMCLKE, HUBP 0, MPCC 0.
+        for x in [reg(R::OtgControl, 0), reg(R::DigFeCntl, 4), reg(R::DigBeCntl, 4), seg(2, 0x2940 + 4 * 0xD8), reg(R::PhypllPixclkResyncCntl, 4),
+                  seg(1, 0xA4), reg(R::HubpCntl, 0), seg(2, 0x1271)] {
+            assert_eq!(g.check(Reg::new(x).unwrap()).err(), Some(Refused::Firmware(x)), "{}: the firmware's {:05X}", name(&o), x);
+        }
+    }
+}
+
+#[test]
+fn a_front_end_on_the_other_sockets_dig_opens_its_front_end_registers_but_not_its_back_end_or_phy() {
+    use light::{assess_for, name, HDMI_A_2};
+    // HDMI-A-1 with front end A busy takes B, as before 213-DRV-0112; HDMI-A-2 with B busy takes A.
+    for (o, theirs, s) in [(HDMI_A_1, HDMI_A_2, found()), (HDMI_A_2, HDMI_A_1, found_2())] {
+        let mut s = s;
+        s.set(R::DigFeCntl, o.phy, 1 << 24);
+        let (f, c) = assess_for(&s, o).unwrap();
+        assert_eq!(c.pipe.dig_fe, theirs.phy, "{}", name(&o));
+        let l = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap();
+        let (g, p) = (l.guard(), theirs.phy as u32);
+        // What table 4 and the HDMI stream write on the front end's DIG: through.
+        for x in [reg(R::DigFeCntl, theirs.phy), reg(R::HdmiControl, theirs.phy), reg(R::AfmtGeneric0, theirs.phy), seg(2, 0x206B + 0x100 * p), seg(2, 0x20DA + 0x100 * p)] {
+            assert!(g.check(Reg::new(x).unwrap()).is_ok(), "{}: {:05X}", name(&o), x);
+        }
+        // That DIG's back end, and the rest of the other socket: refused.
+        for (what, x) in socket_regs(theirs).into_iter().filter(|(w, _)| !w.starts_with("DIG FE") && !w.starts_with("DIG HDMI")) {
+            assert_eq!(g.check(Reg::new(x).unwrap()).err(), Some(Refused::OffRoute(x)), "{}: {}'s {} {:05X}", name(&o), name(&theirs), what, x);
+        }
+        // Every write of first light's plan passes.
+        for n in 1..=STAGES { for st in l.stage(n) { if let Step::Update { reg, .. } = st { assert!(g.check_at(reg, n).is_ok(), "{}: stage {} {:05X}", name(&o), n, reg.offset()); } } }
+    }
+}
+
+#[test]
+fn a_table_that_writes_the_other_sockets_phy_is_refused_and_everything_undone() {
+    // HDMI-A-2's table 76 writing PHY A's RDPCS, HDMI-A-1's writing PHY B's: stage 8 refused, stages 8 to 1 undone.
+    let on_b = image(&[(12, [mov(seg(1, 0xA1), 1), vec![EOT]].concat()), (4, [mov(seg(2, 0x216B), 0x1F), vec![EOT]].concat()),
+                       (76, [mov(seg(2, 0x21B0), 1), mov(PHY_A_CNTL0, 0xDEAD), vec![EOT]].concat())]);
+    let on_a = tables([mov(seg(1, 0xA0), 1), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), mov(PHY_B_CNTL0, 0xDEAD), vec![EOT]].concat());
+    for (o, img, theirs) in [(light::HDMI_A_2, on_b, PHY_A_CNTL0), (HDMI_A_1, on_a, PHY_B_CNTL0)] {
+        let (f, c) = light::expected(o);
+        let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+        let mut e = engine();
+        let before = e.regs.clone();
+        let (outcome, log) = run_light(&l, &img, &mut e, STAGES, false);
+        assert_eq!(outcome, Outcome::Failed { stage: 8, why: Failure::Refused(Refused::OffRoute(theirs)) }, "{}: {:#?}", light::name(&o), &log[log.len().saturating_sub(6)..]);
+        assert!(!writes(&e).iter().any(|w| w.0 == theirs), "{}: the refused write was made", light::name(&o));
+        restored_but(&e, &before, &[]);
+        assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 8 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED")));
+    }
+}
+
+// --- the HDMI_A_2 switch (213-DRV-0112) ---
+
+#[test]
+fn hdmi_a_2_is_read_only_in_a_release_and_each_level_of_its_switch_plans_what_it_says_hdmi_a_1_unchanged() {
+    use setting::{plan, Bringup, HdmiA2::*, Setting};
+    use light::HDMI_A_2;
+    let r = Bringup::RELEASE;
+    assert_eq!(r.hdmi_a_2, Read);
+    let release = plan(Setting::Light, r);
+    // The release: HDMI-A-2 not taken, no EDID read over DDC2, no stage; HDMI-A-1 as before.
+    assert_eq!((release.hdmi_a_2, release.takes(&HDMI_A_2), release.edid_on(&HDMI_A_2), release.stages_on(&HDMI_A_2)), (Read, false, false, 0));
+    assert_eq!((release.takes(&HDMI_A_1), release.edid_on(&HDMI_A_1), release.stages_on(&HDMI_A_1)), (true, true, 16));
+    // Each level: what HDMI-A-2 may do, under STAGES_ALLOWED as it bounds HDMI-A-1; HDMI-A-1's plan the same at every level.
+    for (stages_allowed, levels) in [(16u8, [(Read, false, false, 0u8), (Edid, true, true, 0), (FirstLight, true, true, 8), (Full, true, true, 16)]),
+                                     (4, [(Read, false, false, 0), (Edid, true, true, 0), (FirstLight, true, true, 4), (Full, true, true, 4)]),
+                                     (12, [(Read, false, false, 0), (Edid, true, true, 0), (FirstLight, true, true, 8), (Full, true, true, 12)])] {
+        for (level, takes, edid, stages) in levels {
+            let b = Bringup { stages_allowed, hdmi_a_2: level, ..r };
+            let p = plan(Setting::Light, b);
+            assert_eq!((p.takes(&HDMI_A_2), p.edid_on(&HDMI_A_2), p.stages_on(&HDMI_A_2)), (takes, edid, stages), "{:?} {}", level, stages_allowed);
+            assert_eq!(setting::Plan { hdmi_a_2: Read, ..p }, plan(Setting::Light, Bringup { stages_allowed, ..r }), "{:?}: HDMI-A-1's plan changed", level);
+            // Off and read whatever the level; a level other than Read makes a bring-up build, named first.
+            for s in [Setting::Off, Setting::Read] { assert_eq!(plan(s, b), plan(s, r)); }
+            assert_eq!(b.is_release(), level == Read && stages_allowed >= 16);
+            assert_eq!(b.to_string().contains(&format!(" HDMI_A_2 {}", level.word())), level != Read, "{}", b);
+        }
+    }
+    assert_eq!(Bringup { hdmi_a_2: Edid, ..r }.to_string(), "A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 EDID; ONLY WHAT LIGHT DOES CHANGES");
+    assert_eq!(Bringup { hdmi_a_2: FirstLight, survey_order: true, ..r }.to_string(), "A BRING-UP BUILD, NOT A RELEASE: SURVEY_ORDER HDMI_A_2 FIRST_LIGHT; ONLY WHAT LIGHT DOES CHANGES");
+    // The read setting takes HDMI-A-2 to describe it, writing nothing; off takes nothing (it reads no HPD).
+    let read = plan(Setting::Read, r);
+    assert_eq!((read.takes(&HDMI_A_2), read.edid_on(&HDMI_A_2), read.stages_on(&HDMI_A_2), read.writes()), (true, false, 0, false));
+    // main.rs: the release's level committed, in the build's switches.
+    let main = include_str!("../display/src/main.rs");
+    for c in ["const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;", "stages_allowed: STAGES_ALLOWED, hdmi_a_2: HDMI_A_2 }"] { assert!(main.contains(c), "{}", c); }
+    // Through the switch, end to end on the model: HDMI-A-2's monitor alone lit in 16 stages at Full, refused nothing.
+    let table = vfct(&good_b());
+    let mut m = ryzen_2(plugged_2(), vec![], hdmi_monitor());
+    let s = start_with(&mut m, &plan(Setting::Light, Bringup { hdmi_a_2: Full, ..r }), &table, &mut Log(vec![]));
+    assert_eq!(s.run.as_ref().map(|x| (x.outcome, x.light.choice.output)), Some((Outcome::Stopped { done: 16 }, HDMI_A_2)));
+    assert!(said(&m, "HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 FULL: ITS EDID AND ALL 16 STAGES"), "{:#?}", m.said);
 }

@@ -5,8 +5,9 @@
 //! 11 HDMI-A-1's DDC line (213-DRV-0095). In the survey's order each batch is named in the log before its first read and
 //! paused after, each value logged as it is read, so that a hang names its register; in the production order
 //! (213-DRV-0098) only the registers steps 2 to 4 take are read (`USED`), in the same order, with no pause and one line.
-//! Batch 4 reads only the HUBPs batch 3 shows powered. `Bus` has no write: nothing here can change the device.
-//! `tests/display_batches_host.rs` checks it.
+//! Batch 4 reads only the HUBPs batch 3 shows powered. Batch 12 (213-DRV-0112, `read_second`) reads HDMI-A-2's blocks
+//! after the eleven, whole in either order, its values summed up in lines both orders log. `Bus` has no write: nothing
+//! here can change the device. `tests/display_batches_host.rs` checks it.
 
 use crate::dcn::{field::*, Field, Reg, R};
 use crate::timing::Otg;
@@ -15,6 +16,8 @@ use core::fmt;
 pub const BATCHES: u8 = 11;
 /// The batches steps 3 and 4 need read: batch 11 (the DDC line, 213-DRV-0095) is for the EDID's read, not for them.
 pub const STEP3_BATCHES: u8 = 10;
+/// Batch 12 (213-DRV-0112): HDMI-A-2's blocks, read after the eleven by `read_second`.
+pub const SECOND: u8 = 12;
 /// The most registers one batch reads (batch 2: 19 for each of the four timing generators).
 pub const MAX_REGISTERS: usize = 80;
 /// After a batch's name is logged and before its first read: long enough for the line to be kept.
@@ -186,6 +189,16 @@ const DDC1: [(R, u8); 15] = {
      (DcI2cTransaction, 0), (DcI2cTransaction, 1), (DcI2cTransaction, 2), (DcI2cTransaction, 3), (MicrosecondTimeBaseDiv, 0),
      (DcGpioDdc1Mask, 0), (DcGpioDdc1A, 0), (DcGpioDdc1En, 0), (DcGpioDdc1Y, 0)]
 };
+/// Batch 12 (213-DRV-0112): what steps 2 to 4 would take of HDMI-A-2 (VBIOS path 1: PHY B, DIG back end B, DDC line 2,
+/// HPD 2), the registers batches 1, 5, 7 and 11 read for HDMI-A-1 at its instances, and the DDC pads' I2C mode
+/// (DC_GPIO_AUX_CTRL_5, PHY_AUX_CNTL), which Display Core's hw_ddc sets before a hardware transfer on DCN 2.x and step
+/// 2 does not. Never DC_I2C_DATA, nor a PHY's DPCS or RDPCS (the survey's rule).
+pub const HDMI_A_2: [(R, u8); 15] = {
+    use R::*;
+    [(HpdIntStatus, 1), (HpdControl, 1), (DigFeCntl, 1), (DigBeCntl, 1), (DigBeEnCntl, 1), (PhypllPixclkResyncCntl, 1),
+     (DcI2cDdc2HwStatus, 0), (DcI2cDdc2Speed, 0), (DcI2cDdc2Setup, 0), (DcGpioDdc2Mask, 0), (DcGpioDdc2A, 0), (DcGpioDdc2En, 0),
+     (DcGpioDdc2Y, 0), (DcGpioAuxCtrl5, 0), (PhyAuxCntl, 0)]
+};
 const DMCUB_TAIL: [R; 10] = {
     use R::*;
     [DmcubInbox0Wptr, DmcubInbox0Rptr, DmcubInbox1BaseAddress, DmcubInbox1Size, DmcubInbox1Wptr, DmcubInbox1Rptr,
@@ -251,7 +264,7 @@ pub const USED: [R; 77] = {
 pub fn title(batch: u8) -> &'static str {
     match batch {
         1 => "HPD", 2 => "OTG STATE", 3 => "POWER", 4 => "HUBP", 5 => "DIG", 6 => "APERTURE", 7 => "CLOCKS", 8 => "DMCUB",
-        9 => "PIPE REFERENCE", 10 => "PATH AND SHARED", 11 => "DDC1", _ => "?",
+        9 => "PIPE REFERENCE", 10 => "PATH AND SHARED", 11 => "DDC1", SECOND => "HDMI-A-2", _ => "?",
     }
 }
 
@@ -286,6 +299,7 @@ pub fn plan(batch: u8, known: &Known) -> List {
         9 => if let (Some(p), Some(t)) = (known.firmware_pipe, known.running_otg) { reference_hubp(&mut list, p, t) },
         10 => if let Some(p) = known.firmware_pipe { path_and_shared(&mut list, p) },
         11 => for (r, n) in DDC1 { list.push(r, n); },
+        SECOND => for (r, n) in HDMI_A_2 { list.push(r, n); },
         _ => {}
     }
     list
@@ -346,8 +360,9 @@ impl fmt::Display for Opt {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Report { pub batches_read: u8, pub registers_read: usize }
 
-/// Every value a run read, for step 3 to choose its pipe from (all ten batches: 289 registers).
-pub const STORE: usize = 320;
+/// Every value a run read, for step 3 to choose its pipe from: all eleven batches (305 registers on the Ryzen's state in
+/// the survey's order) and batch 12's own (213-DRV-0112).
+pub const STORE: usize = 336;
 #[derive(Clone, Copy, Debug)]
 pub struct Store { items: [Option<(R, u8, u32)>; STORE], len: usize, batches: u8 }
 
@@ -415,6 +430,41 @@ pub fn read_into(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Ou
     out.part();
     out.note(format_args!("STEP 1 DONE: {} OF {} BATCHES READ, {} REGISTERS, NOTHING WRITTEN{}", report.batches_read, BATCHES, report.registers_read,
         if order == Order::Production { "; ONLY WHAT STEPS 2 TO 4 TAKE (THE PRODUCTION ORDER)" } else { "" }));
+    report
+}
+
+/// Batch 12 (213-DRV-0112): HDMI-A-2's blocks read after the eleven when `allowed`, else only named. It is read whole in
+/// either order and its values summed up in notes, which both orders log: the second socket's bring-up starts from them.
+/// A register an earlier batch kept is not kept twice.
+pub fn read_second(bus: &mut impl Bus, allowed: bool, out: &mut dyn Out, store: &mut Store) -> Report {
+    out.part();
+    let list = plan(SECOND, &Known::default());
+    let mut report = Report::default();
+    if !allowed {
+        out.line(format_args!("B12 {}: NOT READ (STEP 1 READS NOT ALL ELEVEN BATCHES); WOULD READ {} REGISTERS:", title(SECOND), list.len()));
+        for n in list.iter() { out.line(format_args!("B12 WOULD READ {}", n)); }
+        return report;
+    }
+    out.line(format_args!("B12 {}: READING {} REGISTERS NEXT, NEVER WRITTEN (213-DRV-0112)", title(SECOND), list.len()));
+    out.pause(PAUSE_BEFORE_READ_MS);
+    let mut values = Values::new();
+    for n in list.iter() {
+        let v = bus.read(n.reg);
+        match v {
+            Some(v) => {
+                out.line(format_args!("B12 {} = {:08X}", n, v));
+                report.registers_read += 1;
+                if store.get(n.r, n.inst).is_none() { store.push(n.r, n.inst, v); }
+            }
+            None => out.note(format_args!("B12 {}: NOT MAPPED, NOT READ", n)),
+        }
+        values.push(n, v);
+    }
+    summarize_second(&values, out);
+    report.batches_read = 1;
+    if store.batches == BATCHES { store.batches = SECOND; }
+    out.pause(PAUSE_BETWEEN_BATCHES_MS);
+    out.note(format_args!("B12 {} DONE: {} OF {} REGISTERS READ, NOTHING WRITTEN", title(SECOND), report.registers_read, list.len()));
     report
 }
 
@@ -579,6 +629,32 @@ fn summarize_ddc1(v: &Values, out: &mut dyn Out) {
         pad(DcGpioDdc1Mask, AUX_PAD1_MODE), pad(DcGpioDdc1Mask, DC_GPIO_DDC1CLK_MASK), pad(DcGpioDdc1En, DC_GPIO_DDC1CLK_BIT),
         pad(DcGpioDdc1A, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc1Mask, DC_GPIO_DDC1DATA_MASK),
         pad(DcGpioDdc1En, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1A, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc1Y, DC_GPIO_DDC1DATA_BIT)));
+}
+
+/// Batch 12's values (213-DRV-0112) as notes: each register's raw value with the fields steps 2 to 4 would take.
+fn summarize_second(v: &Values, out: &mut dyn Out) {
+    use R::*;
+    let g = |r: R, i: u8, f: Field| Opt(v.field(r, i, f));
+    let x = |r: R, i: u8| Hex32(v.get(r, i));
+    out.note(format_args!("B12 HDMI-A-2 HPD 2 (HPD1_): SENSE {}, ENABLED {}; INT_STATUS {}, CONTROL {}",
+        g(HpdIntStatus, 1, DC_HPD_SENSE), g(HpdControl, 1, DC_HPD_EN), x(HpdIntStatus, 1), x(HpdControl, 1)));
+    out.note(format_args!("B12 HDMI-A-2 DIG B: FE FROM OTG {}, SYMCLK_FE_ON {} ({}); BE ENABLED {}, MODE {}, FROM FE MASK {}, SYMCLK_BE_ON {} ({}, {})",
+        g(DigFeCntl, 1, DIG_SOURCE_SELECT), g(DigFeCntl, 1, DIG_SYMCLK_FE_ON), x(DigFeCntl, 1), g(DigBeEnCntl, 1, DIG_ENABLE),
+        g(DigBeCntl, 1, DIG_MODE), g(DigBeCntl, 1, DIG_FE_SOURCE_SELECT), g(DigBeEnCntl, 1, DIG_SYMCLK_BE_ON), x(DigBeCntl, 1), x(DigBeEnCntl, 1)));
+    out.note(format_args!("B12 HDMI-A-2 PHYPLLB: PIXCLK_ENABLE {}, DEEP COLOR {} ({})",
+        g(PhypllPixclkResyncCntl, 1, PHYPLL_PIXCLK_ENABLE), g(PhypllPixclkResyncCntl, 1, PHYPLL_DEEP_COLOR_CNTL), x(PhypllPixclkResyncCntl, 1)));
+    out.note(format_args!("B12 HDMI-A-2 DDC2: HW STATUS {} ({}); ENABLED {}, TIME LIMIT {}, PRESCALE {}, THRESHOLD {} (SPEED {}, SETUP {})",
+        g(DcI2cDdc2HwStatus, 0, DC_I2C_DDC1_HW_STATUS_BITS), x(DcI2cDdc2HwStatus, 0), g(DcI2cDdc2Setup, 0, DC_I2C_DDC1_ENABLE),
+        g(DcI2cDdc2Setup, 0, DC_I2C_DDC1_TIME_LIMIT), g(DcI2cDdc2Speed, 0, DC_I2C_DDC1_PRESCALE), g(DcI2cDdc2Speed, 0, DC_I2C_DDC1_THRESHOLD),
+        x(DcI2cDdc2Speed, 0), x(DcI2cDdc2Setup, 0)));
+    let pad = |r: R, f: Field| g(r, 0, f);
+    out.note(format_args!("B12 HDMI-A-2 DDC2 PADS: AUX MODE {}; CLOCK MASK {} EN {} A {} Y {}; DATA MASK {} EN {} A {} Y {} (MASK {})",
+        pad(DcGpioDdc2Mask, AUX_PAD1_MODE), pad(DcGpioDdc2Mask, DC_GPIO_DDC1CLK_MASK), pad(DcGpioDdc2En, DC_GPIO_DDC1CLK_BIT),
+        pad(DcGpioDdc2A, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc2Y, DC_GPIO_DDC1CLK_BIT), pad(DcGpioDdc2Mask, DC_GPIO_DDC1DATA_MASK),
+        pad(DcGpioDdc2En, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc2A, DC_GPIO_DDC1DATA_BIT), pad(DcGpioDdc2Y, DC_GPIO_DDC1DATA_BIT), x(DcGpioDdc2Mask, 0)));
+    out.note(format_args!("B12 THE DDC PADS' I2C MODE: DDC1 {} DDC2 {}; AUX PAD RXSEL 1:{} 2:{} (DC_GPIO_AUX_CTRL_5 {}, PHY_AUX_CNTL {})",
+        g(DcGpioAuxCtrl5, 0, DDC_PAD1_I2CMODE), g(DcGpioAuxCtrl5, 0, DDC_PAD2_I2CMODE), g(PhyAuxCntl, 0, AUX1_PAD_RXSEL),
+        g(PhyAuxCntl, 0, AUX2_PAD_RXSEL), x(DcGpioAuxCtrl5, 0), x(PhyAuxCntl, 0)));
 }
 
 fn summarize_reference(v: &Values, p: u8, t: u8, out: &mut dyn Out) {

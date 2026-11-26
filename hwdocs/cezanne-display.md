@@ -422,3 +422,47 @@ What the model showed about the undo, with the Ryzen's tables:
   data register is itself the write into the PHY. So a restore cannot undo them: putting the data register back would
   write a stale value into the PHY. The undo leaves the bus as it is and says so in the log. What table 12 set inside
   PHY A stays until something rewrites it.
+
+## HDMI-A-2, the second HDMI socket (213-DRV-0112)
+
+`display` takes HDMI-A-2 (path 1: PHY B, DIG back end B, DDC line 1, HPD 2) when its HPD alone senses a monitor, as far
+as the build's `HDMI_A_2` switch lets it; HDMI-A-1 is taken first when both do (one spare pipe). Host cases only: none of
+it has run on the Ryzen, and nothing of the second socket has been read there yet.
+
+- **Read first: step 1's batch 12**, after the eleven, whole in either order, never written: HPD1_ `DC_HPD_INT_STATUS` and
+  `DC_HPD_CONTROL` (segment 2 dwords 0x1F1C, 0x1F1E), DIG1_ `DIG_FE_CNTL`, `DIG_BE_CNTL`, `DIG_BE_EN_CNTL` (0x2168, 0x21AF,
+  0x21B0), `PHYPLLB_PIXCLK_RESYNC_CNTL` (segment 1, 0x41), `DC_I2C_DDC2_HW_STATUS`, `_SPEED`, `_SETUP` (0x1E9D, 0x1EA4,
+  0x1EA5), `DC_GPIO_DDC2_MASK`, `_A`, `_EN`, `_Y` (0x28D4 to 0x28D7), `DC_GPIO_AUX_CTRL_5` (0x291D) and `PHY_AUX_CNTL`
+  (0x28FF). The registers batches 1, 5, 7 and 11 read for HDMI-A-1, at B's instances, and the pads' I2C mode; no PHY's
+  DPCS or RDPCS (section "a read proposed as safe"), never `DC_I2C_DATA`.
+- **DDC2 is the I2C engine's line 1.** `acquire_i2c_hw_engine` takes `pool->hw_i2cs[line]` for the GPIO's DDC line
+  (`dce_i2c_hw.c`); DCN 2.1's `hw_i2cs[1]` has `i2c_inst_regs(2)`: `DC_I2C_DDC2_SETUP`, `_SPEED` and `_HW_STATUS`
+  (`dcn21_resource.c`, `dce_i2c_hw.h`), and `setup_engine` writes `DC_I2C_DDC_SELECT` = the engine's index, 1. DDC2's
+  fields lie where DDC1's do (`dcn_2_1_0_sh_mask.h`).
+- **The pads' I2C mode.** On DCN 2.x, `hw_ddc`'s I2C configuration also sets `DC_GPIO_AUX_CTRL_5.DDC_PADn_I2CMODE` = 1 and
+  `PHY_AUX_CNTL.AUXn_PAD_RXSEL` = 1 for its pad (`ddc_regs.h` `DDC_REG_LIST_DCN2`, `hw_factory_dcn21.c`, `hw_ddc.c`).
+  Step 2 does neither, on either line; DDC1's EDID was read on the Ryzen without them (213-DRV-0095). Batch 12 reads both
+  pads' bits: an open question for DDC2 until it has.
+- **The front end** is the output's own letter's when free: DIG B for PHY B, as Display Core pairs a link with its own
+  DIG (`dcn10_find_first_free_match_stream_enc_for_link`, which DCN 2.1 uses, prefers `link_enc->preferred_engine`,
+  DIGB for UNIPHY B, `dcn10_link_encoder.c`). For HDMI-A-1 this is front end A, as before.
+- **The tables' parameters** come from the output: table 12 with `ATOM_COMBOPHY_PLL1` (21) and encoder byte 0x1E (UNIPHY,
+  enum 2), table 76 with phy 1 (UNIPHY B), hpd_sel 2, dig_fe_sel 2, connector 0x0C. What the Ryzen's own tables write
+  with them is not known: a host case runs them when `MIND_AMD_VBIOS` names the image.
+- **The guard** refuses the other socket's blocks whatever the pipe: its DIG block (only `DIG_BE_CNTL`, `DIG_BE_EN_CNTL`
+  and `DIG_LANE_ENABLE` when the chosen front end is that DIG), DP link registers, UNIPHY, DPCS/RDPCS, PLL resync,
+  SYMCLK, HPD block and DDC line.
+- **Table 12 writes one register of PHY A for every PHY.** Its first instruction sets `RDPCSTX0_RDPCSTX_PHY_FUSE0`'s
+  `RDPCS_PHY_DP_MPLLB_V2I` (bits 18-19) to 2, keeping the other bits, whatever the PLL id (20 to 24 traced, the Ryzen's
+  image on LEG9 on a model). Only then does it turn to the chosen PHY's own block. Our parameters are Display Core's
+  (`resource_map_phy_clock_resources` and `find_matching_pll`: UNIPHY B takes PLL1, `ATOM_COMBOPHY_PLL1`).
+  On HDMI-A-2's route that write is left unmade where the register holds the value already, as boot 66's `0xB008003E`
+  does, and refused otherwise. No other write of tables 12, 4 or 76, or of their off calls, leaves HDMI-A-2's blocks.
+  More sources (Linux v7.0, first 16 hex digits of SHA-256): `display/dc/resource/dce112/dce112_resource.c`
+  1a9c10521915f81e, `display/dc/resource/dcn20/dcn20_resource.c` 8408c9d350ef9294,
+  `display/dc/bios/dce112/command_table_helper2_dce112.c` 37cbef7de487824d, `display/dc/bios/command_table_helper2.c`
+  f1e3020eea1b9b27.
+- Sources added (Linux v7.0, first 16 hex digits of SHA-256): `display/dc/dce/dce_i2c_hw.c` 5e733d7ea46ad879,
+  `dce_i2c_hw.h` 564cce137d26fa97, `display/dc/gpio/dcn21/hw_factory_dcn21.c` 91c7d9551313dc55, `display/dc/gpio/ddc_regs.h`
+  be557c14bd8ad921, `display/dc/gpio/hw_ddc.c` 1d7050f023503344, `display/dc/resource/dcn10/dcn10_resource.c`
+  996fe77254fada1c.

@@ -514,3 +514,105 @@ fn no_register_the_production_order_leaves_unread_changes_what_steps_3_and_4_tak
         assert!(differs, "{} is read but not taken", kind.name());
     }
 }
+
+// --- batch 12: HDMI-A-2's blocks (213-DRV-0112) ---
+
+// The Ryzen's state with a monitor in the second socket: HPD 2 sensing and enabled, DIG B idle, DDC2 set up as Display
+// Core leaves DDC1, its pads in I2C mode and high; DDC pad 1 in I2C mode, pad 2 not (a guess for the model, not a reading).
+fn second_state() -> HashMap<u32, u32> {
+    let mut m = ryzen_state();
+    for (r, i, v) in [(R::HpdIntStatus, 1u8, 0b10u32), (R::HpdControl, 1, 1 << 28), (R::DigFeCntl, 1, 7), (R::DcI2cDdc2Speed, 0, 480 << 16 | 2),
+                      (R::DcI2cDdc2Setup, 0, 0x28 << 24 | 1 << 6), (R::DcGpioDdc2Y, 0, 0x0101), (R::DcGpioAuxCtrl5, 0, 1 << 12), (R::PhyAuxCntl, 0, 1 << 10)] {
+        m.insert(reg(r, i), v);
+    }
+    m
+}
+
+// Step 1 with batch 12 after the eleven, as display's start reads it: the reads, the store and the lines.
+fn step1_and_12(order: batches::Order, regs: HashMap<u32, u32>, unmapped: &[u32], allowed: bool) -> (Vec<u32>, batches::Store, batches::Report, Vec<String>) {
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let mut model = Model { regs, events: events.clone(), unmapped: unmapped.iter().copied().collect() };
+    let mut store = batches::Store::default();
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let report = match order {
+        batches::Order::Survey => {
+            let mut log = Log(events.clone());
+            batches::read_into(&mut model, BATCHES, order, &mut log, &mut store);
+            batches::read_second(&mut model, allowed, &mut log, &mut store)
+        }
+        batches::Order::Production => {
+            let mut held = batches::Held::new(Log(events.clone()), &mut buf);
+            batches::read_into(&mut model, BATCHES, order, &mut held, &mut store);
+            batches::read_second(&mut model, allowed, &mut held, &mut store)
+        }
+    };
+    let ev = events.borrow().clone();
+    (reads(&ev), store, report, lines(&ev).iter().map(|x| x.to_string()).collect())
+}
+
+#[test]
+fn batch_12_reads_hdmi_a_2s_blocks_at_the_headers_offsets_and_never_a_phy_or_the_i2c_data() {
+    // dcn_2_1_0_offset.h (Linux v7.0): HPD1_ (HPD 2), DIG1_ (DIG B), PHYPLLB in DCCG, DDC2's engine registers and pads,
+    // DC_GPIO_AUX_CTRL_5 and PHY_AUX_CNTL; in that order, whatever the earlier batches showed.
+    let (s1, s2) = (|d: u32| (0xC0 + d) * 4, |d: u32| (0x34C0 + d) * 4);
+    let want = [s2(0x1F1C), s2(0x1F1E), s2(0x2168), s2(0x21AF), s2(0x21B0), s1(0x41), s2(0x1E9D), s2(0x1EA4), s2(0x1EA5), s2(0x28D4),
+                s2(0x28D5), s2(0x28D6), s2(0x28D7), s2(0x291D), s2(0x28FF)];
+    for known in [Known::default(), firmware_known()] {
+        assert_eq!(plan(batches::SECOND, &known).iter().map(|n| n.reg.offset()).collect::<Vec<_>>(), want);
+    }
+    for &o in &want {
+        assert!(dcn::DCN_BYTES.contains(&o) && !dcn::MSIX_BYTES.contains(&o), "{:05X}", o);
+        // Not a PHY's DPCS or RDPCS (the survey's rule), not DC_I2C_DATA (a read moves its index).
+        for p in 0..5u8 { let (a, b) = light::phy_block(p); assert!(!(a..b).contains(&o), "{:05X} in PHY {}'s DPCS", o, p); }
+        assert_ne!(o, reg(R::DcI2cData, 0));
+    }
+    let names: Vec<String> = plan(batches::SECOND, &Known::default()).iter().map(|n| n.to_string()).collect();
+    for x in ["HPD1_DC_HPD_INT_STATUS AT 14F70", "DIG1_DIG_BE_EN_CNTL AT 159C0", "PHYPLL1_PIXCLK_RESYNC_CNTL AT 00404", "DC_I2C_DDC2_SPEED AT 14D90",
+              "DC_GPIO_DDC2_MASK AT 17650", "DC_GPIO_AUX_CTRL_5 AT 17774", "PHY_AUX_CNTL AT 176FC"] {
+        assert!(names.iter().any(|n| n == x), "no {:?} in {:#?}", x, names);
+    }
+    assert_eq!((batches::title(batches::SECOND), batches::HDMI_A_2.len()), ("HDMI-A-2", 15));
+}
+
+#[test]
+fn batch_12_is_read_whole_in_either_order_its_values_logged_in_both_and_what_steps_3_and_4_take_unchanged() {
+    let notes = [
+        "B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS 00000002, CONTROL 10000000",
+        "B12 HDMI-A-2 DIG B: FE FROM OTG 7, SYMCLK_FE_ON 0 (00000007); BE ENABLED 0, MODE 0, FROM FE MASK 0, SYMCLK_BE_ON 0 (00000000, 00000000)",
+        "B12 HDMI-A-2 PHYPLLB: PIXCLK_ENABLE 0, DEEP COLOR 0 (00000000)",
+        "B12 HDMI-A-2 DDC2: HW STATUS 0 (00000000); ENABLED 1, TIME LIMIT 40, PRESCALE 480, THRESHOLD 2 (SPEED 01E00002, SETUP 28000040)",
+        "B12 HDMI-A-2 DDC2 PADS: AUX MODE 0; CLOCK MASK 0 EN 0 A 0 Y 1; DATA MASK 0 EN 0 A 0 Y 1 (MASK 00000000)",
+        "B12 THE DDC PADS' I2C MODE: DDC1 1 DDC2 0; AUX PAD RXSEL 1:1 2:0 (DC_GPIO_AUX_CTRL_5 00001000, PHY_AUX_CNTL 00000400)",
+        "B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN",
+    ];
+    let twelve: Vec<u32> = plan(batches::SECOND, &Known::default()).iter().map(|n| n.reg.offset()).collect();
+    let (survey, ss, sr, sl) = step1_and_12(batches::Order::Survey, second_state(), &[], true);
+    let (production, ps, pr, pl) = step1_and_12(batches::Order::Production, second_state(), &[], true);
+    // Whole in either order, after the eleven: the same fifteen reads last.
+    assert_eq!((&survey[survey.len() - 15..], &production[production.len() - 15..]), (&twelve[..], &twelve[..]));
+    assert_eq!((sr, pr), (batches::Report { batches_read: 1, registers_read: 15 }, batches::Report { batches_read: 1, registers_read: 15 }));
+    // The survey's order: named and paused before, each value after its read, the notes; the production order logs the
+    // notes alone after step 1's own line.
+    assert!(sl.iter().any(|x| x == "B12 HDMI-A-2: READING 15 REGISTERS NEXT, NEVER WRITTEN (213-DRV-0112)"));
+    assert!(sl.iter().any(|x| x == "B12 DC_GPIO_DDC2_MASK AT 17650 = 00000000") && sl.iter().any(|x| x == "B12 HPD1_DC_HPD_CONTROL AT 14F78 = 10000000"), "{:#?}", sl);
+    for n in notes { assert!(sl.iter().any(|x| x == n), "survey: no {:?} in {:#?}", n, sl.iter().filter(|x| x.starts_with("B12 HDMI-A-2 ") || x.starts_with("B12 THE")).collect::<Vec<_>>()); }
+    assert_eq!(&pl[1..], &notes[..], "the production order's lines: {:#?}", pl);
+    assert!(pl[0].starts_with("STEP 1 DONE: 11 OF 11 BATCHES READ, "));
+    // What it kept: DDC2's values for step 2; what steps 3 and 4 take is what the eleven alone gave.
+    for s in [&ss, &ps] {
+        assert_eq!((s.get(R::DcI2cDdc2Setup, 0), s.get(R::DcGpioDdc2Y, 0), s.get(R::HpdIntStatus, 1), s.batches()), (Some(0x2800_0040), Some(0x0101), Some(0b10), 12));
+    }
+    let (_, eleven, _, _) = step1_in(batches::Order::Survey, second_state(), &[]);
+    assert_eq!(taken(&ss), taken(&eleven));
+    assert_eq!(taken(&ps), taken(&eleven));
+    // A register the grant does not map: named, not read, its fields shown as a dash.
+    let (_, _, r, l) = step1_and_12(batches::Order::Production, second_state(), &[reg(R::DcGpioDdc2Mask, 0)], true);
+    assert_eq!(r.registers_read, 14);
+    assert!(l.iter().any(|x| x == "B12 DC_GPIO_DDC2_MASK AT 17650: NOT MAPPED, NOT READ"), "{:#?}", l);
+    assert!(l.iter().any(|x| x.starts_with("B12 HDMI-A-2 DDC2 PADS: AUX MODE -; CLOCK MASK - EN 0") && x.ends_with("(MASK -)")), "{:#?}", l);
+    // A step 1 that reads not all eleven reads none of it, and names it.
+    let (reads12, _, r, l) = step1_and_12(batches::Order::Survey, second_state(), &[], false);
+    assert_eq!((r, reads12), (batches::Report::default(), step1_in(batches::Order::Survey, second_state(), &[]).0));
+    assert_eq!(l.iter().filter(|x| x.starts_with("B12 WOULD READ ")).count(), 15);
+    for x in sl.iter().chain(&pl).chain(&l) { assert!(x.len() + "[DISPLAY] ".len() <= 180, "{} bytes: {}", x.len(), x); }
+}
