@@ -47,8 +47,9 @@ const INBOX_LISTEN: &str = "data/inbox/bt-listen.txt";
 /// The machine's output read from the audio gateway's sink a tenth of a second ahead, at least 10 ms at a time.
 const OUTPUT_FRAMES: usize = 4_800;
 const OUTPUT_LEAST: usize = 480;
-/// HID reports each logged, with what they gave the input, up to this many; then a line a second (700-BLT-0008).
-const REPORTS_SHOWN: u32 = 100;
+/// HID reports each logged, with what they gave the input, up to this many; then a line a minute (700-BLT-0008).
+const REPORTS_SHOWN: u32 = 1;
+const REPORTS_LINE_MS: u64 = 60_000;
 /// Where bulk OUT data sit in the USB buffer: past the reports and control data at its start.
 const BULK_OUT_AT: usize = 0x8000;
 
@@ -72,9 +73,9 @@ impl Reports {
         }
     }
     fn tick(&mut self, now: u64) {
-        if now < self.said_at + 1_000 { return; }
+        if now < self.said_at + REPORTS_LINE_MS { return; }
         if self.all > REPORTS_SHOWN && self.all != self.said {
-            say(format_args!("HID: {} REPORTS IN 1 S ({} IN ALL: {} KEYBOARD, {} POINTER); INPUT CALLS {} OK, {} FAILED, LAST {:?}", self.all - self.said, self.all, self.keyboard, self.pointer, self.ok, self.failed, self.last_error));
+            say(format_args!("HID: {} REPORTS IN 1 MIN ({} IN ALL: {} KEYBOARD, {} POINTER); INPUT CALLS {} OK, {} FAILED, LAST {:?}", self.all - self.said, self.all, self.keyboard, self.pointer, self.ok, self.failed, self.last_error));
         }
         (self.said_at, self.said) = (now, self.all);
     }
