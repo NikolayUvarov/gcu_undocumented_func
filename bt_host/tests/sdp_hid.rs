@@ -56,10 +56,14 @@ fn a_search_for_the_a2dp_source_is_answered() {
     let r = request(sdp::SEARCH_ATTRIBUTE_REQUEST, 8, &[0x35, 0x03, 0x19, 0x11, 0x24, 0x02, 0x00, 0x35, 0x05, 0x0A, 0x00, 0x00, 0xFF, 0xFF, 0x00]);
     let n = answer(&r, &mut out);
     assert_eq!(&out[5..n], &[0, 3, 0x36, 0, 0, 0]);
-    // Service Search: the record's handle.
+    // Service Search for L2CAP: every record's handle (A2DP source, AVRCP controller and target); for AVRCP's
+    // controller class, that record alone.
     let r = request(sdp::SEARCH_REQUEST, 9, &[0x35, 0x03, 0x19, 0x01, 0x00, 0x00, 0x05, 0x00]);
     let n = answer(&r, &mut out);
-    assert_eq!(&out[..n], &[sdp::SEARCH_RESPONSE, 0, 9, 0, 9, 0, 1, 0, 1, 0, 1, 0, 1, 0]);
+    assert_eq!(&out[..n], &[sdp::SEARCH_RESPONSE, 0, 9, 0, 17, 0, 3, 0, 3, 0, 1, 0, 1, 0, 1, 0, 2, 0, 1, 0, 3, 0]);
+    let r = request(sdp::SEARCH_REQUEST, 10, &[0x35, 0x03, 0x19, 0x11, 0x0F, 0x00, 0x05, 0x00]);
+    let n = answer(&r, &mut out);
+    assert_eq!(&out[..n], &[sdp::SEARCH_RESPONSE, 0, 10, 0, 9, 0, 1, 0, 1, 0, 1, 0, 2, 0]);
     // Service Attribute for that handle, the protocol list alone.
     let r = request(sdp::ATTRIBUTE_REQUEST, 10, &[0, 1, 0, 1, 0x01, 0x00, 0x35, 0x03, 0x09, 0x00, 0x04, 0x00]);
     let n = answer(&r, &mut out);

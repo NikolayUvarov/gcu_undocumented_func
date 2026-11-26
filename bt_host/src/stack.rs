@@ -454,7 +454,7 @@ impl Stack {
                 match ch.psm {
                     l2cap::PSM_SDP => self.sdp.pdu(&mut self.ctl, &self.chans, handle, cid, payload),
                     l2cap::PSM_AVDTP => self.a2dp.data(&mut self.ctl, &mut self.chans, handle, cid, payload),
-                    l2cap::PSM_AVCTP => self.avrcp.pdu(&mut self.ctl, &self.chans, handle, cid, payload),
+                    l2cap::PSM_AVCTP => self.avrcp.data(&mut self.ctl, &self.chans, handle, cid, payload),
                     l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT => self.hid.data(&mut self.ctl, &mut self.chans, &mut self.ups, handle, cid, payload),
                     _ => {}
                 }
@@ -472,6 +472,12 @@ impl Stack {
                     self.say(format_args!("L2CAP CHANNEL {:04X} TO PSM {:04X} OPEN ({}), MTU {}", local, psm, if initiator { "OURS" } else { "THEIRS" }, self.chans.get(local).map_or(0, |c| c.mtu)));
                     match psm {
                         l2cap::PSM_AVDTP => self.a2dp.opened(&mut self.ctl, &mut self.chans, handle, local, initiator),
+                        l2cap::PSM_AVCTP => {
+                            let addr = self.conn(handle).map(|c| c.addr);
+                            self.avrcp.volume = addr.and_then(|a| self.devices.get(a)).and_then(|d| d.volume).unwrap_or(avrcp::START_VOLUME);
+                            let playing = self.a2dp.state == avdtp::State::Streaming;
+                            self.avrcp.opened(&mut self.ctl, &self.chans, handle, local, playing);
+                        }
                         l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT => self.hid.opened(&mut self.ctl, &mut self.chans, handle, local, psm, initiator),
                         _ => {}
                     }
@@ -480,6 +486,7 @@ impl Stack {
                     self.say(format_args!("L2CAP CHANNEL {:04X} TO PSM {:04X} CLOSED", local, psm));
                     match psm {
                         l2cap::PSM_AVDTP => self.a2dp.closed(&mut self.ctl, &mut self.chans, handle, local),
+                        l2cap::PSM_AVCTP => self.avrcp.closed(handle, local),
                         l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT => self.hid.closed(&mut self.ctl, &mut self.chans, &mut self.ups, handle, local),
                         _ => {}
                     }
@@ -566,6 +573,9 @@ impl Stack {
             }
         }
         self.a2dp.tick(&mut self.ctl, &mut self.chans);
+        // A sink watching the playback hears the stream start and stop.
+        let playing = self.a2dp.state == avdtp::State::Streaming;
+        self.avrcp.playing(&mut self.ctl, &self.chans, playing);
         self.hid.tick(&mut self.ctl, &mut self.chans);
         self.le.tick(&mut self.ctl);
     }

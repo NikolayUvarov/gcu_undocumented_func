@@ -336,27 +336,64 @@ fn headphones_listed_for_the_output_take_it_and_a_tone_device_does_not() {
     assert!(!s.stack.wants_output() && s.stack.devices.get(PEER).unwrap().tone);
 }
 
+/// A vendor-dependent AVRCP frame: AVCTP's header (label, command or response), then the AV/C body.
+fn avrcp(label: u8, response: bool, code: u8, pdu: u8, params: &[u8]) -> Vec<u8> {
+    let mut v = vec![label << 4 | (response as u8) << 1, 0x11, 0x0E, code, 0x48, 0x00, 0x00, 0x19, 0x58, pdu, 0, 0, params.len() as u8];
+    v.extend_from_slice(params);
+    v
+}
+
 #[test]
-fn avctp_is_answered_as_a_target_with_a_panel() {
-    use bt_host::avrcp::{self, answer};
-    let mut out = [0u8; 512];
-    let mut lines = Vec::new();
-    // UNIT INFO (status), label 3: a stable answer naming a panel.
-    let n = answer(&[0x30, 0x11, 0x0E, 0x01, 0xFF, avrcp::UNIT_INFO, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], &mut out, |l| lines.push(l.to_string()));
-    assert_eq!(&out[..n], &[0x32, 0x11, 0x0E, avrcp::STABLE, 0xFF, avrcp::UNIT_INFO, 0x07, 0x48, 0x00, 0x19, 0x58]);
-    // PASS THROUGH: accepted, its operands echoed, logged.
-    let n = answer(&[0x40, 0x11, 0x0E, 0x00, 0x48, avrcp::PASS_THROUGH, 0x41, 0x00], &mut out, |l| lines.push(l.to_string()));
-    assert_eq!(&out[..n], &[0x42, 0x11, 0x0E, avrcp::ACCEPTED, 0x48, avrcp::PASS_THROUGH, 0x41, 0x00]);
-    assert!(lines[0].contains("VOLUME UP"));
-    // Vendor-dependent metadata (GetCapabilities): not implemented.
-    let n = answer(&[0x50, 0x11, 0x0E, 0x01, 0x48, avrcp::VENDOR_DEPENDENT, 0x00, 0x19, 0x58, 0x10, 0x00, 0x00, 0x01, 0x03], &mut out, |l| lines.push(l.to_string()));
-    assert_eq!(out[3], avrcp::NOT_IMPLEMENTED);
-    assert_eq!(n, 14);
-    // Another profile: IPID; a response or a fragment: no answer.
-    let n = answer(&[0x60, 0x11, 0x0C, 0x01, 0x48, 0x30], &mut out, |_| {});
-    assert_eq!(&out[..n], &[0x63, 0x11, 0x0C]);
-    assert_eq!(answer(&[0x62, 0x11, 0x0E, 0x09, 0x48, 0x7C], &mut out, |_| {}), 0);
-    assert_eq!(answer(&[0x64, 0x11, 0x0E, 0x01, 0x48, 0x7C], &mut out, |_| {}), 0);
+fn avrcp_sets_the_sinks_volume_and_answers_what_it_asks() {
+    use bt_host::avrcp as a;
+    let (mut s, _) = streaming("11:22:33:44:55:66 audio tone volume 50\n");
+    // The sink opens AVCTP to us: admitted, configured, then our controller asks its events.
+    s.send(0x0B, l2cap::SIGNALLING, &sig(l2cap::CONNECTION_REQUEST, 9, &[0x17, 0, 0x72, 0]), 1021);
+    let f = s.frames();
+    let local = le16(&f[0].2, 4);
+    let l = local.to_le_bytes();
+    s.send(0x0B, l2cap::SIGNALLING, &[sig(l2cap::CONFIGURATION_RESPONSE, f[1].2[1], &[l[0], l[1], 0, 0, 0, 0]), sig(l2cap::CONFIGURATION_REQUEST, 0x41, &[l[0], l[1], 0, 0])].concat(), 1021);
+    let out: Vec<Vec<u8>> = s.frames().into_iter().filter(|f| f.1 == 0x72).map(|f| f.2).collect();
+    assert_eq!(out, vec![avrcp(1, false, a::STATUS, a::GET_CAPABILITIES, &[a::EVENTS_SUPPORTED])]);
+    // It reports its volume: registered for, and the start value of the list (50) given.
+    s.send(0x0B, local, &avrcp(1, true, a::STABLE, a::GET_CAPABILITIES, &[a::EVENTS_SUPPORTED, 2, a::EVENT_PLAYBACK_STATUS, a::EVENT_VOLUME]), 1021);
+    let out: Vec<Vec<u8>> = s.frames().into_iter().filter(|f| f.1 == 0x72).map(|f| f.2).collect();
+    assert_eq!(out, vec![avrcp(2, false, a::NOTIFY, a::REGISTER_NOTIFICATION, &[a::EVENT_VOLUME, 0, 0, 0, 0]), avrcp(3, false, a::CONTROL, a::SET_ABSOLUTE_VOLUME, &[50])]);
+    s.send(0x0B, local, &avrcp(2, true, a::INTERIM, a::REGISTER_NOTIFICATION, &[a::EVENT_VOLUME, 30]), 1021);
+    s.send(0x0B, local, &avrcp(3, true, a::ACCEPTED, a::SET_ABSOLUTE_VOLUME, &[50]), 1021);
+    assert!(s.logged("THE SINK'S VOLUME 30 OF 127") && s.logged("THE SINK TOOK VOLUME 50 OF 127"));
+    // Its own buttons: CHANGED, kept, and registered again.
+    s.send(0x0B, local, &avrcp(2, true, a::CHANGED, a::REGISTER_NOTIFICATION, &[a::EVENT_VOLUME, 70]), 1021);
+    assert!(s.logged("THE SINK'S VOLUME 70 OF 127 (CHANGED THERE)"));
+    assert_eq!(s.stack.avrcp.link.unwrap().sink_volume, Some(70));
+    let out: Vec<Vec<u8>> = s.frames().into_iter().filter(|f| f.1 == 0x72).map(|f| f.2).collect();
+    assert_eq!(out, vec![avrcp(4, false, a::NOTIFY, a::REGISTER_NOTIFICATION, &[a::EVENT_VOLUME, 0, 0, 0, 0])]);
+    // As a target: its questions answered, the playback watched (playing), then CHANGED when the stream stops.
+    s.send(0x0B, local, &avrcp(5, false, a::STATUS, a::GET_CAPABILITIES, &[a::COMPANY_ID]), 1021);
+    s.send(0x0B, local, &avrcp(6, false, a::NOTIFY, a::REGISTER_NOTIFICATION, &[a::EVENT_PLAYBACK_STATUS, 0, 0, 0, 0]), 1021);
+    s.send(0x0B, local, &avrcp(7, false, a::STATUS, a::GET_PLAY_STATUS, &[]), 1021);
+    s.send(0x0B, local, &avrcp(8, false, a::STATUS, 0x20, &[0; 9]), 1021);
+    s.send(0x0B, local, &[0x90, 0x11, 0x0E, a::CONTROL, 0x48, a::PASS_THROUGH, 0x44, 0x00], 1021);
+    s.send(0x0B, local, &[0xA0, 0x11, 0x0E, a::STATUS, 0xFF, a::UNIT_INFO, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 1021);
+    s.send(0x0B, local, &[0xB0, 0x11, 0x0C, a::STATUS, 0xFF, a::UNIT_INFO], 1021);
+    let out: Vec<Vec<u8>> = s.frames().into_iter().filter(|f| f.1 == 0x72).map(|f| f.2).collect();
+    assert_eq!(out[0], avrcp(5, true, a::STABLE, a::GET_CAPABILITIES, &[a::COMPANY_ID, 1, 0x00, 0x19, 0x58]));
+    assert_eq!(out[1], avrcp(6, true, a::INTERIM, a::REGISTER_NOTIFICATION, &[a::EVENT_PLAYBACK_STATUS, 1]));
+    assert_eq!(out[2], avrcp(7, true, a::STABLE, a::GET_PLAY_STATUS, &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1]));
+    assert_eq!(out[3], avrcp(8, true, a::REJECTED, 0x20, &[a::INVALID_COMMAND]));
+    assert_eq!(out[4], vec![0x92, 0x11, 0x0E, a::ACCEPTED, 0x48, a::PASS_THROUGH, 0x44, 0x00]);
+    assert_eq!(out[5], vec![0xA2, 0x11, 0x0E, a::STABLE, 0xFF, a::UNIT_INFO, 0x07, 0x48, 0x00, 0x19, 0x58]);
+    assert_eq!(out[6], vec![0xB3, 0x11, 0x0C]);
+    assert!(s.logged("AVRCP: THE SINK PRESSED PLAY") && s.logged("AVRCP: <- 6011") && s.logged("AVRCP: -> 6211"));
+    s.send(0x0B, s.stack.a2dp.sig.unwrap(), &[0x50, avdtp::SUSPEND, 1 << 2], 1021);
+    s.tick(10);
+    let out: Vec<Vec<u8>> = s.frames().into_iter().filter(|f| f.1 == 0x72).map(|f| f.2).collect();
+    assert_eq!(out, vec![avrcp(6, true, a::CHANGED, a::REGISTER_NOTIFICATION, &[a::EVENT_PLAYBACK_STATUS, 0])]);
+    // A volume above 127 in the list is not understood.
+    let mut d = bt_host::devices::Devices::new();
+    let mut bad = 0;
+    d.load("11:22:33:44:55:66 audio volume 200\n", |_, _| bad += 1);
+    assert_eq!(bad, 1);
 }
 
 #[test]
