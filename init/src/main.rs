@@ -766,6 +766,18 @@ impl Init {
         plan
     }
 
+    // display's second output by data/displays.txt (213-KRN-0281): its word, else off, and the log says which.
+    fn second_output(&mut self) -> mind::displays::Output {
+        let mut text = [0u8; mind::displays::MAX];
+        let length = self.read_boot_file(mind::displays::FILE, &mut text);
+        let read = core::str::from_utf8(&text[..length]).map_err(|_| Some("not UTF-8")).and_then(mind::displays::second_output);
+        match read {
+            Ok(output) => { mind::println!("[INIT] display: SECOND OUTPUT {} BY {}", output.word(), mind::displays::FILE); output }
+            Err(None) => { mind::println!("[INIT] display: NO `output second` LINE IN {}: off", mind::displays::FILE); mind::displays::Output::Off }
+            Err(Some(word)) => { mind::println!("[INIT] display: `output second {}` IN {} IS NOT off, read OR light: off", word, mind::displays::FILE); mind::displays::Output::Off }
+        }
+    }
+
     // A service's line of data/memory.conf, its MiB, read at each start; None without one.
     fn memory_line(&mut self, name: &str) -> Option<u16> {
         let mut text = [0u8; mind::memconf::MAX];
@@ -1231,7 +1243,10 @@ impl Init {
                 }
                 // Its client of the compositor, to offer it the second screen (display.wit 1.3, 213-KRN-0272).
                 if self.running(service_index("compositor")) { grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_SCREEN)?, CLIENT); }
-                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", device));
+                // The second output's word after the device's index (213-KRN-0281, for 213-DRV-0099): data/displays.txt's
+                // `output second off|read|light`, read at each start; with no line or another word, off, said which.
+                let output = self.second_output();
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{} {}", device, output.word()));
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => {
