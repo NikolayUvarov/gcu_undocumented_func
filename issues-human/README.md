@@ -288,3 +288,22 @@ Main task [100003](../issues/100003-mind-hub-requests-conversation-check-and-upd
 - [ ] **Backups** of the hub's directory (`journal.jsonl`, `attachments/`).
 
 Done when an agent in a cloud session reads its queue on the hub with `mindhub call`, and the host, the name and the pin are recorded in 100003.
+
+## 19. The Ryzen's MIND Core stick refused a write once (a medium error)
+
+The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-26. One fault is not a verdict on the stick, but it is the stick that holds both slots, the data and the logs.
+
+**What happened** (boot 108, release 202611262015, uptime in seconds):
+- 6833.383 the updater began to take a release of 31 MB sent through the Effector server.
+- 6853.543 `[USB] STORAGE: WRITE REFUSED: SENSE KEY 3 ASC 03 ASCQ 00 (MEDIUM ERROR)`, the stick's own answer to a write.
+- `[UPDATER] INSTALL: REFUSED: Write`, then `EFFECTOR: FAILED … update_agent: io`. Nothing was installed, and the machine went on with the release it had.
+- The same release sent again two minutes later was written, started on trial and confirmed (202611262214, slot A, boot 109). No fault on that boot.
+- No other fault of the stick is in that boot's log or in the logs kept from 2026-11-21 on. Four other releases were written to it that day.
+
+**What the software did:** the driver passed the stick's answer on, the updater refused the whole install, and the server was told `failed`. Nothing was retried by itself and no slot was touched.
+
+**For you to decide:**
+- [ ] Whether to go on with this stick or write a new one. A second fault would settle it. Writing a stick is yours (`./build-and-write.sh` from the fast-test clone).
+- [ ] If Ubuntu is started on that machine for any reason, the stick's own health record can be read there first (`smartctl -a` seldom works on a stick; `dmesg` after a read of the whole device shows medium errors if any stand).
+
+**Asked for nothing else:** no code changes follow from one fault. If it comes again, DRV writes it up as an issue with both records.
