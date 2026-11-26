@@ -15,6 +15,7 @@
 
 pub mod acl;
 pub mod avdtp;
+pub mod avrcp;
 pub mod buf;
 pub mod ctl;
 pub mod devices;

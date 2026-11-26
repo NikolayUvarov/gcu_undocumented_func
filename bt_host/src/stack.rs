@@ -4,6 +4,7 @@
 //! (commands and ACL packets for the controller, log lines, upcalls for the driver): no I/O of its own.
 use crate::acl::{self, Pdu};
 use crate::avdtp;
+use crate::avrcp;
 use crate::buf::{le16, Addr, Queue};
 use crate::ctl::Ctl;
 use crate::devices::{Devices, Kind, Ltk};
@@ -84,6 +85,7 @@ pub struct Stack {
     pub scan: Scan,
     pub sdp: sdp::Server,
     pub a2dp: avdtp::Source,
+    pub avrcp: avrcp::Control,
     pub hid: hid::Hosts,
     pub le: le::Central,
     pub ups: Ups,
@@ -102,7 +104,7 @@ fn conn_at(conns: &[Option<Conn>], handle: u16) -> Option<usize> { conns.iter().
 impl Stack {
     pub fn new() -> Self {
         Self { ctl: Ctl::new(), chans: Channels::new(), conns: [const { None }; CONNS], devices: Devices::new(), scan: Scan::new(), sdp: sdp::Server::new(),
-               a2dp: avdtp::Source::new(), hid: hid::Hosts::new(), le: le::Central::new(), ups: Ups::default(), features: [0; 8], ready: false, paging: None, started: false }
+               a2dp: avdtp::Source::new(), avrcp: avrcp::Control::new(), hid: hid::Hosts::new(), le: le::Central::new(), ups: Ups::default(), features: [0; 8], ready: false, paging: None, started: false }
     }
 
     pub fn say(&mut self, args: core::fmt::Arguments) { self.ctl.say(args) }
@@ -395,7 +397,10 @@ impl Stack {
         if c.started || c.step != Step::Secure { return; }
         c.started = true;
         match c.kind {
-            Some(Kind::Audio) => self.a2dp.start(&mut self.ctl, &mut self.chans, handle),
+            Some(Kind::Audio) => {
+                self.a2dp.hz44 = self.devices.get(c.addr).is_some_and(|d| d.hz44);
+                self.a2dp.start(&mut self.ctl, &mut self.chans, handle)
+            }
             Some(Kind::Hid) => self.hid.start(&mut self.ctl, &mut self.chans, handle),
             _ => {}
         }
@@ -425,7 +430,7 @@ impl Stack {
                 let mut changes = Changes::default();
                 let admit = |psm: u16| match (psm, kind) {
                     (l2cap::PSM_SDP, _) => Admit::Accept,
-                    (l2cap::PSM_AVDTP, Some(Kind::Audio)) | (l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT, Some(Kind::Hid)) => if secure { Admit::Accept } else { Admit::Pending },
+                    (l2cap::PSM_AVDTP | l2cap::PSM_AVCTP, Some(Kind::Audio)) | (l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT, Some(Kind::Hid)) => if secure { Admit::Accept } else { Admit::Pending },
                     _ => Admit::Refuse,
                 };
                 self.chans.signal(&mut self.ctl, handle, payload, admit, &mut changes);
@@ -449,6 +454,7 @@ impl Stack {
                 match ch.psm {
                     l2cap::PSM_SDP => self.sdp.pdu(&mut self.ctl, &self.chans, handle, cid, payload),
                     l2cap::PSM_AVDTP => self.a2dp.data(&mut self.ctl, &mut self.chans, handle, cid, payload),
+                    l2cap::PSM_AVCTP => self.avrcp.pdu(&mut self.ctl, &self.chans, handle, cid, payload),
                     l2cap::PSM_HID_CONTROL | l2cap::PSM_HID_INTERRUPT => self.hid.data(&mut self.ctl, &mut self.chans, &mut self.ups, handle, cid, payload),
                     _ => {}
                 }

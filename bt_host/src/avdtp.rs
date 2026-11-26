@@ -2,7 +2,7 @@
 //! the sink's endpoints, reads their capabilities, configures SBC, opens the media channel and starts; as acceptor it
 //! answers a sink that does those itself. Media packets carry an RTP header and SBC frames (A2DP 4.3.4), paced by the
 //! clock, from a tone made here until a program feeds it (the audio gateway's sink, later).
-use crate::buf::be16;
+use crate::buf::{be16, Hex};
 use crate::ctl::Ctl;
 use crate::l2cap::{self, Channels};
 use crate::sbc::{self, Config, Encoder, Mode, Tone};
@@ -70,9 +70,12 @@ pub fn sbc_capability(caps: &[u8]) -> Option<[u8; 4]> {
 
 /// The configuration we choose within a sink's SBC capability: 48 kHz before 44.1, joint stereo before stereo, dual
 /// and mono, 16 blocks, 8 subbands, loudness, the highest bitpool up to ours. None when nothing is common.
-pub fn choose(cap: [u8; 4]) -> Option<Config> {
+pub fn choose(cap: [u8; 4]) -> Option<Config> { choose_at(cap, false) }
+
+/// The same with 44.1 kHz before 48 when `hz44` (a device listed `audio 44100`).
+pub fn choose_at(cap: [u8; 4], hz44: bool) -> Option<Config> {
     let pick = |bits: u8, order: &[(u8, u8)]| order.iter().find(|(b, _)| bits & b != 0).map(|&(_, v)| v);
-    let rate = pick(cap[0] >> 4, &[(0x1, 3), (0x2, 2)])?;
+    let rate = if hz44 { pick(cap[0] >> 4, &[(0x2, 2), (0x1, 3)])? } else { pick(cap[0] >> 4, &[(0x1, 3), (0x2, 2)])? };
     let mode = pick(cap[0] & 0x0F, &[(0x1, 3), (0x2, 2), (0x4, 1), (0x8, 0)])?;
     let blocks = pick(cap[1] >> 4, &[(0x1, 16), (0x2, 12), (0x4, 8), (0x8, 4)])?;
     let subbands = pick(cap[1] >> 2 & 3, &[(0x1, 8), (0x2, 4)])?;
@@ -181,6 +184,8 @@ pub struct Source {
     /// the counters at the last line.
     pub bytes: u64, pub waits: u32, pub refused: u32, said_at: u64, said: [u32; 6],
     rx: [u8; 512], rx_len: usize,
+    /// 44.1 kHz before 48 for the device streamed to.
+    pub hz44: bool,
 }
 
 impl Default for Source { fn default() -> Self { Self::new() } }
@@ -192,7 +197,7 @@ impl Source {
         let cfg = Config { rate: 3, blocks: 16, mode: Mode::Joint, snr: false, subbands: 8, bitpool: BITPOOL };
         Self { handle: None, sig: None, media: None, state: State::Idle, ours: false, remote: 0, candidates: [0; 8], tried: 0, found: 0, label: 0, pending: None,
                since: 0, cfg: None, min_bitpool: 2, enc: Encoder::new(cfg), tone: Tone::new(440, 660, 48_000, 8192), pcm: Pcm::new(), output: false, seq: 0, timestamp: 0, started: 0, sent: 0, played: 0, packets: 0, bytes: 0, waits: 0, refused: 0, said_at: 0, said: [0; 6],
-               late: 0, rx: [0; 512], rx_len: 0 }
+               late: 0, rx: [0; 512], rx_len: 0, hz44: false }
     }
 
     fn reset(&mut self) {
@@ -216,11 +221,13 @@ impl Source {
 
     fn command(&mut self, ctl: &mut Ctl, chans: &Channels, signal: u8, params: &[u8]) {
         self.label = (self.label + 1) & 0x0F;
+        ctl.say(format_args!("A2DP: -> {} {} [{}]", name(signal), self.label, Hex(params)));
         let head = [header(self.label, COMMAND), signal];
         if self.send(ctl, chans, &[&head, params]) { self.pending = Some((self.label, signal, ctl.now)); }
     }
 
     fn answer(&mut self, ctl: &mut Ctl, chans: &Channels, label: u8, signal: u8, message: u8, params: &[u8]) {
+        ctl.say(format_args!("A2DP: -> {} {} {} [{}]", name(signal), label, ["COMMAND", "GENERAL REJECT", "ACCEPT", "REJECT"][message as usize & 3], Hex(params)));
         self.send(ctl, chans, &[&[header(label, message), signal], params]);
     }
 
@@ -293,6 +300,7 @@ impl Source {
         let msg = &whole[..n];
         if msg.len() < 2 { return; }
         let (signal, params) = (msg[1] & 0x3F, &msg[2..]);
+        ctl.say(format_args!("A2DP: <- {} {} {} [{}]", name(signal), label, ["COMMAND", "GENERAL REJECT", "ACCEPT", "REJECT"][message as usize & 3], Hex(&params[..params.len().min(64)])));
         if message == COMMAND { self.on_command(ctl, chans, label, signal, params); } else { self.on_answer(ctl, chans, label, signal, message, params); }
     }
 
@@ -394,7 +402,7 @@ impl Source {
             }
             GET_CAPABILITIES => {
                 let seid = self.candidates[self.tried - 1];
-                match sbc_capability(p).and_then(|cap| choose(cap).map(|c| (cap, c))) {
+                match sbc_capability(p).and_then(|cap| choose_at(cap, self.hz44).map(|c| (cap, c))) {
                     Some((cap, cfg)) => {
                         let info = codec_info(&cfg, cap[2]);
                         self.remote = seid;
@@ -512,6 +520,15 @@ impl Source {
         self.tone.fill(out, channels);
         if self.played % hz as u64 >= hz as u64 * 4 / 10 { out.fill(0); }
         self.played += (out.len() / channels) as u64;
+    }
+}
+
+/// A signal's name, for the log.
+pub fn name(signal: u8) -> &'static str {
+    match signal {
+        DISCOVER => "DISCOVER", GET_CAPABILITIES => "GET CAPABILITIES", SET_CONFIGURATION => "SET CONFIGURATION", GET_CONFIGURATION => "GET CONFIGURATION",
+        RECONFIGURE => "RECONFIGURE", OPEN => "OPEN", START => "START", CLOSE => "CLOSE", SUSPEND => "SUSPEND", ABORT => "ABORT",
+        SECURITY_CONTROL => "SECURITY CONTROL", GET_ALL_CAPABILITIES => "GET ALL CAPABILITIES", DELAY_REPORT => "DELAY REPORT", _ => "UNKNOWN",
     }
 }
 

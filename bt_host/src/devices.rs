@@ -24,6 +24,8 @@ pub struct Ltk { pub key: [u8; 16], pub ediv: u16, pub rand: [u8; 8], pub authen
 #[derive(Clone, Copy, Debug)]
 pub struct Device {
     pub addr: Addr, pub kind: Kind, pub random: bool, pub tone: bool,
+    /// An audio device's stream at 44.1 kHz rather than 48 (`audio 44100`), as phones stream SBC.
+    pub hz44: bool,
     pub key: Option<([u8; 16], u8)>, pub ltk: Option<Ltk>,
     /// When the stack may page it next, and how often it failed in a row.
     pub next_try: u64, pub failures: u32,
@@ -50,12 +52,20 @@ impl Devices {
             let mut w = words(line);
             let addr = w.next().and_then(Addr::parse);
             let kind = match w.next() { Some("audio") => Some(Kind::Audio), Some("hid") => Some(Kind::Hid), Some("le-hid") => Some(Kind::LeHid), _ => None };
-            let (mut random, mut tone, mut known) = (false, false, true);
-            for word in w { match word { "public" => {} "random" => random = true, "tone" if kind == Some(Kind::Audio) => tone = true, _ => known = false } }
+            let (mut random, mut tone, mut hz44, mut known) = (false, false, false, true);
+            for word in w {
+                match word {
+                    "public" => {} "random" => random = true,
+                    "tone" if kind == Some(Kind::Audio) => tone = true,
+                    "44100" if kind == Some(Kind::Audio) => hz44 = true,
+                    "48000" if kind == Some(Kind::Audio) => hz44 = false,
+                    _ => known = false,
+                }
+            }
             let (Some(addr), Some(kind), true) = (addr, kind, known) else { bad(n + 1, line); continue };
             if self.get(addr).is_some() { continue; }
             match self.list.iter_mut().find(|d| d.is_none()) {
-                Some(slot) => *slot = Some(Device { addr, kind, random, tone, key: None, ltk: None, next_try: 0, failures: 0 }),
+                Some(slot) => *slot = Some(Device { addr, kind, random, tone, hz44, key: None, ltk: None, next_try: 0, failures: 0 }),
                 None => bad(n + 1, line),
             }
         }

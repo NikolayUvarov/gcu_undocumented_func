@@ -15,6 +15,7 @@ pub const PSM_SDP: u16 = 0x0001;
 pub const PSM_HID_CONTROL: u16 = 0x0011;
 pub const PSM_HID_INTERRUPT: u16 = 0x0013;
 pub const PSM_AVDTP: u16 = 0x0019;
+pub const PSM_AVCTP: u16 = 0x0017;
 
 pub const COMMAND_REJECT: u8 = 0x01;
 pub const CONNECTION_REQUEST: u8 = 0x02;

@@ -335,3 +335,42 @@ fn headphones_listed_for_the_output_take_it_and_a_tone_device_does_not() {
     let (s, _) = streaming("11:22:33:44:55:66 audio tone\n");
     assert!(!s.stack.wants_output() && s.stack.devices.get(PEER).unwrap().tone);
 }
+
+#[test]
+fn avctp_is_answered_as_a_target_with_a_panel() {
+    use bt_host::avrcp::{self, answer};
+    let mut out = [0u8; 512];
+    let mut lines = Vec::new();
+    // UNIT INFO (status), label 3: a stable answer naming a panel.
+    let n = answer(&[0x30, 0x11, 0x0E, 0x01, 0xFF, avrcp::UNIT_INFO, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], &mut out, |l| lines.push(l.to_string()));
+    assert_eq!(&out[..n], &[0x32, 0x11, 0x0E, avrcp::STABLE, 0xFF, avrcp::UNIT_INFO, 0x07, 0x48, 0x00, 0x19, 0x58]);
+    // PASS THROUGH: accepted, its operands echoed, logged.
+    let n = answer(&[0x40, 0x11, 0x0E, 0x00, 0x48, avrcp::PASS_THROUGH, 0x41, 0x00], &mut out, |l| lines.push(l.to_string()));
+    assert_eq!(&out[..n], &[0x42, 0x11, 0x0E, avrcp::ACCEPTED, 0x48, avrcp::PASS_THROUGH, 0x41, 0x00]);
+    assert!(lines[0].contains("VOLUME UP"));
+    // Vendor-dependent metadata (GetCapabilities): not implemented.
+    let n = answer(&[0x50, 0x11, 0x0E, 0x01, 0x48, avrcp::VENDOR_DEPENDENT, 0x00, 0x19, 0x58, 0x10, 0x00, 0x00, 0x01, 0x03], &mut out, |l| lines.push(l.to_string()));
+    assert_eq!(out[3], avrcp::NOT_IMPLEMENTED);
+    assert_eq!(n, 14);
+    // Another profile: IPID; a response or a fragment: no answer.
+    let n = answer(&[0x60, 0x11, 0x0C, 0x01, 0x48, 0x30], &mut out, |_| {});
+    assert_eq!(&out[..n], &[0x63, 0x11, 0x0C]);
+    assert_eq!(answer(&[0x62, 0x11, 0x0E, 0x09, 0x48, 0x7C], &mut out, |_| {}), 0);
+    assert_eq!(answer(&[0x64, 0x11, 0x0E, 0x01, 0x48, 0x7C], &mut out, |_| {}), 0);
+}
+
+#[test]
+fn a_device_listed_44100_is_streamed_at_44_1_khz() {
+    let cap = [0xFF, 0xFF, 0x02, 0x28];
+    assert_eq!(avdtp::choose_at(cap, true).map(|c| (c.rate, c.bitpool)), Some((2, 40)));
+    assert_eq!(avdtp::choose_at(cap, false).map(|c| c.rate), Some(3));
+    let mut d = bt_host::devices::Devices::new();
+    d.load("11:22:33:44:55:66 audio tone 44100\n", |n, l| panic!("{} {}", n, l));
+    assert!(d.get(PEER).is_some_and(|d| d.hz44 && d.tone));
+    // The sink's AVCTP channel to us is admitted on a secure link.
+    let (mut s, _) = streaming("11:22:33:44:55:66 audio 44100\n");
+    assert!(s.logged("44100 HZ"));
+    s.send(0x0B, l2cap::SIGNALLING, &sig(l2cap::CONNECTION_REQUEST, 9, &[0x17, 0, 0x72, 0]), 1021);
+    let f = s.frames();
+    assert_eq!((f[0].2[0], &f[0].2[8..12]), (l2cap::CONNECTION_RESPONSE, &[0u8, 0, 0, 0][..]));
+}
