@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
+[features]
+# A test build (213-DRV-0060, the QEMU suite nvme2): a read-only instance tries every way its disk could change, each refused.
+write-probe = []
+
 [dependencies]
 libmind = { path = "../libmind" }
 

@@ -156,6 +156,29 @@ impl Nvme {
                        if signature { "ENDS" } else { "DOES NOT END" }, if gpt { "A GPT HEADER" } else { "NO GPT HEADER" });
     }
 
+    // Test build only (write-probe, the nvme2 suite): a read-only instance tries, itself, each way its disk could change:
+    // the Driver's write and flush, then medium- and state-changing commands straight to submit. Each must be refused.
+    #[cfg(feature = "write-probe")]
+    fn write_probe(&mut self) {
+        let driver = [self.write(0, 1, &[0x5A; 512]).is_ok(), self.flush().is_ok()].iter().filter(|&&done| done).count();
+        self.dma.bytes(DATA, 512).fill(0x5A);
+        let data = self.dma.physical(DATA);
+        // I/O: Write, Write Zeroes, Write Uncorrectable, Dataset Management (deallocate), Flush; LBA 0, one sector.
+        let io: [(u8, [u32; 6]); 5] = [(OP_WRITE, [0; 6]), (0x08, [0; 6]), (0x04, [0; 6]), (0x09, [0, 4, 0, 0, 0, 0]), (OP_FLUSH, [0; 6])];
+        // Admin: Format NVM, Sanitize (block erase), Set Features of the write cache and of the queues saved, Namespace
+        // Management (delete), Firmware Commit, Firmware Image Download.
+        let admin: [(u8, [u32; 6]); 7] = [(0x80, [0; 6]), (0x84, [2, 0, 0, 0, 0, 0]), (OP_SET_FEATURES, [0x06, 1, 0, 0, 0, 0]),
+                                          (OP_SET_FEATURES, [0x8000_0000 | QUEUES_FEATURE, 0, 0, 0, 0, 0]), (0x0D, [1, 0, 0, 0, 0, 0]), (0x10, [0x08, 0, 0, 0, 0, 0]), (0x11, [0, 0, 0, 0, 0, 0])];
+        let mut sent = 0;
+        for (opcode, dwords) in io {
+            let mut queue = core::mem::replace(&mut self.io, Queue { sq: 0, cq: 0, tail: 0, head: 0, phase: true, sq_bell: 0, cq_bell: 0, id: 0 });
+            sent += self.submit(&mut queue, opcode, 1, data, 0, dwords).is_some() as usize;
+            self.io = queue;
+        }
+        for (opcode, dwords) in admin { sent += self.admin_command(opcode, if opcode == 0x0D { 1 } else { 0 }, data, dwords).is_some() as usize; }
+        mind::println!("{} WRITE PROBE (A TEST BUILD): 2 DRIVER CALLS AND {} COMMANDS TRIED; {} DRIVER CALLS DONE, {} COMMANDS SENT", self.tag, io.len() + admin.len(), driver, sent);
+    }
+
     // A write or flush asked of a read-only instance, said in the log within guard::Refusals' bound.
     fn refuse(&mut self, what: core::fmt::Arguments) {
         if let Some(n) = self.refusals.one() { mind::println!("{} {} REFUSED: THE DISK IS READ-ONLY AT THE TESTING STAGE; REFUSAL {}{}", self.tag, what, n, guard::after(n)); }
@@ -221,5 +244,7 @@ fn main(_info: &'static BootInfo) {
         None => mind::println!("{} NO USABLE NAMESPACE", tag),
     }
     if let Some(d) = disk.as_mut().filter(|d| !d.writes) { d.show_first_sectors(); }
+    #[cfg(feature = "write-probe")]
+    if let Some(d) = disk.as_mut().filter(|d| !d.writes) { d.write_probe(); }
     block::serve(BLOCK_KIND_NVME, disk.as_mut().map(|d| d as &mut dyn Driver));
 }
