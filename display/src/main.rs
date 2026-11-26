@@ -35,11 +35,11 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// (step 1's batch 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages,
 /// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
 /// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
-const SURVEY_ORDER: bool = false;
-const UNDO_AFTER_STAGES: bool = false;
+const SURVEY_ORDER: bool = true; // BENCH ONLY, NEVER TO LAND
+const UNDO_AFTER_STAGES: bool = false; // BENCH ONLY, NEVER TO LAND
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
-const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Full; // BENCH ONLY, NEVER TO LAND
+const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA2; // BENCH ONLY, NEVER TO LAND
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
                                                      hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST };
 /// Between two log lines, so that a burst is not dropped.
