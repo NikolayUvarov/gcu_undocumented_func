@@ -33,12 +33,15 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// 16 the picture); below 15 no standing check, at 0 the stages only described. HDMI_A_2 (213-DRV-0112): how far display
 /// goes on the Ryzen's second HDMI socket when its monitor is the one there: Read (the release's) reads its blocks only
 /// (step 1's batch 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages,
-/// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs).
+/// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
+/// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
 const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
-const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED, hdmi_a_2: HDMI_A_2 };
+const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
+const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
+                                                     hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST };
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 

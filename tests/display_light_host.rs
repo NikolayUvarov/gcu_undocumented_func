@@ -2180,7 +2180,9 @@ fn bringups() -> Vec<setting::Bringup> {
     use setting::HdmiA2::*;
     let mut all = vec![];
     for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 { for hdmi_a_2 in [Read, Edid, FirstLight, Full] {
-        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed, hdmi_a_2 });
+        for hdmi_first in [setting::HdmiFirst::HdmiA1, setting::HdmiFirst::HdmiA2] {
+            all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed, hdmi_a_2, hdmi_first });
+        }
     } } } }
     all
 }
@@ -3438,7 +3440,7 @@ fn hdmi_a_2_is_read_only_in_a_release_and_each_level_of_its_switch_plans_what_it
             assert_eq!(setting::Plan { hdmi_a_2: Read, ..p }, plan(Setting::Light, Bringup { stages_allowed, ..r }), "{:?}: HDMI-A-1's plan changed", level);
             // Off and read whatever the level; a level other than Read makes a bring-up build, named first.
             for s in [Setting::Off, Setting::Read] { assert_eq!(plan(s, b), plan(s, r)); }
-            assert_eq!(b.is_release(), level == Read && stages_allowed >= 16);
+            assert_eq!(b.is_release(), level == Read && stages_allowed >= 16 && b.hdmi_first == setting::HdmiFirst::HdmiA1);
             assert_eq!(b.to_string().contains(&format!(" HDMI_A_2 {}", level.word())), level != Read, "{}", b);
         }
     }
@@ -3449,7 +3451,7 @@ fn hdmi_a_2_is_read_only_in_a_release_and_each_level_of_its_switch_plans_what_it
     assert_eq!((read.takes(&HDMI_A_2), read.edid_on(&HDMI_A_2), read.stages_on(&HDMI_A_2), read.writes()), (true, false, 0, false));
     // main.rs: the release's level committed, in the build's switches.
     let main = include_str!("../display/src/main.rs");
-    for c in ["const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;", "stages_allowed: STAGES_ALLOWED, hdmi_a_2: HDMI_A_2 }"] { assert!(main.contains(c), "{}", c); }
+    for c in ["const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;", "hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST }"] { assert!(main.contains(c), "{}", c); }
     // Through the switch, end to end on the model: HDMI-A-2's monitor alone lit in 16 stages at Full, refused nothing.
     let table = vfct(&good_b());
     let mut m = ryzen_2(plugged_2(), vec![], hdmi_monitor());
@@ -3563,4 +3565,54 @@ fn a_monitor_plugged_into_the_socket_not_lit_has_its_edid_read_and_a_nack_or_a_h
             for l in &log { assert!(l.len() + "[DISPLAY] ".len() <= 200, "{} bytes: {}", l.len(), l); }
         }
     }
+}
+
+// --- which socket is taken first (213-DRV-0112, third round) ---
+
+#[test]
+fn hdmi_first_takes_hdmi_a_2_first_where_its_level_lets_it_and_hdmi_a_1_stays_dark_named_and_read_only_of_its_edid() {
+    use setting::{plan, Bringup, HdmiA2, HdmiFirst, Setting};
+    let r = Bringup::RELEASE;
+    assert_eq!((r.hdmi_first, plan(Setting::Light, r).hdmi_first), (HdmiFirst::HdmiA1, HdmiFirst::HdmiA1));
+    let b = Bringup { hdmi_a_2: HdmiA2::Full, hdmi_first: HdmiFirst::HdmiA2, ..r };
+    assert!(!b.is_release() && !Bringup { hdmi_first: HdmiFirst::HdmiA2, ..r }.is_release());
+    assert_eq!(b.to_string(), "A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 FULL HDMI_FIRST HDMI-A-2; ONLY WHAT LIGHT DOES CHANGES");
+    for s in [Setting::Off, Setting::Read] { assert_eq!(plan(s, b), plan(s, r)); }
+    let main = include_str!("../display/src/main.rs");
+    assert!(main.contains("const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;"));
+    let table = vfct(&plain());
+    // The release's choice: HDMI-A-1 first (as the case with a monitor in each shows); a bench build: HDMI-A-2 first.
+    let mut m = ryzen_2(plugged_both(), hdmi_monitor(), other_monitor());
+    let before = m.at.0.borrow().e.regs.clone();
+    let p = plan(Setting::Light, b);
+    let (outcome, log, w, run) = production_start(&mut m, &p, &table);
+    assert_eq!(outcome, Some(Outcome::Stopped { done: 16 }), "{:#?}", &log[log.len().saturating_sub(8)..]);
+    assert_eq!(run.as_ref().map(|x| x.light.choice.output), Some(light::HDMI_A_2));
+    for x in ["HDMI-A-1 NOT DRIVEN: HPD 1 SENSES A MONITOR THERE TOO; HDMI-A-2 IS TAKEN FIRST (HDMI_FIRST HDMI-A-2), AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW",
+              "HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, TAKEN FIRST; HDMI_A_2 FULL: ITS EDID AND ALL 16 STAGES"] {
+        assert!(said(&m, x), "no {:?} in {:#?}", x, m.said);
+    }
+    {
+        let b = m.at.0.borrow();
+        // Nothing of HDMI-A-1's pipe written; its EDID read over DDC1 as a socket not taken, the engine as found.
+        assert!(!writes(&b.e).iter().any(|w| hdmi_a_1s(w.0)) && b.e.ev.contains(&Ev::Offer(1920, 1080, 7680)));
+        assert!(log.iter().any(|l| l == "HDMI-A-1 NOT TAKEN: ITS EDID READ OVER DDC1 ALL THE SAME, THE I2C ENGINE GIVEN BACK AS FOUND; NOTHING ELSE OF IT WRITTEN"), "{:#?}", log);
+        assert!(log.iter().any(|l| l.starts_with("HDMI-A-1: D STEP 2 DONE: 2 BLOCKS READ (256 BYTES)") && l.ends_with("AS BATCH 11 READ THEM")), "{:#?}", log);
+        assert!(log.iter().any(|l| l.starts_with("HDMI-A-1: D PREFERRED: 3440x1440")));
+        engine_as_found(&b);
+    }
+    // What follows: HDMI-A-2 lit; its monitor out, HDMI-A-1's lights, HDMI-A-2's registers as before.
+    let mut w = w.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, run, &p).expect("nothing followed");
+    assert!(said(&m, "HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 FULL): SENSE 1; THE SECOND OUTPUT Lit ON HDMI-A-2"), "{:#?}", m.said);
+    let table: &'static [u8] = Box::leak(table.into_boxed_slice());
+    follow_2(&mut m, &mut w, &mut f, &p, table, [true, false], 9000, &mut Log(vec![]));
+    assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(HDMI_A_1)));
+    blocks_as_before(&m.at.0.borrow().e, &before, &hdmi_a_2s);
+    // HDMI_FIRST HDMI-A-2 where HDMI_A_2 does not let display take it (Read): HDMI-A-1 taken, HDMI-A-2 named.
+    let mut m = ryzen_2(plugged_both(), hdmi_monitor(), other_monitor());
+    let (outcome, _, _, run) = production_start(&mut m, &plan(Setting::Light, Bringup { hdmi_first: HdmiFirst::HdmiA2, ..r }), table);
+    assert_eq!((outcome, run.as_ref().map(|x| x.light.choice.output)), (Some(Outcome::Stopped { done: 16 }), Some(HDMI_A_1)));
+    assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)"), "{:#?}", m.said);
+    assert!(!m.at.0.borrow().i2c.writes.iter().any(|w| hdmi_a_2s(w.0)), "a transaction on DDC2 at level Read");
 }

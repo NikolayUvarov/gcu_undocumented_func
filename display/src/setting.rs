@@ -64,14 +64,16 @@ impl fmt::Display for Args<'_> {
 }
 
 /// The build switches kept for bring-up (213-DRV-0099), all off in a release: the survey's order (213-DRV-0098), the
-/// stages undone after they ran, fewer stages than all 16, and HDMI-A-2 driven further than its blocks read
-/// (213-DRV-0112). They change only what `Light` does.
+/// stages undone after they ran, fewer stages than all 16, HDMI-A-2 driven further than its blocks read, and HDMI-A-2
+/// taken first when both sockets have a monitor (213-DRV-0112). They change only what `Light` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2 }
+pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2, pub hdmi_first: HdmiFirst }
 
 impl Bringup {
-    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Read };
-    pub fn is_release(&self) -> bool { !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES && self.hdmi_a_2 == HdmiA2::Read }
+    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1 };
+    pub fn is_release(&self) -> bool {
+        !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES && self.hdmi_a_2 == HdmiA2::Read && self.hdmi_first == HdmiFirst::HdmiA1
+    }
 }
 
 impl fmt::Display for Bringup {
@@ -82,6 +84,7 @@ impl fmt::Display for Bringup {
         if self.undo_after_stages { f.write_str(" UNDO_AFTER_STAGES")?; }
         if self.stages_allowed < STAGES { write!(f, " STAGES_ALLOWED {} OF {}", self.stages_allowed, STAGES)?; }
         if self.hdmi_a_2 != HdmiA2::Read { write!(f, " HDMI_A_2 {}", self.hdmi_a_2.word())?; }
+        if self.hdmi_first != HdmiFirst::HdmiA1 { write!(f, " HDMI_FIRST {}", self.hdmi_first.word())?; }
         f.write_str("; ONLY WHAT LIGHT DOES CHANGES")
     }
 }
@@ -101,6 +104,15 @@ impl HdmiA2 {
             HdmiA2::FirstLight => "ITS EDID AND FIRST LIGHT'S 8 STAGES", HdmiA2::Full => "ITS EDID AND ALL 16 STAGES",
         }
     }
+}
+
+/// Which HDMI socket steps 2 to 4 take when both have a monitor (213-DRV-0112): HDMI-A-1, as a release does, or HDMI-A-2
+/// in a bench build, HDMI-A-1 then dark and named as not driven. HDMI-A-2 only where `HdmiA2` lets display take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HdmiFirst { HdmiA1, HdmiA2 }
+
+impl HdmiFirst {
+    pub fn word(self) -> &'static str { match self { HdmiFirst::HdmiA1 => "HDMI-A-1", HdmiFirst::HdmiA2 => "HDMI-A-2" } }
 }
 
 /// What display's start does, from the setting and the build's bring-up switches.
@@ -123,6 +135,8 @@ pub struct Plan {
     pub watch_frames: u32,
     /// How far display goes on HDMI-A-2 (213-DRV-0112).
     pub hdmi_a_2: HdmiA2,
+    /// Which socket is taken when both have a monitor (213-DRV-0112).
+    pub hdmi_first: HdmiFirst,
 }
 
 impl Plan {
@@ -146,7 +160,7 @@ impl Plan {
 pub fn plan(setting: Setting, b: Bringup) -> Plan {
     let order = if b.survey_order { Order::Survey } else { Order::Production };
     let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES,
-                      hdmi_a_2: HdmiA2::Read };
+                      hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1 };
     match setting {
         Setting::Off => none,
         Setting::Read => Plan { batches: BATCHES, ..none },
@@ -156,7 +170,7 @@ pub fn plan(setting: Setting, b: Bringup) -> Plan {
             let follows = stages > 0 && !b.undo_after_stages;
             let standing_check = follows && stages >= 15;
             Plan { batches: BATCHES, edid: true, stages, undo_after_stages: b.undo_after_stages && stages > 0, hotplug: follows, standing_check,
-                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, ..none }
+                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, hdmi_first: b.hdmi_first, ..none }
         }
     }
 }

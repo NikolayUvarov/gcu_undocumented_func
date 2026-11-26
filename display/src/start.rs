@@ -9,7 +9,7 @@
 use crate::batches::{self, Bus, Order, Out, Store};
 use crate::dcn::{self, field::{DC_HPD_EN, DC_HPD_SENSE}, Output, Reg, R};
 use crate::light::Clock;
-use crate::setting::Plan;
+use crate::setting::{self, Plan};
 use crate::{atom, ddc, edid, hpd, light, timing};
 use alloc::boxed::Box;
 use core::fmt;
@@ -109,10 +109,18 @@ fn read_all(bus: &mut impl Bus, plan: &Plan, out: &mut dyn Out, store: &mut Stor
     read + batches::read_second(bus, plan.batches >= batches::BATCHES, out, store).registers_read
 }
 
-/// The socket steps 2 to 4 take (213-DRV-0112): the one whose HPD senses a monitor; HDMI-A-1 first when both do, the other
-/// named as not driven (display lights one socket at a time); HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does, as before.
+/// The socket steps 2 to 4 take (213-DRV-0112): the one whose HPD senses a monitor. When both do, HDMI-A-1, or HDMI-A-2 in
+/// a build that takes it first (`HdmiFirst`) where the plan takes it; the other is named as not driven (display lights
+/// one socket at a time). HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does, as before.
 fn choose<D: Device>(d: &mut D, plan: &Plan, s: &Store) -> Output {
+    let second_first = plan.hdmi_first == setting::HdmiFirst::HdmiA2;
     match (sensed(s, &light::HDMI_A_1), sensed(s, &light::HDMI_A_2)) {
+        (true, true) if second_first && plan.takes(&light::HDMI_A_2) => {
+            d.say(format_args!("HDMI-A-1 NOT DRIVEN: HPD 1 SENSES A MONITOR THERE TOO; HDMI-A-2 IS TAKEN FIRST (HDMI_FIRST HDMI-A-2), AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW"));
+            d.say(format_args!("HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, TAKEN FIRST; HDMI_A_2 {}: {}", plan.hdmi_a_2.word(), plan.hdmi_a_2.what()));
+            light::HDMI_A_2
+        }
+        (true, true) if second_first => { not_driven(d, plan); light::HDMI_A_1 }
         (true, true) => { d.say(format_args!("HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW")); light::HDMI_A_1 }
         (false, true) if plan.takes(&light::HDMI_A_2) => {
             d.say(format_args!("HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 {}: {}", plan.hdmi_a_2.word(), plan.hdmi_a_2.what()));
