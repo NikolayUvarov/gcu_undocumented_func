@@ -19,11 +19,13 @@ pub struct Options {
     pub tls: Option<Arc<httpd::tls::Reloading>>,
     /// The hub's clock, so that tests move it; the system's otherwise.
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// The release tree served under `/updates/` (100003-APP-0159), when one is given.
+    pub updates: Option<Arc<crate::updates::Updates>>,
 }
 
 impl Options {
     pub fn new() -> Options {
-        Options { connections: 128, per_client: 16, timeout: Duration::from_secs(30), requests_per_connection: 1000, tls: None, clock: Arc::new(util::now_ms) }
+        Options { connections: 128, per_client: 16, timeout: Duration::from_secs(30), requests_per_connection: 1000, tls: None, clock: Arc::new(util::now_ms), updates: None }
     }
 }
 
@@ -108,6 +110,15 @@ fn serve_conn<S: Socket>(mut conn: Conn<S>, ip: IpAddr, shared: &Mutex<Shared>, 
             }
             Err(_) => return,
         };
+        // The release tree: a file sent as it is read, outside the lock.
+        if crate::updates::ours(&req.path) {
+            match crate::updates::answer(options.updates.as_deref(), &mut conn.stream, &req, &network) {
+                Ok((_, true)) if !req.close => continue,
+                Ok((_, true)) => return,
+                Ok((_, false)) => { conn.stream.finish(); linger(&mut conn.stream); return; }
+                Err(_) => return,
+            }
+        }
         let response = {
             let mut s = shared.lock().unwrap();
             let now = (options.clock)();
