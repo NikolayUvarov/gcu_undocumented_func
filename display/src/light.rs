@@ -243,9 +243,14 @@ pub fn mode_for(edid: Option<&crate::edid::Edid>, fallback: Timing) -> (Timing, 
 /// before it), PHY A's not.
 pub const RESTART_MARK: u32 = 0x5A5A;
 
-/// How many frames stage 9 counts on the firmware's timing generator, and for at most how long.
+/// How many frames stage 9 counts on the firmware's timing generator at least, and for at most how long.
 pub const MEASURED_FRAMES: u32 = 30;
 pub const MEASURE_LIMIT_US: u64 = 2_000_000;
+/// Between polls where nothing is timed, stage 9's frames between its two edges and stage 15's watch: asleep, as the
+/// service shares its CPU with others (213-DRV-0111). A millisecond or more is a sleep to the clock, less is waited awake.
+pub const ASLEEP_POLL_US: u32 = 1000;
+/// Between polls for one of stage 9's two edges, awake for a frame at most: the count is as exact as this is short.
+pub const EDGE_POLL_US: u32 = 20;
 
 /// The pipe and output the firmware drives DP-2 with, and the HUBPs that follow its timing generator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1027,7 +1032,9 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
         if now.saturating_sub(last) > gap { (gap, gap_at) = (now - last, seen + 1); }
         last = now;
         let c = (read(e, count)?.wrapping_sub(first) & 0xFF_FFFF).min(frames);
-        if c <= seen { continue; }
+        // No new frame: asleep until the next look. The statuses are kept until cleared, so nothing is lost by it; a wake
+        // later than a frame shows in the frames passed between two reads and in the longest gap (213-DRV-0111).
+        if c <= seen { e.delay_us(ASLEEP_POLL_US); continue; }
         let (v0, w0, v1, w1) = (read(e, h0)?, read(e, o0)?, read(e, h1)?, read(e, o1)?);
         // The firmware's pipe: at once.
         if new(HUBP_UNDERFLOW_STATUS, v0, d.underflow[0]) { return Err(Failure::Underflow { offset: h0.offset(), value: v0 }); }
@@ -1101,7 +1108,8 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     out.line(format_args!("S{} PIPE {} AS THE FIRMWARE SET IT: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {}, PITCH FIELD {} (WIDTH {})",
         n, r.pipe, crate::batches::Ratio19(Some(r.ref_to_pix)), r.per_htotal, r.refcyc_h_blank_end, r.dlg_v_blank_end, r.line_delivery,
         r.req_delivery, r.pitch_field, r.width));
-    // Its frame rate: from one frame's edge, MEASURED_FRAMES frames.
+    // Its frame rate: from one frame's edge to another, MEASURED_FRAMES frames later or more. Only the two edges are
+    // waited for awake; the frames between are slept through, and a late wake only makes the count longer (213-DRV-0111).
     let count = R::OtgStatusFrameCount.at(r.otg).ok_or(Failure::NoReference)?;
     let frame = |e: &mut E| read(e, count).map(|v| v & 0xFF_FFFF);
     let begin = e.now_us();
@@ -1109,14 +1117,20 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let mut edge = first;
     while edge == first {
         if e.now_us().saturating_sub(begin) > MEASURE_LIMIT_US { return Err(Failure::NoFrames(0)); }
-        e.delay_us(100);
+        e.delay_us(EDGE_POLL_US);
         edge = frame(e)?;
     }
     let start = e.now_us();
     let mut frames = 0;
-    while frames < MEASURED_FRAMES {
+    while frames + 1 < MEASURED_FRAMES {
         if e.now_us().saturating_sub(begin) > MEASURE_LIMIT_US { return Err(Failure::NoFrames(frames)); }
-        e.delay_us(100);
+        e.delay_us(ASLEEP_POLL_US);
+        frames = frame(e)?.wrapping_sub(edge) & 0xFF_FFFF;
+    }
+    let before = frames;
+    while frames == before {
+        if e.now_us().saturating_sub(begin) > MEASURE_LIMIT_US { return Err(Failure::NoFrames(frames)); }
+        e.delay_us(EDGE_POLL_US);
         frames = frame(e)?.wrapping_sub(edge) & 0xFF_FFFF;
     }
     let us = e.now_us().saturating_sub(start).max(1);
