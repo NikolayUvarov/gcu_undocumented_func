@@ -107,7 +107,7 @@
 
 ## For a successor (state on 2026-11-22, 20:25 UTC)
 
-How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
+How the bench is run, the helpers and the other open work are in [000-DRV-0094's section](../issues-done/000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.done#for-a-successor-state-on-2026-11-22-1850-utc). This issue's own state:
 
 - **The heads:**
   - **3ad6e4d76** is the code that ran on the Ryzen: boots 97 to 99 as the boot image, releases 202611221738, 202611221746 and 202611221811.
@@ -141,4 +141,4 @@ How the bench is run, the helpers and the other open work are in [000-DRV-0094's
 
 ## Related
 
-[000-DRV-0094](000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.md), [000-LNK-0050](000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.md), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
+[000-DRV-0094](../issues-done/000-DRV-0094-an-isochronous-in-ring-does-not-run-dry-while-its-client-is-slow.done), [000-LNK-0050](../issues-done/000-LNK-0050-usb-serial-writes-in-pieces-so-usb-host-serves-its-streams.done), [158-DRV-0082](158-DRV-0082-a-stream-for-each-camera.md), [000-DRV-0073](000-DRV-0073-usb-audio-class-speakerphone.md).
