@@ -197,7 +197,8 @@ A level other than `Read` makes a bring-up build, whose first line says so, for 
 session's.
 0. **Before any write, on LEG9.** Run the PHY B case on the Ryzen's image:
    `MIND_AMD_VBIOS=<image> <display_light-tests> the_ryzens_own_tables_on_phy_b`. It shows what tables 12, 4 and 76
-   write with PHY B's parameters, and whether all of it lies on HDMI-A-2's route.
+   write with PHY B's parameters, and whether all of it lies on HDMI-A-2's route. It passes since the second round.
+   Also look up PHY A's FUSE0 in old survey-order logs (`S2 T12 WROTE AT 1783C`, the second round's open question).
 1. **The read-only run** (`Read`; `light`; the production order will do, `SURVEY_ORDER` gives each value too).
    - Boot with the monitor in socket 2 only.
      - Expected: the B12 notes, `HDMI-A-2 NOT DRIVEN: ... (HDMI_A_2 READ)`, `STEP 3 NOT RUN: HPD 1 SENSES NO MONITOR ON
@@ -254,7 +255,8 @@ session's.
    written. If DDC2's pad reads otherwise than DDC1's and the EDID read fails, they are the next write to design.
 3. **PHY B's DPCS/RDPCS are not read by step 1**, by the survey's rule since the hang. Table 12's path (short or long, by
    `RDPCSTX1_RDPCSTX_SCRATCH`) shows at stage 2, logged. Whether Linux ever powered PHY B is not known.
-4. **What the Ryzen's tables write on PHY B.** Not run here (no image); the host case exists (procedure step 0).
+4. **What the Ryzen's tables write on PHY B.** Run on LEG9 on a model since: all on HDMI-A-2's route, but for table 12's
+   first write, of PHY A's `RDPCSTX_PHY_FUSE0`, left unmade where it changes nothing (the second round, below).
 5. **HDMI-A-2's monitor is not known.** Without its EDID the mode is CTA VIC 16 in DVI, the mode first light was shown in.
 6. **The front end's fallback.** With DIG B busy it is the lowest free one, which may be A, HDMI-A-1's DIG. The guard then
    lets through that DIG's front end registers only.
@@ -264,6 +266,90 @@ session's.
 9. **HPD 1's follower line keeps its old text.** `HPD 1 FOLLOWED ..., THE SECOND OUTPUT Lit` names the output's state, which
    may be HDMI-A-2's; HPD 2's line says which socket.
 10. **Not addressed here: the hub on xHCI 1's port 1** that went away at 2054.3 s (the problem section above).
+
+## Second round (2026-11-26): table 12 on PHY B writes one register of PHY A
+
+**What was seen.** The owner session ran the PHY B case with the Ryzen's image, and it failed: stage 2 was refused at a
+write to BAR byte 0x1783C and undone. The guard did its work.
+
+**What 0x1783C is.** `RDPCSTX0_RDPCSTX_PHY_FUSE0`: segment 2 dword 0x294F, PHY A's RDPCS (`dpcs_2_1_0_offset.h`). Its
+bits 18-19 are `RDPCS_PHY_DP_MPLLB_V2I` (`dpcs_2_1_0_sh_mask.h`).
+
+**Why table 12 writes it for PHY B: the table's own sequence, not our parameters.**
+- **Our parameters are Display Core's for transmitter B.**
+  - `set_pixel_clock_v7` passes the PLL of the stream's clock source. DCN 2.x maps it by transmitter
+    (`dcn20_add_stream_to_ctx`, then `resource_map_phy_clock_resources` and `find_matching_pll`: UNIPHY B takes PLL1).
+    PLL1 becomes `ATOM_COMBOPHY_PLL1` = 21 (`command_table_helper2_dce112.c`).
+  - The encoder byte is `encoder_id_to_atom(ENCODER_ID_INTERNAL_UNIPHY)` = 0x1E, the enum dropped, as for PHY A. The
+    CRTC is 1, for OTG 1.
+  - The transmitter control 1.6 takes phy 1 (UNIPHY B), hpd_sel 2 (`ATOM_TRANSMITTER_V6_HPD2_SEL`) and dig_fe_sel 2
+    (`ATOM_TRANMSITTER_V6__DIGB_SEL`).
+  - Ours are the same bytes: `C8 A8 16 00 15 1E 02 00 01 00 ...` for table 12.
+- **The write is table 12's first instruction, for every PHY.** Traced with the image on LEG9 on a model that refuses
+  nothing:
+  - table 12 first reads `RDPCSTX0_RDPCSTX_PHY_FUSE0` and writes it back with `MPLLB_V2I` = 2, its other bits kept;
+  - only then does it read the chosen PHY's `RDPCSTX_PHY_CNTL6` and call table 77 on that PHY's own block;
+  - it does so for PLL ids 20, 21, 22 and 24 alike, and for CRTC 0 or 1.
+  - The field set was seen from several values before it: 0, 0x40000, 0x80000 and 0xC0000 each became 0x00080000; a
+    value with the field already 2 was written back unchanged; 0xFFFFFFFF became 0xFFFBFFFF.
+- **For PHY A this register is its own, on its route**, and the hardware's own run made the same write. The watched run
+  of boot 66 shows stage 2, table 12, writing 0x1783C first, with `0xB008003E`. That is the value it held before, the
+  field already 2.
+- **Linux:** with early DMUB firmware, Display Core ran this same bytecode on the host (the survey's "DMUB question"), so
+  it made the same write for HDMI-A-2. With today's firmware the DMUB runs the command; whether by this bytecode is not
+  known.
+
+**What each table writes for HDMI-A-2 on the image** (a model with PHY B's statuses answered; cold: PHY B's
+`RDPCSTX_SCRATCH` 0; warm: 0x300; steps, calls as the interpreter counts them, writes):
+
+| Table (stage) | 1080p60 DVI, cold | warm | 3440x1440 HDMI, cold | warm | Outside HDMI-A-2's blocks |
+|---|---|---|---|---|---|
+| 12 (stage 2) | 530, 4, 111 | 308, 4, 33 | 530, 4, 111 | 308, 4, 33 | one, every time: `RDPCSTX0_RDPCSTX_PHY_FUSE0` (MPLLB_V2I := 2) |
+| 4 (stage 6) | 31, 2, 5 | 31, 2, 5 | 33, 2, 5 | 33, 2, 5 | none |
+| 76 (stage 8) | 286, 9, 23 | 238, 9, 18 | 301, 9, 23 | 253, 9, 18 | none |
+| 12, pixel clock 0 (stage 2's undo) | 101, 2, 14 | 101, 2, 14 | 101, 2, 14 | 101, 2, 14 | none |
+| 76 DISABLE (stage 8's undo) | 160, 6, 18 | 160, 6, 18 | 160, 6, 18 | 160, 6, 18 | none |
+
+- Table 12 enters 77, 77 and 46; table 4 enters 20; table 76 enters 77, 4, 20, 77, 77, 4, 20 and 77.
+- Everything else lies in PHY B's DPCSTX1/RDPCSTX1, DIG B, DP1, UNIPHYB, PHYPLLB, SYMCLKB and OTG 1's pixel rate.
+- PHY A's runs give the same counts, all on PHY A's route.
+
+**The mend: the write is left unmade when it would change nothing, and refused otherwise** (`light.rs`:
+`TABLE12_SETS_FOR_EVERY_PHY`, `Adapter::leave`). Nothing joins HDMI-A-2's writable set.
+- **When the rule applies:** table 12 writes PHY A's FUSE0 while it is off the route, as it is for HDMI-A-2.
+  - **If the register holds the value already,** the write is not made, and the table goes on. Logged:
+    `S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE (xxxxxxxx)`.
+    The table's line ends `..., n WRITES, 1 LEFT AS IT IS`.
+  - **If the write would change it,** it is refused, and stage 2 is undone as any refusal is. Logged:
+    `S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM xxxxxxxx TO yyyyyyyy`.
+    Then `S2 PIXEL CLOCK FAILED: A WRITE OFF THE ROUTE, TO 1783C, WAS REFUSED; ...`.
+- **Where it does not apply:** any other table's write of it, and any other register, are refused as before. For
+  HDMI-A-1 the register is PHY A's own, and the write is made as before.
+- PHY A is never written by HDMI-A-2's stages: neither its value nor a write of the same value.
+
+**Host cases.**
+- The PHY B case with the image now runs four ways:
+  - cold and warm, with PHY A's FUSE0 as boot 66 read it: all 8 stages, table 12 `530 STEPS ..., 110 WRITES, 1 LEFT AS
+    IT IS` and `308 STEPS ..., 32 WRITES, 1 LEFT AS IT IS`, the long and the short path, nothing of HDMI-A-1's written;
+  - with PHY A's FUSE0 at 0: refused at stage 2 and undone, PHY A's FUSE0 never written;
+  - all 16 stages at 3440x1440 in HDMI, then an unplug: taken back whole, but PHY B's control register bus, left by
+    design.
+- A synthetic case, which runs without the image:
+  - the write is left where the value is held, and refused where it is not;
+  - the same write from table 76 is refused;
+  - on HDMI-A-1's route the write is made.
+
+**Open, from this round.**
+- **PHY A's FUSE0 when HDMI-A-2's stage 2 runs.** The rule lets HDMI-A-2 light only if `MPLLB_V2I` is 2 already.
+  - It was on boot 66 (`0xB008003E`, after a restart out of Linux).
+  - After a power-on with no first light on HDMI-A-1 it is not known.
+  - HDMI-A-1's own stage 2 sets it, but its undo (an unplug) puts back the value from before.
+  - What to look at first, nothing written: survey-order logs of HDMI-A-1's first lights (boots 70 to 81) carry
+    `S2 T12 WROTE AT 1783C = ... (WAS ...)`; the `WAS` is the value at each boot.
+  - Or, on the maintainer's word, batch 12 could read this one register. The table reads it on every first light, but
+    the survey's rule keeps RDPCS out of step 1, so it is not added.
+- **If the value is found otherwise**, letting the table set the field on a PHY A that drives nothing is a decision for
+  the maintainer. It is what table 12 does first for PHY A itself; it is not done now.
 
 ## Related
 

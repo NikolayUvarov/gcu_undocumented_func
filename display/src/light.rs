@@ -465,6 +465,11 @@ fn socket_blocks(o: &Output, fe_shared: bool, add: &mut impl FnMut(u32, u32)) {
     add(seg1(0xA0 + p), seg1(0xA1 + p));
 }
 
+/// PHY A's RDPCSTX_PHY_FUSE0, which the Ryzen's table 12 sets first, for every PHY (PLL ids 20 to 24 alike): its
+/// RDPCS_PHY_DP_MPLLB_V2I to 2, the other bits kept (dpcs_2_1_0_offset.h and _sh_mask.h; 213-DRV-0112). Off HDMI-A-2's
+/// route, so that table's write of it is left unmade where the register holds that value already, and refused otherwise.
+pub const TABLE12_SETS_FOR_EVERY_PHY: u32 = seg2(0x294F);
+
 /// PHY `p`'s DPCS/RDPCS block, whose sequence the VBIOS owns.
 pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x2928 + 0xD8 * (p as u32 + 1))) }
 
@@ -631,6 +636,12 @@ impl fmt::Display for Name {
 
 fn table_name(index: u8) -> &'static str {
     match index { dcn::TABLE_SETPIXELCLOCK => "SETPIXELCLOCK 1.7", dcn::TABLE_DIGXENCODERCONTROL => "DIGXENCODERCONTROL 1.5", dcn::TABLE_DIG1TRANSMITTERCONTROL => "DIG1TRANSMITTERCONTROL 1.6", _ => "?" }
+}
+
+// A table's writes left unmade, at the end of its line; nothing when none.
+struct Left(u32);
+impl fmt::Display for Left {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { if self.0 > 0 { write!(f, ", {} LEFT AS IT IS", self.0) } else { Ok(()) } }
 }
 
 struct Bytes<'a>(&'a [u8]);
@@ -925,12 +936,18 @@ pub enum Outcome {
 struct Adapter<'a, E: Engine> {
     engine: &'a mut E, guard: &'a Guard, journal: &'a mut Journal, out: &'a mut dyn Out,
     tag: (char, u8, u8), record: bool, writes: u32, refused: Option<Refused>, unreadable: Option<u32>, full: bool, log_us: u64,
+    /// Writes left unmade: table 12's of a register off the route that held their value already (213-DRV-0112).
+    left: u32,
 }
 
 impl<E: Engine> atom::Machine for Adapter<'_, E> {
     fn read(&mut self, reg: Reg) -> Option<u32> { self.engine.read(reg) }
     fn write(&mut self, reg: Reg, value: u32) -> bool {
-        let w = match self.guard.check(reg) { Ok(w) => w, Err(r) => { self.refused = Some(r); return false; } };
+        let w = match self.guard.check(reg) {
+            Ok(w) => w,
+            Err(Refused::OffRoute(o)) if o == TABLE12_SETS_FOR_EVERY_PHY && self.tag.2 == dcn::TABLE_SETPIXELCLOCK => return self.leave(reg, value),
+            Err(r) => { self.refused = Some(r); return false; }
+        };
         let Some(old) = self.engine.read(reg) else { self.unreadable = Some(reg.offset()); return false };
         if self.record && !self.journal.push(w, old, self.tag.1) { self.full = true; return false; }
         self.engine.write(w, value);
@@ -944,19 +961,41 @@ impl<E: Engine> atom::Machine for Adapter<'_, E> {
     fn now_us(&mut self) -> u64 { self.engine.now_us().saturating_sub(self.log_us) }
 }
 
+impl<E: Engine> Adapter<'_, E> {
+    // Table 12's write of PHY A's FUSE0 on another output's route: not made when the register holds the value already,
+    // so that PHY A is not written; refused when it would change it.
+    fn leave(&mut self, reg: Reg, value: u32) -> bool {
+        let Some(old) = self.engine.read(reg) else { self.unreadable = Some(reg.offset()); return false };
+        let t0 = self.engine.now_us();
+        let (tag, o) = (self.tag, reg.offset());
+        let same = old == value;
+        if same {
+            self.left += 1;
+            self.out.line(format_args!("{}{} T{} LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT {:05X} AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE ({:08X})",
+                tag.0, tag.1, tag.2, o, old));
+        } else {
+            self.refused = Some(Refused::OffRoute(o));
+            self.out.line(format_args!("{}{} T{} REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT {:05X}: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM {:08X} TO {:08X}",
+                tag.0, tag.1, tag.2, o, old, value));
+        }
+        self.log_us += self.engine.now_us().saturating_sub(t0);
+        same
+    }
+}
+
 /// Runs table `t` for stage `n`; `record` journals its writes for the undo.
 fn call<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, t: Table, prefix: char, n: u8, record: bool, out: &mut dyn Out) -> Result<TableRun, Failure> {
     let (p, len) = t.parameters();
     out.line(format_args!("{}{} RUNNING TABLE {} ({}) NOW", prefix, n, t.index(), table_name(t.index())));
     let begin = e.now_us();
-    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, unreadable: None, full: false, log_us: 0 };
+    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, unreadable: None, full: false, log_us: 0, left: 0 };
     interp.set_time_limit(TABLE_TIME_LIMIT_US);
     let result = interp.run(t.index(), &p[..len], &mut a);
-    let (writes, refused, unreadable, full, log_us) = (a.writes, a.refused, a.unreadable, a.full, a.log_us);
+    let (writes, refused, unreadable, full, log_us, left) = (a.writes, a.refused, a.unreadable, a.full, a.log_us, a.left);
     let us = e.now_us().saturating_sub(begin).saturating_sub(log_us);
     match result {
         Ok(o) => {
-            out.line(format_args!("{}{} TABLE {} DONE: {} STEPS, {} CALLS, {} US OF DELAYS, {} WRITES", prefix, n, t.index(), o.steps, o.calls, o.delay_us, writes));
+            out.line(format_args!("{}{} TABLE {} DONE: {} STEPS, {} CALLS, {} US OF DELAYS, {} WRITES{}", prefix, n, t.index(), o.steps, o.calls, o.delay_us, writes, Left(left)));
             Ok(TableRun { index: t.index(), steps: o.steps, writes, us })
         }
         Err(_) if refused.is_some() => Err(Failure::Refused(refused.unwrap_or(Refused::OffRoute(0)))),

@@ -452,6 +452,16 @@ it has run on the Ryzen, and nothing of the second socket has been read there ye
 - **The guard** refuses the other socket's blocks whatever the pipe: its DIG block (only `DIG_BE_CNTL`, `DIG_BE_EN_CNTL`
   and `DIG_LANE_ENABLE` when the chosen front end is that DIG), DP link registers, UNIPHY, DPCS/RDPCS, PLL resync,
   SYMCLK, HPD block and DDC line.
+- **Table 12 writes one register of PHY A for every PHY.** Its first instruction sets `RDPCSTX0_RDPCSTX_PHY_FUSE0`'s
+  `RDPCS_PHY_DP_MPLLB_V2I` (bits 18-19) to 2, keeping the other bits, whatever the PLL id (20 to 24 traced, the Ryzen's
+  image on LEG9 on a model). Only then does it turn to the chosen PHY's own block. Our parameters are Display Core's
+  (`resource_map_phy_clock_resources` and `find_matching_pll`: UNIPHY B takes PLL1, `ATOM_COMBOPHY_PLL1`).
+  On HDMI-A-2's route that write is left unmade where the register holds the value already, as boot 66's `0xB008003E`
+  does, and refused otherwise. No other write of tables 12, 4 or 76, or of their off calls, leaves HDMI-A-2's blocks.
+  More sources (Linux v7.0, first 16 hex digits of SHA-256): `display/dc/resource/dce112/dce112_resource.c`
+  1a9c10521915f81e, `display/dc/resource/dcn20/dcn20_resource.c` 8408c9d350ef9294,
+  `display/dc/bios/dce112/command_table_helper2_dce112.c` 37cbef7de487824d, `display/dc/bios/command_table_helper2.c`
+  f1e3020eea1b9b27.
 - Sources added (Linux v7.0, first 16 hex digits of SHA-256): `display/dc/dce/dce_i2c_hw.c` 5e733d7ea46ad879,
   `dce_i2c_hw.h` 564cce137d26fa97, `display/dc/gpio/dcn21/hw_factory_dcn21.c` 91c7d9551313dc55, `display/dc/gpio/ddc_regs.h`
   be557c14bd8ad921, `display/dc/gpio/hw_ddc.c` 1d7050f023503344, `display/dc/resource/dcn10/dcn10_resource.c`

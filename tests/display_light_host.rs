@@ -3020,26 +3020,105 @@ fn answered_on(p: u32) -> Engine {
     e
 }
 
+// PHY A's RDPCSTX_PHY_FUSE0, which the Ryzen's table 12 sets first for every PHY; its value on boot 66, as WARM holds it.
+const PHY_A_FUSE0: u32 = (0x34C0 + 0x294F) * 4;
+fn boot66(o: u32) -> u32 { WARM.iter().find(|w| w.0 == o).map(|w| w.1).unwrap() }
+const PHY_B_CR_ADDR: u32 = (0x34C0 + 0x2934 + 0xD8) * 4; // RDPCSTX1_RDPCS_TX_CR_ADDR
+const PHY_B_CR_DATA: u32 = (0x34C0 + 0x2935 + 0xD8) * 4; // RDPCSTX1_RDPCS_TX_CR_DATA
+
 #[test]
 fn the_ryzens_own_tables_on_phy_b_write_only_hdmi_a_2s_route() {
     let skip = |why: String| { use std::io::Write; let _ = writeln!(std::io::stderr(), "the_ryzens_own_tables_on_phy_b_write_only_hdmi_a_2s_route SKIPPED: {}", why); };
     let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { skip("MIND_AMD_VBIOS is not set (the Ryzen's VBIOS image, not in the repository)".into()); return };
     let Ok(bytes) = std::fs::read(&path) else { skip(format!("{} cannot be read", path)); return };
-    // First light's eight stages on HDMI-A-2 with PHY B's statuses answered: tables 12, 4 and 76 with PHY B's PLL, front
-    // end B and HPD 2; every write on HDMI-A-2's route, none of HDMI-A-1's blocks, the firmware's pipe unchanged.
     let (f, c) = light::expected(light::HDMI_A_2);
     let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    let run8 = |e: &mut Engine| { let mut interp = atom::Interpreter::new(atom::Image::new(&bytes).unwrap()); let mut journal = light::Journal::default(); let mut log = Log(vec![]);
+        let o = light::run(&l, e, &mut interp, &mut journal, STAGES, &mut log); (o, log.0) };
+    // First light's eight stages with PHY B's statuses answered and PHY A's FUSE0 as boot 66 read it: table 12's first write,
+    // PHY A's FUSE0 (its MPLLB_V2I set to 2, which it is already), left unmade; every other write on HDMI-A-2's route.
+    for (warm, t12, t76) in [(false, "S2 TABLE 12 DONE: 530 STEPS, 4 CALLS, 10 US OF DELAYS, 110 WRITES, 1 LEFT AS IT IS", "S8 TABLE 76 DONE: 286 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES"),
+                             (true, "S2 TABLE 12 DONE: 308 STEPS, 4 CALLS, 10 US OF DELAYS, 32 WRITES, 1 LEFT AS IT IS", "S8 TABLE 76 DONE: 238 STEPS, 9 CALLS, 420 US OF DELAYS, 18 WRITES")] {
+        let mut e = answered_on(1);
+        e.regs.insert(PHY_A_FUSE0, boot66(PHY_A_FUSE0));
+        if warm { e.regs.insert(phy(0x2937 + 0xD8), 0x300); } // PHY B set up already: RDPCSTX1_RDPCSTX_SCRATCH
+        let before = e.regs.clone();
+        let (outcome, log) = run8(&mut e);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "warm {}: {:#?}", warm, &log[log.len().saturating_sub(20)..]);
+        for x in [t12, "S6 TABLE 4 DONE: 31 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES", t76,
+                  "S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE (B008003E)"] {
+            assert!(log.iter().any(|y| y == x), "warm {}: no {:?} in {:#?}", warm, x, log.iter().filter(|y| y.contains("TABLE") || y.contains("FUSE0")).collect::<Vec<_>>());
+        }
+        let path = if warm { "S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS" } else { "S2 THE PHY WAS NOT SET UP (SCRATCH 0x0): THE LONG PATH: 37 WRITES THROUGH ITS BUS (17 INTO THE PHY)" };
+        assert!(log.iter().any(|y| y == path), "warm {}: {:#?}", warm, log.iter().filter(|y| y.starts_with("S2 THE")).collect::<Vec<_>>());
+        for (w, _) in writes(&e) { assert!(l.guard().check(Reg::new(w).unwrap()).is_ok(), "{:05X}", w); assert!(!hdmi_a_1s(w), "HDMI-A-1's {:05X}", w); }
+        assert_eq!(e.regs[&PHY_A_FUSE0], before[&PHY_A_FUSE0]);
+        for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    }
+    // PHY A's FUSE0 not as boot 66 read it (0, as a PHY A no table has set up might hold it): the write would change it, so
+    // stage 2 is refused there and undone; PHY A's FUSE0 never written.
     let mut e = answered_on(1);
     let before = e.regs.clone();
-    let mut interp = atom::Interpreter::new(atom::Image::new(&bytes).unwrap());
-    let mut journal = light::Journal::default();
-    let mut log = Log(vec![]);
-    let outcome = light::run(&l, &mut e, &mut interp, &mut journal, STAGES, &mut log);
-    for x in log.0.iter().filter(|x| x.contains("TABLE") && x.contains("DONE") || x.contains("FAILED") || x.contains("REFUSED")) { eprintln!("{}", x); }
-    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log.0[log.0.len().saturating_sub(20)..]);
-    for t in [12, 4, 76] { assert!(log.0.iter().any(|x| x.contains(&format!("TABLE {} DONE", t))), "table {}", t); }
-    for (w, _) in writes(&e) { assert!(l.guard().check(Reg::new(w).unwrap()).is_ok(), "{:05X}", w); assert!(!hdmi_a_1s(w), "HDMI-A-1's {:05X}", w); }
-    for o in watched(&l) { assert_eq!(e.regs.get(&o), before.get(&o), "{:05X}", o); }
+    let (outcome, log) = run8(&mut e);
+    assert_eq!(outcome, Outcome::Failed { stage: 2, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    assert!(log.iter().any(|y| y == "S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM 00000000 TO 00080000"), "{:#?}", log);
+    assert!(log.iter().any(|y| y.starts_with("U2 TABLE 12 DONE")), "the off call did not end");
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+    restored_but(&e, &before, &[]);
+    // All sixteen stages at 3440x1440 in HDMI on the Ryzen's tables, then an unplug: taken back whole but PHY B's control
+    // register bus (left by design, as PHY A's is); PHY A's FUSE0 never written.
+    let mut e = answered_on(1);
+    e.frame_us = DP2;
+    e.regs.insert(PHY_A_FUSE0, boot66(PHY_A_FUSE0));
+    let before = e.regs.clone();
+    let wide2 = Light::new_with(f, c, WIDE, dcn::Signal::Hdmi).unwrap().with_reference(Some(boot70_reference())).with_build("TESTBUILD");
+    let (outcome, mut lit, log) = light_up(wide2, &bytes, &mut e, 16);
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(12)..]);
+    assert!(e.ev.contains(&Ev::Offer(3440, 1440, 13824)));
+    for (w, _) in writes(&e) { assert!(!hdmi_a_1s(w), "HDMI-A-1's {:05X}", w); }
+    let (same, log) = take_back(&mut lit, &mut e, 16);
+    assert!(same, "{:#?}", log);
+    for t in ["U2 TABLE 12 DONE", "U8 TABLE 76 DONE"] { assert!(log.iter().any(|x| x.starts_with(t)), "{}", t); }
+    as_before(&e, &before, &[PHY_B_CR_ADDR, PHY_B_CR_DATA]);
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+}
+
+#[test]
+fn table_12s_write_of_phy_as_fuse0_off_the_route_is_left_unmade_where_it_holds_the_value_and_refused_otherwise() {
+    // Synthetic tables for HDMI-A-2 whose table 12 first writes PHY A's FUSE0 with boot 66's value, as the Ryzen's sets its field.
+    let fuse = boot66(PHY_A_FUSE0);
+    let img = |t12_first: Vec<u8>, t76: Vec<u8>| image(&[(12, [t12_first, mov(seg(1, 0xA1), 1), mov(PHY_B_CNTL0, 0x0020_0001), vec![EOT]].concat()),
+        (4, [mov(seg(2, 0x216B), 0x1F), vec![EOT]].concat()), (76, [mov(seg(2, 0x21B0), 1), t76, vec![EOT]].concat())]);
+    let (f, c) = light::expected(light::HDMI_A_2);
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    // It holds the value: the write is not made, the stages go on.
+    let mut e = engine();
+    e.regs.insert(PHY_A_FUSE0, fuse);
+    let (outcome, log) = run_light(&l, &img(mov(PHY_A_FUSE0, fuse), vec![]), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0) && e.regs[&PHY_A_FUSE0] == fuse);
+    assert!(log.iter().any(|x| x == "S2 TABLE 12 DONE: 4 STEPS, 1 CALLS, 0 US OF DELAYS, 2 WRITES, 1 LEFT AS IT IS"), "{:#?}", log.iter().filter(|x| x.contains("TABLE 12")).collect::<Vec<_>>());
+    // It does not: refused, stage 2 and stage 1 undone, PHY A's FUSE0 as it was.
+    let mut e = engine();
+    let before = e.regs.clone();
+    let (outcome, log) = run_light(&l, &img(mov(PHY_A_FUSE0, fuse), vec![]), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 2, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) });
+    assert!(log.iter().any(|x| x == &format!("S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM 00000000 TO {:08X}", fuse)));
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0));
+    restored_but(&e, &before, &[]);
+    // Only table 12's: the same write from table 76, the value held, is refused as off the route.
+    let mut e = engine();
+    e.regs.insert(PHY_A_FUSE0, fuse);
+    let (outcome, _) = run_light(&l, &img(vec![], mov(PHY_A_FUSE0, fuse)), &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 8, why: Failure::Refused(Refused::OffRoute(PHY_A_FUSE0)) });
+    // On HDMI-A-1's route it is PHY A's own: made, as before.
+    let (f, c) = EXPECTED;
+    let l = Light::new(f, c, timing::CEA_1080P60).unwrap();
+    let mut e = engine();
+    let one = tables([mov(PHY_A_FUSE0, fuse), mov(seg(1, 0xA0), 1), vec![EOT]].concat(), [mov(seg(2, 0x20B0), 1), vec![EOT]].concat());
+    let (outcome, log) = run_light(&l, &one, &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 });
+    assert!(writes(&e).contains(&(PHY_A_FUSE0, fuse)) && !log.iter().any(|x| x.contains(" LEFT PHY A")));
 }
 
 // --- which socket (213-DRV-0112) ---
