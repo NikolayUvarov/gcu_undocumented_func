@@ -18,3 +18,6 @@ sha2 = { version = "0.10", default-features = false }
 webpki = { package = "rustls-webpki", version = "0.103.13", default-features = false, features = ["std"] }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+# A hub known by a CA bundle (--ca, 100003-APP-0160): its chain and handshake checked with RSA and P-384 too, as `tls` checks them.
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+rsa = { version = "0.9", default-features = false, features = ["sha2", "std"] }

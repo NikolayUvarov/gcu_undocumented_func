@@ -38,7 +38,7 @@ fn start(dir: &Path, tls: Option<Arc<httpd::tls::Reloading>>) -> String {
 }
 
 fn target(url: String, pins: Vec<[u8; 32]>) -> Target {
-    Target { url, pins, admin: key(1), intake: key(2), track: key(3), track_code: "APP".into(), integrator: key(4) }
+    Target { url, trust: mindhub::client::Trust::Pins(pins), proxy: None, admin: key(1), intake: key(2), track: key(3), track_code: "APP".into(), integrator: key(4) }
 }
 
 fn run(t: &Target) {

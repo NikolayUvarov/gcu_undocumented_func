@@ -10707,6 +10707,85 @@ def slot_applications_check(args):
           "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
+def hub_update_suite(args):
+    """100003-APP-0159: MIND Core's updater takes a release from MIND Hub. A raw image with release 5 in slot A,
+    confirmed, its channel and key file kept there; update.txt names the hub's /updates over HTTPS, trusted by its
+    pinned key, with `automatic fetch` every 5 s. tools/mindhub serves the tree release.py published (--releases), with
+    release 6 on stable: the updater checks, fetches release 6's files from the hub and stages it in slot B. From the
+    host, the hub serves stable's channel as published and refuses the restricted channel test, naming why."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: hubupdate suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    import http.client
+    import ssl
+    temp = Path(tempfile.mkdtemp(prefix="mind-hub-update-"))
+    arch = args.arch
+    volume, _, server, kept, good, _, _, _, _ = update_releases(temp, arch)
+    serve_channel(server, good)
+    serve_channel(server, kept, channel="test")
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    pin = _spki_pin(certificates / "server.pem")
+    target = Path(tempfile.gettempdir()) / "mind-mindhub-target"
+    subprocess.run(["cargo", "build", "--quiet", "--release", "--manifest-path", str(ROOT / "tools/mindhub/Cargo.toml"), "--target-dir", str(target)], check=True)
+    mindhub = str(target / "release" / "mindhub")
+    data = temp / "hub"
+    data.mkdir()
+    admin = subprocess.run([mindhub, "key", str(temp / "admin.key")], check=True, capture_output=True, text=True).stdout.strip()
+    (data / "hub.conf").write_text(f"admin maintainer {admin}\n")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    hub = subprocess.Popen([mindhub, "serve", str(data), "--listen", f"127.0.0.1:{port}", "--cert", str(certificates / "server.pem"),
+                            "--key", str(certificates / "server.key"), "--releases", str(server)], stderr=subprocess.PIPE, text=True)
+    vm = None
+    try:
+        started = ""
+        while "OFFERED UNDER /updates/" not in started:
+            line = hub.stderr.readline()
+            assert line, f"mindhub did not start: {started}"
+            started += line
+        require(started, "CHANNELS stable OFFERED UNDER /updates/")
+        # From the host: stable's channel as published; the restricted one refused with its reason.
+        context = ssl.create_default_context(cafile=str(certificates / "ca.pem"))
+        context.check_hostname = False
+        def fetch(path):
+            c = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=30)
+            c.request("GET", path)
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+            return r.status, body
+        assert fetch("/updates/channels/stable") == (200, good)
+        status, body = fetch("/updates/channels/test")
+        assert status == 404 and b"a restricted channel is served on the device's signature" in body, (status, body)
+        layout = temp / "layout"
+        boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
+        (layout / "MIND/A/CHANNEL").write_bytes(kept)
+        (layout / "MIND/A/KEYS").write_bytes((server / "keys/current").read_bytes())
+        (layout / "netpolicy.txt").write_text(f"# the updater may reach the hub\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+        (layout / "update.txt").write_text(f"# MIND Hub's release tree (100003-APP-0159)\nsource https://10.0.2.2:{port}/updates\npin {pin}\n"
+                                           "channel stable\nautomatic fetch\nevery 5\n")
+        image = boot_slots.Image.create(temp / "hub-update.img", layout)
+        cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+        vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+                extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        log = updater_log(vm, "[UPDATER] FETCH: VERSION 6 STAGED IN SLOT B", 900)
+        require(log, "[UPDATER] METADATA: CHANNEL stable VERSION 6")
+        staged = re.search(r"\[UPDATER\] FETCH: VERSION 6 STAGED IN SLOT B: [^\n]*", log).group(0)
+        print(f"PASS: hubupdate (100003-APP-0159): MIND Core's updater, its source the hub's /updates, fetched release 6 from "
+              f"tools/mindhub and staged it ({staged.split(': ', 2)[2]}); the hub served stable's channel as published and "
+              f"refused the restricted channel test, naming why", flush=True)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        if vm is not None:
+            vm.close()
+        hub.terminate()
+        hub.wait(timeout=30)
+        shutil.rmtree(temp, ignore_errors=True)
+
+
 def hub_check(args, disk):
     """100003-APP-0151: `improve` on MIND Core against `tools/mindhub` on the host, over TLS 1.3 to the hub's pinned key
     (QEMU gives the host as 10.0.2.2): set up, registered and approved by the admin, a request filed, the agents'
@@ -11266,8 +11345,15 @@ def usbaudio_suite(args):
             require(log, "[AUDIO] USB PLAYBACK STARTED")
             stopped = re.search(r"\[AUDIO\] USB PLAYBACK STOPPED: INTERFACE \d+; (\d+) PACKETS SENT, (\d+) OF THEM SILENCE", log)
             assert stopped and int(stopped[1]) > 500, log
-            usb = vm.service_logs("usb_host", "STREAMS OUT")
+            # Its close (000-DRV-0081): SET_INTERFACE 0 before the endpoint is dropped, and no error from it on the stream's last line.
+            usb = vm.service_logs("usb_host", "STREAMS CLOSED")
             require(usb, f"ENDPOINT {attached[4]} STREAMS OUT")
+            closed = re.search(rf"INTERFACE {attached[3]} SETTING 0: STREAMS CLOSED, THE DEVICE TOLD FIRST: SET_INTERFACE DONE IN ([\d.]+) MS, ENDPOINTS DROPPED IN ([\d.]+) MS", usb)
+            assert closed, usb
+            dci = (int(attached[4], 16) & 0xF) * 2 + (int(attached[4], 16) >> 7)
+            ended = re.search(rf"ENDPOINT {dci}: STREAM ENDED: \d+ PACKETS SENT, \d+ MISSED, \d+ TIMES DRY \([^)]*\), (\d+) WITH ERRORS", usb)
+            assert ended and ended[1] == "0", usb
+            in_close = re.search(rf"ENDPOINT {dci}: (\d+) TDS ENDED IN ITS CLOSE", usb)
             # A device plugged in beside it is the one used; the first waits, and comes back when that one goes.
             vm.qmp("device_add", driver="usb-audio", bus="axhci.0", audiodev="usnd2", id="uac2")
             waits, again = "WAITS: A DEVICE SET UP AFTER IT IS USED", "AGAIN: THE DEVICE SET UP AFTER IT WENT"
@@ -11318,7 +11404,8 @@ def usbaudio_suite(args):
             heard.append(loud / channels / rate)
     print(f"PASS: USB audio: {attached[1]}:{attached[2]} attached in the codec's place, endpoint {attached[4]} streamed "
           f"{stopped[1]} packets ({stopped[2]} of silence) of up to {attached[5]} bytes while beep played, and the device heard "
-          f"{heard[0]:.2f} s of tone; a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
+          f"{heard[0]:.2f} s of tone; its close told the device first (SET_INTERFACE {closed[1]} ms, the endpoint dropped {closed[2]} ms after) "
+          f"with 0 errors on the stream's last line ({in_close[1] if in_close else 0} TDs ended in the close); a second one plugged in beside it played in its place ({heard[1]:.2f} s) and gave it back; "
           f"unplugged, the codec again", flush=True)
     audiostub_check(args)
 
@@ -11413,10 +11500,19 @@ def usbload_suite(args):
             usb = vm.service_logs("usb_host", "ANSWERED FROM THE LOOP")
             loop = re.search(r"\[USB\] A BULK TRANSFER ANSWERED FROM THE LOOP: SLOT \d+ ENDPOINT [0-9A-F]{2}, \d+ BYTES, \d+ MS", usb)
             assert loop, usb
+            # The minute's tally, once the boot's first minute with transfers has closed: every one answered, none lost.
+            for _ in range(40):
+                usb += vm.service_logs("usb_host")
+                if "IN THE LAST MINUTE" in usb:
+                    break
+                vm.command("sha256 big.bin", raw=True, timeout=120)
+                time.sleep(1)
+            tally = re.search(r"BULK TRANSFERS FROM THE LOOP IN THE LAST MINUTE: (\d+) DEFERRED, (\d+) ANSWERED, (\d+) NOT FOUND, (\d+) TIMED OUT, (\d+) STOPPED, (\d+) WAITED ON; THE LONGEST (\d+) MS", usb)
+            assert tally and int(tally[1]) > 0 and abs(int(tally[1]) - int(tally[2])) <= 1 and tally.groups()[2:6] == ("0", "0", "0", "0"), usb[-3000:]
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-usbload-{args.cpus}cpu.log").write_text(vm.log)
-    print(f"PASS: usbload: with every bulk transfer answered from usb_host's loop, a 4 MiB file read off the USB stick 3 times whole while QEMU's usb-audio played {ended[2]} frames in {ended[1]} ms and the log came whole over MIND Link's FT232; {loop[0][6:]} (000-DRV-0101)", flush=True)
+    print(f"PASS: usbload: with every bulk transfer answered from usb_host's loop, a 4 MiB file read off the USB stick 3 times whole while QEMU's usb-audio played {ended[2]} frames in {ended[1]} ms and the log came whole over MIND Link's FT232; {loop[0][6:]}; a minute's tally: {tally[1]} deferred, {tally[2]} answered, the longest {tally[7]} ms (000-DRV-0101)", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -20456,6 +20552,9 @@ def main():
             continue
         if suite == "updatekeys":
             update_keys_suite(args)
+            continue
+        if suite == "hubupdate":  # MIND Core's updater takes a release from MIND Hub's tree (100003-APP-0159)
+            hub_update_suite(args)
             continue
         if suite == "updaterecovery":
             update_recovery_suite(args)
