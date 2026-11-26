@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware/MAC/RX diagnostic using retained, disjoint command and receive DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware/MAC/RX diagnostic using retained, disjoint command and receive DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues-done/213-DRV-0033-rtl8852be-firmware-and-probe.done).
 
 ## Observed card
 

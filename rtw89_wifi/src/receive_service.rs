@@ -193,7 +193,8 @@ pub(crate) struct ReceiveOnly {
     mac: [u8; 6], channel: u8, filter: Filter, limits: Option<Limits>, settings: u64, admits: bool, ask: Option<Ask>,
     frames: [[u8; FRAME_BYTES]; FRAMES], lengths: [usize; FRAMES], head: usize, count: usize, dropped: u64,
     waiters: [Option<Waiter>; WAITERS], last_ms: u64, failure: Option<Stop>, tally: Tally,
-    // The hardware filter: narrowed for a network's filter (`narrow`), and a change the serving loop has to apply.
+    // The hardware filter: narrowed for a network's filter once a send admits its channel (`narrow`), and a change the
+    // serving loop has to apply.
     narrow: bool, narrowing: Option<bool>,
     // A channel the client set: until then `info` says 0, how wlan tells a restarted radio (550-NET-0061).
     set: bool,
@@ -370,9 +371,10 @@ impl ReceiveOnly {
                 }
                 self.filter = Filter::new(self.mac, filter.all_beacons, address(filter.bssid), address(filter.own));
                 self.head = 0; self.count = 0; self.signal.forget();
-                // A network's filter narrows the hardware's too, as Linux's outside a scan: the scan's let the whole busy
-                // channel through, and the firmware's recovery then reset the BB under the calibration (the Ryzen, 2026-11-08).
-                if self.narrow == filter.all_beacons { self.narrow = !filter.all_beacons; self.narrowing = Some(self.narrow); }
+                // A scan's filter opens the hardware's at once. A network's narrows it only when a send admits the channel
+                // (`Request::Send`): narrowed, the hardware checks beacons against a BSSID this mode never sets and drops
+                // them all, the very ones a listen-only channel waits for (the Ryzen on channel 100, 2026-11-26).
+                if filter.all_beacons && self.narrow { self.narrow = false; self.narrowing = Some(false); }
                 let _ = wlanhw::reply_set_filter(call, Ok(()));
             }
             // No calibrated channel, so nothing is sent. Under a country that lets it send here, the first `send` admits this
@@ -388,7 +390,12 @@ impl ReceiveOnly {
                 let allowed = if probe || !self.set { Err(()) } else { self.sends_on(self.channel, receiver) };
                 let admit = allowed.is_ok() && self.ask.is_none();
                 let _ = wlanhw::reply_send(call, Err(if admit { wlanhw::Error::Busy } else { wlanhw::Error::Failed }));
-                if let (true, Ok(heard)) = (admit, allowed) { self.ask = Some(Ask::Admit(self.channel, heard)); }
+                if let (true, Ok(heard)) = (admit, allowed) {
+                    self.ask = Some(Ask::Admit(self.channel, heard));
+                    // Narrowed before the calibration, as Linux's outside a scan: a scan's filter let the whole busy channel
+                    // through, and the firmware's recovery then reset the BB under the calibration (the Ryzen, 2026-11-08).
+                    if !self.filter.all_beacons() && !self.narrow { self.narrow = true; self.narrowing = Some(true); }
+                }
                 let listen = self.limits.as_ref().filter(|_| self.admits).and_then(|l| l.applied(self.channel)).is_some_and(|a| a.listen);
                 if allowed.is_err() && listen && self.set && !self.told {
                     self.told = true; events(Event::ListenOnly { channel: self.channel, receiver, heard: self.heard.iter().flatten().count() });

@@ -1,6 +1,6 @@
 # 213-DRV-0060 — The Ryzen 9 5900HX's second NVMe disk, and its analog sound heard
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** for the second disk, `init`'s `nvme#1` (KRN: the request of 2026-11-26), then the maintainer's run · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P2 · **Status:** open · **Blocked by:** for the second disk, the maintainer's run (`init`'s `nvme#1`, [213-KRN-0282](213-KRN-0282-nvme-1-the-second-nvme-controller-read-only.md), is merged into this branch and lands with it) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
 
 Numbered from the kernel track's request of 2026-10-13 in `requests-DRV.md` ("The Ryzen 9 5900HX machine: sound, Ethernet, a second NVMe disk, a second xHCI"), from the maintainer's first run (`log:hw0003.txt`).
 
@@ -90,6 +90,47 @@ The machine is the maintainer's: the run needs it booted into MIND Core, and the
 **Not done:**
 - The second and third criteria on the Ryzen. They wait for KRN's grant, or the bench image, and the maintainer's run.
 - The second disk writable: split to [213-DRV-0105](213-DRV-0105-the-ryzens-second-nvme-disk-writable.md). No instance but the first writes.
+
+## Progress (2026-11-26, later): with KRN's `nvme#1`, the suite `nvme2` in the gate
+
+**KRN's part, merged here:** 213-KRN-0282 (`claude/213-KRN-0282-nvme-1-read-only`, 97bf009fc). It lands only with this branch, since `main`'s `nvme` would drive the second disk writable.
+- `"nvme#1"` is in `common/abi.rs`'s `SERVICE_INSTANCES`.
+- `init`'s `nvme` arm drives the instance's controller in PCI order, with the argument `1`.
+- KRN gives `nvme#1` to neither the block store nor `vfs_server`, so no service holds a client of it.
+
+**The suite `nvme2`** (`second_nvme_check` in `tests/qemu_smoke.py`) now runs in the gate's group "NVMe boot disk" (`scripts/ci_local.sh`, `.github/workflows/ci.yml`). It checks what `main` will do with that wiring.
+- **Machine 1** boots from the first NVMe disk. The second holds a GPT disk of another system.
+  - `nvme#1` says it is read-only and lists 131072 sectors.
+  - The SHA-256 of its first MiB, read in MIND Core, is the image file's.
+  - Its bring-up failed nowhere.
+  - `init` reads nothing of it, and `vfs_server` gets none of it.
+  - A file written on the first disk is read back.
+- **Machine 2** (x86) boots from IDE with `nvme`'s test build `write-probe`: a cargo feature, built by `scripts/x86_fixtures.sh` as `usb_host`'s `defer-every-bulk` is.
+  - The read-only instance itself tries the Driver's write and flush, and 12 commands that change the medium or the controller's kept state.
+  - Each is refused and said, and none is sent.
+- After each machine, the second image file's SHA-256 is what it was. The blank first disk, which `vfs_server` holds whole, is still blank.
+
+**What went from the bench branch's version, and why:**
+- **`init` listing the second disk's partitions** went. KRN's `init` reads nothing of `nvme#1`, so the suite now asks that no `[INIT] nvme#1` line follows its start.
+- **The block stand-in for `vfs_server` writing to the second disk through its client** went. No service holds a client of `nvme#1` any more.
+  - So the serve loop's refusal, with the client's badge and PID, cannot be reached in QEMU without a change to `init` or `vfs_server`, and none is made.
+  - Its evidence stays `tests/block_host.rs` (a read-only medium refuses the write badge) and `tests/nvme_host.rs`.
+  - It was also shown once on the bench branch, with that branch's own `init`.
+- Machine 2's probe replaces it for the driver's two inner layers: `Driver::write`/`flush`, and `submit`'s allow-list.
+
+**Tested** on e1891d657 (this branch with `main` 43331fbe0 and 213-KRN-0282 merged), on LEG9, in QEMU on 4 CPUs; no hardware:
+- `bash ./02_build.sh` and `scripts/x86_fixtures.sh` passed.
+- `tests/qemu_smoke.py --suites nvme2` passed, both machines.
+- The x86 groups passed:
+  - "NVMe boot disk", now `vfs,nvme2`: 96 s;
+  - "files and block writes": 1034 s.
+- `scripts/host_tests.sh`, all of it, passed.
+- `ARCH=aarch64 ./02_build.sh --fixtures` passed, and so did the group "aarch64: NVMe boot disk" (183 s).
+- These are QEMU runs. They are no evidence for the Ryzen (MC-12.1).
+
+**The bench branch** `claude/DRV-nvme-bench` is no longer needed. This branch now carries all that the Ryzen's run needs: `nvme#1` started, read-only, its capacity and its first MiB's SHA-256 in the log. The bench branch is left as it was.
+
+`docs/profile/evidence.md` gains the statement and its evidence, beside KRN's row in `docs/profile/bootstrap.md`.
 
 ## Related
 

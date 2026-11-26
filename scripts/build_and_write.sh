@@ -2,12 +2,19 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--machine <id>] [--old-disk <n>] [--new-device-key] [--mode=<modes>] <disk number>   |   --list   |   --list-machines
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--board <name>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--machine <id>] [--old-disk <n>] [--new-device-key] [--mode=<modes>] <disk number>   |   --list   |   --list-machines
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
 #                  beside it, so the steps after the write find its volume. Proprietary files, wallpapers and
 #                  mac/startup-disk.sh are not copied then.
+#   --board <name> a board's card in place of a PC's disk (100004-MOB-0011): the aarch64 build packed, then made into the
+#                  card of that entry of scripts/boards.toml (scripts/board_image.py --list names them) with its firmware
+#                  from the entry's script, as dist/boards/mind-<name>.img; written as any image, the same checks before.
+#                  With --image, the card is made from that aarch64 image. --link puts `uart` in link.conf, at 115200:
+#                  the link then takes the console UART and the shell has no serial line (stage 2; the first boot is
+#                  written without --link). The PCs' and the MacBook's options (--keep-*, --machine, --old-disk,
+#                  --new-device-key, --wifitest, --wifi-ofdm, --wifijoin) are refused with it.
 #   --slots        the image with boot slots (docs/update/slots.md) and an update.txt at its root that takes releases
 #                  from data/link/rel/ (351-KRN-0141): after this one write, scripts/link_update.py updates the machine
 #                  over the link, with no rewrite. It writes link.conf as --link does unless a --link option is given.
@@ -149,32 +156,34 @@ fi
 
 MODE_WORDS="development maintenance link-console remote-update link-remote-update"
 COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; LINK_ADDRESS=; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
-MACHINE=""; OLD_DISK=""; OLD_GIVEN=0; NEW_KEY=0
+MACHINE=""; OLD_DISK=""; OLD_GIVEN=0; NEW_KEY=0; BOARD=""; LINK_RATE_GIVEN=0; PC_ONLY=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --commit) COMMIT="${2:?usage: $0 --commit <id> <disk number>}"; shift 2 ;;
         --image) IMAGE_FILE="$(realpath "${2:?usage: $0 --image <file> <disk number>}")"; shift 2 ;;
+        --board) BOARD="${2:?usage: $0 --board <name> <disk number>}"; shift 2
+                 [[ $BOARD =~ ^[a-z0-9-]{1,40}$ ]] || { echo "--board <name>: a name of scripts/boards.toml (scripts/board_image.py --list): $BOARD" >&2; exit 1; } ;;
         --slots) SLOTS=1; shift ;;
-        --wifitest) FLAGS+=(wifitest.txt); shift ;;
-        --wifi-ofdm) FLAGS+=(wifi-ofdm.txt); shift ;;
+        --wifitest) FLAGS+=(wifitest.txt); PC_ONLY+=("$1"); shift ;;
+        --wifi-ofdm) FLAGS+=(wifi-ofdm.txt); PC_ONLY+=("$1"); shift ;;
         --wifi-ofdm=*) m="${1#--wifi-ofdm=}"; [[ "$m" =~ ^[0-7]$ ]] || { echo "--wifi-ofdm=<cores off>: a mask 0 to 7" >&2; exit 1; }
-                       FLAGS+=("wifi-ofdm.txt:cores-off=$m"); shift ;;
-        --wifijoin) WIFIJOIN=1; shift ;;
+                       FLAGS+=("wifi-ofdm.txt:cores-off=$m"); PC_ONLY+=(--wifi-ofdm); shift ;;
+        --wifijoin) WIFIJOIN=1; PC_ONLY+=("$1"); shift ;;
         --link) LINK_BAUD=460800; shift ;;
-        --link=*) LINK_BAUD="${1#--link=}"; [[ "$LINK_BAUD" =~ ^[0-9]+$ ]] || { echo "--link=<baud>: digits" >&2; exit 1; }; shift ;;
+        --link=*) LINK_BAUD="${1#--link=}"; LINK_RATE_GIVEN=1; [[ "$LINK_BAUD" =~ ^[0-9]+$ ]] || { echo "--link=<baud>: digits" >&2; exit 1; }; shift ;;
         --link-run) LINK_RUN=1; shift ;;
         --link-dev) LINK_RUN=1; LINK_DEV=1; shift ;;
         --link-address=*) LINK_ADDRESS="${1#--link-address=}"
                           [[ "$LINK_ADDRESS" =~ ^[0-9]+$ ]] && (( 10#$LINK_ADDRESS >= 1 && 10#$LINK_ADDRESS <= 247 )) || { echo "--link-address=<n>: 1 to 247" >&2; exit 1; }
                           LINK_ADDRESS=$((10#$LINK_ADDRESS)); shift ;;
-        --keep-wifi) KEEP_WIFI=1; shift ;;
-        --keep-effector) KEEP_EFFECTOR=1; shift ;;
-        --keep-settings) KEEP_SETTINGS=1; KEEP_WIFI=1; KEEP_EFFECTOR=1; shift ;;
-        --machine) MACHINE="${2:?usage: $0 --machine <id> <disk number>}"; shift 2
+        --keep-wifi) KEEP_WIFI=1; PC_ONLY+=("$1"); shift ;;
+        --keep-effector) KEEP_EFFECTOR=1; PC_ONLY+=("$1"); shift ;;
+        --keep-settings) KEEP_SETTINGS=1; KEEP_WIFI=1; KEEP_EFFECTOR=1; PC_ONLY+=("$1"); shift ;;
+        --machine) MACHINE="${2:?usage: $0 --machine <id> <disk number>}"; PC_ONLY+=("$1"); shift 2
                    [[ $MACHINE =~ ^[A-Za-z0-9_-]{1,68}$ ]] || { echo "--machine <id>: 1 to 68 of A-Z a-z 0-9 _ -, as --list-machines shows it: $MACHINE" >&2; exit 1; } ;;
-        --old-disk) OLD_DISK="${2:?usage: $0 --old-disk <n> <disk number>}"; OLD_GIVEN=1; shift 2
+        --old-disk) OLD_DISK="${2:?usage: $0 --old-disk <n> <disk number>}"; OLD_GIVEN=1; PC_ONLY+=("$1"); shift 2
                     [[ $OLD_DISK =~ ^[0-9]+$ ]] || { echo "--old-disk <n>: the old disk's number (--list), digits: $OLD_DISK" >&2; exit 1; } ;;
-        --new-device-key) NEW_KEY=1; shift ;;
+        --new-device-key) NEW_KEY=1; PC_ONLY+=("$1"); shift ;;
         --mode=*) m="${1#--mode=}"; words=()
                   for w in ${m//,/ }; do
                       [[ " $MODE_WORDS " == *" $w "* ]] || { echo "--mode=<modes>: ${MODE_WORDS// /, }, comma-separated: $w" >&2; exit 1; }
@@ -195,6 +204,15 @@ done
 # --machine and --old-disk say whose kept settings go on the disk and where they are read from (801-LNK-0046).
 [[ ( -z $MACHINE && $OLD_GIVEN == 0 ) || $KEEP_WIFI == 1 || $KEEP_EFFECTOR == 1 ]] || { echo "--machine and --old-disk go with --keep-settings, --keep-wifi or --keep-effector: they say whose kept settings go on the disk" >&2; exit 1; }
 [[ $NEW_KEY == 0 || $KEEP_WIFI == 1 ]] || { echo "--new-device-key goes with --keep-wifi or --keep-settings: it sets the machine's kept device key aside" >&2; exit 1; }
+# A board's card (100004-MOB-0011): a device of the catalog; the options of a PC's disk and the MacBook's Wi-Fi tests refused;
+# the link on the console UART, at the rate the firmware left it at.
+if [[ -n $BOARD ]]; then
+    boards=$(python3 "$REPO/scripts/board_image.py" --list | cut -f1) || { echo "--board: scripts/board_image.py --list failed" >&2; exit 1; }
+    grep -qxF -- "$BOARD" <<< "$boards" || { echo "--board <name>: one of $(echo $boards | tr ' ' ',' | sed 's/,/, /g'), as scripts/board_image.py --list names them: $BOARD" >&2; exit 1; }
+    (( ${#PC_ONLY[@]} == 0 )) || { echo "--board makes a board's new card: ${PC_ONLY[*]} go with a PC's disk or the MacBook's Wi-Fi, not with it" >&2; exit 1; }
+    [[ $LINK_RATE_GIVEN == 0 || $LINK_BAUD == 115200 ]] || { echo "--link=$LINK_BAUD with --board: a board's console UART keeps the firmware's 115200 (uart_serial refuses another)" >&2; exit 1; }
+    [[ -z $LINK_BAUD ]] || LINK_BAUD=115200
+fi
 
 # Request files (data/NAME, holding TEXT) put on the volume MIND CORE that holds this build's MANIFEST (at its root, or in
 # MIND/A with --slots), flushed and read back.
@@ -271,6 +289,7 @@ PS
 put_link() {
     local script="${PS_LINK//__MANIFEST__/$(sha256sum "$MANIFEST_FILE" | cut -d' ' -f1)}"
     local conf="baud=$1"; [[ $LINK_RUN == 1 ]] && conf+=" run"; [[ $LINK_DEV == 1 ]] && conf+=" dev"; [[ -n $LINK_ADDRESS ]] && conf+=" address=$LINK_ADDRESS"
+    [[ -n $BOARD ]] && conf+=" uart"
     winps "${script//__CONF__/$conf}" | tr -d '\r'
 }
 
@@ -795,27 +814,27 @@ if [[ "${1:-}" == "--list" ]]; then
 fi
 # The kept machines (801-LNK-0046): nothing is fetched, built or written.
 if [[ "${1:-}" == "--list-machines" ]]; then list_machines; exit 0; fi
-[[ ($LINK_RUN == 1 || $SLOTS == 1 || -n $LINK_ADDRESS) && -z $LINK_BAUD ]] && LINK_BAUD=460800
+[[ ($LINK_RUN == 1 || $SLOTS == 1 || -n $LINK_ADDRESS) && -z $LINK_BAUD ]] && LINK_BAUD=$([[ -n $BOARD ]] && echo 115200 || echo 460800)
 [[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--machine <id>] [--old-disk <n>] [--new-device-key] [--mode=<modes>] <disk number> | --list | --list-machines}"
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--board <name>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--machine <id>] [--old-disk <n>] [--new-device-key] [--mode=<modes>] <disk number> | --list | --list-machines}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 # The old disk is the one written unless --old-disk names another device.
 OLD_DISK=${OLD_DISK:-$DISK}
 
 cd "$REPO"
-# The volume after the write is found by its MANIFEST: this build's, or the given image's beside it.
-MANIFEST_FILE="$REPO/usb_root/MANIFEST"
+# The volume after the write is found by its MANIFEST: this build's (the aarch64 one for a board), or the given image's beside it.
+MANIFEST_FILE="$REPO/$([[ -n $BOARD ]] && echo aarch64_root || echo usb_root)/MANIFEST"
 HAVE_PROPRIETARY=0
 if [[ -n $IMAGE_FILE ]]; then
     [[ -f $IMAGE_FILE ]] || { echo "No image $IMAGE_FILE" >&2; exit 1; }
     MANIFEST_FILE="$(dirname "$IMAGE_FILE")/MANIFEST"
     [[ -f $MANIFEST_FILE ]] || { echo "No MANIFEST beside $IMAGE_FILE: the steps after the write could not find its volume" >&2; exit 1; }
-    echo ">>> Writing the given image $IMAGE_FILE (no build); its MANIFEST $(sha256sum "$MANIFEST_FILE" | cut -c1-16)"
+    echo ">>> $([[ -n $BOARD ]] && echo "The card made from" || echo Writing) the given image $IMAGE_FILE (no build); its MANIFEST $(sha256sum "$MANIFEST_FILE" | cut -c1-16)"
 else
 [[ -n "$COMMIT" ]] && echo ">>> Building commit $(git log -1 --format='%h %ad %s' --date=short)"
 echo ">>> build_and_write.sh $(git log -1 --format=%h -- scripts/build_and_write.sh) runs$([[ -n $UPDATED ]] && { [[ -n $RESTORE_BRANCH ]] && echo ", the commit's own" || echo ', the version the pull brought'; })"
 # Build first, then pack: make_usb_image.py lists the programs when it starts, so packing inside its own build misses new ones.
-bash ./02_build.sh
+if [[ -n $BOARD ]]; then ARCH=aarch64 bash ./02_build.sh; else bash ./02_build.sh; fi
 # With --slots: the build in slot A and an update.txt that takes releases from data/link/rel/ (scripts/link_update.py),
 # looked for once a minute: each check reads the disk and logs two lines (800-LNK-0040).
 SLOT_ARGS=()
@@ -825,14 +844,24 @@ if [[ $SLOTS == 1 ]]; then
     SLOT_ARGS=(--slots --update "$UPDATE_TXT")
     echo ">>> An image with slots; update.txt takes releases from data/link/rel/ (scripts/link_update.py after this write)"
 fi
-python3 scripts/make_usb_image.py --no-build --force ${SLOT_ARGS[@]+"${SLOT_ARGS[@]}"}
-
-# Proprietary files (AGENTS.md, section 3): fetched into proprietary/ and checked now, copied onto the disk after the write.
-if [[ -x scripts/proprietary.sh ]]; then scripts/proprietary.sh fetch && HAVE_PROPRIETARY=1; fi
+if [[ -n $BOARD ]]; then
+    python3 scripts/make_usb_image.py --arch aarch64 --no-build --force ${SLOT_ARGS[@]+"${SLOT_ARGS[@]}"}
+else
+    python3 scripts/make_usb_image.py --no-build --force ${SLOT_ARGS[@]+"${SLOT_ARGS[@]}"}
+    # Proprietary files (AGENTS.md, section 3): fetched into proprietary/ and checked now, copied onto the disk after the write.
+    if [[ -x scripts/proprietary.sh ]]; then scripts/proprietary.sh fetch && HAVE_PROPRIETARY=1; fi
+fi
 fi
 
-# The image's size once it is ready, in decimal MB (000-LNK-0048).
 IMAGE_PATH="${IMAGE_FILE:-$REPO/dist/mind-core-usb.img}"
+# A board's card (100004-MOB-0011): the aarch64 image's partitions moved past the board's firmware, the firmware before them.
+if [[ -n $BOARD ]]; then
+    BASE_IMAGE="${IMAGE_FILE:-$REPO/dist/mind-core-usb-aarch64.img}"
+    IMAGE_PATH="$REPO/dist/boards/mind-$BOARD.img"
+    echo ">>> The card of $BOARD from $BASE_IMAGE, its firmware from its entry in scripts/boards.toml"
+    python3 scripts/board_image.py --board "$BOARD" --image "$BASE_IMAGE" --output "$IMAGE_PATH" --force
+fi
+# The image's size once it is ready, in decimal MB (000-LNK-0048).
 if [[ -f $IMAGE_PATH ]]; then echo ">>> The image: $IMAGE_PATH, $(stat -c %s -- "$IMAGE_PATH" | awk '{ printf "%.1f MB (%d bytes)", $1 / 1e6, $1 }')"; fi
 IMAGE_WIN="$(wslpath -w "$IMAGE_PATH")"
 case "$IMAGE_WIN" in
@@ -859,11 +888,11 @@ echo ">>> The writer's window was closed."
 if [[ $KEEP_SETTINGS == 1 ]]; then put_settings || echo ">>> The settings NOT all put on the disk." >&2; fi
 if [[ $HAVE_PROPRIETARY == 1 ]]; then scripts/proprietary.sh copy || echo ">>> Proprietary files NOT copied: run scripts/proprietary.sh copy once the disk shows MIND CORE." >&2; fi
 # Desktop pictures (wallpapers/README.md): not in the image either, copied to data/wallpapers/ and read back.
-if [[ -z $IMAGE_FILE && -x scripts/disk_copy.sh ]] && compgen -G "wallpapers/*.jpg" > /dev/null; then
+if [[ -z $IMAGE_FILE && -z $BOARD && -x scripts/disk_copy.sh ]] && compgen -G "wallpapers/*.jpg" > /dev/null; then
     ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers || echo ">>> Desktop pictures NOT copied: run ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers." >&2
 fi
 # An Intel Mac's startup disk (800-LNK-0029): mac/startup-disk.sh, run in macOS Recovery, makes the Mac start this disk.
-if [[ -z $IMAGE_FILE && -x scripts/disk_copy.sh ]]; then
+if [[ -z $IMAGE_FILE && -z $BOARD && -x scripts/disk_copy.sh ]]; then
     scripts/disk_copy.sh scripts/mac mac mac || echo ">>> mac/startup-disk.sh NOT copied: run scripts/disk_copy.sh scripts/mac mac mac." >&2
 fi
 for flag in "${FLAGS[@]}"; do put_flag "$flag" || echo ">>> data/${flag%%:*} NOT put on the disk." >&2; done
