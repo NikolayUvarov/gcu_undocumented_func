@@ -43,7 +43,7 @@ The maintainer saw the boot's log on one screen only.
 - `card1-HDMI-A-1` is connected, preferring 3440x1440. That is the dark one.
 - `amdgpu` names the display engine: VBIOS `113-CEZANNE-021`, DCN 2.1, with its DMUB firmware loaded through the PSP.
 
-**The decision.** With one firmware framebuffer, there is nothing for the loader to pass for the HDMI monitor. Lighting it needs a native driver for the Radeon's display engine. That is a task of its own: [213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md).
+**The decision.** With one firmware framebuffer, there is nothing for the loader to pass for the HDMI monitor. Lighting it needs a native driver for the Radeon's display engine. That is a task of its own: [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done).
 
 ## Related
 

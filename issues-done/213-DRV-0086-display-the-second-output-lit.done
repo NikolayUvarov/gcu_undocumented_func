@@ -4,7 +4,7 @@
 
 ## Problem
 
-The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)). This task is the first light on the second output, by the route [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done) writes down.
+The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done)). This task is the first light on the second output, by the route [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done) writes down.
 
 ## Plan
 
@@ -815,4 +815,4 @@ of APP then. `display` writes its side against KRN's interface.
 
 ## Related
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
