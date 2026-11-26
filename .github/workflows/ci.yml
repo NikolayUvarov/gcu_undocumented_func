@@ -82,7 +82,7 @@ jobs:
           - name: the cable with no words
             args: --suites cable
           - name: NVMe boot disk
-            args: --disk nvme --suites vfs
+            args: --disk nvme --suites vfs,nvme2
           # Every CPU the machine has, beyond the former 8 (issue 171).
           - name: 16 CPUs
             args: --cpus 16 --suites normal
