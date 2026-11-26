@@ -63,7 +63,11 @@ impl Resolved{
         };
         let policy=Policy::resolve(board,rule,Platform::Resolved(limits)).map_err(Error::Policy)?;
         if policy.access!=Access::InitiateRadiation{return Err(Error::Passive)}
-        tssi_cap(source_tssi_limit(policy.group,policy.channel)?,policy.limits)?;
+        // The unknown country's cap (801-DRV-0071) holds what the station sends. The calibration's own bursts are held to the
+        // channel's maximum under the world's rules, the value the cap is taken from (the maintainer, 2026-11-26): capped,
+        // channel 100's 11.5 dBm refused TSSI's 12 dBm and with it every join there.
+        let floor=policy.cap().map_or(policy.limits,|cap|Constraints{per_ntx:cap.maximum,per_path:policy.limits.per_path});
+        tssi_cap(source_tssi_limit(policy.group,policy.channel)?,floor)?;
         Ok(Self{policy,board:board_fingerprint(board),basis})
     }
     pub(crate) fn policy(&self)->&Policy{&self.policy}
