@@ -164,6 +164,7 @@ The DDC2 fields lie where DDC1's do. `DC_I2C_DDC_SELECT` is 1 for DDC2: its engi
   HPD 2 IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED
   HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND THERE IS ONE SPARE PIPE
   HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN
+  HDMI-A-1: ITS MONITOR TAKEN OUT, NOT DRIVEN        (only while HDMI-A-2 is lit)
   ```
 - Under the `read` setting, HDMI-A-2's monitor alone is taken to be described, and nothing is written:
   `HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, HPD 1 NONE; HDMI_A_2 READ: ITS BLOCKS READ ONLY`, then

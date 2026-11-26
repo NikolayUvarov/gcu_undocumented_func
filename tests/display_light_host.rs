@@ -3162,6 +3162,11 @@ fn with_a_monitor_in_each_socket_hdmi_a_1_is_lit_the_other_named_and_lit_once_th
     follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, true], 2000, &mut out);
     assert!(said(&m, "HDMI-A-1 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT, AND THERE IS ONE SPARE PIPE"), "{:#?}", m.said);
     assert_eq!((device(&m.at.0.borrow().e).len(), f.output()), (made, Some(light::HDMI_A_2)));
+    // Taken out again while HDMI-A-2 is lit: named, nothing written; then in again.
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [false, true], 2000, &mut out);
+    assert!(said(&m, "HDMI-A-1: ITS MONITOR TAKEN OUT, NOT DRIVEN"), "{:#?}", m.said);
+    follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, true], 2000, &mut out);
+    assert_eq!((device(&m.at.0.borrow().e).len(), f.output()), (made, Some(light::HDMI_A_2)));
     // HDMI-A-2's taken out: back to HDMI-A-1, HDMI-A-2's blocks as before.
     follow_2(&mut m, &mut w, &mut f, &plan, &table, [true, false], 9000, &mut out);
     assert_eq!((f.state(), f.output()), (hpd::State::Lit, Some(HDMI_A_1)));

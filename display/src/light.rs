@@ -405,8 +405,8 @@ pub const DDC2_WRITES: [R; 7] = [R::DcI2cControl, R::DcI2cArbitration, R::DcI2cD
 pub fn ddc_writes(o: &Output) -> Option<&'static [R; 7]> { if *o == HDMI_A_1 { Some(&DDC_WRITES) } else if *o == HDMI_A_2 { Some(&DDC2_WRITES) } else { None } }
 /// A write of step 2 on HDMI-A-1's line: one of `DDC_WRITES`' registers (any of the four transactions), else refused.
 pub fn ddc_writable(reg: Reg) -> Result<Writable, Refused> { ddc_writable_on(&DDC_WRITES, reg) }
-/// A write of step 2 on a line: one of `writes`' registers (any of the four transactions), else refused; the other
-/// line's speed, set-up and pads among them.
+/// A write of step 2 on a line: one of `writes`' registers (any of the four transactions), else refused, the other
+/// line's speed, set-up and pads with the rest.
 pub fn ddc_writable_on(writes: &[R], reg: Reg) -> Result<Writable, Refused> {
     let o = reg.offset();
     let ok = writes.iter().any(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o)));

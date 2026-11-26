@@ -275,10 +275,11 @@ impl<'a> Follower<'a> {
                 d.say(format_args!("{} NOT DRIVEN: A MONITOR PLUGGED IN THERE; {} IS LIT, AND THERE IS ONE SPARE PIPE", light::name(&o), light::name(&lit)));
                 if i == 1 { batches::read_second(w, true, out, &mut Store::default()); }
             }
-            // HDMI-A-2's monitor taken out while it was not driven: said, and its blocks read again.
-            hpd::Event::Gone(1) => {
-                d.say(format_args!("HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN"));
-                batches::read_second(w, true, out, &mut Store::default());
+            // A monitor taken out of a socket not driven: said when it is HDMI-A-2's or the other socket is lit (HDMI-A-1
+            // alone stays as quiet as before), and HDMI-A-2's blocks read again.
+            hpd::Event::Gone(i) if i == 1 || pair.state() == hpd::State::Lit => {
+                d.say(format_args!("{}: ITS MONITOR TAKEN OUT, NOT DRIVEN", light::name(&light::SOCKETS[i])));
+                if i == 1 { batches::read_second(w, true, out, &mut Store::default()); }
             }
             hpd::Event::Gone(_) | hpd::Event::None => {}
         }
