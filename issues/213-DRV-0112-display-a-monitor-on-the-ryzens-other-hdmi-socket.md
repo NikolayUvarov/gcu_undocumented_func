@@ -363,6 +363,38 @@ bits 18-19 are `RDPCS_PHY_DP_MPLLB_V2I` (`dpcs_2_1_0_sh_mask.h`).
 - The real image was fetched from the machine's own log volume to the owner session's private directory for these
   host cases; it is not in the repository.
 
+## The read-only run, first part: nothing in the second socket (boot 108, 2026-11-26)
+
+Release 202611262015, boot 108: `claude/DRV-ryzen-bench-42-hdmi2` abe47faa4, which is `main` 9d6feac696 with this
+branch, 213-DRV-0111 and the bench-only line of `init`. `HDMI_A_2` is `Read`. The monitor was in the first socket, the
+second empty. It holds for that machine and that release (MC-12.1). Through QEMU before it: "x86: keys, shell, tools",
+"x86: services, storage, audio" and the update from the release before.
+
+**Batch 12, as logged at 3.6 to 3.7 s, before step 3 wrote anything:**
+- `B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 0, ENABLED 1; INT_STATUS 00000000, CONTROL 10FA09C4`
+- `B12 HDMI-A-2 DIG B: FE FROM OTG 0, SYMCLK_FE_ON 0 (00000000); BE ENABLED 0, MODE 1, FROM FE MASK 0, SYMCLK_BE_ON 1 (00010000, 00000100)`
+- `B12 HDMI-A-2 PHYPLLB: PIXCLK_ENABLE 0, DEEP COLOR 0 (00000000)`
+- `B12 HDMI-A-2 DDC2: HW STATUS 0 (00000000); ENABLED 1, TIME LIMIT 48, PRESCALE 480, THRESHOLD 2 (SPEED 01E00002, SETUP 30000040)`
+- `B12 HDMI-A-2 DDC2 PADS: AUX MODE 0; CLOCK MASK 0 EN 0 A 0 Y 1; DATA MASK 0 EN 0 A 0 Y 1 (MASK 00000000)`
+- `B12 THE DDC PADS' I2C MODE: DDC1 1 DDC2 1; AUX PAD RXSEL 1:1 2:1 (DC_GPIO_AUX_CTRL_5 0001F2AA, PHY_AUX_CNTL 00155401)`
+- `B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN`
+
+**What they say:**
+- No read hung, and all 15 registers answered.
+- HPD 2 is enabled and senses no monitor, as the socket was empty.
+- DIG back end B is not enabled and PHY PLL B's pixel clock is off: nothing drives the second socket.
+- The I2C engine's DDC2 line is idle and set up (speed and setup hold values, not zeros).
+- **Open question 2 is answered for this start:** DDC pad 2 is in I2C mode already (`DDC2 1`, `AUX PAD RXSEL … 2:1`),
+  as pad 1 is. No write of those two registers is needed before an EDID read over DDC2.
+- All of it is after a start out of Linux, as every boot of this machine so far.
+
+**HDMI-A-1 beside it, unchanged:** `STEP 1 DONE: 11 OF 11 BATCHES READ, 143 REGISTERS`, the second screen offered
+2012.8 ms after step 3 began, `HPD 1 FOLLOWED …: SENSE 1, THE SECOND OUTPUT Lit`, and
+`HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 READ): SENSE 0; THE SECOND OUTPUT Lit ON HDMI-A-1`.
+
+**Still to come in this run:** the monitor moved into the second socket (HPD 2's sense 1, the socket named, batch 12
+read again with a sink there), and back.
+
 ## Related
 
 [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (the mode from the EDID),
