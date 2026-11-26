@@ -4,6 +4,7 @@
 // timing against the CTA table. The tables are synthetic VBIOS tables here; the Ryzen's own run when MIND_AMD_VBIOS
 // names its image (the vendor's, not in the repository).
 #![allow(dead_code)] // the driver uses parts these cases do not
+extern crate alloc;
 #[path = "../display/src/timing.rs"] mod timing;
 #[path = "../display/src/edid.rs"] mod edid;
 #[path = "../display/src/dcn.rs"] mod dcn;
@@ -12,6 +13,9 @@
 #[path = "../display/src/light.rs"] mod light;
 #[path = "../display/src/picture.rs"] mod picture;
 #[path = "../display/src/hpd.rs"] mod hpd;
+#[path = "../display/src/ddc.rs"] mod ddc;
+#[path = "../display/src/setting.rs"] mod setting;
+#[path = "../display/src/start.rs"] mod start;
 
 use batches::{Bus, Out, Store};
 use dcn::{Reg, Step, R};
@@ -137,6 +141,8 @@ enum Ev { Line(String), Write(u32, u32), Read(u32), Offer(u16, u16, u32), Gone }
 #[derive(Default)]
 struct Engine {
     regs: HashMap<u32, u32>, clock: u64, ev: Vec<Ev>, frames: u32, frames_move: bool,
+    // Every read made, mapped or not (213-DRV-0099: the setting `off` makes none).
+    reads: u64,
     // After a write to the first offset, the model sets the second to the third: the firmware's pipe changed by the hardware.
     hook: Option<(u32, u32, u32)>,
     // After a write to the first offset that clears the bits of the second, the model sets the third to the fourth.
@@ -191,6 +197,7 @@ impl Canvas for Engine {
 }
 impl Bus for Engine {
     fn read(&mut self, r: Reg) -> Option<u32> {
+        self.reads += 1;
         self.catch_up();
         self.clock += 10;
         if let Some((left, len)) = self.stalled { if left == 0 { self.clock += len; self.stalled = None; } else { self.stalled = Some((left - 1, len)); } }
@@ -2144,10 +2151,24 @@ fn the_watch_is_300_frames_unless_the_build_gives_60_with_the_standing_check() {
     let watched = log.iter().find(|x| x.starts_with("S15 WATCHED ")).unwrap();
     assert!(watched.starts_with("S15 WATCHED 60 FRAMES OF OTG1 IN "), "{}", watched);
     assert_eq!(log.iter().filter(|x| x.starts_with("S15 FRAMES ")).count(), 1, "one line of 60 marks");
-    // The build refuses a short watch without the check: main.rs's const assertion, which no host case can build.
-    let main = include_str!("../display/src/main.rs");
-    assert!(main.contains("const _: () = assert!(!SHORT_WATCH || STANDING_CHECK"));
-    assert!(main.contains("const STANDING_CHECK: bool = false;") && main.contains("const SHORT_WATCH: bool = false;"));
+    // The short watch comes only with the standing check (213-DRV-0099: the setting's plan decides both, not a build
+    // switch): for every setting and every bring-up build.
+    for setting in [setting::Setting::Off, setting::Setting::Read, setting::Setting::Light] {
+        for b in bringups() {
+            let p = setting::plan(setting, b);
+            assert_eq!(p.watch_frames == light::SHORT_WATCH_FRAMES, p.standing_check, "{:?} {:?}", setting, b);
+            assert!(p.watch_frames == light::SHORT_WATCH_FRAMES || p.watch_frames == light::WATCH_FRAMES);
+        }
+    }
+}
+
+// Every build the bring-up switches can make (213-DRV-0099).
+fn bringups() -> Vec<setting::Bringup> {
+    let mut all = vec![];
+    for survey_order in [false, true] { for undo_after_stages in [false, true] { for stages_allowed in 0..=dcn::STAGES + 1 {
+        all.push(setting::Bringup { survey_order, undo_after_stages, stages_allowed });
+    } } }
+    all
 }
 
 #[test]
@@ -2179,4 +2200,569 @@ fn an_unplug_and_a_plug_inside_ten_minutes_count_apart_from_the_time_between_two
     // The next ten minutes, all lit: the line as before, the dark not carried over.
     for _ in 0..600 { check(&mut e, &lit, &mut account, &mut out); }
     assert_eq!(out.0.last().unwrap(), "S15 STANDING CHECK: 600 CHECKS IN 10 MIN, THE LONGEST 1000 MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE");
+}
+
+// --- the setting (213-DRV-0099) ---
+
+use std::cell::RefCell;
+
+#[test]
+fn the_word_after_the_devices_index_is_the_setting_and_none_or_an_unknown_one_is_off() {
+    use setting::{parse, Given, Setting};
+    let cases = [("24 light", "24", Setting::Light, Given::Word), ("24 read", "24", Setting::Read, Given::Word), ("24 off", "24", Setting::Off, Given::Word),
+        ("  24   LiGhT ", "24", Setting::Light, Given::Word), ("24", "24", Setting::Light, Given::Missing), ("", "", Setting::Light, Given::Missing),
+        ("24 bright", "24", Setting::Off, Given::Unknown("bright")), ("24 light now", "24", Setting::Off, Given::Unknown("light now"))];
+    for (args, device, s, g) in cases {
+        let a = parse(args);
+        assert_eq!((a.device, a.setting, a.given), (device, s, g), "{:?}", args);
+    }
+    // The log's line: the setting, how it was given, and what it does.
+    assert_eq!(parse("24 light").to_string(), "THE SECOND OUTPUT: LIGHT, THE WORD AFTER DEVICE 24: STEPS 1 TO 4, THE EDID DECIDING THE MODE, THEN HPD 1 FOLLOWED AND THE STANDING CHECK");
+    assert_eq!(parse("24 read").to_string(), "THE SECOND OUTPUT: READ, THE WORD AFTER DEVICE 24: STEP 1 READ, THE STAGES DESCRIBED, NOTHING WRITTEN");
+    assert_eq!(parse("24 off").to_string(), "THE SECOND OUTPUT: OFF, THE WORD AFTER DEVICE 24: NO REGISTER MAPPED, NOTHING READ OR WRITTEN");
+    assert_eq!(parse("24").to_string(), "THE SECOND OUTPUT: LIGHT, NO WORD AFTER DEVICE 24 (A BENCH BUILD: NO WORD IS LIGHT): STEPS 1 TO 4, THE EDID DECIDING THE MODE, THEN HPD 1 FOLLOWED AND THE STANDING CHECK");
+    assert_eq!(parse("24 bright").to_string(), "THE SECOND OUTPUT: OFF, \"bright\" AFTER DEVICE 24 IS NOT OFF, READ OR LIGHT: NO REGISTER MAPPED, NOTHING READ OR WRITTEN");
+    // An unknown word is shown up to 32 bytes, cut at a character.
+    let long = format!("24 {}", "x".repeat(100));
+    let wide = format!("24 {}", "ж".repeat(40));
+    let odd = format!("24 x{}", "ж".repeat(40));
+    assert!(parse(&long).to_string().contains(&format!("\"{}...\"", "x".repeat(32))), "{}", parse(&long));
+    assert!(parse(&wide).to_string().contains(&format!("\"{}...\"", "ж".repeat(16))), "{}", parse(&wide));
+    assert!(parse(&odd).to_string().contains(&format!("\"x{}...\"", "ж".repeat(15))), "{}", parse(&odd));
+    for args in ["24 light", "24 read", "24", long.as_str(), wide.as_str(), odd.as_str()] {
+        let line = format!("[DISPLAY] {}", parse(args));
+        assert!(line.len() <= 180, "{} bytes: {}", line.len(), line);
+    }
+}
+
+#[test]
+fn each_setting_plans_what_it_says_and_a_bring_up_switch_changes_only_light_and_says_so_first() {
+    use setting::{plan, Bringup, Setting};
+    let r = Bringup::RELEASE;
+    let off = plan(Setting::Off, r);
+    assert_eq!((off.batches, off.edid, off.stages, off.undo_after_stages, off.hotplug, off.standing_check, off.writes()), (0, false, 0, false, false, false, false));
+    let read = plan(Setting::Read, r);
+    assert_eq!((read.batches, read.edid, read.stages, read.hotplug, read.standing_check, read.writes()), (batches::BATCHES, false, 0, false, false, false));
+    // Light: what boots 95 to 100 ran on the Ryzen (11 batches, the EDID, 16 stages, HOTPLUG, STANDING_CHECK, SHORT_WATCH).
+    let lit = plan(Setting::Light, r);
+    assert_eq!((lit.order, lit.batches, lit.edid, lit.stages, lit.undo_after_stages, lit.hotplug, lit.standing_check, lit.watch_frames, lit.writes()),
+               (batches::Order::Production, 11, true, 16, false, true, true, light::SHORT_WATCH_FRAMES, true));
+    for b in bringups() {
+        // Off and read whatever the build, but for the order step 1 names.
+        for s in [Setting::Off, Setting::Read] { assert_eq!(setting::Plan { order: batches::Order::Production, ..plan(s, b) }, plan(s, r), "{:?} {:?}", s, b); }
+        let p = plan(Setting::Light, b);
+        assert_eq!(p.order == batches::Order::Survey, b.survey_order);
+        assert_eq!(p.stages, b.stages_allowed.min(dcn::STAGES));
+        assert!(!p.hotplug || (p.stages > 0 && !p.undo_after_stages), "{:?}", b);
+        assert!(!p.standing_check || (p.stages >= 15 && !p.undo_after_stages), "{:?}", b);
+        assert_eq!(b.is_release(), p == lit, "{:?}", b);
+        // A bring-up build names its switches.
+        let line = b.to_string();
+        assert_eq!(line.starts_with("A BRING-UP BUILD, NOT A RELEASE:"), !b.is_release(), "{}", line);
+        assert_eq!(line.contains(" SURVEY_ORDER"), b.survey_order);
+        assert_eq!(line.contains(" UNDO_AFTER_STAGES"), b.undo_after_stages);
+        assert_eq!(line.contains(&format!(" STAGES_ALLOWED {} OF 16", b.stages_allowed)), b.stages_allowed < 16);
+        assert!(line.len() + "[DISPLAY] ".len() <= 180, "{}", line);
+    }
+    // main.rs: the release's values committed; its first line the build's when it is a bring-up one, then the setting's,
+    // before anything is read.
+    let main = include_str!("../display/src/main.rs");
+    for c in ["const SURVEY_ORDER: bool = false;", "const UNDO_AFTER_STAGES: bool = false;", "const STAGES_ALLOWED: u8 = dcn::STAGES;"] { assert!(main.contains(c), "{}", c); }
+    let body = &main[main.find("fn main(").unwrap()..];
+    let at = |x: &str| body.find(x).unwrap_or_else(|| panic!("{}", x));
+    assert!(at("mind::println!") == at("mind::println!(\"[DISPLAY] {}\", BRINGUP)"));
+    assert!(at("BRINGUP); }") < at("mind::println!(\"[DISPLAY] {}\", args);") && at("\", args);") < at("cap_info(ENGINE)"));
+}
+
+// The model shared by display's window, its writer and the case, so that what each part did shows after it.
+struct Shared<T>(Rc<RefCell<T>>);
+impl<T> Clone for Shared<T> { fn clone(&self) -> Self { Shared(self.0.clone()) } }
+impl<T: Bus> Bus for Shared<T> { fn read(&mut self, r: Reg) -> Option<u32> { self.0.borrow_mut().read(r) } }
+impl<T: Poke> Poke for Shared<T> { fn write(&mut self, w: Writable, v: u32) { self.0.borrow_mut().write(w, v) } }
+impl<T: Clock> Clock for Shared<T> {
+    fn now_us(&mut self) -> u64 { self.0.borrow_mut().now_us() }
+    fn delay_us(&mut self, us: u32) { self.0.borrow_mut().delay_us(us) }
+}
+impl<T: Canvas> Canvas for Shared<T> {
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { self.0.borrow_mut().row(y, pitch, pixels) }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { self.0.borrow_mut().sample(x, y, pitch) }
+}
+impl<T: Screens> Screens for Shared<T> {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> { self.0.borrow_mut().offer(width, height, pitch) }
+    fn gone(&mut self) -> Result<(), ScreenRefused> { self.0.borrow_mut().gone() }
+}
+
+// display's device on the model: how often its window was mapped and a writer made, and display's own lines.
+struct Model<T> { at: Shared<T>, maps: u32, writers: u32, said: Vec<String> }
+impl<T: Bus + Poke + Clock + Canvas + Screens> start::Device for Model<T> {
+    type Window = Shared<T>;
+    type Writer = Shared<T>;
+    fn map(&mut self) -> Option<Shared<T>> { self.maps += 1; Some(self.at.clone()) }
+    fn writer(&mut self, window: Shared<T>) -> Shared<T> { self.writers += 1; window }
+    fn now_us(&mut self) -> u64 { self.at.0.borrow_mut().now_us() }
+    fn say(&mut self, a: fmt::Arguments) { self.said.push(a.to_string()); }
+}
+
+// Step 2 on the model: DCN 2.1's I2C engine and a monitor at 0x50, as display_ddc_host.rs models them (its arbitration,
+// its indexed buffer, its transactions run on GO), found as batch 11 found it there.
+const I2C_CONTROL: u32 = 0x14D60;
+const I2C_ARBITRATION: u32 = 0x14D64;
+const I2C_SW_STATUS: u32 = 0x14D6C;
+const I2C_TRANSACTION: u32 = 0x14DB8;
+const I2C_DATA: u32 = 0x14DC8;
+const I2C_TIME_BASE: u32 = 0x004EC;
+const I2C_PADS: u32 = 0x17640;
+const I2C_FOUND: [(u32, u32); 12] = [(I2C_ARBITRATION, 0), (I2C_CONTROL, 0x0000_0002), (I2C_SW_STATUS, 0), (0x14D70, 0), (0x14D88, 0x12C0_0102),
+    (0x14D8C, 0x0300_0044), (I2C_TRANSACTION, 0x0001_1100), (I2C_TRANSACTION + 4, 0x0080_3101), (I2C_TRANSACTION + 8, 0), (I2C_TRANSACTION + 12, 0),
+    (I2C_TIME_BASE, 0x0000_0130), (I2C_PADS, 0x0000_0101)];
+fn i2c_reg(o: u32) -> bool { (I2C_CONTROL..=I2C_DATA).contains(&o) || o == I2C_TIME_BASE || (I2C_PADS..=I2C_PADS + 12).contains(&o) }
+
+struct I2c { regs: HashMap<u32, u32>, buf: [u8; 538], index: usize, reading: bool, monitor: Vec<u8>, pointer: usize, granted: bool, busy_until: u64, done: u32, reads: u64, writes: Vec<(u32, u32)> }
+impl I2c {
+    // No monitor answers when `monitor` is empty.
+    fn new(monitor: Vec<u8>) -> I2c {
+        I2c { regs: I2C_FOUND.into_iter().collect(), buf: [0; 538], index: 0, reading: false, monitor, pointer: 0, granted: false, busy_until: 0, done: 0, reads: 0, writes: vec![] }
+    }
+    fn go(&mut self, now: u64) {
+        if !self.granted { self.done = 1 << 4; return; }
+        let count = ((self.regs[&I2C_CONTROL] >> 20) & 3) as usize + 1;
+        let mut p = 0;
+        for t in 0..count {
+            let tr = self.regs.get(&(I2C_TRANSACTION + 4 * t as u32)).copied().unwrap_or(0);
+            let (read, n) = (tr & 1 == 1, ((tr >> 16) & 0x3FF) as usize);
+            let address = self.buf[p];
+            p += 1;
+            if self.monitor.is_empty() || address >> 1 != 0x50 { self.done = 1 << 8; self.busy_until = now + 300; return; }
+            if read {
+                for k in 0..n { self.buf[p + k] = self.monitor[(self.pointer + k) % self.monitor.len()]; }
+                self.pointer += n;
+            } else {
+                self.pointer = self.buf[p] as usize;
+            }
+            p += n;
+        }
+        self.done = 1 << 2;
+        self.busy_until = now + 12_000; // 129 bytes at 100 kHz
+    }
+    fn read(&mut self, o: u32, now: u64) -> u32 {
+        self.reads += 1;
+        match o {
+            I2C_ARBITRATION => (self.regs[&o] & !0x30_000C) | (self.granted as u32) << 2,
+            I2C_SW_STATUS => if now < self.busy_until { 1 } else { self.done },
+            I2C_DATA => { if !self.reading { return 0; } let v = (self.buf[self.index] as u32) << 8 | 1; self.index += 1; v }
+            _ => self.regs.get(&o).copied().unwrap_or(0),
+        }
+    }
+    fn write(&mut self, o: u32, v: u32, now: u64) {
+        self.writes.push((o, v));
+        match o {
+            I2C_ARBITRATION => {
+                if v & 1 << 20 != 0 { self.granted = true; }
+                if v & 1 << 21 != 0 { self.granted = false; }
+                self.regs.insert(o, v & !0x30_000C);
+            }
+            I2C_DATA => {
+                if v & 1 << 31 != 0 { self.index = ((v >> 16) & 0x3FF) as usize; }
+                self.reading = v & 1 == 1;
+                if !self.reading { self.buf[self.index] = (v >> 8) as u8; self.index += 1; }
+            }
+            I2C_CONTROL => {
+                self.regs.insert(o, v);
+                if v & 8 != 0 { self.done = 0; self.busy_until = 0; }
+                if v & 1 != 0 { self.go(now); }
+            }
+            _ => { self.regs.insert(o, v); }
+        }
+    }
+}
+
+// The Ryzen as step 1 finds it (`plugged`), with HDMI-A-1's DDC line and a monitor on it.
+struct Both { e: Engine, i2c: I2c }
+impl Bus for Both {
+    fn read(&mut self, r: Reg) -> Option<u32> {
+        let o = r.offset();
+        if !i2c_reg(o) { return self.e.read(r); }
+        self.e.catch_up();
+        self.e.clock += 2;
+        Some(self.i2c.read(o, self.e.clock))
+    }
+}
+impl Poke for Both {
+    fn write(&mut self, w: Writable, v: u32) {
+        let o = w.reg().offset();
+        if !i2c_reg(o) { return self.e.write(w, v); }
+        self.e.catch_up();
+        self.i2c.write(o, v, self.e.clock);
+    }
+}
+impl Clock for Both {
+    fn now_us(&mut self) -> u64 { self.e.now_us() }
+    fn delay_us(&mut self, us: u32) { self.e.delay_us(us) }
+}
+impl Canvas for Both {
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { self.e.row(y, pitch, pixels) }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { self.e.sample(x, y, pitch) }
+}
+impl Screens for Both {
+    fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused> { self.e.offer(width, height, pitch) }
+    fn gone(&mut self) -> Result<(), ScreenRefused> { self.e.gone() }
+}
+
+// A synthetic monitor shaped like the Ryzen's HDMI one (its own bytes are not kept): `preferred` first, an HDMI 1.4 block
+// of 340 MHz and an HDMI Forum one of 600 MHz when `hdmi`, a CTA extension with VICs 16, 4 and 31.
+fn dtd(t: &timing::Timing) -> [u8; 18] {
+    let mut d = [0u8; 18];
+    d[0..2].copy_from_slice(&((t.pixel_khz / 10) as u16).to_le_bytes());
+    let (hb, vb) = (t.h_front + t.h_sync + t.h_back, t.v_front + t.v_sync + t.v_back);
+    d[2] = t.h_active as u8; d[3] = hb as u8; d[4] = ((t.h_active >> 8) as u8) << 4 | (hb >> 8) as u8;
+    d[5] = t.v_active as u8; d[6] = vb as u8; d[7] = ((t.v_active >> 8) as u8) << 4 | (vb >> 8) as u8;
+    d[8] = t.h_front as u8; d[9] = t.h_sync as u8;
+    d[10] = ((t.v_front & 0xF) as u8) << 4 | (t.v_sync & 0xF) as u8;
+    d[11] = ((t.h_front >> 8) as u8) << 6 | ((t.h_sync >> 8) as u8) << 4 | ((t.v_front >> 4) as u8) << 2 | (t.v_sync >> 4) as u8;
+    d[12] = 0x20; d[13] = 0x50; d[14] = 0x21;
+    d[17] = 0x18 | (t.v_sync_positive as u8) << 2 | (t.h_sync_positive as u8) << 1;
+    d
+}
+fn descriptor(tag: u8, payload: &[u8]) -> [u8; 18] { let mut d = [0u8; 18]; d[3] = tag; d[5..5 + payload.len()].copy_from_slice(payload); d }
+fn seal(block: &mut [u8]) { let sum = block[..127].iter().fold(0u8, |s, b| s.wrapping_add(*b)); block[127] = 0u8.wrapping_sub(sum); }
+fn monitor_with(preferred: timing::Timing, hdmi: bool) -> Vec<u8> {
+    let mut b = vec![0u8; 256];
+    b[..8].copy_from_slice(&[0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0]);
+    let id: u16 = (((b'W' - b'A' + 1) as u16) << 10) | (((b'I' - b'A' + 1) as u16) << 5) | (b'D' - b'A' + 1) as u16;
+    b[8..10].copy_from_slice(&id.to_be_bytes());
+    b[10..12].copy_from_slice(&0x3440u16.to_le_bytes());
+    b[17] = 31; b[18] = 1; b[19] = 4; b[20] = 0x80 | 2 << 4; b[21] = 80; b[22] = 34;
+    for s in b[38..54].chunks_mut(2) { s.copy_from_slice(&[1, 1]); }
+    b[38] = (1920 / 8 - 31) as u8; b[39] = 3 << 6;
+    b[54..72].copy_from_slice(&dtd(&preferred));
+    b[72..90].copy_from_slice(&descriptor(0x10, &[]));
+    b[90..108].copy_from_slice(&descriptor(0xFD, &[24, 85, 30, 160, 60]));
+    b[108..126].copy_from_slice(&descriptor(0xFC, b"WIDE MONITOR\n"));
+    b[126] = 1;
+    seal(&mut b[..128]);
+    let e = &mut b[128..];
+    e[0] = 0x02; e[1] = 3;
+    let mut blocks: Vec<u8> = vec![0x40 | 3, 16 | 0x80, 4, 31];
+    if hdmi {
+        blocks.extend_from_slice(&[0x60 | 7, 0x03, 0x0C, 0x00, 0x10, 0x00, 0x38, 68]);
+        blocks.extend_from_slice(&[0x60 | 6, 0xD8, 0x5D, 0xC4, 1, 120, 0x80]);
+    }
+    e[4..4 + blocks.len()].copy_from_slice(&blocks);
+    e[2] = (4 + blocks.len()) as u8;
+    seal(e);
+    b
+}
+fn hdmi_monitor() -> Vec<u8> { monitor_with(WIDE, true) }
+
+// The ACPI VFCT table around a VBIOS image for 1002:1638, as init grants it.
+fn vfct(image: &[u8]) -> Vec<u8> {
+    let mut t = vec![0u8; 0x40 + 28];
+    t[..4].copy_from_slice(b"VFCT");
+    t[52..56].copy_from_slice(&0x40u32.to_le_bytes());
+    t[0x40 + 12..0x40 + 14].copy_from_slice(&0x1002u16.to_le_bytes());
+    t[0x40 + 14..0x40 + 16].copy_from_slice(&0x1638u16.to_le_bytes());
+    t[0x40 + 24..0x40 + 28].copy_from_slice(&(image.len() as u32).to_le_bytes());
+    t.extend_from_slice(image);
+    let len = t.len() as u32;
+    t[4..8].copy_from_slice(&len.to_le_bytes());
+    t
+}
+
+fn ryzen(monitor: Vec<u8>) -> Model<Both> {
+    Model { at: Shared(Rc::new(RefCell::new(Both { e: plugged(), i2c: I2c::new(monitor) }))), maps: 0, writers: 0, said: vec![] }
+}
+// display's start on the model, as main.rs starts it on the Radeon (its engine's window of 108 KiB).
+fn start_with<'a>(m: &mut Model<Both>, plan: &setting::Plan, table: &'a [u8], out: &mut dyn Out) -> start::Started<'a, Shared<Both>> {
+    start::start(m, plan, start::RADEON, dcn::DCN_BYTES.end as usize, Some(table), "TESTBUILD", 0, out)
+}
+// What follows the stages for `ms`, HPD 1 sensing `sense`, display sleeping between polls as main.rs does.
+fn follow_for<'a>(m: &mut Model<Both>, w: &mut Shared<Both>, f: &mut start::Follower<'a>, plan: &setting::Plan, table: &'a [u8], sense: bool, ms: u64, out: &mut dyn Out) {
+    m.at.0.borrow_mut().e.regs.insert(reg(R::HpdIntStatus, 0), (sense as u32) << 1);
+    let end = m.at.0.borrow().e.clock + ms * 1000;
+    while m.at.0.borrow().e.clock < end {
+        m.at.0.borrow_mut().e.clock += f.sleep_ms() as u64 * 1000;
+        f.poll(m, w, plan, Some(table), "TESTBUILD", out);
+    }
+}
+fn said(m: &Model<Both>, x: &str) -> bool { m.said.iter().any(|s| s == x) }
+fn said_start(m: &Model<Both>, x: &str) -> bool { m.said.iter().any(|s| s.starts_with(x)) }
+
+#[test]
+fn off_no_word_and_an_unknown_one_map_nothing_read_nothing_and_write_nothing() {
+    let table = vfct(&good());
+    let mut first: Option<Vec<String>> = None;
+    // The bench: no word is light, so only off and an unknown word here.
+    assert_eq!(setting::parse("24").setting, setting::Setting::Light);
+    for args in ["24 off", "24 bright"] {
+        let plan = setting::plan(setting::parse(args).setting, setting::Bringup::RELEASE);
+        assert_eq!(plan, setting::plan(setting::Setting::Off, setting::Bringup::RELEASE), "{:?}", args);
+        let mut m = ryzen(hdmi_monitor());
+        let mut log = Log(vec![]);
+        let s = start_with(&mut m, &plan, &table, &mut log);
+        let b = m.at.0.borrow();
+        // The window never mapped, no writer made, not one read or write of the engine or its I2C engine, no offer.
+        assert_eq!((m.maps, m.writers, b.e.reads, b.i2c.reads, b.i2c.writes.len()), (0, 0, 0, 0, 0), "{:?}", args);
+        assert!(device(&b.e).is_empty(), "{:?}", args);
+        assert!(s.writer.is_none() && s.run.is_none() && (s.read, s.written) == (0, 0));
+        for want in ["STEP 1 MAY READ 0 OF 11 BATCHES, WRITES NOTHING; THE PRODUCTION ORDER", "STEP 2 (THE EDID OVER DDC1) NOT RUN: THE SETTING DOES NOT ASK FOR IT", "NO REGISTER READ OR WRITTEN"] {
+            assert!(said(&m, want), "{:?}: {} {:#?}", args, want, m.said);
+        }
+        assert!(said_start(&m, "STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: STEP 1'S BATCH 1 WAS NOT READ") && said_start(&m, "NO SECOND SCREEN OFFERED, IN THE PRODUCTION ORDER"), "{:#?}", m.said);
+        assert!(!m.said.iter().any(|x| x.starts_with("STEP 3'S MODE")));
+        assert_eq!(log.0.last().unwrap(), &format!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", dcn::STAGES));
+        assert!(log.0.iter().any(|x| x.starts_with("STEP 1 DONE: 0 OF 11 BATCHES READ, 0 REGISTERS, NOTHING WRITTEN")), "{:#?}", log.0);
+        // The same, whichever way off was given.
+        match &first { None => first = Some(m.said.clone()), Some(f) => assert_eq!(f, &m.said, "{:?}", args) }
+    }
+}
+
+#[test]
+fn read_maps_the_window_reads_step_1_and_describes_the_stages_with_no_writer() {
+    let table = vfct(&good());
+    let plan = setting::plan(setting::parse("24 read").setting, setting::Bringup::RELEASE);
+    let mut m = ryzen(hdmi_monitor());
+    let mut log = Log(vec![]);
+    let s = start_with(&mut m, &plan, &table, &mut log);
+    assert_eq!((m.maps, m.writers), (1, 0));
+    assert!(s.writer.is_none() && s.run.is_none() && s.read > 0 && s.written == 0, "{} {}", s.read, s.written);
+    let b = m.at.0.borrow();
+    // Read: the engine and batch 11's I2C registers; written: nothing, no offer.
+    assert!(b.e.reads > 0 && b.i2c.reads > 0, "{} {}", b.e.reads, b.i2c.reads);
+    assert!(device(&b.e).is_empty() && b.i2c.writes.is_empty(), "{:?}", &b.i2c.writes);
+    assert!(log.0.iter().any(|x| x.starts_with("STEP 1 DONE: 11 OF 11 BATCHES READ, ")), "{:#?}", log.0);
+    assert!(said(&m, "STEP 1 MAY READ 11 OF 11 BATCHES, WRITES NOTHING; THE PRODUCTION ORDER") && said(&m, "STEP 2 (THE EDID OVER DDC1) NOT RUN: THE SETTING DOES NOT ASK FOR IT"));
+    assert!(said(&m, &format!("{} REGISTERS READ, NONE WRITTEN", s.read)) && said_start(&m, "NO SECOND SCREEN OFFERED"), "{:#?}", m.said);
+    // The stages described for the pipe step 1 found, the mode today's in DVI (no EDID read).
+    assert!(log.0.iter().any(|x| x.starts_with("S0 THE FIRMWARE'S PIPE (AS STEP 1 FOUND)")));
+    assert!(log.0.iter().any(|x| x.ends_with("MODE 1920x1080 AT 148.5 MHZ IN DVI SIGNALLING (CTA VIC 16)")), "{:#?}", log.0.iter().filter(|x| x.starts_with("S0")).collect::<Vec<_>>());
+    assert_eq!(log.0.last().unwrap(), &format!("STEP 3 DONE: 0 OF {} STAGES RUN, NOTHING WRITTEN", dcn::STAGES));
+}
+
+// What the bench builds of boots 95 to 100 ran on the Ryzen: display's main.rs before 213-DRV-0099 with BATCHES_ALLOWED 11,
+// STAGES_ALLOWED 16, EDID_ALLOWED, HDMI_SIGNALLING, MODE_FROM_EDID, HOTPLUG, STANDING_CHECK and SHORT_WATCH set: step 1 in
+// the production order, step 2, the mode from the EDID in HDMI, the 16 stages with the watch of 60. The engine's writes,
+// the offer and the I2C engine's writes, in order.
+fn bench_run(table: &[u8], monitor: Vec<u8>) -> (Outcome, Vec<Ev>, Vec<(u32, u32)>) {
+    let mut both = Both { e: plugged(), i2c: I2c::new(monitor) };
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    let mut store = Store::default();
+    batches::read_into(&mut both, 11, batches::Order::Production, &mut held, &mut store);
+    let edid = ddc::read(&store, &mut both, &mut held).ok().and_then(|r| ddc::describe(&r, &mut held));
+    let (t, s, _) = light::mode_from_edid(edid.as_ref(), timing::first_light_mode(&start::HDMI_A_1_VICS), dcn::Signal::Hdmi);
+    let l = light::prepare(&store, t, s, "TESTBUILD").unwrap().with_watch(light::SHORT_WATCH_FRAMES);
+    let (_, _, image) = atom::vfct_image(table).unwrap();
+    let mut interp = atom::Interpreter::new(atom::Image::new(image).unwrap());
+    let mut journal = Box::new(light::Journal::default());
+    let (outcome, _) = light::run_timed(&l, &mut both, &mut interp, &mut journal, 16, false, &mut held);
+    (outcome, device(&both.e), both.i2c.writes.clone())
+}
+
+#[test]
+fn light_reads_the_edid_lights_its_mode_in_16_stages_as_the_bench_did_then_follows_hpd_1_with_the_standing_check() {
+    let table = vfct(&good());
+    let plan = setting::plan(setting::parse("24 light").setting, setting::Bringup::RELEASE);
+    let mut m = ryzen(hdmi_monitor());
+    let before = m.at.0.borrow().e.regs.clone();
+    let mut buf = vec![0u8; batches::HELD_BYTES];
+    let mut held = batches::Held::new(Log(vec![]), &mut buf);
+    let s = start_with(&mut m, &plan, &table, &mut held);
+    assert_eq!((m.maps, m.writers), (1, 1));
+    let outcome = s.run.as_ref().unwrap().outcome;
+    let log = held.inner.0.clone();
+    assert_eq!(outcome, Outcome::Stopped { done: 16 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    // The EDID read and its mode, the watch of 60, the offer; the lines main.rs logs.
+    assert!(log.iter().any(|x| x.starts_with("D STEP 2 DONE: 2 BLOCKS READ (256 BYTES)")), "{:#?}", log);
+    assert!(said(&m, "STEP 3'S MODE: 3440x1440 AT 324000 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING"), "{:#?}", m.said);
+    assert!(log.iter().any(|x| x.ends_with("MODE 3440x1440 AT 324 MHZ IN HDMI SIGNALLING (CTA VIC 0)")));
+    assert!(log.iter().any(|x| x.starts_with("S15 UNBLANK DONE") && x.contains(", WATCHED 60 FRAMES IN ")), "{:#?}", log.iter().filter(|x| x.starts_with("S15")).collect::<Vec<_>>());
+    assert!(log.iter().any(|x| x.starts_with("S16 OFFER DONE") && x.ends_with(", OFFERED 3440x1440 PITCH 13824")));
+    assert!(said_start(&m, "THE SECOND SCREEN OFFERED ") && said(&m, &format!("{} REGISTERS READ BY STEP 1, {} WRITES BY STEP 3", s.read, s.written)), "{:#?}", m.said);
+    // The same writes, offer and I2C transfers, in the same order, as the bench's switches made on the same model.
+    let first = device(&m.at.0.borrow().e);
+    let (bench_outcome, bench_device, bench_i2c) = bench_run(&table, hdmi_monitor());
+    assert_eq!(bench_outcome, outcome);
+    assert_eq!(first, bench_device);
+    assert_eq!(m.at.0.borrow().i2c.writes, bench_i2c);
+    assert!(first.contains(&Ev::Offer(3440, 1440, 13824)) && first.iter().filter(|x| matches!(x, Ev::Write(..))).count() > 100);
+    // What follows: HPD 1 every 50 ms and the standing check, the watch named.
+    let mut w = s.writer.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, s.run, &plan).expect("nothing followed");
+    assert!(said(&m, "HPD 1 FOLLOWED EVERY 50 MS, A CHANGE COUNTED AFTER 500 MS: SENSE 1, THE SECOND OUTPUT Lit"), "{:#?}", m.said);
+    assert!(said(&m, "THE STANDING CHECK: BOTH PIPES' UNDERFLOW STATUSES READ EVERY 1000 MS WHILE THE SECOND PICTURE IS UP; THE WATCH 60 FRAMES"));
+    assert_eq!((f.sleep_ms(), f.state()), (hpd::POLL_MS, hpd::State::Lit));
+    // Eleven minutes plugged: the check's line once, nothing written.
+    let mut out = Log(vec![]);
+    follow_for(&mut m, &mut w, &mut f, &plan, &table, true, 660_000, &mut out);
+    assert_eq!(device(&m.at.0.borrow().e), first, "the check wrote");
+    assert_eq!(out.0.len(), 1, "{:#?}", out.0);
+    assert!(out.0[0].starts_with("S15 STANDING CHECK: ") && out.0[0].ends_with(" MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE"), "{}", out.0[0]);
+    // Unplugged two seconds: taken back once, screen_gone first, every register as before step 3, the mark too.
+    let made = m.at.0.borrow().e.ev.len();
+    follow_for(&mut m, &mut w, &mut f, &plan, &table, false, 2000, &mut out);
+    assert_eq!(f.state(), hpd::State::Dark);
+    {
+        let b = m.at.0.borrow();
+        let after: Vec<Ev> = b.e.ev[made..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+        assert_eq!(after.first(), Some(&Ev::Gone));
+        assert_eq!(after.iter().filter(|x| **x == Ev::Gone).count(), 1);
+        as_before(&b.e, &before, &[]);
+    }
+    // Plugged in eight seconds: steps 1 to 4 again, the EDID read again, the same writes and offer as at start.
+    let from = m.at.0.borrow().e.ev.len();
+    let transfers = m.at.0.borrow().i2c.writes.len();
+    follow_for(&mut m, &mut w, &mut f, &plan, &table, true, 8000, &mut out);
+    assert_eq!(f.state(), hpd::State::Lit);
+    assert!(said(&m, "A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit"));
+    let b = m.at.0.borrow();
+    let again: Vec<Ev> = b.e.ev[from..].iter().filter(|x| matches!(x, Ev::Write(..) | Ev::Offer(..) | Ev::Gone)).cloned().collect();
+    assert_eq!(again, first);
+    assert_eq!(&b.i2c.writes[transfers..], &bench_i2c[..], "the EDID read again");
+}
+
+#[test]
+fn light_takes_the_edids_mode_only_from_an_hdmi_sink_where_it_fits_and_else_1080p_in_hdmi_or_dvi() {
+    let table = vfct(&good());
+    let plan = setting::plan(setting::Setting::Light, setting::Bringup::RELEASE);
+    let over = timing::Timing { pixel_khz: 540_000, ..WIDE };
+    for (name, monitor, mode, line) in [
+        ("a DVI sink", monitor_with(WIDE, false), "MODE 1920x1080 AT 148.5 MHZ IN DVI SIGNALLING (CTA VIC 16)", "STEP 3'S MODE: 1920x1080 AT 148500 KHZ IN Dvi SIGNALLING, TODAY'S: THE SINK HAS NO HDMI BLOCK"),
+        ("its preferred timing over HDMI's 340 MHz", monitor_with(over, true), "MODE 1920x1080 AT 148.5 MHZ IN HDMI SIGNALLING (CTA VIC 16)", "STEP 3'S MODE: 1920x1080 AT 148500 KHZ IN Hdmi SIGNALLING, TODAY'S: ITS PREFERRED TIMING'S 540000 KHZ IS OVER 340000 KHZ"),
+        ("no monitor answering on DDC", vec![], "MODE 1920x1080 AT 148.5 MHZ IN DVI SIGNALLING (CTA VIC 16)", "STEP 3'S MODE: 1920x1080 AT 148500 KHZ IN Dvi SIGNALLING, TODAY'S: THE EDID WAS NOT READ"),
+    ] {
+        let mut m = ryzen(monitor);
+        let mut log = Log(vec![]);
+        let s = start_with(&mut m, &plan, &table, &mut log);
+        assert!(said(&m, line), "{}: {:#?}", name, m.said.iter().filter(|x| x.starts_with("STEP 3'S MODE")).collect::<Vec<_>>());
+        assert!(log.0.iter().any(|x| x.ends_with(mode)), "{}", name);
+        assert_eq!(s.run.as_ref().unwrap().outcome, Outcome::Stopped { done: 16 }, "{}", name);
+        assert!(m.at.0.borrow().e.ev.contains(&Ev::Offer(1920, 1080, 7680)), "{}", name);
+        // The I2C engine given back as batch 11 found it, after a read or a failure.
+        let b = m.at.0.borrow();
+        for (o, v) in I2C_FOUND { if o != I2C_SW_STATUS { assert_eq!(b.i2c.regs.get(&o).copied().unwrap_or(0), v, "{}: {:05X}", name, o); } }
+    }
+    // The rule alone: an HDMI sink in its mode where it fits; no EDID in DVI.
+    let today = timing::CEA_1080P60;
+    let edid = edid::Edid::parse(&hdmi_monitor()).unwrap();
+    assert_eq!(light::mode_for(Some(&edid), today).1, dcn::Signal::Hdmi);
+    assert_eq!(light::mode_for(Some(&edid), today).0.h_active, 3440);
+    assert_eq!(light::mode_for(None, today), (today, dcn::Signal::Dvi, light::ModeFrom::NotRead));
+}
+
+// A writer that logs each line with the engine's reads so far: where each stage begins.
+struct Marks { at: Shared<Both>, lines: Vec<(String, u64)> }
+impl Out for Marks {
+    fn line(&mut self, a: fmt::Arguments) { let reads = self.at.0.try_borrow().map(|b| b.e.reads).expect("the model is in use"); self.lines.push((a.to_string(), reads)); }
+    fn pause(&mut self, _: u32) {}
+}
+
+#[test]
+fn under_light_a_failure_at_each_stage_is_undone_whole_the_mark_kept_and_nothing_is_tried_again() {
+    let table = vfct(&good());
+    let plan = setting::plan(setting::Setting::Light, setting::Bringup::RELEASE);
+    let mark = reg(R::OtgVerticalInterrupt2Position, 1);
+    // A clean start, every line with the reads so far: the reads from the mark to each stage's first.
+    let mut m = ryzen(hdmi_monitor());
+    let mut marks = Marks { at: m.at.clone(), lines: vec![] };
+    let s = start_with(&mut m, &plan, &table, &mut marks);
+    assert_eq!(s.run.as_ref().unwrap().outcome, Outcome::Stopped { done: 16 });
+    let at = |p: &str| marks.lines.iter().find(|(x, _)| x.starts_with(p)).unwrap_or_else(|| panic!("{}", p)).1;
+    let marked = at("S0 MARKED ");
+    for n in 1..=dcn::STAGES {
+        let begins = at(&format!("S{} {}: STAGE {} OF 16 NEXT", n, dcn::STAGE_NAMES[n as usize - 1], n));
+        // The first read of stage n cannot be read.
+        let mut m = ryzen(hdmi_monitor());
+        m.at.0.borrow_mut().e.fail = Some((mark, (begins - marked) as usize));
+        let before = m.at.0.borrow().e.regs.clone();
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let mut held = batches::Held::new(Log(vec![]), &mut buf);
+        let s = start_with(&mut m, &plan, &table, &mut held);
+        let log = held.inner.0.clone();
+        let run = s.run.unwrap();
+        assert!(matches!(run.outcome, Outcome::Failed { stage, why: Failure::Unreadable(_) | Failure::Table(atom::Error::Unreadable { .. }) } if stage == n),
+                "stage {}: {:?} {:#?}", n, run.outcome, &log[log.len().saturating_sub(6)..]);
+        {
+            let b = m.at.0.borrow();
+            // Undone whole, the firmware's pipe as before, the one line; its detail before it (the production order).
+            undone_whole(&b.e, &before, &log, n);
+            let failed = log.iter().position(|x| x.starts_with(&format!("S{} {} FAILED: ", n, dcn::STAGE_NAMES[n as usize - 1]))).expect("its line");
+            assert!(log[..failed].iter().any(|x| x == &format!("S{} {}: STAGE {} OF 16 NEXT; ITS WRITES:", n, dcn::STAGE_NAMES[n as usize - 1], n)), "stage {}: its detail", n);
+            // The mark kept: nothing is tried again this boot. screen_gone only after an offer.
+            assert_eq!(b.e.regs[&mark], light::RESTART_MARK, "stage {}", n);
+            assert_eq!(b.e.ev.iter().filter(|x| **x == Ev::Gone).count(), (n == 16) as usize, "stage {}", n);
+        }
+        assert!(said_start(&m, "NO SECOND SCREEN OFFERED, IN THE PRODUCTION ORDER"), "stage {}", n);
+        // What follows: HPD 1 followed, the output stopped; an unplug and a plug do nothing, the check does not run.
+        let mut w = s.writer.unwrap();
+        let mut f = start::Follower::new(&mut m, &mut w, Some(run), &plan).expect("nothing followed");
+        assert_eq!(f.state(), hpd::State::Stopped);
+        assert!(said(&m, "HPD 1 FOLLOWED EVERY 50 MS, A CHANGE COUNTED AFTER 500 MS: SENSE 1, THE SECOND OUTPUT Stopped"), "{:#?}", m.said);
+        let (made, transfers) = (device(&m.at.0.borrow().e).len(), m.at.0.borrow().i2c.writes.len());
+        let mut out = Log(vec![]);
+        follow_for(&mut m, &mut w, &mut f, &plan, &table, false, 2000, &mut out);
+        follow_for(&mut m, &mut w, &mut f, &plan, &table, true, 8000, &mut out);
+        assert_eq!((device(&m.at.0.borrow().e).len(), m.at.0.borrow().i2c.writes.len()), (made, transfers), "stage {}: written after the failure", n);
+        assert!(out.0.is_empty() && !said_start(&m, "A MONITOR PLUGGED IN"), "stage {}: {:#?}", n, out.0);
+        assert_eq!(f.state(), hpd::State::Stopped);
+        // display started again (init restarting it): the mark, no stage, nothing written to the engine.
+        if n == 8 {
+            let mut log = Log(vec![]);
+            let s = start_with(&mut m, &plan, &table, &mut log);
+            assert_eq!(s.run.unwrap().outcome, Outcome::Failed { stage: 0, why: Failure::StartedAgain });
+            assert_eq!(device(&m.at.0.borrow().e).len(), made);
+        }
+    }
+}
+
+#[test]
+fn light_in_the_surveys_order_makes_the_production_orders_writes_and_a_bring_up_build_of_fewer_stages_follows_them() {
+    let table = vfct(&good());
+    let run = |b: setting::Bringup| {
+        let mut m = ryzen(hdmi_monitor());
+        let mut log = Log(vec![]);
+        let s = start_with(&mut m, &setting::plan(setting::Setting::Light, b), &table, &mut log);
+        let outcome = s.run.as_ref().map(|r| r.outcome);
+        let b = m.at.0.borrow();
+        (outcome, device(&b.e), b.i2c.writes.clone(), m.said.clone())
+    };
+    let production = run(setting::Bringup::RELEASE);
+    let survey = run(setting::Bringup { survey_order: true, ..setting::Bringup::RELEASE });
+    assert_eq!((survey.0, &survey.1, &survey.2), (production.0, &production.1, &production.2));
+    assert!(survey.3.iter().any(|x| x == "STEP 1 MAY READ 11 OF 11 BATCHES, WRITES NOTHING; THE SURVEY'S ORDER"));
+    // Eight stages (first light), and the stages undone after they ran.
+    let eight = run(setting::Bringup { stages_allowed: 8, ..setting::Bringup::RELEASE });
+    assert_eq!(eight.0, Some(Outcome::Stopped { done: 8 }));
+    assert!(!eight.1.iter().any(|x| matches!(x, Ev::Offer(..))));
+    let undone = run(setting::Bringup { undo_after_stages: true, ..setting::Bringup::RELEASE });
+    assert_eq!(undone.0, Some(Outcome::Undone { done: 16 }));
+    assert!(undone.1.contains(&Ev::Gone));
+}
+
+#[test]
+fn under_light_an_offer_the_compositor_does_not_take_leaves_the_picture_on_the_second_output_checked_and_followed() {
+    // Stage 16 not ready (no client of the compositor): stages 1 to 15 stay, no second screen; the standing check and HPD 1 go on.
+    let table = vfct(&good());
+    let plan = setting::plan(setting::Setting::Light, setting::Bringup::RELEASE);
+    let mut m = ryzen(hdmi_monitor());
+    m.at.0.borrow_mut().e.refuse_offer = Some(ScreenRefused::Unavailable);
+    let before = m.at.0.borrow().e.regs.clone();
+    let mut log = Log(vec![]);
+    let s = start_with(&mut m, &plan, &table, &mut log);
+    assert_eq!(s.run.as_ref().unwrap().outcome, Outcome::NotReady { done: 15, stage: 16, why: Failure::Screen(ScreenRefused::Unavailable) });
+    assert!(said_start(&m, "NO SECOND SCREEN OFFERED"));
+    let mut w = s.writer.unwrap();
+    let mut f = start::Follower::new(&mut m, &mut w, s.run, &plan).expect("nothing followed");
+    assert_eq!(f.state(), hpd::State::Lit);
+    let made = device(&m.at.0.borrow().e).len();
+    let mut out = Log(vec![]);
+    follow_for(&mut m, &mut w, &mut f, &plan, &table, true, 601_000, &mut out);
+    assert_eq!(out.0.len(), 1, "{:#?}", out.0);
+    assert!(out.0[0].ends_with("; NOTHING NEW ON EITHER PIPE"), "{}", out.0[0]);
+    assert_eq!(device(&m.at.0.borrow().e).len(), made);
+    // Unplugged: stages 15 to 1 taken back, no screen_gone without an offer taken.
+    follow_for(&mut m, &mut w, &mut f, &plan, &table, false, 2000, &mut out);
+    assert_eq!(f.state(), hpd::State::Dark);
+    let b = m.at.0.borrow();
+    assert!(!b.e.ev.contains(&Ev::Gone));
+    as_before(&b.e, &before, &[]);
 }

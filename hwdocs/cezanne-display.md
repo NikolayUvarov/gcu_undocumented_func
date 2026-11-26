@@ -370,8 +370,8 @@ What follows for the route (plans, not guarantees):
 
 ## Step 3 as code: first light in eight stages (213-DRV-0086)
 
-`display/src/light.rs`, switched off (`STAGES_ALLOWED = 0` in `main.rs`): the route above as eight stages that a build
-lets go one at a time: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
+`display/src/light.rs`, run only under the machine's `light` setting (213-DRV-0099; written in the stages of a bring-up
+build one at a time at first): the route above as eight stages: 1 the OTG's clocks, 2 the pixel clock (table 12), 3 the 1080p60 timing, 4 the OPP's colour
 squares, 5 the OTG started and its frame count seen to move, 6 the DIG front end (table 4), 7 the back end in DVI
 mode, 8 the PHY (table 76) and the `DIG_START` pulse.
 
