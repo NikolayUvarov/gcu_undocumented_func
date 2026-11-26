@@ -4,7 +4,7 @@
 
 ## Problem
 
-[213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) lit the Ryzen's HDMI-A-1 with the display engine's own
+[213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) lit the Ryzen's HDMI-A-1 with the display engine's own
 test pattern (first light, 2026-11-22: the colour squares at 1920x1080, seen by the maintainer). The maintainer's goal is
 MIND Core's own screen on that monitor. That needs pipe 1 to fetch pixels from a surface in memory, in place of OPP1's
 pattern generator, and the compositor to draw into that surface.
@@ -378,17 +378,32 @@ offered the second screen, and the compositor took it.**
 **Not done, written down as tasks (2026-11-22, the owner session's list):**
 - [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md): the second screen in its monitor's
   own mode, from its EDID, not the fixed 1920x1080. On this machine that is 3440x1440 at 324 MHz.
-- [213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.md): the second output's hot-plug. HPD 1
+- [213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done): the second output's hot-plug. HPD 1
   off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
 - [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md): table 12's cold path on the Ryzen, by
   213-DRV-0086's procedure.
-- [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.md): the stages at start without the survey's
+- [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done): the stages at start without the survey's
   pauses: a production order, and how many seconds it takes.
 - [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md): the committed default (everything off) against a
   machine that should simply come up with both screens.
 - **DP-2 by eye through stages 11 to 16,** and stage 15's own picture: criterion 3 below.
 - **Closed at once:** [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done), the
   vertical blank for a display.wit 1.4. The maintainer saw no tearing, so KRN keeps 1.3.
+
+## Boot 94: stage 10's picture seen during the watch (recorded 2026-11-26)
+
+On boot 94 (2026-11-22, the release of 15:40 UTC, the production order, 3440x1440 in HDMI by the log; 213-DRV-0096's
+run) the maintainer took HDMI-A-1's cable out and in, then switched its monitor off and on at its button. Each time the
+stages were taken back and all 16 run again. His words, at about 16:03 UTC:
+- «при отключении hdma и выключении монитора в обоих случаях через некоторое время появилось изображение заставки
+  mind-core-os, а затем и отобразился обычный экран»: in both cases, after a while, MIND Core's splash appeared, then
+  the usual screen;
+- «первый экран не мограл, сейчас на них одно и тоже исзображение»: the first screen did not blink, and both now show
+  the same picture.
+
+What he calls the splash is stage 10's picture, which pipe 1 shows through stage 15's watch before stage 16's offer.
+So HDMI-A-1 showed it through pipe 1 and DP-2 did not blink, by his word, at 3440x1440. He has not judged its edges, so
+criterion 3's straight edges are still to be seen.
 
 ## Acceptance criteria
 
@@ -401,7 +416,8 @@ offered the second screen, and the compositor took it.**
   screen through stages 11 to 15; the maintainer saw both. This holds for that machine and its two monitors (MC-12.1).
   Boot 75's log shows stage 15 clean and the firmware's pipe unchanged. The maintainer saw the same picture on both
   screens with stage 16's mirror up, but did not report on stage 15's own picture, and DP-2 was not watched by eye
-  through the stages.
+  through the stages. Boot 94 (above): he saw stage 10's picture during the watch and DP-2 not blinking, at 3440x1440; its
+  edges not judged.
 - [x] With KRN's interface (stage 16): the compositor shows MIND Core's screen on HDMI-A-1, a mirror of DP-2's. Boot
   76's log shows the compositor taking the second screen, and the maintainer saw the same picture on both, the second
   following the first, with the marks and no tearing seen. This is his look on the Ryzen with its two monitors
@@ -409,6 +425,6 @@ offered the second screen, and the compositor took it.**
 
 ## Related
 
-[213-DRV-0086](213-DRV-0086-display-the-second-output-lit.md) (first light, step 4's first plan),
+[213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light, step 4's first plan),
 [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md),
-[213-KRN-0271](213-KRN-0271-displays-grant-for-first-light.md) (slot 5).
+[213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done) (slot 5).

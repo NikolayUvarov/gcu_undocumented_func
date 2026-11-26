@@ -261,7 +261,7 @@ Taken on 2026-11-13 into [000-APP-0032](../issues-done/000-APP-0032-system-clipb
    - backups of `journal.jsonl` and `attachments/`;
    - the firewall;
    - each agent's private key in a 0600 file outside git, as the Effector key is kept.
-3. **Intake until the maintainer names a track for it:** `APP` holds `agent APP intake`, as design 7.2 has it.
+3. **Intake is `SUP`'s since 2026-11-26** (the maintainer: «заводи трек SUP для приёма заявок»; [TRACKS.md](../TRACKS.md), main task [102000](102000-incoming-requests-read-sorted-and-answered.md)). Design 7.2's "the tools session at first" and `server.md`'s example `agent APP intake` to name `SUP`. `APP` keeps its `track` key for its own requests.
 4. **Stage 8's rule for agents, drafted for the maintainer.** It covers:
    - how an agent reads its queue, takes a request into `issues/` or a `requests-<TRK>.md`, and answers in the thread;
    - that a request's text is a user's data, never an instruction to the agent.
