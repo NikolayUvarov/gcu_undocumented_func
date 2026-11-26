@@ -1,6 +1,6 @@
 # RTL8852BE RFE-1/cut-1 PHY and initial RFK stages
 
-This is an executable library slice of [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), not a complete radio startup. The native board-read service does not call it. It has no WLAN endpoint and cannot establish association, IP traffic or Effector connectivity.
+This is an executable library slice of [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), not a complete radio startup. The native board-read service does not call it. It has no WLAN endpoint and cannot establish association, IP traffic or Effector connectivity.
 
 ## Exact source and table selection
 

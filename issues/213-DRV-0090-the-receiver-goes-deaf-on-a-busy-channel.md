@@ -162,4 +162,4 @@ The holes' registers are to decide, not this list. This morning's TSSI-tracking 
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver), [801-DRV-0071](801-DRV-0071-the-bench-radios-keep-their-network-across-releases.md) (the stalled receive's stop), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association), [213-DRV-0087](213-DRV-0087-rtl8852be-on-5-ghz.md) (this branch's base).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done) (the driver), [801-DRV-0071](801-DRV-0071-the-bench-radios-keep-their-network-across-releases.md) (the stalled receive's stop), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence after association), [213-DRV-0087](213-DRV-0087-rtl8852be-on-5-ghz.md) (this branch's base).

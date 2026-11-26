@@ -4,7 +4,7 @@
 
 ## Problem
 
-The driver was brought up on the narrowest configuration, as [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)'s plan said: 2.4 GHz, 20 MHz. Every table and calibration in it is that band's.
+The driver was brought up on the narrowest configuration, as [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)'s plan said: 2.4 GHz, 20 MHz. Every table and calibration in it is that band's.
 
 On the Ryzen's network, the same machine and access point, 2026-11-21:
 
@@ -269,4 +269,4 @@ Linux ran VHT 80 MHz there: SCO, the bandwidth fields, RF18's width and the limi
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) (the driver; its section of 2026-11-21 has the measurements and the method), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (the platform's power policy).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done) (the driver; its section of 2026-11-21 has the measurements and the method), [213-DRV-0052](213-DRV-0052-coexistence-after-association.md) (coexistence), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (the platform's power policy).

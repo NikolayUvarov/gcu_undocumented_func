@@ -3,7 +3,7 @@
 The private provider in `rtw89_wifi/src/calibration_policy.rs`, exposed inside
 `phy::channel`, resolves the supported source calibration profile and grants
 one initial IQK/TSSI/DPK permission set. This continues
-[213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md). The native scoped-input
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done). The native scoped-input
 consumer remains dependent on the [KRN platform-policy request](../issues/requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver).
 No radio endpoint, packet scheduler or native calibration caller is enabled
 by this slice. Actual radiated power and WLAN operation are not measured here.

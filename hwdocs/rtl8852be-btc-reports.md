@@ -1,6 +1,6 @@
 # RTL8852BE BTC 105 receive-envelope evidence
 
-Task: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Task: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This decoder is an RX prerequisite, not a firmware-policy acknowledgement,
 RFK arbitration grant, initialized BTC state or working WLAN endpoint.
 

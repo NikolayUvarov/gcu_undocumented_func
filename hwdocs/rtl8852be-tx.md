@@ -1,6 +1,6 @@
 # RTL8852B raw MPDU transmit prerequisite
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This private library moves management and ordinary/QoS data MPDUs through
 band-zero ACH0..3 and CH8. It is not yet a `wlanhw` service. Its private start transition is owned by the checked DataSession after actual
 channel RFK/policy, station CMAC configuration, live session ownership and

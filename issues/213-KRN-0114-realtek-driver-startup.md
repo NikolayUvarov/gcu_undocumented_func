@@ -127,7 +127,7 @@ Left: the MacBook Pro's radio unchanged, and the Ryzen's `rtw89_wifi` start.
 ## Related
 
 [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md),
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md),
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done),
 [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done),
 [213-KRN-0113](213-KRN-0113-realtek-boot-identification.md),
 [hardware audit](../issues-audit/2026-10-15-hardware-audit.md).

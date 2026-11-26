@@ -1,7 +1,7 @@
 # H14 — XTAL cleanup can replace an unfinished board-access command
 
 **Assessment:** corrected by `37a379a4`; host regressions passed after raw publication.
-**Priority:** P1 · **Owner:** ASTRA, [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md)
+**Priority:** P1 · **Owner:** ASTRA, [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done)
 · **Roadmap:** H / 213, D / 550 · **Constitution:** MC-6.1, MC-12.1, MC-12.3.
 
 ## Finding

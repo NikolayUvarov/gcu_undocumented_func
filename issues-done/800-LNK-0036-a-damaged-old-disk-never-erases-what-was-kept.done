@@ -43,4 +43,4 @@ The functions stay inside the script: it runs from its own copy while it changes
 
 ## Related
 
-[800-LNK-0023](../issues/800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](../issues/800-LNK-0024-keep-the-owners-settings-across-a-write.md), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+[800-LNK-0023](../issues/800-LNK-0023-keep-the-effector-agent-across-a-write.md), [800-LNK-0024](../issues/800-LNK-0024-keep-the-owners-settings-across-a-write.md), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done).

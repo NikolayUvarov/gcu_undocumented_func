@@ -35,7 +35,7 @@ QEMU has no RTL8852BE, so no suite reached the limit.
 
 ## Related
 
-[213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), docs/profile/kernel-objects.md.
+[213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0123](../issues/213-KRN-0123-the-rtl8852be-radio-endpoint.md), docs/profile/kernel-objects.md.
 
 ## Resolution
 

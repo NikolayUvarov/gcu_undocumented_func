@@ -99,7 +99,7 @@ Then the maintainer rewrites every disk from `fast-test` and restarts every mach
 
 ## Related
 
-[751](751-system-updates-at-a-developers-request.md), [750](750-effector-agent.md), [800](800-mind-link.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [800-LNK-0026](800-LNK-0026-several-machines-on-one-line.md), [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md).
+[751](751-system-updates-at-a-developers-request.md), [750](750-effector-agent.md), [800](800-mind-link.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md), [800-LNK-0026](800-LNK-0026-several-machines-on-one-line.md), [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 
 ## Progress (2026-11-15)
 
