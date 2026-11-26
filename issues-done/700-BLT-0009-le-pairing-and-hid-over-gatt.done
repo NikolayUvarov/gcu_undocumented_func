@@ -1,6 +1,6 @@
-# 700-BLT-0009 — LE: SMP pairing, the ATT client, GATT discovery, HID over GATT
+# 700-BLT-0009 — LE: SMP pairing, the ATT client, GATT discovery, HID over GATT — done
 
-**Type:** library (`bt_host`) · **Owner:** `BLT` · **Priority:** P2 (after audio and classic HID, unless the maintainer's devices are LE) · **Status:** in progress (2026-11-26) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-10.1, MC-11.4, MC-12.1
+**Type:** library (`bt_host`) · **Owner:** `BLT` · **Priority:** P2 (after audio and classic HID, unless the maintainer's devices are LE) · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-10.1, MC-11.4, MC-12.1
 
 ## Problem
 
@@ -58,7 +58,7 @@ Written in `bt_host` (`smp_crypto.rs`, `le.rs`), linked into `bt_hci`.
   - **Paired** in legacy Just Works (`ITS IO CAPABILITY 3, AUTHENTICATION 01, LEGACY PAIRING`), its LTK and identity kept.
   - **HID over GATT** in the boot protocol (`HID SERVICE 0021-0037, 8 CHARACTERISTICS, BOOT PROTOCOL, REPORT MAP 97 BYTES`, `HID READY`).
   - **Reconnected** with its key after a click woke it (`ENCRYPTING WITH ITS KEY`, `ENCRYPTED`).
-  - **Moved the pointer:** 24 to 125 reports a second, every input call OK; the maintainer confirms the pointer and both buttons. *That was with the bench branch's input privilege.*
+  - **Moved the pointer:** 24 to 125 reports a second, every input call OK; the maintainer confirms the pointer and both buttons. *That was with the bench branch's input privilege. With `main`'s own (700-KRN-0280) the reports were taken again on boot 107: see the resolution.*
 
 ## Progress (2026-11-26): the bench
 
@@ -74,4 +74,18 @@ Written in `bt_host` (`smp_crypto.rs`, `le.rs`), linked into `bt_hci`.
 
 ## Related
 
-[700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0008](700-BLT-0008-classic-hid-host.md).
+[700-BLT-0005](../issues/700-BLT-0005-connections-carry-data.md), [700-BLT-0008](../issues/700-BLT-0008-classic-hid-host.md).
+
+## Resolution
+
+Done on 2026-11-26. LE pairing (SMP: Secure Connections and legacy Just Works), the ATT client, GATT discovery and HID
+over GATT in the boot protocol are in `main` (round 179, `main` 9d6feac696, 2026-11-26; the branch's head fef042ee1).
+
+- **Shown on the Ryzen** (that machine, the maintainer's Logitech MX Vertical; MC-12.1):
+  - paired in legacy Just Works, its long term key and identity kept;
+  - connected again with its key after a click woke it;
+  - the pointer and both buttons, by the maintainer's look;
+  - boot 107, with `main`'s own input privilege (700-KRN-0280): `HID: 878 REPORTS IN 1 MIN (2241 IN ALL: 0 KEYBOARD,
+    2241 POINTER); INPUT CALLS 2241 OK, 0 FAILED`.
+- **By host cases only:** Secure Connections, a boot keyboard, a wrong confirm value and a short key refused.
+- **Not done here:** the report protocol (the boot protocol alone), and a device's wheel or extra buttons.

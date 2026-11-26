@@ -39,4 +39,4 @@ A Bluetooth keyboard or mouse is a HID device on L2CAP. Its input has to reach t
 
 ## Related
 
-[700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md), [700-BLT-0009](700-BLT-0009-le-pairing-and-hid-over-gatt.md) (HID over GATT).
+[700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0006](../issues-done/700-BLT-0006-classic-pairing-and-link-keys.done), [700-BLT-0009](../issues-done/700-BLT-0009-le-pairing-and-hid-over-gatt.done) (HID over GATT).

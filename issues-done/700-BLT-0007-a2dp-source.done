@@ -1,6 +1,6 @@
-# 700-BLT-0007 — Audio out: an A2DP source with our own SBC encoder, a tone first, the audio gateway next
+# 700-BLT-0007 — Audio out: an A2DP source with our own SBC encoder, a tone first, the audio gateway next — done
 
-**Type:** library (`bt_host`) · **Owner:** `BLT` · **Priority:** P1 (headphones are the first device the maintainer named) · **Status:** in progress (2026-11-26) · **Blocked by:** `DRV`: a sink in `audio_gw` that hands its output to `bt_hci` (for `say` through headphones; the tone needs nothing) · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.3
+**Type:** library (`bt_host`) · **Owner:** `BLT` · **Priority:** P1 (headphones are the first device the maintainer named) · **Status:** done (2026-11-26) · **Blocked by:** — · **Main task:** [700](../issues/700-bluetooth.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 
@@ -75,4 +75,20 @@ Headphones need the A2DP profile, its codec SBC (mandatory for every sink), AVDT
 
 ## Related
 
-[700-BLT-0005](700-BLT-0005-connections-carry-data.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.md), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md) (`audio_gw`).
+[700-BLT-0005](../issues/700-BLT-0005-connections-carry-data.md), [700-BLT-0006](700-BLT-0006-classic-pairing-and-link-keys.done), [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) (`audio_gw`).
+
+## Resolution
+
+Done on 2026-11-26. The A2DP source with our own SBC encoder, AVDTP both ways, SDP and AVRCP's absolute volume are in
+`main` (round 179, `main` 9d6feac696, 2026-11-26; the branch's head fef042ee1).
+
+- **Shown on the Ryzen** (that machine, the maintainer's JBL Flip 5; MC-12.1):
+  - the tone heard, once the speaker was given its volume over AVRCP (the maintainer named that need);
+  - the machine's output heard through 700-DRV-0110's sink: `say`'s phrase;
+  - the stream beside an LE mouse without crackle, after the source kept the central's role;
+  - boot 107: `A2DP: 1 MIN: 2953 PACKETS OF 7 FRAMES … 0 NOT QUEUED, 0 LATE` in each of the 51 minute lines read.
+- **Not in `main` yet:** `init`'s grant to `bt_hci` of `audio_gw`'s client badged for the sink. It is KRN's line, said to
+  follow in the round after this one. Until it lands, `bt_hci` on `main` plays its tone to a listed speaker and the
+  machine's output stays on its own device. The Ryzen's releases carry the line as a bench-only commit.
+- **Not shown:** other headphones, a codec other than SBC, and the stream beside a 2.4 GHz Wi-Fi link without loss
+  (213-DRV-0052: 21 one-second beacon holes a minute on channel 8).
