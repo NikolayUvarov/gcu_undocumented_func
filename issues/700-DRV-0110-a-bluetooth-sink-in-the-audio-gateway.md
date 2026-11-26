@@ -38,9 +38,9 @@
   - headphones listed as `audio` want the output, and `audio tone` does not;
   - held, silence until PCM comes, then the PCM;
   - suspended, given back.
-- [ ] QEMU: the audio suites (`services,ahci,audio,tts,listen,hda,usbaudio,usbload,link,modes`) pass as before, and no client holds the sink there.
+- [x] QEMU: the audio suites (`services,ahci,audio,tts,listen,hda,usbaudio,usbload,link,modes`) pass as before, and no client holds the sink there.
   - On the bench branch (`claude/700-BLT-bench` b1b4488a9 = this code with `init`'s three bench lines), "x86: services, storage, audio" PASSed in 1189 s (LEG9, x86, 4 CPUs, `scripts/ci_local.sh --only x86 --group ...`, 2026-11-26).
-  - The task branch's own run is next.
+  - On the task branch at 0d5a11595, the same group PASSed in 1060 s (LEG9, x86, 4 CPUs, 2026-11-26).
 - [ ] On the Ryzen, with KRN's grant: `say` heard in the maintainer's headphones, then on the machine's own output once they are off.
 
 ## Related
