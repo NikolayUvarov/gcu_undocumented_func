@@ -21,11 +21,15 @@
 //! 1.2 (550-NET-0035, stage B; the maintainer's decision of 2026-11-04): with no country chosen the station still
 //! works. Its first scan sends nothing; then it runs under the country the access points it heard announce (their
 //! Country element), or with none announced under `00`, the rules every country allows. `country-source` says which
-//! and why. A chosen country always comes first, and `00` is still never a chosen one.
+//! and why. A chosen country always comes first; until 1.4 `00` was never a chosen one.
 //!
 //! 1.3 (550-NET-0058): `reader`, a client of the station that only reads (`BADGE_WIFI` without the change bit), for
 //! a program that only shows the station, such as a status line. The station mints it from its own endpoint, so
 //! whoever holds a client of this interface may narrow it, and nobody widens one.
+//!
+//! 1.4 (550-NET-0096; the maintainer's word of 2026-11-25, «на этапе тестирования мы не привязываемся к странам»):
+//! `set-country` takes `00`, the rules every country allows, as a choice. `keystore` keeps it as it keeps a country,
+//! and an announcement never moves the station from it. A 1.3 client loses nothing: it was answered `invalid` for `00`.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -35,7 +39,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wifi";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -335,9 +339,10 @@ pub fn country(endpoint: Endpoint) -> Result<CountryStatus> {
 }
 
 /// Asks for country `code` (change badge only, 1.1): the station leaves the network and drops the last scan, has the
-/// radio apply the country's limits and `keystore` keep the code, and answers the status after. `invalid`: not two
-/// capital letters, or `00`; `not-found`: not in the catalogue; `no-device`: no radio yet; `unsupported`: no
-/// catalogue in this station. A radio that refuses the limits is not an error: the status says `failed`.
+/// radio apply the country's limits and `keystore` keep the code, and answers the status after. `00` may be asked
+/// for since 1.4. `invalid`: not two capital letters, nor `00`; `not-found`: not in the catalogue; `no-device`: no
+/// radio yet; `unsupported`: no catalogue in this station. A radio that refuses the limits is not an error: the
+/// status says `failed`.
 pub fn set_country(endpoint: Endpoint, code: &str) -> Result<core::result::Result<CountryStatus, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {

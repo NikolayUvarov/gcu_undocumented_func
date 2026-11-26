@@ -19,8 +19,19 @@ fn with_none_chosen_the_announced_country_else_00() {
     assert_eq!(decide(Some(*b"QQ"), None), (*b"00", Source::World));
     assert_eq!(decide(Some(*b"QQ"), Some((*b"KZ", 1, 1))), (*b"KZ", Source::Detected { announced: 1, heard: 1 }));
     assert_eq!(decide(None, Some((*b"QQ", 4, 4))), (*b"00", Source::World));
-    // 00 is never a chosen or an announced country.
-    assert_eq!(decide(Some(*b"00"), Some((*b"00", 1, 1))), (*b"00", Source::World));
+    // 00 is never followed as an announced country.
+    assert_eq!(decide(None, Some((*b"00", 1, 1))), (*b"00", Source::World));
+}
+
+// 550-NET-0096 (the maintainer, 2026-11-25: no tie to a country at the testing stage): 00 may be chosen, and an
+// announcement then never moves the station from it.
+#[test]
+fn the_world_rules_may_be_chosen_and_stay() {
+    assert_eq!(decide(Some(*b"00"), Some((*b"RU", 4, 8))), (*b"00", Source::Chosen));
+    assert_eq!(decide(Some(*b"00"), None), (*b"00", Source::Chosen));
+    assert_eq!(moves((*b"00", Source::Chosen), Some((*b"RU", 4, 8))), None);
+    // 00 that none chose still moves to an announced country, as before.
+    assert_eq!(moves((*b"00", Source::World), Some((*b"RU", 4, 8))), Some((*b"RU", Source::Detected { announced: 4, heard: 8 })));
 }
 
 #[test]
