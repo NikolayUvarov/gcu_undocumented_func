@@ -5,7 +5,7 @@
 //! writer.
 
 use crate::batches::{self, Bus, Order, Out, Store};
-use crate::dcn::{self, field::{DC_HPD_EN, DC_HPD_SENSE}, Reg, R};
+use crate::dcn::{self, field::{DC_HPD_EN, DC_HPD_SENSE}, Output, Reg, R};
 use crate::light::Clock;
 use crate::setting::Plan;
 use crate::{atom, ddc, edid, hpd, light, timing};
@@ -17,6 +17,13 @@ pub const RADEON: u32 = 0x1638_1002;
 pub const START_PAUSE_MS: u32 = 5000;
 /// The VICs HDMI-A-1's EDID lists (read under Linux, 2026-11-21): the mode when the EDID gives none (step 2 reads it).
 pub const HDMI_A_1_VICS: [u8; 17] = [1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 31, 63, 93, 94, 95, 96, 97];
+/// HDMI-A-2's monitor is not known (213-DRV-0112): with no EDID, the mode first light was shown in, CTA VIC 16.
+pub const HDMI_A_2_VICS: [u8; 1] = [16];
+
+/// An output's mode when its EDID gives none.
+pub fn fallback(o: &Output) -> timing::Timing {
+    timing::first_light_mode(if *o == light::HDMI_A_1 { &HDMI_A_1_VICS[..] } else { &HDMI_A_2_VICS[..] })
+}
 
 /// What display starts on: the engine's window, read only, and the same window with its writes.
 pub trait Device {
@@ -51,9 +58,10 @@ pub fn start<'a, D: Device>(d: &mut D, plan: &Plan, id: u32, engine: usize, vfct
     let t2 = d.now_us();
     // Only here is a writer made: a plan that writes nothing has none, and step 3 only describes its stages.
     let mut writer = window.filter(|_| plan.writes()).map(|w| d.writer(w));
-    let edid = step2(d, plan, &store, writer.as_mut(), out);
+    let output = light::HDMI_A_1;
+    let edid = step2(d, plan, output, &store, writer.as_mut(), out);
     let t3 = d.now_us();
-    let run = step3(d, plan, &store, writer.as_mut(), vfct, edid.as_ref(), build, out);
+    let run = step3(d, plan, output, &store, writer.as_mut(), vfct, edid.as_ref(), build, out);
     let (written, times) = (run.as_ref().map_or(0, |r| r.journal.len()), run.as_ref().map(|r| r.times));
     // How long each part took, from display's start (213-DRV-0098): to the offer when stage 16 made it.
     let ms = |us: u64| (us / 1000, us % 1000 / 100);
@@ -97,24 +105,25 @@ fn read_all(bus: &mut impl Bus, plan: &Plan, out: &mut dyn Out, store: &mut Stor
     read + batches::read_second(bus, plan.batches >= batches::BATCHES, out, store).registers_read
 }
 
-/// Step 2 (213-DRV-0095): the EDID over DDC1, on the writer, and what it says.
-fn step2<D: Device>(d: &mut D, plan: &Plan, store: &Store, writer: Option<&mut D::Writer>, out: &mut dyn Out) -> Option<edid::Edid> {
-    if !plan.edid { d.say(format_args!("STEP 2 (THE EDID OVER DDC1) NOT RUN: THE SETTING DOES NOT ASK FOR IT")); return None; }
+/// Step 2 (213-DRV-0095): the EDID over the output's DDC line, on the writer, and what it says.
+fn step2<D: Device>(d: &mut D, plan: &Plan, output: Output, store: &Store, writer: Option<&mut D::Writer>, out: &mut dyn Out) -> Option<edid::Edid> {
+    let Some(line) = ddc::line_of(&output) else { d.say(format_args!("STEP 2 NOT RUN: {} HAS NO DDC LINE HERE", light::name(&output))); return None };
+    if !plan.edid { d.say(format_args!("STEP 2 (THE EDID OVER {}) NOT RUN: THE SETTING DOES NOT ASK FOR IT", line.name)); return None; }
     let Some(w) = writer else { d.say(format_args!("STEP 2 NOT RUN: STEP 1 DID NOT MAP THE ENGINE'S WINDOW")); return None };
-    let read = ddc::read(store, w, out).ok()?;
+    let read = ddc::read_on(line, store, w, out).ok()?;
     ddc::describe(&read, out)
 }
 
-/// Steps 3 and 4: their run, when their stages ran. With no stage in the plan they only describe the stages, for the pipe
-/// step 1 found or, with step 1 not read, for the survey's expectation.
-fn step3<'a, D: Device>(d: &mut D, plan: &Plan, store: &Store, writer: Option<&mut D::Writer>, vfct: Option<&'a [u8]>, edid: Option<&edid::Edid>, build: &'static str, out: &mut dyn Out) -> Option<Run<'a>> {
-    let (timing, signal, why) = light::mode_for(edid, timing::first_light_mode(&HDMI_A_1_VICS));
+/// Steps 3 and 4 on `output`: their run, when their stages ran. With no stage in the plan they only describe the stages,
+/// for the pipe step 1 found or, with step 1 not read, for the survey's expectation.
+fn step3<'a, D: Device>(d: &mut D, plan: &Plan, output: Output, store: &Store, writer: Option<&mut D::Writer>, vfct: Option<&'a [u8]>, edid: Option<&edid::Edid>, build: &'static str, out: &mut dyn Out) -> Option<Run<'a>> {
+    let (timing, signal, why) = light::mode_for(edid, fallback(&output));
     if plan.edid { d.say(format_args!("STEP 3'S MODE: {}x{} AT {} KHZ IN {:?} SIGNALLING, {}", timing.h_active, timing.v_active, timing.pixel_khz, signal, why)); }
-    let plan3 = match light::prepare(store, timing, signal, build) {
+    let plan3 = match light::prepare_on(store, output, timing, signal, build) {
         Ok(p) => p.with_watch(plan.watch_frames),
         Err(why) if plan.stages == 0 => {
             d.say(format_args!("STEP 3 SHOWN FOR THE SURVEY'S EXPECTATION: {}", why));
-            let (f, c) = light::EXPECTED;
+            let (f, c) = light::expected(output);
             if let Ok(p) = light::Light::new_with(f, c, timing, signal) { light::describe(&p.with_build(build).with_watch(plan.watch_frames), true, out); }
             return None;
         }
@@ -143,16 +152,18 @@ impl<'a> Follower<'a> {
     /// What follows the stages, when the plan asks for it and does not undo them; None, and display idles.
     pub fn new<D: Device>(d: &mut D, w: &mut D::Writer, run: Option<Run<'a>>, plan: &Plan) -> Option<Follower<'a>> {
         if !(plan.hotplug || plan.standing_check) || plan.undo_after_stages { return None; }
-        let (Some(sense), Some(control)) = (R::HpdIntStatus.at(light::HDMI_A_1.hpd), R::HpdControl.at(light::HDMI_A_1.hpd)) else { return None };
+        let output = run.as_ref().map_or(light::HDMI_A_1, |r| r.light.choice.output);
+        let (Some(sense), Some(control)) = (R::HpdIntStatus.at(output.hpd), R::HpdControl.at(output.hpd)) else { return None };
         let state = hpd::state_after(run.as_ref().map(|r| r.outcome));
         let mut f = None;
         if plan.hotplug {
-            if w.read(control).map(|v| DC_HPD_EN.get(v)) != Some(1) { d.say(format_args!("HPD 1 IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED")); }
+            let n = output.hpd + 1;
+            if w.read(control).map(|v| DC_HPD_EN.get(v)) != Some(1) { d.say(format_args!("HPD {} IS NOT ENABLED: ITS SENSE IS NOT FOLLOWED", n)); }
             else if let Some(now) = w.read(sense).map(|v| DC_HPD_SENSE.get(v) == 1) {
-                d.say(format_args!("HPD 1 FOLLOWED EVERY {} MS, A CHANGE COUNTED AFTER {} MS: SENSE {}, THE SECOND OUTPUT {:?}", hpd::POLL_MS,
+                d.say(format_args!("HPD {} FOLLOWED EVERY {} MS, A CHANGE COUNTED AFTER {} MS: SENSE {}, THE SECOND OUTPUT {:?}", n, hpd::POLL_MS,
                                    hpd::SETTLE_US / 1000, now as u8, state));
                 f = Some(hpd::Follow::new(state, now));
-            } else { d.say(format_args!("HPD 1 CANNOT BE READ: NOT FOLLOWED")); }
+            } else { d.say(format_args!("HPD {} CANNOT BE READ: NOT FOLLOWED", n)); }
         }
         if f.is_none() && !plan.standing_check { return None; }
         if plan.standing_check {
@@ -200,8 +211,9 @@ impl<'a> Follower<'a> {
                 drop(self.run.take()); // the last run's journal and interpreter let go before the next is made
                 let mut store = Store::default();
                 read_all(w, plan, out, &mut store);
-                let edid = if plan.edid { ddc::read(&store, w, out).ok().and_then(|r| ddc::describe(&r, out)) } else { None };
-                self.run = step3(d, plan, &store, Some(&mut *w), vfct, edid.as_ref(), build, out);
+                let output = light::HDMI_A_1;
+                let edid = if plan.edid { ddc::read_on(ddc::DDC1, &store, w, out).ok().and_then(|r| ddc::describe(&r, out)) } else { None };
+                self.run = step3(d, plan, output, &store, Some(&mut *w), vfct, edid.as_ref(), build, out);
                 self.state = hpd::state_after(self.run.as_ref().map(|r| r.outcome));
                 follow.set(self.state);
                 self.next = w.now_us() + light::STANDING_US;
