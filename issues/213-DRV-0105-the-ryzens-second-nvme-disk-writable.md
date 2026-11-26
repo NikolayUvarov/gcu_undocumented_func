@@ -1,8 +1,8 @@
 # 213-DRV-0105 — The Ryzen's second NVMe disk writable
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P3 · **Status:** open · **Blocked by:** [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md) (the disk read on the bench); the maintainer's word that the disk may be written, and which part of it · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P3 · **Status:** open · **Blocked by:** [213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done) (the disk read on the bench); the maintainer's word that the disk may be written, and which part of it · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
-Split from [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md) on 2026-11-26.
+Split from [213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done) on 2026-11-26.
 
 ## Problem
 
@@ -31,4 +31,4 @@ Split from [213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sou
 
 ## Related
 
-[213-DRV-0060](213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.md), [213](213-amd-ryzen-pc.md).
+[213-DRV-0060](../issues-done/213-DRV-0060-the-ryzens-second-nvme-and-its-analog-sound.done), [213](213-amd-ryzen-pc.md).

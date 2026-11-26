@@ -1,6 +1,6 @@
 # 000-KRN-0283 — A wake IPI that never came is sent again
 
-**Type:** kernel (`kernel/src/scheduler.rs`, the wake of an idle CPU) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-26) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/scheduler.rs`, the wake of an idle CPU) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 179, 9d6feac696, 2026-11-26; the cause under x2APIC and a real machine's line left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -27,7 +27,7 @@
 ## Acceptance criteria
 
 - The kernel builds on both architectures within its budget, and the gate's groups pass.
-- `x86: x2APIC` run ten times on two lanes at once with no stall, and each resend line it shows read.
+- [x] `x86: x2APIC` run ten times on two lanes at once with no stall (648fa9270b, x32 and x32-2, 2026-11-26), and in round 179's gate. Whether any run needed a resend was not read.
 - On a real machine (the Ryzen's idle minutes, DRV's 000-KRN-0276 run), the minute's line says how many wakes were sent again (MC-12.1).
 
 ## Related

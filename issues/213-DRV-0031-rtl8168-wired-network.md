@@ -1,6 +1,6 @@
 # 213-DRV-0031 — A wired RTL8168 path on the Ryzen for ordinary use and Effector
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (2026-11-26: on the Ryzen the wired link carries DHCP, ping outward and 30 minutes of transfers, and comes back after the driver's restart; left: the cable taken out and put back, an HTTPS request, and the echo from the LAN) · **Blocked by:** the maintainer's hands on the cable; `NET`'s word on the echo · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (2026-11-26: on the Ryzen the wired link carries DHCP, ping outward and 30 minutes of transfers, and comes back after the driver's restart; the cable was taken out and put back, the wire carried the Effector agent's TLS session as the only route, and the route is switched in software with the cable in; left: a link that fails to negotiate, the echo from the LAN and the numbers in `docs/profile`) · **Blocked by:** `NET`'s word on the echo · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -93,3 +93,33 @@ The maintainer plugged a cable in during boot 103 (release 202611260804) and lef
 5. **No timeout, DMA error or hang** of the driver in these runs. `docs/profile` is not changed yet: it gets the numbers when the task closes.
 
 **Seen beside it:** with the cable plugged in after the start, the Effector agent's session stayed on the Wi-Fi (card 0 had sent 4 frames after 25 minutes of boot 104) though the wire was the default route. Told to `NET` in the same message.
+
+## The cable out and in, the wire alone, the route switched in software (2026-11-26, later)
+
+Boots 104 to 106 of the same day; boot 106 is release 202611261618 (`main` 84401caf4 with the Bluetooth branch; `rtl8168`, `netstack` and `netpolicy` are `main`'s). It holds for that machine and those releases (MC-12.1). Raw lines: the owner session's `logs-2026-11-26/` (`boot0104.log`, `bt-diag2-a.txt`, `route-c.txt` to `route-g.txt`).
+
+**The cable taken out and put back** (the maintainer's hands; criterion 4):
+- **Out, boot 104, 12252.165 s** (about 12:24 UTC): `[NETSTACK] CARD 0 LINK DOWN: ADDRESS AND 0 CONNECTIONS HELD FOR 30 S`, `DEFAULT ROUTE: CARD 2`; at 12282.170 `CARD 0 LINK STILL DOWN AFTER 30 S: ADDRESS DROPPED, 0 CONNECTIONS ABORTED`. The machine went on over the Wi-Fi.
+- **In, boot 105, 6968.259 s** (about 14:29 UTC): `CARD 0 LINK UP, WAITING FOR DHCP`; at 6978.270 `DHCP 192.168.2.241/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 0`, `DEFAULT ROUTE: CARD 0`.
+- **They are two boots, not one:** between them the machine hung on an HDMI plug change (213-KRN-0278) and was power-cycled, and boot 105 started with the cable out. So "a restored link reacquires its lease" is shown from a boot that began without a link, and the held address coming back inside 30 s is shown only by the driver's restart above, not by the cable.
+- **New flows after it:** the transfers below ran over card 0.
+
+**The wire as the only route** (criterion 2's HTTPS request). The Wi-Fi card was put out of use by the policy line `card 2 off`, typed at the console:
+- 1439.051 s: `CARD 2 OUT OF USE BY THE POLICY: ADDRESS DROPPED, 1 CONNECTIONS ABORTED, NOTHING SENT THERE`.
+- 1440.395 s: `[TLS] SESSION 2 OF PID 43: hesere.uz VERIFIED BY ITS PIN, SUITE 1303, GROUP 001D, CLIENT CERTIFICATE NOT SENT`. That is the Effector agent's own session to its server, made again over card 0 in 1.3 s, through `tls` and under `netpolicy`'s grant to it.
+- Through that session the server then fetched the log ring (140 KB in 12 s) and a file of 534 724 bytes (18 s; the same bytes as a copy fetched earlier). Card 0's sent count went from 52 to 735 and card 2's stood still.
+- **What it is not:** the shell's `https` command was not used. The session is the agent's: `tls` verified the server by its pinned key, and the server went on accepting the agent and running its operations.
+- `card 2 off` removed: `CARD 2 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP`, its address 21 ms later.
+
+**The route switched in software, the cable left in** ([550-NET-0062](../issues-done/550-NET-0062-the-card-chosen-in-software.done)). The maintainer asked for this instead of pulling the cable for Wi-Fi runs:
+- `netpolicy add default card 2`: `CARD 2 PREFERRED AS THE DEFAULT`, `DEFAULT ROUTE: CARD 2`; pings went out on card 2 while the wire stayed up.
+- `netpolicy remove default card 2`: `NO CARD PREFERRED`, `DEFAULT ROUTE: CARD 0`.
+- `netpolicy add card 0 off`: `CARD 0 OUT OF USE BY THE POLICY: ADDRESS DROPPED, 0 CONNECTIONS ABORTED, NOTHING SENT THERE`, `DEFAULT ROUTE: CARD 2`; `ip` says `CARD 0 … IP 0.0.0.0/0 … WIRED OFF`.
+- `netpolicy remove card 0 off`: `CARD 0 IN USE AGAIN BY THE POLICY, WAITING FOR DHCP`, the default route on card 0 21 ms later, pings 3 of 3 (1.1 to 10.2 ms).
+- Each line is typed at the console and answered `y` within the shell's 60 s question. The link's shell line refuses `netpolicy`.
+- The lines and times went to `NET` (`NET/2026-11-26T1653Z-DRV-550-net-0062-on-the-ryzen-the-four-policy-lines-switch-the-route-with-the-cable-in.md` on `internal-dev-messages`).
+
+**Left:**
+- a link that fails to negotiate: not provoked, and there is no way to provoke it on this bench without other hardware;
+- the echo request from the LAN, which neither card answers: `NET`'s word;
+- the numbers and limits in `docs/profile`, when the task closes.

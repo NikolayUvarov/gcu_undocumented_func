@@ -373,10 +373,10 @@ offered the second screen, and the compositor took it.**
   - The stretched mirror and the extended desktop are the compositor's (KRN) and `wm`'s (APP). The owner session asked
     them in messages today.
   - The part that is `display`'s is the second screen in the monitor's own mode, 3440x1440 at 324 MHz on this one, not
-    1920x1080: [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md).
+    1920x1080: [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done).
 
 **Not done, written down as tasks (2026-11-22, the owner session's list):**
-- [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md): the second screen in its monitor's
+- [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done): the second screen in its monitor's
   own mode, from its EDID, not the fixed 1920x1080. On this machine that is 3440x1440 at 324 MHz.
 - [213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done): the second output's hot-plug. HPD 1
   off gives `screen_gone` and blank; HPD 1 on runs the stages again without a boot.
