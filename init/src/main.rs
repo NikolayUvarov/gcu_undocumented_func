@@ -1059,10 +1059,13 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
             }
             "nvme" => {
-                // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.
-                let device = platform::find_device(0x01_08_02, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
+                // The instance's NVMe controller (class 01:08:02) in PCI order: registers in BAR0; commands are polled, so no
+                // interrupt. nvme#1 is told its instance ("1") and is read-only (213-KRN-0282, for 213-DRV-0060); it is given to
+                // neither vfs_server nor the block store: on the Ryzen it holds a system the machine's other users boot.
+                let device = platform::find_device(0x01_08_02, 0xFF_FF_FF, instance)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, NVME_DMA_BYTES)?, 0);
+                if instance > 0 { let _ = core::fmt::Write::write_fmt(&mut args, format_args!("{}", instance)); }
             }
             // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001), and
             // ramdisk#2 the boot volume the loader read into memory, read-only, on a live boot alone (352-KRN-0268).

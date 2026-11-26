@@ -21,6 +21,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `compositor` | server endpoint (requests from the shell's display client, issue 086), framebuffer memory, display privilege |
 | `ata` | server endpoint, ports 0x1F0–0x1F7 and 0x3F6 |
 | `ahci` | server endpoint, ABAR (BAR5) MMIO of the first AHCI controller, 128 KiB DMA |
+| `nvme`, `nvme#1` | server endpoint, BAR0 MMIO of the instance's NVMe controller in PCI order, 128 KiB DMA; commands polled, no interrupt. `nvme#1` is told its instance and is read-only; `init` gives it to neither `vfs_server` nor the block store, as on the Ryzen it holds a system the machine's other users boot (213-KRN-0282, for 213-DRV-0060) |
 | `usb_host` | server endpoint, BAR0 MMIO of the first xHCI controller, 512 KiB DMA (issue 164); the second xHCI controller's BAR0 MMIO and its own 512 KiB DMA in `mind::usb::XHCI`'s slots, stopped and resumed with the first (213-KRN-0099, 213-DRV-0048); the EHCI controllers' BAR0 MMIO and DMA in `mind::usb::EHCI`'s slots (211-DRV-0004) |
 | `usb_storage` | server endpoint, a client of `usb_host` badged for mass storage interfaces (only when `usb_host` runs) |
 | `usb_hid` | server endpoint (the keyboard service), a client of `usb_host` badged for HID interfaces, input privilege (only when `usb_host` runs) |
