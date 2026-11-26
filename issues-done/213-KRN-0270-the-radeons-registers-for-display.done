@@ -9,7 +9,7 @@ DRV's [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.d
 - its register BAR;
 - `display` in the boot image.
 
-The maintainer asked the same day that the Ryzen's work go first, as the machine stays for two more days. So the grant is made before DRV's survey ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)) has its facts. It follows what `amdgpu` does on every chip since Bonaire: the registers are BAR 5.
+The maintainer asked the same day that the Ryzen's work go first, as the machine stays for two more days. So the grant is made before DRV's survey ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done)) has its facts. It follows what `amdgpu` does on every chip since Bonaire: the registers are BAR 5.
 
 **What must not happen.** This device is also the one whose output the firmware's GOP set up, the screen MIND Core draws on. So:
 - a grant that cleared its bus mastering, as the Realtek drivers' first grant does, could blank that output;
@@ -78,4 +78,4 @@ This is evidence for that machine with those builds (MC-12.1).
 
 ## Related
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done), [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done) (the last image added).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done), [000-KRN-0235](../issues-done/000-KRN-0235-init-starts-the-clipboard-service.done) (the last image added).

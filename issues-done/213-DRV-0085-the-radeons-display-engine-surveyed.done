@@ -1,10 +1,10 @@
-# 213-DRV-0085 — The Ryzen's display engine surveyed from Linux: its tables, the state of both outputs, and whether DMUB is needed
+# 213-DRV-0085 — The Ryzen's display engine surveyed from Linux: its tables, the state of both outputs, and whether DMUB is needed — done
 
-**Type:** survey (`hwdocs/`; read-only on the machine) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-21) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** survey (`hwdocs/`; read-only on the machine) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26; criterion 4 not met, see Resolution) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
-[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) needs a driver for the Cezanne Radeon's display engine (DCN 2.1) to light the Ryzen's second monitor. Nothing is known yet of what that driver must write. Linux on the same machine drives **both** monitors (`DP-2`, 2560x1600, and `HDMI-A-1`, 3440x1440), so it holds a working configuration of the very output MIND Core lacks.
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) needs a driver for the Cezanne Radeon's display engine (DCN 2.1) to light the Ryzen's second monitor. Nothing is known yet of what that driver must write. Linux on the same machine drives **both** monitors (`DP-2`, 2560x1600, and `HDMI-A-1`, 3440x1440), so it holds a working configuration of the very output MIND Core lacks.
 
 This task reads and writes no driver. **Reading is not harmless on this device:** on 2026-11-21 a survey script's register read hung the Ryzen in Linux and a person had to power-cycle it (Progress, below). Since then nothing reads its registers under Linux (BENCH rule); what Linux's own driver hands out as finished files is read instead, and a register read is only proposed, for MIND Core with KRN's grant.
 
@@ -24,7 +24,7 @@ This task reads and writes no driver. **Reading is not harmless on this device:*
 
 ## Acceptance criteria
 
-- [ ] `hwdocs/` holds the survey with its sources: the ATOM tables named, the state of both outputs under Linux, the state the firmware leaves, and how each was read.
+- [x] `hwdocs/` holds the survey with its sources: the ATOM tables named, the state of both outputs under Linux, the state the firmware leaves, and how each was read. The firmware's state was read under MIND Core by `display` (213-DRV-0086 step 1), not from Linux.
 - [x] The DMUB question is answered with its evidence, or what is still missing to answer it is named.
 - [x] A route to first light is written as register blocks and tables, each tied to a line of the survey. It is a plan, not a guarantee (MC-12.3).
 - [ ] Nothing on the Ryzen was changed: no package installed, no register written, the machine back in MIND Core. **Not met as written:** no package was installed and no register written by this task, and the machine is back in MIND Core, but the register read hung it and it needed a power cycle (Progress).
@@ -87,6 +87,18 @@ running (the PHY interface, DMCU/DMCUB, the mailbox, gated pipes). "Read-only" d
 registers changed the machine. The owner session then read the kernel's files alone, one step per operation, with no
 register read; nothing hung, and the machine was returned to MIND Core (bench log, 15:02 UTC).
 
+## Resolution (2026-11-26)
+
+**What was done, and where:**
+- **The survey** is [hwdocs/cezanne-display.md](../hwdocs/cezanne-display.md), in `main`: the device, the VBIOS's tables (read with `scripts/hardware/amd_vbios_tables.py`), the display paths, the monitors and their modes, Linux's state of both pipes, and how each was read.
+- **The state the firmware leaves** (criterion 1's open part on 2026-11-21) was read under MIND Core by `display` with KRN's grant, in eight batches ([213-DRV-0086](213-DRV-0086-display-the-second-output-lit.done), step 1). The file's section "What the firmware leaves for MIND Core" has it: the pipe, the clocks, the powered pipes, the aperture, HPD, and the DMCUB held in reset. The second way, Linux without `amdgpu`, was not taken.
+- **The DMUB question** (criterion 2): by Linux's source it is not needed for a TMDS mode set. On this machine the DMCUB is held in reset, and the route ran without it: first light on 2026-11-22 (213-DRV-0086). That holds for this machine and its two monitors (MC-12.1).
+- **The route** (criterion 3) became `display`'s stages, in `main` with 213-DRV-0086 and its successors.
+
+**Criterion 4 is not met and cannot be:** the register read under Linux hung the machine on 2026-11-21 and it needed a power cycle (Progress). No package was installed and no register written. What came of it is a rule in force on the bench: no register of this machine is read under Linux by mapping a BAR, `/dev/mem` or a raw debugfs file, and no unknown debugfs file is read.
+
+**Left to others:** the driver's own criteria are [213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done)'s.
+
 ## Related
 
-[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md) (the driver), [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light), [213-DRV-0074](../issues-done/213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) (the driver), [213-DRV-0086](213-DRV-0086-display-the-second-output-lit.done) (first light), [213-DRV-0074](213-DRV-0074-the-ryzens-second-monitor.done) (the firmware gives one output).
