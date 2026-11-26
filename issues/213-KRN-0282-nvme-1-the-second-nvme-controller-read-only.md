@@ -1,6 +1,6 @@
 # 213-KRN-0282 — `nvme#1`: the second NVMe controller, read-only
 
-**Type:** `init`, `common/abi.rs`'s service list (no system-call change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-26) · **Blocked by:** DRV's `nvme` by instance (213-DRV-0060, `claude/213-DRV-0060-nvme-by-instance`), which must land in the same round or before: `main`'s `nvme` ignores its argument and writes · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.1, MC-4.2, MC-12.1, MC-12.3
+**Type:** `init`, `common/abi.rs`'s service list (no system-call change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 178, 4a7672da70, 2026-11-26, with DRV's 213-DRV-0060 and its `nvme2` suite, which passed in the gate; the Ryzen run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.1, MC-4.2, MC-12.1, MC-12.3
 
 ## Problem
 
