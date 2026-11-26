@@ -1,10 +1,10 @@
 # 213-DRV-0086 — `display`: the Ryzen's second output lit, first with the engine's own test pattern — done
 
-**Type:** driver (a new `display` service) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — (it was [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)'s route and KRN's grant, both given) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (a new `display` service) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-26) · **Blocked by:** — (it was [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done)'s route and KRN's grant, both given) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
-The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)). This task is the first light on the second output, by the route [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md) writes down.
+The Ryzen's HDMI monitor stays dark under MIND Core: the firmware sets one output, and nothing drives the display engine ([213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md)). This task is the first light on the second output, by the route [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done) writes down.
 
 ## Plan
 
@@ -67,7 +67,7 @@ MSI-X bytes. Two cases: every offset of the range refused, every register of eve
 step of first light inside the engine.
 
 Tested on LEG9 only: the 15 cases pass, and the three modules build as `#![no_std]` with `-D warnings`. Nothing of it
-has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md)),
+has run on the Ryzen; the plan is the survey's route ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done)),
 not a guarantee (MC-12.3). Still open before step 3 can run: the VBIOS command tables need an interpreter (or their
 writes known) and the VBIOS image from the ACPI VFCT table, and the firmware's own state is to be read under MIND Core
 (step 1, with KRN's grant).
@@ -815,4 +815,4 @@ of APP then. `display` writes its side against KRN's interface.
 
 ## Related
 
-[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](../issues/213-DRV-0085-the-radeons-display-engine-surveyed.md), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).
+[213-DRV-0078](../issues/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.md), [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done), [213-KRN-0098](../issues-done/213-KRN-0098-black-screen-when-the-shell-takes-it.done).

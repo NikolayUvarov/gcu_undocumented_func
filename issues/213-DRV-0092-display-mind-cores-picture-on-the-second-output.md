@@ -426,5 +426,5 @@ criterion 3's straight edges are still to be seen.
 ## Related
 
 [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (first light, step 4's first plan),
-[213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md),
+[213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done),
 [213-KRN-0271](../issues-done/213-KRN-0271-displays-grant-for-first-light.done) (slot 5).

@@ -1,6 +1,6 @@
 # 213-DRV-0078 — A display driver for the Ryzen's Radeon (DCN 2.1): its second monitor lit
 
-**Type:** driver (a new `display` service; `compositor` with `KRN`) · **Owner:** `DRV` · **Priority:** P2 (the maintainer, 2026-11-21) · **Status:** open (2026-11-20; split on 2026-11-21 into [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md) and [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done)) · **Blocked by:** 213-DRV-0085, 213-DRV-0086 · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (a new `display` service; `compositor` with `KRN`) · **Owner:** `DRV` · **Priority:** P2 (the maintainer, 2026-11-21) · **Status:** open (2026-11-20; split on 2026-11-21 into [213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done) and [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done)) · **Blocked by:** a run of `main`'s own `display` on the Ryzen (criterion 2) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -28,14 +28,23 @@ This is a large driver. Nothing of it exists yet, and none of it is promised by 
 
 ## Acceptance criteria
 
-- [ ] The survey recorded in `hwdocs/` with its sources: the ATOM tables named, the DCN state the firmware leaves, and the DMUB question settled.
+- [x] The survey recorded in `hwdocs/` with its sources: the ATOM tables named, the DCN state the firmware leaves, and the DMUB question settled. In `main`: [hwdocs/cezanne-display.md](../hwdocs/cezanne-display.md) (213-DRV-0085, done 2026-11-26).
 - [ ] On the Ryzen, the HDMI monitor shows MIND Core's screen, and the DP monitor keeps it, both at a stated mode. This holds for that machine and its two monitors (MC-12.1).
 
 ## Its tasks (2026-11-21)
 
-- [213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.md): steps 1 and 2 above, the survey and the DMUB question.
+- [213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done): steps 1 and 2 above, the survey and the DMUB question.
 - [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done): step 3, first light, with the engine's own test pattern before a framebuffer.
 - Step 4, the compositor, is KRN's and is asked of it with the survey's facts.
+
+## Progress (2026-11-26)
+
+- **Criterion 1 is met:** the survey is in `main`, the firmware's state read under MIND Core, and the DMUB question settled on this machine: its DMCUB is held in reset and the second output is lit without it ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done)).
+- **Criterion 2 is shown on bench builds, not yet on `main`'s:**
+  - what was seen on the Ryzen (2026-11-22, boots 84 to 95, the bench branch with its build switches set): MIND Core's screen mirrored on `HDMI-A-1`, by the log at the monitor's own 3440x1440, with `DP-2` kept at 2560x1600 and not blinking by the maintainer's eye; the plug taken out and put back ([213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done));
+  - since then the code landed with a setting in place of the switches (213-DRV-0099, 213-KRN-0281): `main`'s `display` lights the second output only when `data/displays.txt` says `output second light`. That very build has not run on the machine (MC-12.1);
+  - **the criterion is ticked after one boot of `main`'s build on the Ryzen with that line written,** read from the log and seen by the maintainer. The monitor's own menu (3440x1440 at 60 Hz) is [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md)'s last criterion.
+- **Not this task's:** the cold path of table 12 ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)); the extended desktop (177-KRN-0274, a plan).
 
 ## Related
 
