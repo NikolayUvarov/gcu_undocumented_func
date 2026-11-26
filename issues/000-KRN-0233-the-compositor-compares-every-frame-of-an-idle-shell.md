@@ -85,3 +85,8 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 ## Related
 
 [000-KRN-0201](../issues-done/000-KRN-0201-the-idle-halt-window-holds-a-loaded-hosts-frame-copy.done), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) (the compare one pixel at a time), [000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done) and [000-KRN-0186](../issues-done/000-KRN-0186-a-frame-copied-while-it-was-drawn.done) (whole frames, the hold).
+
+## Round 177's gate (2026-11-26)
+
+`x86: x2APIC` failed once on x32-2 (54 s): after `run memtest endpoints &` the shell's prompt did not come back within the wait. Two minutes later `x86: USB image` failed on the same lane: the line the test types was not in `log:boot0001.log`, a shell that did not answer as well. Both passed when run again alone on x32 (224 s and 184 s), and round 177 landed. Two stalls of the shell on one lane within minutes, with no failure elsewhere, point at that lane's load at the time, not at the candidate. That is not shown: the stuck CPUs' state is in that run's `mind-core-stuck-*.log` on x32-2, not read yet.
+

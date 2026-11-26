@@ -1,6 +1,6 @@
 # 700-KRN-0280 — `bt_hci`: the input privilege and a writable `data/bluetooth/`
 
-**Type:** `init` (grants; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-26) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.1, MC-6.3, MC-12.3
+**Type:** `init` (grants; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 177, bf0e9db15a, 2026-11-26; BLT's run and the `audio_gw` sink line left) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.1, MC-6.3, MC-12.3
 
 ## Problem
 
