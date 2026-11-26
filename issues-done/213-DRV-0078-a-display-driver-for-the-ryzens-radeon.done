@@ -43,7 +43,7 @@ This is a large driver. Nothing of it exists yet, and none of it is promised by 
 - **Criterion 2 is shown on bench builds, not yet on `main`'s:**
   - what was seen on the Ryzen (2026-11-22, boots 84 to 95, the bench branch with its build switches set): MIND Core's screen mirrored on `HDMI-A-1`, by the log at the monitor's own 3440x1440, with `DP-2` kept at 2560x1600 and not blinking by the maintainer's eye; the plug taken out and put back ([213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.done));
   - since then the code landed with a setting in place of the switches (213-DRV-0099, 213-KRN-0281): `main`'s `display` lights the second output only when `data/displays.txt` says `output second light`. That very build has not run on the machine (MC-12.1);
-  - **the criterion is ticked after one boot of `main`'s build on the Ryzen with that line written,** read from the log and seen by the maintainer. The monitor's own menu (3440x1440 at 60 Hz) is [213-DRV-0095](../issues/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md)'s last criterion.
+  - **the criterion is ticked after one boot of `main`'s build on the Ryzen with that line written,** read from the log and seen by the maintainer. The monitor's own menu (3440x1440 at 60 Hz) is [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done)'s last criterion.
 - **Not this task's:** the cold path of table 12 ([213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)); the extended desktop (177-KRN-0274, a plan).
 
 ## Related
@@ -63,6 +63,6 @@ This is a large driver. Nothing of it exists yet, and none of it is promised by 
 It holds for that machine, its two monitors and those releases (MC-12.1).
 
 **Not this task's, and still open:**
-- the monitor's own menu reading the mode: [213-DRV-0095](../issues/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.md)'s last criterion;
+- the monitor's own menu reading the mode: [213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done)'s last criterion;
 - a start from power-off, table 12's long path: [213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md);
 - the stretched mirror by the maintainer's eye (213-KRN-0273) and the extended desktop (177-KRN-0274, a plan): KRN's and APP's.
