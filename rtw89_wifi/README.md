@@ -24,8 +24,8 @@ Initial DACK/RXDCK use the owned BTC antenna/grant/TDMA policy and bounded
 START/STOP arbitration; a firmware ACK alone never grants calibration.
 [Hardware notes](../hwdocs/rtl8852be.md)
 record the immutable BSD sources, exact bounds, error behavior and validation
-limits. [DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md) remains open until
-actual association and traffic under load meet its acceptance criteria.
+limits. [DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done) is closed: the
+Ryzen associates and carries its traffic; its resolution names what is left.
 
 Build from this directory with `cargo build --release --locked`. The focused
 host fixtures are `tests/rtw89_power_host.rs`, `tests/rtw89_mac_host.rs`,

@@ -1,6 +1,6 @@
 # Initial RTL8852B host IQK
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 The private library implements initial non-DBCC, PHY0, 2 GHz/20 MHz,
 wideband IQK for the already selected RFE1/cut1 board. It has no native caller
 and does not establish calibrated radio quality, association or packet traffic.

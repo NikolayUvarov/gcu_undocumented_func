@@ -63,4 +63,4 @@ The first scan was passive, and nothing was sent before the country. `init` gave
 
 ## Related
 
-[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).
+[213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).

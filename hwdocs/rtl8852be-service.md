@@ -1,6 +1,6 @@
 # RTL8852BE private wlanhw 1.1 adapter
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md); MC-2.3,
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done); MC-2.3,
 MC-3.3, MC-6.1, MC-12.1, MC-12.3 and Appendix B.6.
 
 `rtw89_wifi/src/service.rs` adapts an actual, borrowed `DataSession` to the

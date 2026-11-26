@@ -1,6 +1,6 @@
 # 550-NET-0096 — The world rules chosen: `00` as the user's country, kept against announcements
 
-**Type:** `wlan`, `dot11`, `keystore` (interface: `wifi.wit` 1.4) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-26) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3, MC-12.4
+**Type:** `wlan`, `dot11`, `keystore` (interface: `wifi.wit` 1.4) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 177, bf0e9db15a, 2026-11-26; the Ryzen's 5 GHz join left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3, MC-12.4
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # RTL8852BE cold firmware/MAC/RX model
 
-Task: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Task: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This is host model coverage, not physical firmware, RF or WLAN evidence.
 
 `tests/rtw89_pipeline_device.rs` extends the existing cumulative OTP/power/

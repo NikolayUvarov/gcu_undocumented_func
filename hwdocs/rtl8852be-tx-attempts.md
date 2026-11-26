@@ -1,6 +1,6 @@
 # RTL8852B firmware transmit-attempt accounting
 
-Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
+Issue: [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done).
 This follow-up resolves the deliberately unknown count in the
 [raw transmit prerequisite](rtl8852be-tx.md). It changes no service interface,
 does not activate native transmission and does not claim a Ryzen measurement.

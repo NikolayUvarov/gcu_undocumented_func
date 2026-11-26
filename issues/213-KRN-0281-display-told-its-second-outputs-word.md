@@ -1,6 +1,6 @@
 # 213-KRN-0281 — `display` told its second output's word from `data/displays.txt`
 
-**Type:** `init`, `libmind` (no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-26) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `init`, `libmind` (no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 177, bf0e9db15a, 2026-11-26, with DRV's 213-DRV-0099; the Ryzen run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
