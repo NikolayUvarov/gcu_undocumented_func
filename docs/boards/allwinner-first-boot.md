@@ -159,7 +159,21 @@ qemu-system-aarch64 -machine virt,acpi=off,gic-version=2,highmem=off,virtualizat
 python3 scripts/board_stage1.py --tcp 127.0.0.1:4555 --type --save console.txt
 ```
 
-**Not run yet** (2026-11-26): the try waits for this repository's build machine. Its result goes here and into 100004-MOB-0012, as evidence for QEMU `virt` only (MC-12.1).
+**Run on 2026-11-26** (LEG9's WSL2, QEMU 8.2.2, TCG; U-Boot `2025.10-0ubuntu0.24.04.4`; the tree of `claude/MOB-boards` 1a0c83cc1796, its `[INIT] BUILD` line; the Zero 3's card, SHA-256 `70e39dc6…9480df`, with the firmware the catalog names, `73bcdf3f…38d842`): **all eight criteria met, twice**, each run about 9 s from the first banner to the next.
+
+| | `-m 512`, a `bochs-display` (a GOP), the VirtIO keyboard and tablet | `-m 2G`, no display, as the Zero 3 has none |
+|---|---|---|
+| `u-boot` | `U-Boot 2025.10-0ubuntu0.24.04.4 (Oct 07 2026 - 20:58:59 +0000)` | the same |
+| `loader` | `BOOT: MANIFEST 2c448b4c627fa694 KEY fd9adafc8d461c37 (THE TEST KEY) VERIFIED, 47 IMAGES CHECKED`, then `BOOT: VOLUME MBR PARTITION 1 AT LBA 8192`: the boot partition where the card has it | the same |
+| `kernel` | `… BOARD FROM THE DEVICE TREE: GICV2 … PL011 … TIMER PPI 27 CPUS 4 PSCI SMC … ENTERED AT EL2`, `PROTECTION: PXN`, `INIT STARTED` | the same |
+| `cpus` | four rows `ONLINE=true`, each with `TICKS` above 0 | the same |
+| `timer` | `UPTIME MS=640`, then `3690`: 3.05 s on the kernel's clock, 3.01 s on the host's | 3.05 s and 3.01 s |
+| `memory` | `RANGES=89 FREE_RAM=394580K`; `MEMORY: 385 MIB` | `RANGES=85 FREE_RAM=1967444K`; `MEMORY: 1921 MIB` |
+| `prompt`, `reboot` | `MIND> `; `REBOOT VIA PSCI SYSTEM_RESET`, then U-Boot's banner | the same |
+
+- **`UPTIME MS`** counts the kernel's ticks, so it shows the timer's interrupts arriving; `time`'s `MONOTONIC NS`, the generic counter, was 3.4 s ahead of it, the time before the kernel's tick started.
+- **What this shows:** that the script reads such a console and decides each criterion, and that MIND Core's aarch64 image on this card's layout boots under U-Boot's UEFI at EL2 on four Cortex-A53 in QEMU `virt`. **It shows nothing of either board** (MC-12.1): `virt`'s PL011, GIC addresses, PSCI and memory are not a 16550's, the H5's or the H618's, and QEMU's U-Boot never runs the board's firmware at 8 KiB.
+- The recorded console is `tests/data/stage1/qemu-virt-uboot-a53-512m.txt`, the host tests' good one.
 
 ## 9. What is known to be at risk on the boards
 

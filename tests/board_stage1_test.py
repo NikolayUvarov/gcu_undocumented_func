@@ -1,7 +1,7 @@
-"""scripts/board_stage1.py on consoles (100004-MOB-0012): a good one, and broken ones made from it line by line; read from
-a file, from standard input, from a TCP line, from effector485's console API and from an Effector server's serial session,
-the last three by stand-ins that answer each typed command with the console's answer. No console here is a board's: what
-passes says how the script reads, not how a board boots (MC-12.1)."""
+"""scripts/board_stage1.py on consoles (100004-MOB-0012): one recorded in QEMU, one composed in a board's shape, and broken
+ones made from the recording line by line; read from a file, from standard input, from a TCP line, from effector485's
+console API and from an Effector server's serial session, the last three by stand-ins that answer each typed command with
+the recording's answer. No console here is a board's: what passes says how the script reads, not how a board boots (MC-12.1)."""
 import base64
 import http.server
 import json
@@ -20,9 +20,12 @@ sys.path.insert(0, str(ROOT))
 from scripts import board_stage1  # noqa: E402
 
 DATA = ROOT / "tests/data/stage1"
+# Recorded as the script read it (--save) on 2026-11-26: QEMU 8.2.2 `virt,acpi=off,gic-version=2,virtualization=on`, four
+# Cortex-A53, 512 MiB, U-Boot 2025.10's UEFI (scripts/fetch_uboot.sh), the Zero 3's card from board_image.py, with --type.
+RECORDED = DATA / "qemu-virt-uboot-a53-512m.txt"
 # Composed from the formats in the code, in a board's shape (U-Boot's SPL, a 16550, EL2): no board printed it.
 COMPOSED = DATA / "composed-h5-shape.txt"
-GOOD = COMPOSED
+GOOD = RECORDED
 TOOL = [sys.executable, str(ROOT / "scripts/board_stage1.py")]
 COMMANDS = {c for c in board_stage1.COMMANDS if isinstance(c, str)}
 
@@ -84,12 +87,18 @@ class Board:
 
 
 class Lines(unittest.TestCase):
-    def test_the_good_recording(self):
-        stage = check(GOOD.read_text())
-        text, missing = stage.report("good")
-        self.assertEqual(missing, 0, text)
-        self.assertIn("CPUS 4", stage.board[1])
-        self.assertIn("ENTERED AT EL2", stage.board[1])
+    def test_the_good_consoles(self):
+        for console in (RECORDED, COMPOSED):
+            with self.subTest(console=console.name):
+                stage = check(console.read_text())
+                text, missing = stage.report("good")
+                self.assertEqual(missing, 0, text)
+                self.assertIn("CPUS 4", stage.board[1])
+                self.assertIn("ENTERED AT EL2", stage.board[1])
+        # U-Boot's SPL comes first on a board: the banner is U-Boot proper's, and the next boot's SPL shows the reboot.
+        stage = check(COMPOSED.read_text())
+        self.assertTrue(stage.met["u-boot"][1].startswith("U-Boot 2026.10 "), stage.met["u-boot"])
+        self.assertIn("then U-Boot SPL 2026.10", stage.met["reboot"][1])
 
     def broken(self, text, name, why):
         stage = check(text)
@@ -221,6 +230,7 @@ class Live(unittest.TestCase):
                 self.reply("POST")
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return f"http://127.0.0.1:{server.server_address[1]}"
 
