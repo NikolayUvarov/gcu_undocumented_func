@@ -55,8 +55,8 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 
 ## Acceptance criteria
 
-- [ ] Step 1 reads the second socket's blocks, with host cases that it writes nothing; its values from the Ryzen
-  recorded here.
+- [x] Step 1 reads the second socket's blocks, with host cases that it writes nothing; its values from the Ryzen
+  recorded here (boot 108, the socket empty and with the monitor in it).
 - [ ] The EDID read over DDC2, with host cases on the model of the engine; on the Ryzen its checksums good and the
   engine left as found.
 - [x] Host cases: the stages on a model with the monitor on the second socket; the guard's refusals for the first
@@ -392,8 +392,34 @@ second empty. It holds for that machine and that release (MC-12.1). Through QEMU
 2012.8 ms after step 3 began, `HPD 1 FOLLOWED …: SENSE 1, THE SECOND OUTPUT Lit`, and
 `HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 READ): SENSE 0; THE SECOND OUTPUT Lit ON HDMI-A-1`.
 
-**Still to come in this run:** the monitor moved into the second socket (HPD 2's sense 1, the socket named, batch 12
-read again with a sink there), and back.
+**The second part, the same boot: the monitor moved into the second socket and back** (the maintainer's hands, about
+21:11 UTC; uptime in seconds).
+- 3186.310 `STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR`, taken back in 29.9 ms.
+- 3191.412 `HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)`
+- Batch 12 with the monitor there, 15 of 15 read, nothing written:
+  - `B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS FF000013, CONTROL 10FA09C4`
+  - DIG B, PHY PLL B, DDC2 and the pads exactly as with the socket empty: `BE ENABLED 0`, `PIXCLK_ENABLE 0`,
+    `HW STATUS 0`, both pad lines read high (`Y 1`), `DDC1 1 DDC2 1`.
+- 3200.342 `HDMI-A-2: ITS MONITOR TAKEN OUT, NOT DRIVEN`, after 8.9 s there; `SENSE 0`, `INT_STATUS FF0FF001`.
+- 3205.881 `A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT Lit`, on HDMI-A-1 again.
+
+**What it settles:**
+- **The socket the maintainer calls the second one is HDMI-A-2**, VBIOS path 1: HPD 2 sensed his monitor there.
+- A monitor there changes nothing in DIG B, PHY PLL B or the DDC2 engine by itself: the firmware and Linux have set up
+  nothing for it on a boot where Linux did not see a monitor in that socket.
+- Nothing was written for the second socket, and HDMI-A-1 lit again afterwards as before.
+
+**Seen again, the second time of two:** when the cable goes into the second socket, the hub on xHCI 1's port 1
+(05E3:0608) drops and comes back, with the mouse's receiver and the serial converter behind it (3190.902 s `THE
+CONVERTER IS GONE`, 3191.067 s `PORT 1: CONNECTED`), half a second before HPD 2's sense. On boot 107 it was 2054.3 s.
+Whether that hub is in the monitor is still asked of the maintainer. It costs the serial link about a second.
+
+**Before first light there, known and not known:**
+- **PHY B is most likely cold.** Table 12 then takes its long path (530 steps, 111 writes on the model with the real
+  image), which has never run on this hardware for any PHY ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
+  Whether it is cold is said by stage 2's own line; step 1 does not read RDPCS.
+- So first light on the second socket is to be made with a person at the machine, in the survey's order and undone
+  after its stages on the first run.
 
 ## Related
 
