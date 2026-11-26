@@ -1,8 +1,8 @@
 //! bt_hci's parts that need no controller (700-BLT-0001): HCI commands, events joined from USB packets, the devices
 //! heard, and a Realtek patch made from its files. With `proprietary/firmware/rtl_bt/` fetched, the real RTL8821C
 //! files too. Evidence for these encodings only: what the controller does with them is the DEXP's to show (MC-12.1).
-#[path = "../bt_hci/src/hci.rs"] #[allow(dead_code)] mod hci;
-#[path = "../bt_hci/src/rtl.rs"] #[allow(dead_code)] mod rtl;
+#[path = "../bt_host/src/hci.rs"] #[allow(dead_code)] mod hci;
+#[path = "../bt_host/src/rtl.rs"] #[allow(dead_code)] mod rtl;
 use std::path::Path;
 
 #[test]
@@ -39,8 +39,8 @@ fn the_address_and_the_devices_heard() {
     report.extend_from_slice(b"Mouse1");
     report.push((-60i8) as u8);
     let mut heard = Vec::new();
-    hci::le_reports(&report, |h| heard.push((h.addr, h.rssi, h.name.map(|n| n.to_vec()))));
-    assert_eq!(heard, vec![([1, 2, 3, 4, 5, 6], -60, Some(b"Mouse1".to_vec()))]);
+    hci::le_reports(&report, |h| heard.push((h.addr, h.random, h.rssi, h.name.map(|n| n.to_vec()))));
+    assert_eq!(heard, vec![([1, 2, 3, 4, 5, 6], false, -60, Some(b"Mouse1".to_vec()))]);
     // An extended inquiry result: a keyboard (peripheral, 0x002540), RSSI -70, a shortened name.
     let mut eir = vec![1, 6, 5, 4, 3, 2, 1, 1, 0, 0x40, 0x25, 0x00, 0, 0, (-70i8) as u8, 3, 0x08, b'K', b'B'];
     eir.resize(15 + 240, 0);

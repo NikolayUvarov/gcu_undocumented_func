@@ -132,6 +132,14 @@ The RTL8821C Bluetooth controller's `rtl_bt/rtl8821c_fw.bin` and `rtl_bt/rtl8821
 
 The RTL8852B Bluetooth controller's `rtl_bt/rtl8852bu_fw.bin` (`bt_hci`, 700-BLT-0004; the Ryzen's RTL8852BE) comes from the same `linux-firmware` commit and licence, fetched by [`scripts/firmware/rtl8852b_bt.py`](scripts/firmware/rtl8852b_bt.py) through `scripts/proprietary.sh fetch`. It has no configuration file. It stays in ignored `proprietary/firmware/rtl_bt/` and reaches a disk's `data/firmware/rtl_bt/` the same way; [its pin and layout](hwdocs/rtl8852b-bt.md). `bt_hci`'s loader for its format is written from the file's layout; Linux's GPL `btrtl.c` was read for facts only, and no code was taken from it.
 
+### Bluetooth: specification data in the host stack
+
+`bt_host` (700-BLT-0005 and on) is written from the Bluetooth SIG's public specifications: Core 5.3, A2DP 1.3.2, AVDTP 1.3, AVRCP 1.6.2 with AVCTP 1.4, HID 1.1. No code of BlueZ, Linux or libsbc was taken. Two tables are the specification's own data:
+- **The SBC encoder's prototype filters** (`bt_host/src/sbc.rs`) are tables 12.23 and 12.24 of the A2DP 1.3.2 specification (Appendix B), scaled by 2^30. They were read from the specification's text, not typed by hand.
+- **The SDP records** (`bt_host/src/sdp.rs`) of the A2DP source (A2DP 1.3.2 figure 5.1) and of AVRCP's controller (AVRCP 1.6.2 table 8.1) use the Assigned Numbers' UUIDs and the profiles' version numbers.
+
+The SBC test vectors (`bt_host/tests/data/sbc_*.hex`) are this encoder's output. They were checked once by decoding with `sbcdec` from Ubuntu's `sbc-tools` 2.0 (libsbc, LGPL/GPL), used as a tool only and never part of the repository or an image.
+
 ## The Allwinner boards' firmware (built from fetched sources; on a board's card, in no system image)
 
 `scripts/board_uboot.sh` builds U-Boot with TF-A's BL31 for the Orange Pi Zero Plus 2 H5 and the Orange Pi Zero 3 ([100004-MOB-0001](issues/100004-MOB-0001-the-boards-sd-card.md)), from the tags below, each checked against its commit. The catalog of devices, `scripts/boards.toml` ([352-MOB-0010](issues-done/352-MOB-0010-a-catalog-of-devices-for-board-image.done)), pins them, and `tests/board_image_test.py` checks this table against it. Neither source is stored here. `scripts/board_image.py` writes the result at 8 KiB on the board's card, outside MIND Core's partitions. A card holds code from both, so one given to others must carry their notices, and U-Boot's source with it (GPL-2.0).
