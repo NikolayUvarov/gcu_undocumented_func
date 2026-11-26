@@ -168,8 +168,19 @@ fn the_world_code_caps_the_power_and_a_known_country_does_not(){
             }
         }
     }
-    // An EIRP above the tables' 14.5 dBm leaves their maximum; one of 13 dBm is the maximum, and its cap is below TSSI's 12 dBm.
+    // An EIRP above the tables' 14.5 dBm leaves their maximum; one of 13 dBm is the maximum.
     let low=Resolved::resolve(&b,Rule::station(*b"00",1,6,30,false),PlatformInput::HeldBack).unwrap();
     assert_eq!(low.policy().cap(),Some(channel::Cap{maximum:[29,23],limit:[26,20]}));
-    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"00",1,6,26,false),PlatformInput::HeldBack),Err(Error::TssiPower)));
+    // The cap holds the station's frames; TSSI's 12 dBm is held to the maximum the cap is taken from (the maintainer,
+    // 2026-11-26). So a maximum of 13 dBm admits though its cap is 11.5 dBm, and one of 11.5 dBm still refuses.
+    let at13=Resolved::resolve(&b,Rule::station(*b"00",1,6,26,false),PlatformInput::HeldBack).unwrap();
+    assert_eq!(at13.policy().cap(),Some(channel::Cap{maximum:[26,23],limit:[23,20]}));
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"00",1,6,23,false),PlatformInput::HeldBack),Err(Error::TssiPower)));
+    // Channel 100 under the world's rules is that case (the Ryzen, 2026-11-26): 13 dBm on one TX, capped to 11.5 dBm.
+    let radar=Resolved::resolve(&b,Rule::station(*b"00",1,100,40,false),PlatformInput::HeldBack).unwrap();
+    assert_eq!(radar.policy().cap(),Some(channel::Cap{maximum:[26,20],limit:[23,17]}));
+    // Channel 149's own maximum there is 7 dBm: no cap's matter, the calibration is refused.
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"00",1,149,40,false),PlatformInput::HeldBack),Err(Error::TssiPower)));
+    // A known country is as before: its limit alone decides.
+    assert!(matches!(Resolved::resolve(&b,Rule::station(*b"UZ",1,6,23,false),PlatformInput::HeldBack),Err(Error::TssiPower)));
 }

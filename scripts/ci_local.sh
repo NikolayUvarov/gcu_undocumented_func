@@ -89,7 +89,7 @@ X86_GROUPS=(
     "x86: the updater and an update through the link|$X86 --suites updater,linkupdate"
     "x86: the cable with no words|$X86 --suites cable"
     "x86: an update from the previous release|OVMF=$OVMF scripts/previous_release.sh x86_64"
-    "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
+    "x86: NVMe boot disk|$X86 --disk nvme --suites vfs,nvme2"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs,fill"
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"

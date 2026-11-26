@@ -1,6 +1,6 @@
 # 213-DRV-0087 — The RTL8852BE on 5 GHz: 20 MHz channels at 802.11a's rates
 
-**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-21): written and in `main`, the join not run yet · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-26: the join on channel 100 run under `00` on the Ryzen: the access point heard and chosen, one fault mended, the admission then refused by TSSI's power floor under the unknown country's cap; the maintainer's word on that cap awaited) · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -254,6 +254,29 @@ The maintainer, 2026-11-25: «То же касается и 5ГГц. Напом�
 4. Three 6 MB downloads with the sender's `TCP_INFO`, and the agent's return to the server.
 5. A restart: the station comes up under the kept `00` and joins channel 100 by itself.
 6. `wifi country UZ`, and the join and three downloads on channel 8 with the same build.
+
+## The first run on channel 100 under `00` (the Ryzen, 2026-11-26)
+
+Release 202611260804 (`main` 6230e1fdb with DRV's pending requests; `rtw89_wifi`, `wlan` and `netstack` are `main`'s), boot 103, the wired card being the default route so that the server stayed reached. It holds for that machine, that access point and that release (MC-12.1). The raw lines are kept by the owner session (`logs-2026-11-26/cable-5g-*.txt`).
+
+**What worked, by the log:**
+- `wifi country 00`: `[WIFI] COUNTRY 00 (the world domain) APPLIED, THE RADIO CONFIRMED ITS LIMITS; CHOSEN BY THE USER, KEPT BY KEYSTORE`, `[WLAN] COUNTRY 00 (THE RULES EVERY COUNTRY ALLOWS, CHOSEN BY THE USER, KEPT BY KEYSTORE): 11 CHANNELS TO SEND ON, 27 TO LISTEN ON`.
+- **In data mode the scan stays on its channel:** `[RTW89] COUNTRY 00 IN DATA MODE: CHANNEL 8 KEPT AT THE POWER IT WAS ADMITTED AT`, and the station joined channel 8 again. So the order's step 2 alone does not move the station: the radio has to start anew (a restart of the driver or of the machine).
+- **The driver restarted once** (`kill`): `[WLAN] THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY 00 AGAIN`, `[RTW89] COUNTRY 00: 38 CHANNELS, 27 LISTEN ONLY; APPLIED … COUNTRY UNKNOWN: POWER CAPPED AT 75 % (801-DRV-0071)`, the scan with `[RTW89] HEARD A0:36:BC:11:F8:8C ON 5 GHZ CHANNEL 100` and `SCAN: 37 PASSIVE TUNES, THE LONGEST 4473 US; 63 FRAMES KEPT`, then `[WLAN] JOINING CoolNet2 ON CHANNEL 100`.
+
+**The first fault, mended (c95eb9d51 on `claude/213-DRV-0087-beacons-pass-until-admission`):**
+- **Seen:** `[RTW89] LISTEN-ONLY CHANNEL 100: NOTHING SENT TO A0:36:BC:11:F8:8C, NO BEACON OF IT HEARD HERE SINCE THE TUNE (0 ACCESS POINTS HEARD)`, `[WLAN] AUTO-JOIN CoolNet2: NO ANSWER`, try after try, fourteen in all.
+- **Why:** the station's filter for its network narrowed the hardware's (`BCN_CHK_EN` and the two beside it at 0xCE20) before the first send. Narrowed, the hardware checks beacons against a BSSID that the receive-only mode never sets, and passes none. On 2.4 GHz the first send admits the channel at once, so nothing waited for a beacon and it never showed.
+- **The change:** a scan's filter opens the hardware's at once, as before; a network's narrows it with the send that admits the channel, still before the calibration.
+- **With it** (the driver replaced over the cable): `[RTW89] LISTEN-ONLY CHANNEL 100: A0:36:BC:11:F8:8C HEARD 157 MS AFTER THE TUNE, 157 MS AFTER THE REFUSED SEND`, and the next send was admitted. On channel 8 the same build joins as before (`DATAPATH ADMITTED ON CHANNEL 8`, `AUTO-JOIN CoolNet2: JOINED`).
+
+**Where it stops now: `WLANHW SERVICE STOPPED 1: Admission(Admission { channel: 100, failure: Admission(TssiPower) })`.**
+- **The numbers** (`calibration_policy::tssi_cap`, a host case printed them): under the world group channel 100's most on one TX is 13 dBm (26 half-dBm); the unknown country's cap (801-DRV-0071, three half-dB steps) makes it 11.5 dBm; the TSSI calibration's bursts go at 12 dBm (the source's raw level 48, `hwdocs/rtl8852be-tssi.md`). 11.5 is below 12, so the admission is refused, and with it every join there. On channels 1 to 11 the capped limit is 13 dBm, which is why 2.4 GHz never met it.
+- **The driver then left and came again every 7 s** (`RESTART_AFTER_FAILURE`) until `wifi country UZ` took channel 100 out; the station joined channel 8 at once.
+- **This is a rule's matter, not a fault:** the cap is the maintainer's of 2026-11-14. Asked of him on 2026-11-26, with three ways: the calibration held to the channel's world limit while the cap stays for the station's frames (the owner session's recommendation); no cap for a `00` the user chose; or no change.
+- **The maintainer's word, the same day:** «Да, делай», to the first. So `calibration_policy::Resolved::resolve` compares TSSI's 12 dBm with the channel's maximum under the world's rules (the cap's `maximum`), and the cap goes on holding every frame the station sends. Host cases: a maximum of 13 dBm admits (channel 6 at that EIRP, and channel 100), one of 11.5 dBm and channel 149's 7 dBm refuse, a known country is as before.
+
+**Not reached yet:** IQK, TSSI and DPK on 5 GHz, the association and any frame sent there. The order's steps 3 to 6 stay as they are, with one change: step 2 is followed by a restart of the radio.
 
 ## For a second Linux reference on channel 100 (asked by the owner session)
 

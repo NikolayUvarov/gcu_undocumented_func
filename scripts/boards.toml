@@ -1,0 +1,87 @@
+# The catalog of devices MIND Core's aarch64 image is made into a card for (352-MOB-0010, for 352-UPD-0049): one entry each.
+# scripts/board_image.py --board <name> reads it (`--list` names the entries), and scripts/board_uboot.sh builds an entry's
+# firmware from it. Each fact is said here only; THIRD_PARTY.md's table is checked against [source] by tests/board_image_test.py.
+# What an entry says was read in the sources named beside it, and none of it has been seen on a board yet (MC-12.3).
+# The PinePhone's entry and card wait for the phone (the maintainer, 2026-11-26; issues/requests-MOB.md, request 2).
+#
+# An entry:
+#   title, soc, arch            the device, its SoC and cores, and the image and update bundle it takes (one aarch64 bundle for all)
+#   [firmware]                  what runs before our loader: the script that builds it from [source], its file and SHA-256
+#   [card]                      the card's layout: `firmware` is "card" (on the card, at `firmware-offset` bytes) or "flash"
+#                               (the device's own, so the card leaves room for it; not made yet); `boot-start` is the boot
+#                               partition's first sector; `device-tree` the tree U-Boot hands over as the EFI device tree
+#   [emmc]                      where the firmware goes for a boot from the device's eMMC (352-UPD-0048's installer)
+
+# The sources the firmware is built from, pinned by tag and commit; fetched on the maintainer's machine, never stored here.
+[source.u-boot]
+name = "U-Boot"
+tag = "v2026.10"
+commit = "5508406582f6f7120dce0c4b3059819a41788db2"
+urls = ["https://source.denx.de/u-boot/u-boot.git", "https://github.com/u-boot/u-boot.git"]
+licence = "GPL-2.0+"
+
+[source.tf-a]
+name = "Trusted Firmware-A"
+tag = "v2.15.0"
+commit = "da738d5eae93af342fdc4995dd3c05acb4c9d757"
+urls = ["https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git", "https://github.com/ARM-software/arm-trusted-firmware.git"]
+licence = "BSD-3-Clause"
+
+[board.orangepi-zero-plus2]
+title = "Orange Pi Zero Plus 2 H5 (v1.0)"
+soc = "Allwinner H5 (sun50i-h5), 4 x Cortex-A53, 512 MiB DDR3"
+arch = "aarch64"
+main-task = "100004"
+
+[board.orangepi-zero-plus2.firmware]
+script = "scripts/board_uboot.sh"
+sources = ["u-boot", "tf-a"]
+u-boot-defconfig = "orangepi_zero_plus2_defconfig"
+tf-a-platform = "sun50i_a64"  # TF-A has one platform for the A64 and the H5
+file = "u-boot-sunxi-with-spl.bin"  # the SPL, BL31 and U-Boot, in U-Boot's sunxi image format
+header = "eGON.BT0"  # the SPL's header, at byte 4 (U-Boot's include/sunxi_image.h)
+header-offset = 4
+sha256 = "eca0f636f497cd524bc1f6d1863517da700b8d5d598e9ea73124b702414f4c54"  # 761269 bytes, the same in two builds
+built-with = "Ubuntu 24.04's gcc-aarch64-linux-gnu 13.3.0"
+
+[board.orangepi-zero-plus2.card]
+firmware = "card"
+firmware-offset = 8192  # 8 KiB, sector 16: where every Allwinner boot ROM reads a card first (U-Boot's doc/board/allwinner/sunxi.rst)
+boot-start = 8192  # sectors: 4 MiB, past U-Boot's last byte, room for a U-Boot of almost 4 MiB
+device-tree = "sun50i-h5-orangepi-zero-plus2"  # CONFIG_DEFAULT_DEVICE_TREE of the defconfig at the tag, U-Boot's own copy
+test-tree = "tests/data/fdt/orangepi-zero-plus2-h5.dtb"  # Linux v6.12's tree of that name, read by tests/fdt_host.rs
+
+[board.orangepi-zero-plus2.emmc]
+present = true
+device = "8 GB eMMC on mmc2 (CONFIG_MMC_SUNXI_SLOT_EXTRA=2)"
+firmware-offset = 8192  # into its user data area, as on the card: the card's layout written whole boots from there
+boot-start = 8192
+note = "the boot ROM tries the card first, then the eMMC: its user area at 8 KiB, or a boot partition once enabled (sunxi.rst)"
+
+[board.orangepi-zero3]
+title = "Orange Pi Zero 3 (H618, 2 GiB)"
+soc = "Allwinner H618 (sun50i-h616 family), 4 x Cortex-A53, 2 GiB LPDDR4"
+arch = "aarch64"
+main-task = "100004"
+
+[board.orangepi-zero3.firmware]
+script = "scripts/board_uboot.sh"
+sources = ["u-boot", "tf-a"]
+u-boot-defconfig = "orangepi_zero3_defconfig"
+tf-a-platform = "sun50i_h616"
+file = "u-boot-sunxi-with-spl.bin"
+header = "eGON.BT0"
+header-offset = 4
+sha256 = "73bcdf3f7e0698f0983ff15a2026b28796fd87b93688543dbd6dff92d838d842"  # 820057 bytes, the same in two builds
+built-with = "Ubuntu 24.04's gcc-aarch64-linux-gnu 13.3.0"
+
+[board.orangepi-zero3.card]
+firmware = "card"
+firmware-offset = 8192
+boot-start = 8192
+device-tree = "allwinner/sun50i-h618-orangepi-zero3"  # CONFIG_DEFAULT_DEVICE_TREE at the tag: U-Boot's copy of Linux's tree
+test-tree = "tests/data/fdt/orangepi-zero3-h618.dtb"
+
+[board.orangepi-zero3.emmc]
+present = false
+note = "no eMMC; a SPI NOR flash (CONFIG_SPL_SPI_SUNXI, CONFIG_SPI_FLASH_ZBIT), which the boot ROM reads after the card"

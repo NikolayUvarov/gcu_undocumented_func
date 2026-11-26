@@ -90,3 +90,4 @@ The check's loop, made to sample each CPU's registers for 10 s (every 20 ms or s
 
 `x86: x2APIC` failed once on x32-2 (54 s): after `run memtest endpoints &` the shell's prompt did not come back within the wait. Two minutes later `x86: USB image` failed on the same lane: the line the test types was not in `log:boot0001.log`, a shell that did not answer as well. Both passed when run again alone on x32 (224 s and 184 s), and round 177 landed. Two stalls of the shell on one lane within minutes, with no failure elsewhere, point at that lane's load at the time, not at the candidate. That is not shown: the stuck CPUs' state is in that run's `mind-core-stuck-*.log` on x32-2, not read yet.
 
+**Round 178 (2026-11-26):** the same stall, on x32 this time (87 s), and again passed alone (224 s). Its dump shows every CPU halted with the shell ready on CPU 3: a wake that never led to a select. That is taken up as 000-KRN-0283 (on `claude/000-KRN-0283-a-stale-wake-sent-again`).
