@@ -274,7 +274,8 @@ fn a_device_listed_is_paged_paired_and_secured() {
     let page = s.tick(10);
     assert_eq!(ops(&page), vec![hci::CREATE_CONNECTION]);
     assert_eq!(&page[0].1[..6], &PEER.0);
-    assert_eq!(&page[0].1[6..], &[0x18, 0xCC, 1, 0, 0, 0, 1]);
+    // No role switch: the source stays the central.
+    assert_eq!(&page[0].1[6..], &[0x18, 0xCC, 1, 0, 0, 0, 0]);
     // Connected: authentication asked at once.
     assert_eq!(ops(&s.connected(0x0B)), vec![hci::AUTHENTICATION_REQUESTED]);
     let pairing = s.pair(0x0B);
@@ -329,11 +330,11 @@ fn only_devices_listed_may_connect_or_pair() {
     assert_eq!((r[0].0, r[0].1.clone()), (hci::REJECT_CONNECTION, vec![1, 2, 3, 4, 5, 6, 0x0F]));
     assert_eq!(s.event(hci::EV_IO_CAPABILITY_REQUEST, &stranger)[0].0, hci::IO_CAPABILITY_NEGATIVE_REPLY);
     assert_eq!(s.event(hci::EV_PIN_CODE_REQUEST, &stranger)[0].0, hci::PIN_CODE_NEGATIVE_REPLY);
-    // Ours: accepted, staying peripheral; a legacy device gets PIN 0000.
+    // Ours, an audio sink: accepted, becoming the central; a legacy device gets PIN 0000.
     let mut req = PEER.0.to_vec();
     req.extend_from_slice(&[0x04, 0x04, 0x24, 1]);
     let r = s.event(hci::EV_CONNECTION_REQUEST, &req);
-    assert_eq!((r[0].0, r[0].1[6]), (hci::ACCEPT_CONNECTION, 1));
+    assert_eq!((r[0].0, r[0].1[6]), (hci::ACCEPT_CONNECTION, 0));
     let r = s.event(hci::EV_PIN_CODE_REQUEST, &PEER.0);
     assert_eq!((r[0].0, &r[0].1[6..11]), (hci::PIN_CODE_REPLY, &[4, b'0', b'0', b'0', b'0'][..]));
     // It connected to us and asks for AVDTP before securing the link: pending, we authenticate, then it is admitted.

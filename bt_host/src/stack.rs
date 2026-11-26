@@ -20,8 +20,8 @@ pub const CONNS: usize = 4;
 pub const PAGE_MS: u64 = 8_000;
 /// An LE connection is waited for longer: a device advertises only while it is awake (a mouse moved, a key pressed).
 pub const LE_CONNECT_MS: u64 = 30_000;
-/// The LE supervision timeout given at least, in 10 ms: 5 s.
-pub const LE_TIMEOUT: u16 = 500;
+/// The LE supervision timeout given at least, in 10 ms: 2 s.
+pub const LE_TIMEOUT: u16 = 200;
 pub const RETRY_MS: u64 = 15_000;
 pub const RETRY_MAX_MS: u64 = 60_000;
 /// After a device connects to us, how long we leave it to open its channels before we open ours.
@@ -128,8 +128,10 @@ impl Stack {
         let mut name = [0u8; 248];
         name[..NAME.len()].copy_from_slice(NAME.as_bytes());
         self.ctl.command(hci::WRITE_LOCAL_NAME, &name);
-        // Role switch allowed, sniff not: a link in sniff mode starves a stream (the testing stage keeps links active).
-        self.ctl.command(hci::WRITE_DEFAULT_LINK_POLICY, &0x0001u16.to_le_bytes());
+        // Neither role switch nor sniff: the source stays the central of its links, so that one controller is central to
+        // the speaker and to an LE mouse at once (a peripheral on one piconet and central on another starved the
+        // stream when the mouse moved, 2026-11-26), and a link in sniff mode starves a stream.
+        self.ctl.command(hci::WRITE_DEFAULT_LINK_POLICY, &0x0000u16.to_le_bytes());
         // 0x2000 slots: 5.12 s.
         self.ctl.command(hci::WRITE_PAGE_TIMEOUT, &0x2000u16.to_le_bytes());
         if !self.devices.is_empty() { self.ctl.command(hci::WRITE_SCAN_ENABLE, &[0x02]); }
@@ -157,8 +159,10 @@ impl Stack {
                 let link = p[9];
                 if link == 1 && self.devices.get(addr).is_some() && self.links() < CONNS {
                     self.say(format_args!("{} ASKS TO CONNECT: ACCEPTED", addr));
-                    // We stay peripheral if the device made the link: no role switch to fail.
-                    self.ctl.command(hci::ACCEPT_CONNECTION, &[p[0], p[1], p[2], p[3], p[4], p[5], 0x01]);
+                    // An audio sink that pages us: we become the central, as the source; another device: we stay peripheral,
+                    // no role switch to fail.
+                    let central = self.devices.get(addr).is_some_and(|d| d.kind == Kind::Audio);
+                    self.ctl.command(hci::ACCEPT_CONNECTION, &[p[0], p[1], p[2], p[3], p[4], p[5], if central { 0x00 } else { 0x01 }]);
                 } else {
                     self.say(format_args!("{} ASKS TO CONNECT (CLASS {:06X}, LINK {}): NOT A DEVICE LISTED, REFUSED", addr, u32::from_le_bytes([p[6], p[7], p[8], 0]), link));
                     // Unacceptable BD_ADDR.
@@ -438,8 +442,8 @@ impl Stack {
             }
             l2cap::LE_SIGNALLING if le => {
                 if let Some(p) = l2cap::le_signal(&mut self.ctl, handle, payload) {
-                    // Its intervals and latency as asked, a supervision timeout of 5 s at least: a radio shared with a stream
-                    // and a Wi-Fi misses events, and the shortest timeout a peripheral asks drops the link (700-BLT-0009).
+                    // As asked, but a supervision timeout under 2 s, which a radio shared with a stream and a Wi-Fi drops
+                    // (700-BLT-0009). Giving another than it asked made the mouse ask again every 30 s.
                     let timeout = p.timeout.max(LE_TIMEOUT);
                     self.say(format_args!("LE {:03X} ASKS: INTERVAL {}-{} × 1.25 MS, LATENCY {}, TIMEOUT {} × 10 MS: TIMEOUT {} GIVEN", handle, p.min, p.max, p.latency, p.timeout, timeout));
                     let mut b = [0u8; 14];
@@ -564,10 +568,10 @@ impl Stack {
                     self.say(format_args!("{}: PAGING ({})", d.addr, d.kind.name()));
                     let mut b = [0u8; 13];
                     b[..6].copy_from_slice(&d.addr.0);
-                    // DM1 to DH5, page scan repetition R1, no clock offset, role switch allowed.
+                    // DM1 to DH5, page scan repetition R1, no clock offset, no role switch: we stay the central.
                     b[6..8].copy_from_slice(&0xCC18u16.to_le_bytes());
                     b[8] = 1;
-                    b[12] = 1;
+                    b[12] = 0;
                     self.ctl.command(hci::CREATE_CONNECTION, &b);
                 }
             }
