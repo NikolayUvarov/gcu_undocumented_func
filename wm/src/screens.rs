@@ -14,6 +14,8 @@ impl Side {
     pub fn from_name(word: &str) -> Option<Side> {
         match word { "right" => Some(Side::Right), "left" => Some(Side::Left), "above" => Some(Side::Above), "below" => Some(Side::Below), _ => None }
     }
+    /// The words before "this one": "to the right of", "above".
+    pub fn words(self) -> &'static str { match self { Side::Right => "to the right of", Side::Left => "to the left of", Side::Above => "above", Side::Below => "below" } }
 }
 
 /// The desk of the screens: its size in cells and each screen's rectangle in it, the first screen first.
@@ -63,16 +65,36 @@ impl Layout {
 
     /// A window of `window` (in the desk) moved from its screen to screen `to`: at the same place within it, in
     /// proportion to the screens' sizes, its size kept as far as the screen holds it, and inside it.
-    pub fn moved(&self, window: Rect, to: usize) -> Rect {
-        let from = self.screens[self.screen_of(window.x, window.y)];
-        let dest = self.screens[to];
-        let (w, h) = (window.w.min(dest.w), window.h.min(dest.h));
-        let scale = |offset: usize, from_len: usize, to_len: usize, len: usize| {
-            let room = to_len.saturating_sub(len);
-            if from_len <= 1 { 0 } else { (offset * to_len / from_len).min(room) }
-        };
-        let x = dest.x + scale(window.x.saturating_sub(from.x), from.w, dest.w, w);
-        let y = dest.y + scale(window.y.saturating_sub(from.y), from.h, dest.h, h);
-        Rect::new(x, y, w, h)
+    pub fn moved(&self, window: Rect, to: usize) -> Rect { carried(window, self.screens[self.screen_of(window.x, window.y)], self.screens[to]) }
+}
+
+/// A window of `window` in rectangle `from` carried into `dest`: at the same place in proportion, its size kept as far
+/// as `dest` holds it, and inside it.
+pub fn carried(window: Rect, from: Rect, dest: Rect) -> Rect {
+    let (w, h) = (window.w.min(dest.w), window.h.min(dest.h));
+    let scale = |offset: usize, from_len: usize, to_len: usize, len: usize| {
+        let room = to_len.saturating_sub(len);
+        if from_len <= 1 { 0 } else { (offset * to_len / from_len).min(room) }
+    };
+    let x = dest.x + scale(window.x.saturating_sub(from.x), from.w, dest.w, w);
+    let y = dest.y + scale(window.y.saturating_sub(from.y), from.h, dest.h, h);
+    Rect::new(x, y, w, h)
+}
+
+/// A window of `window` in rectangle `from` given the same share of `dest`: its edges scaled, for one that fills a
+/// half, a quarter or the whole of a screen's area.
+pub fn scaled(window: Rect, from: Rect, dest: Rect) -> Rect {
+    let along = |at: usize, start: usize, from_len: usize, to_start: usize, to_len: usize| to_start + at.saturating_sub(start).min(from_len) * to_len / from_len.max(1);
+    let (x0, x1) = (along(window.x, from.x, from.w, dest.x, dest.w), along(window.right(), from.x, from.w, dest.x, dest.w));
+    let (y0, y1) = (along(window.y, from.y, from.h, dest.y, dest.h), along(window.bottom(), from.y, from.h, dest.y, dest.h));
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// The cells where windows go on screen `s` of `layout`: the first below the top bar and above the status line, which
+/// are its own; another screen whole.
+pub fn area(layout: &Layout, s: usize) -> Rect {
+    match layout.screens.get(s) {
+        Some(&r) if s > 0 => r,
+        _ => { let r = layout.screens[0]; Rect::new(r.x, r.y + 1, r.w, r.h.saturating_sub(2)) }
     }
 }

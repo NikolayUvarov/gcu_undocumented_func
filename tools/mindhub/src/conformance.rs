@@ -4,7 +4,7 @@
 //! three and checks that a rejection holds the fourth back. `mindhub conformance` runs it against any hub; the host
 //! tests run it against `tools/mindhub`, and MIND Core's native hub (stage 7) is to pass it too.
 
-use crate::client::{Client, Reply};
+use crate::client::{Client, Reply, Trust};
 use crate::util::{self, hex, sha256};
 use ed25519_dalek::SigningKey;
 use improve_proto::form::{Attachment, AttachmentKind, DeviceKind, Joining, Consent, Kind, Message, MessageKind, Registration, Request, Verdict, Visibility};
@@ -13,7 +13,10 @@ use improve_proto::{sign, wire, API};
 
 pub struct Target {
     pub url: String,
-    pub pins: Vec<[u8; 32]>,
+    /// How the hub is known over TLS: its pins, or a CA bundle's roots.
+    pub trust: Trust,
+    /// The proxy it is reached through (`host:port`, CONNECT), if any.
+    pub proxy: Option<String>,
     pub admin: SigningKey,
     pub intake: SigningKey,
     pub track: SigningKey,
@@ -46,7 +49,7 @@ fn api_body(fields: &[(&str, &str)]) -> Vec<u8> {
 struct Suite<'a> { t: &'a Target, log: &'a mut dyn FnMut(&str), n: usize }
 
 impl Suite<'_> {
-    fn client(&self, key: SigningKey) -> Result<Client, String> { Client::new(&self.t.url, &self.t.pins, key) }
+    fn client(&self, key: SigningKey) -> Result<Client, String> { Client::connect(&self.t.url, self.t.trust.clone(), self.t.proxy.clone(), key) }
     fn device(&self) -> Result<Client, String> { self.client(SigningKey::from_bytes(&util::random::<32>())) }
     fn ok(&mut self, what: &str) { self.n += 1; (self.log)(&format!("ok {} - {what}", self.n)); }
 }
