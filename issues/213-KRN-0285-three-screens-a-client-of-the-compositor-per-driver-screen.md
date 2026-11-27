@@ -1,6 +1,6 @@
 # 213-KRN-0285 — Three screens: a client of the compositor for each driver screen
 
-**Type:** `compositor`, `init`, IDL (`display.wit` 1.5; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made on `claude/213-KRN-0285-three-screens`, for round 181) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.1, MC-3.11, MC-12.3, MC-12.4
+**Type:** `compositor`, `init`, IDL (`display.wit` 1.5; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 180, f32ba90c93, 2026-11-27; DRV's Ryzen run with 213-DRV-0113 left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-3.1, MC-3.11, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -41,7 +41,7 @@ The parts:
 ## Acceptance criteria
 
 - [x] The compositor and init build for x86 and aarch64. The compositor's and display's host cases pass (`compositor_mirror`, `compositor_second`, `display_screen`).
-- [ ] The gate's groups pass with it (round 181).
+- [x] The gate's groups pass with it: round 180's second gate, 62 groups green on candidate 97245d1665.
 - [ ] On the Ryzen, with 213-DRV-0113's two runs, both HDMI monitors and DP-2 show the desktop at once: the second and third screens mirror the first, each at its own size. This is DRV's run, with the maintainer.
 - [ ] The offer's times on the Ryzen show which part held the CPU for 64 ms. Whatever takes more than one time slice is mended, here or in a task of its own.
 

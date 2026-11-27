@@ -1,6 +1,6 @@
 # 700-KRN-0284 — `bt_hci`: a client of `audio_gw`'s sink
 
-**Type:** `init` (a grant; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, for round 180) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.1, MC-3.11, MC-12.3
+**Type:** `init` (a grant; no ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 180, f32ba90c93, 2026-11-27; BLT's run on its bench left) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.1, MC-3.11, MC-12.3
 
 ## Problem
 
@@ -15,7 +15,7 @@
 
 ## Acceptance criteria
 
-- [ ] The tree builds, and the gate's groups pass with it (round 180).
+- [x] The tree builds, and the gate's groups pass with it: round 180's second gate, 62 groups green on candidate 97245d1665.
 - [ ] On a machine with a Bluetooth controller and headphones listed as `audio`, `bt_hci`'s start line says `HEADPHONES PLAY THE MACHINE'S OUTPUT`, and the machine's output is heard in them. This is BLT's run, on its bench.
 
 ## Related
