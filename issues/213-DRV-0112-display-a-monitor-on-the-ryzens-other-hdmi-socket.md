@@ -74,8 +74,8 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 - [x] On the Ryzen: a monitor in the second socket lit in its own mode with the mirror on it, stage 15's watch clean,
   the firmware's pipe unchanged, and the maintainer's look (MC-12.1). Boot 112, below, on a bench image that takes
   HDMI-A-2 first.
-- [ ] On the Ryzen: the monitor moved from one socket to the other and back, lit each time. (Moved once on 2026-11-27,
-  the two monitors swapped and each lit, below; not moved back yet.)
+- [x] On the Ryzen: the monitor moved from one socket to the other and back, lit each time (2026-11-27, release
+  202611271414: the two monitors swapped and swapped back, each lit each time; below and in 213-DRV-0113).
 - [x] HDMI-A-1 alone behaves as before: its host cases pass unchanged and its lines on the Ryzen are the same (boots
   108, 109 and 113: the same mode, stage 15's watch clean, the offer 2011 to 2013 ms after step 3 began).
 

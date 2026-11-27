@@ -204,7 +204,7 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    - [x] HDMI-A-2's surface in the second window (slot 7), offered as the third screen through slot 8, `display.wit`
      1.5 (on the model only);
    - [x] the mirror on both HDMI monitors in their own modes (the Ryzen, release 202611271307, below);
-   - [ ] the standing check clean on three pipes for an hour.
+   - [x] the standing check clean on three pipes for an hour (boot 116, 3012 to 6734 s, below).
 5. **Plugged and unplugged:**
    - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model, and on the Ryzen
      with the maintainer's look: release 202611271414, below);
@@ -720,9 +720,15 @@ x32-128. Boot 116. It holds for that machine, those monitors and that release (M
 **What it shows:** the release lights both sockets, each unplug takes back only its own run, each plug lights its socket
 again beside the other, and either socket drives either monitor (PHY B at 324 MHz too).
 
+**The monitors swapped back** (4320.6 to 4330.8 s): both taken back, then HDMI-A-1 lit on OTG1 as the second screen and
+HDMI-A-2 on OTG2 as the third, `HDMI SOCKETS NOW: HDMI-A-1 LIT ON OTG1 (16 STAGES, SECOND SCREEN); HDMI-A-2 LIT ON OTG2
+(16 STAGES, THIRD SCREEN)`; the maintainer: «мониторы поставил обратно».
+
+**An hour of the standing checks** (read every ten minutes over the server, 3012 to 6734 s of uptime): every ten-minute
+line of both runs `NOTHING NEW ON ANY OF THE THREE PIPES`, 579 to 590 checks each, the longest gap 1041 to 1045 ms
+between two while lit. Two lines say `DARK 1 TIMES, 6 S IN ALL` and `7 S`: the plug changes above. No underflow line.
+
 **Not shown yet:**
-- an hour of the standing checks on three pipes;
-- the monitors swapped back;
 - table 12's long path: every PHY was warm here, since every start came through Linux, which lights both sockets;
 - a start not through Linux.
 
