@@ -310,7 +310,7 @@ The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-
 - 4616.286 the updater began to take release 202611270726 (31 MB) through the Effector server.
 - 4681.495 `[USB] STORAGE: WRITE REFUSED: SENSE KEY 3 ASC 03 ASCQ 00 (MEDIUM ERROR)`; `[UPDATER] INSTALL: REFUSED: Write`; `EFFECTOR: THE GATEWAY REFUSED 32768 BYTES AT 29196288: Io`. The first fault was at 5668864 of its bundle: a different place.
 - The drive: `152D:2329 ON PORT 4 (HIGH SPEED)`, `MASS STORAGE: 31277232 SECTORS` (16 GB). 152D is JMicron, a USB-to-SATA bridge, so the fault may be the drive behind it, the bridge, or its power; the log cannot tell which.
-- Between the two faults, 7 releases were written to it whole (202611262015 to 202611270607).
+- Between the two faults, 5 releases were written to it whole (202611262214, 202611270508, 0515, 0533 and 0607).
 - Nothing was installed and the machine runs on as it was. **DRV sends no more releases to this drive** until you decide: a third try might pass, as the first retry did, but each try writes 31 MB to a drive that refuses writes.
 
 **For you to decide, now:**
