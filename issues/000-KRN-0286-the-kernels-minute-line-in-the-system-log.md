@@ -21,7 +21,7 @@ Why `init` or `logd` cannot simply forward it:
 - **A small ring of lines meant for the system log.** The kernel keeps them (the minute line now), apart from the kept ring.
 - **A new stat kind, `STAT_KERNEL_LINES`**, an observation, which `logd` already holds. It answers with the bytes written past a cursor the reader passes, and the new cursor, so a reader drains nothing.
 - **ABI 38**, with `docs/api` and `tests/boot_abi_host.rs`.
-- **`logd`** reads it every few seconds and records each whole line as the kernel's. The line stays in `init`'s log as well, for `logs 1`.
+- **`logd`** reads it when a request comes, at most every 5 s, and at least once a minute when none does (a wake every few seconds made the one-CPU checks late on a slow machine), and records each whole line as the kernel's. The line stays in `init`'s log as well, for `logs 1`.
 - **A QEMU check:** after a minute with late waits, `dmesg` shows the line as the kernel's.
 
 ## Acceptance criteria

@@ -15,7 +15,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 
 | Service | Receives from `init` |
 |---|---|
-| `logd` | server endpoint, observe privilege (to name the sender of a record from the kernel's task records, and to read the kernel's lines for the system log every 5 s, `STAT_KERNEL_LINES`, recorded as the kernel's, 000-KRN-0286) |
+| `logd` | server endpoint, observe privilege (to name the sender of a record from the kernel's task records, and to read the kernel's lines for the system log, `STAT_KERNEL_LINES`, at a request at most every 5 s and at least once a minute, recorded as the kernel's, 000-KRN-0286) |
 | `rtc` | server endpoint, ports 0x70–0x71 |
 | `ps2_kbd` | server endpoint (requests from the shell's keyboard client, issue 085), ports 0x60 and 0x64, IRQ 1, input privilege |
 | `compositor` | server endpoint (requests from the shell's display client, issue 086), framebuffer memory, display privilege |

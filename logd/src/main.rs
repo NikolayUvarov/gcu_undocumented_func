@@ -16,7 +16,8 @@ use ring::{Ring, NAME, TEXT};
 
 const RECEIVED: usize = 9;
 const CACHE: usize = 32;
-const KERNEL_LOOK_MS: u64 = 5000; // how often the kernel's lines for the log are read (000-KRN-0286)
+const KERNEL_LOOK_MS: u64 = 5000; // the kernel's lines for the log are read at a request at most this often (000-KRN-0286)
+const KERNEL_WAKE_MS: u32 = 60_000; // and at least this often: the minute line's own cadence, so an idle logd wakes once a minute
 
 static mut RING: Ring = Ring::new();
 
@@ -41,7 +42,7 @@ impl Names {
 fn kernel_lines(ring: &mut Ring, next: &mut u64, scratch: &mut [u8], now: u64) {
     let Ok(records) = stat::read(STAT_KERNEL_LINES, *next, scratch) else { return };
     for line in records.iter::<StatLine>() {
-        if line.seq > *next { ring.push(now, 0, "kernel", 2, "[LOGD] KERNEL LINES MISSED BEFORE THE NEXT"); }
+        if line.seq > *next { ring.push(now, 0, "kernel", 1, "[LOGD] KERNEL LINES MISSED BEFORE THE NEXT"); }
         let text = core::str::from_utf8(&line.text[..(line.len as usize).min(STAT_LINE_BYTES)]).unwrap_or("[LOGD] A KERNEL LINE THAT IS NOT TEXT");
         for start in (0..text.len().max(1)).step_by(TEXT) { ring.push(now, 0, "kernel", 1, &text[start..(start + TEXT).min(text.len())]); }
         *next = line.seq + 1;
@@ -65,7 +66,7 @@ fn main(_info: &'static BootInfo) {
             kernel_at = now();
             if let Some(scratch) = lines.as_mut() { kernel_lines(ring, &mut kernel_next, scratch.as_mut_slice(), kernel_at); }
         }
-        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, KERNEL_LOOK_MS as u32) else { continue };
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, KERNEL_WAKE_MS) else { kernel_at = 0; continue };
         let reader = request.badge & mind::log::BADGE_READ != 0;
         let _ = match log::decode(&request, RECEIVED) {
             Ok((log::Request::Write { level, text: line }, call)) => {
