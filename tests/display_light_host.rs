@@ -4047,3 +4047,78 @@ fn with_hdmi_first_hdmi_a_2_the_second_run_lights_hdmi_a_1_on_pipe_2_with_front_
     as_before(&m.at.0.borrow().e, &before, &[]);
     lines_fit(&m, &log.0);
 }
+
+// --- the Ryzen's own tables on CRTC 2 and PHY B beside a lit HDMI-A-1 (213-DRV-0113, stage 3) ---
+
+// PHY A's and PHY B's statuses answered, as `answered_on` answers one.
+fn answered_both() -> Engine {
+    let mut e = answered_on(0);
+    let b = answered_on(1);
+    let base = engine();
+    e.set.extend(b.set.iter().skip(base.set.len()).cloned());
+    e.follow.extend(b.follow.iter().skip(base.follow.len()).cloned());
+    e.derived.extend(b.derived.iter().skip(base.derived.len()).cloned());
+    e
+}
+// The third monitor's preferred mode (boot 109): 1366x768 at 59.790 Hz, 85500 kHz, DMT's 1366x768 timing.
+const DMT_1366: timing::Timing = timing::Timing { pixel_khz: 85_500, h_active: 1366, h_front: 70, h_sync: 143, h_back: 213, v_active: 768, v_front: 3,
+    v_sync: 3, v_back: 24, h_sync_positive: true, v_sync_positive: true, interlaced: false };
+
+#[test]
+fn the_ryzens_own_tables_on_crtc_2_and_phy_b_beside_a_lit_hdmi_a_1_write_only_the_second_route_and_leave_phy_as_fuse0() {
+    let skip = |why: String| { use std::io::Write; let _ = writeln!(std::io::stderr(), "the_ryzens_own_tables_on_crtc_2_and_phy_b_beside_a_lit_hdmi_a_1 SKIPPED: {}", why); };
+    let Ok(path) = std::env::var("MIND_AMD_VBIOS") else { skip("MIND_AMD_VBIOS is not set (the Ryzen's VBIOS image, not in the repository)".into()); return };
+    let Ok(bytes) = std::fs::read(&path) else { skip(format!("{} cannot be read", path)); return };
+    let (f, c1) = EXPECTED;
+    for (warm, fuse) in [(false, 0xB038_003Eu32), (false, 0xB038_A034), (true, 0xB038_003E), (true, 0xB038_A034)] {
+        // HDMI-A-1 lit first by its own first light on the Ryzen's tables (PHY A's long path), in the bench's mode.
+        let mut e = answered_both();
+        e.frame_us = DP2;
+        e.regs.insert(PHY_A_FUSE0, boot66(PHY_A_FUSE0));
+        let before = e.regs.clone();
+        let first = Light::new_with(f, c1, WIDE, dcn::Signal::Hdmi).unwrap();
+        let (outcome, mut first, log1) = light_up(first, &bytes, &mut e, dcn::FIRST_LIGHT);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log1[log1.len().saturating_sub(12)..]);
+        let model_fuse = e.regs[&PHY_A_FUSE0];
+        // PHY A's FUSE0 as the Ryzen reads it after HDMI-A-1's stage 2; PHY B set up already or not.
+        e.regs.insert(PHY_A_FUSE0, fuse);
+        if warm { e.regs.insert(phy(0x2937 + 0xD8), 0x300); }
+        let with_first = e.regs.clone();
+        let from = e.ev.len();
+        let second = Light::new_with(f, choice_2(), DMT_1366, dcn::Signal::Hdmi).unwrap().beside(&c1).unwrap();
+        first.l.refuse(&second.choice).unwrap();
+        let (outcome, mut lit2, log) = light_up(second, &bytes, &mut e, STAGES);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "warm {} {:08X}: {:#?}", warm, fuse, &log[log.len().saturating_sub(16)..]);
+        let tables: Vec<&String> = log.iter().filter(|x| x.contains(" TABLE ") && x.contains(" DONE: ")).collect();
+        let ws: Vec<(u32, u32)> = e.ev[from..].iter().filter_map(|x| if let Ev::Write(o, v) = x { Some((*o, *v)) } else { None }).collect();
+        // Table 12 on PLL1 for CRTC 2: its long path cold, its short one with PHY B set up; tables 4 and 76 as on CRTC 1 but three steps more (213-DRV-0112's counts).
+        let want: [&str; 3] = if warm { ["S2 TABLE 12 DONE: 318 STEPS, 4 CALLS, 10 US OF DELAYS, 32 WRITES, 1 LEFT AS IT IS", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+                                         "S8 TABLE 76 DONE: 241 STEPS, 9 CALLS, 420 US OF DELAYS, 18 WRITES"] }
+                                  else { ["S2 TABLE 12 DONE: 540 STEPS, 4 CALLS, 10 US OF DELAYS, 110 WRITES, 1 LEFT AS IT IS", "S6 TABLE 4 DONE: 33 STEPS, 2 CALLS, 2 US OF DELAYS, 5 WRITES",
+                                         "S8 TABLE 76 DONE: 289 STEPS, 9 CALLS, 420 US OF DELAYS, 23 WRITES"] };
+        assert_eq!(tables, want.iter().map(|x| x.to_string()).collect::<Vec<_>>().iter().collect::<Vec<_>>(), "warm {} {:08X}", warm, fuse);
+        assert_eq!((ws.len(), model_fuse), (if warm { 108 } else { 191 }, 0xB028_003E));
+        // Every write in the second's own blocks: DIG B, PHY B and its PLL and clocks, pipe 2's OTG, OPP and pixel rate.
+        assert!(ws.iter().all(|w| hdmi_a_2s(w.0) || pipe_s(2, w.0)), "{:05X?}", ws.iter().filter(|w| !hdmi_a_2s(w.0) && !pipe_s(2, w.0)).collect::<Vec<_>>());
+        assert!(log.iter().any(|x| x == &format!("S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE ({:08X})", fuse)),
+                "{:#?}", log.iter().filter(|x| x.contains("FUSE0")).collect::<Vec<_>>());
+        // Not one write of the lit pipe's, nor the firmware's; each a block of the second's as the first's guard refuses it.
+        for (o, _) in &ws {
+            assert_eq!(first.l.guard().check(Reg::new(*o).unwrap()).err(), Some(Refused::Lit(*o)), "{:05X}", o);
+            assert!(!hdmi_a_1s(*o) && !pipe_s(1, *o), "HDMI-A-1's {:05X}", o);
+        }
+        assert_eq!(e.regs[&PHY_A_FUSE0], fuse);
+        for o in watched(&lit2.l).into_iter().chain(Watch_regs(&c1)) { assert_eq!(e.regs.get(&o), with_first.get(&o), "{:05X}", o); }
+        for n in 1..=dcn::FIRST_LIGHT { assert!(log.iter().any(|x| x.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S AND HDMI-A-1'S PIPES UNCHANGED; ", n, dcn::STAGE_NAMES[n as usize - 1]))), "stage {}", n); }
+        // The second's unplug: back as with HDMI-A-1 alone but PHY B's control register bus; HDMI-A-1's pipe and PHY A's FUSE0 unchanged.
+        let (same, log) = take_back(&mut lit2, &mut e, STAGES);
+        assert!(same, "{:#?}", log);
+        assert!(log.last().unwrap().ends_with("THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE UNCHANGED"), "{}", log.last().unwrap());
+        for (o, _) in &ws { if ![PHY_B_CR_ADDR, PHY_B_CR_DATA].contains(o) { assert_eq!(e.regs.get(o).copied().unwrap_or(0) & !follow_bits(&e, *o), with_first.get(o).copied().unwrap_or(0) & !follow_bits(&e, *o), "{:05X}", o); } }
+        assert!(!e.ev[from..].iter().any(|x| matches!(x, Ev::Write(o, _) if *o == PHY_A_FUSE0)));
+        // Then HDMI-A-1's: every register as before both, but PHY A's and PHY B's buses.
+        e.regs.insert(PHY_A_FUSE0, model_fuse);
+        assert!(take_back(&mut first, &mut e, dcn::FIRST_LIGHT).0);
+        as_before(&e, &before, &[PHY_B_CR_ADDR, PHY_B_CR_DATA, phy(0x2934), phy(0x2935), phy(0x2937 + 0xD8)]);
+    }
+}
