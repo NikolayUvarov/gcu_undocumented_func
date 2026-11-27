@@ -732,6 +732,22 @@ between two while lit. Two lines say `DARK 1 TIMES, 6 S IN ALL` and `7 S`: the p
 - table 12's long path: every PHY was warm here, since every start came through Linux, which lights both sockets;
 - a start not through Linux.
 
+## Both sockets empty under Linux, then plugged: still the short path (2026-11-27, boot 117)
+
+To reach table 12's long path, the maintainer took both HDMI cables out and the Ryzen was restarted through Ubuntu.
+Linux then reported `card1-HDMI-A-1 disconnected disabled` and `card1-HDMI-A-2 disconnected disabled`, and MIND Core
+started with both sockets empty (`STEP 3 NOT RUN: HPD 1 SENSES NO MONITOR ON HDMI-A-1`, `SECOND HDMI RUN NOT MADE …: NO
+MONITOR SENSED IN THE OTHER HDMI SOCKET`). He then plugged the monitors in one at a time, on a sound from the speaker:
+- **The big monitor into HDMI-A-1:** `S2 PIXEL CLOCK DONE; … TABLE 12 170 US (321 STEPS, 33 WRITES), THE PHY SET UP
+  ALREADY: THE SHORT PATH`; lit in 2027.9 ms, as the second screen. «есть изображение».
+- **The third monitor into HDMI-A-2:** `HDMI-A-2: S2 PIXEL CLOCK DONE; … TABLE 12 165 US (331 STEPS, 32 WRITES), THE PHY
+  SET UP ALREADY: THE SHORT PATH`; lit in 2457 ms beside it, as the third screen.
+
+**What it says:** both PHYs were set up although Linux had driven neither. Their scratch mark (0x300) is set before
+Linux, most likely by the VBIOS when the machine starts. So on this Ryzen a start through Linux always meets the short
+path, whatever is plugged in. Table 12's long path stays not shown, as in 213-DRV-0097: it would need a start where
+nothing set the PHYs up, which this bench does not give.
+
 ## Not known
 
 - Whether the firmware's DISPCLK, DPPCLK (DTO2), DCFCLK and watermarks carry three pipes without underflow. First
