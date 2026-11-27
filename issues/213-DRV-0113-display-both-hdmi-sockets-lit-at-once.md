@@ -10,7 +10,7 @@ The maintainer wants three screens at once on the Ryzen:
 - HDMI-A-2, with a third monitor in it since 2026-11-26.
 
 `display` lights one HDMI socket at a time
-([213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.md)). With a monitor in each, the one not
+([213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done)). With a monitor in each, the one not
 taken is named `NOT DRIVEN ... DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`.
 
 The limit is `display`'s and its interface's, not the engine's:
@@ -204,7 +204,7 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    - [x] HDMI-A-2's surface in the second window (slot 7), offered as the third screen through slot 8, `display.wit`
      1.5 (on the model only);
    - [x] the mirror on both HDMI monitors in their own modes (the Ryzen, release 202611271307, below);
-   - [ ] the standing check clean on three pipes for an hour.
+   - [x] the standing check clean on three pipes for an hour (boot 116, 3012 to 6734 s, below).
 5. **Plugged and unplugged:**
    - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model, and on the Ryzen
      with the maintainer's look: release 202611271414, below);
@@ -720,11 +720,33 @@ x32-128. Boot 116. It holds for that machine, those monitors and that release (M
 **What it shows:** the release lights both sockets, each unplug takes back only its own run, each plug lights its socket
 again beside the other, and either socket drives either monitor (PHY B at 324 MHz too).
 
+**The monitors swapped back** (4320.6 to 4330.8 s): both taken back, then HDMI-A-1 lit on OTG1 as the second screen and
+HDMI-A-2 on OTG2 as the third, `HDMI SOCKETS NOW: HDMI-A-1 LIT ON OTG1 (16 STAGES, SECOND SCREEN); HDMI-A-2 LIT ON OTG2
+(16 STAGES, THIRD SCREEN)`; the maintainer: «мониторы поставил обратно».
+
+**An hour of the standing checks** (read every ten minutes over the server, 3012 to 6734 s of uptime): every ten-minute
+line of both runs `NOTHING NEW ON ANY OF THE THREE PIPES`, 579 to 590 checks each, the longest gap 1041 to 1045 ms
+between two while lit. Two lines say `DARK 1 TIMES, 6 S IN ALL` and `7 S`: the plug changes above. No underflow line.
+
 **Not shown yet:**
-- an hour of the standing checks on three pipes;
-- the monitors swapped back;
 - table 12's long path: every PHY was warm here, since every start came through Linux, which lights both sockets;
 - a start not through Linux.
+
+## Both sockets empty under Linux, then plugged: still the short path (2026-11-27, boot 117)
+
+To reach table 12's long path, the maintainer took both HDMI cables out and the Ryzen was restarted through Ubuntu.
+Linux then reported `card1-HDMI-A-1 disconnected disabled` and `card1-HDMI-A-2 disconnected disabled`, and MIND Core
+started with both sockets empty (`STEP 3 NOT RUN: HPD 1 SENSES NO MONITOR ON HDMI-A-1`, `SECOND HDMI RUN NOT MADE …: NO
+MONITOR SENSED IN THE OTHER HDMI SOCKET`). He then plugged the monitors in one at a time, on a sound from the speaker:
+- **The big monitor into HDMI-A-1:** `S2 PIXEL CLOCK DONE; … TABLE 12 170 US (321 STEPS, 33 WRITES), THE PHY SET UP
+  ALREADY: THE SHORT PATH`; lit in 2027.9 ms, as the second screen. «есть изображение».
+- **The third monitor into HDMI-A-2:** `HDMI-A-2: S2 PIXEL CLOCK DONE; … TABLE 12 165 US (331 STEPS, 32 WRITES), THE PHY
+  SET UP ALREADY: THE SHORT PATH`; lit in 2457 ms beside it, as the third screen.
+
+**What it says:** both PHYs were set up although Linux had driven neither. Their scratch mark (0x300) is set before
+Linux, most likely by the VBIOS when the machine starts. So on this Ryzen a start through Linux always meets the short
+path, whatever is plugged in. Table 12's long path stays not shown, as in 213-DRV-0097: it would need a start where
+nothing set the PHYs up, which this bench does not give.
 
 ## Not known
 
@@ -749,7 +771,7 @@ again beside the other, and either socket drives either monitor (PHY B at 324 MH
 
 ## Related
 
-[213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.md) (HDMI-A-2 alone, one socket at a time),
+[213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done) (HDMI-A-2 alone, one socket at a time),
 [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
 [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md) (table 12's cold path),
 [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md) (the setting),

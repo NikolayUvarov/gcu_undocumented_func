@@ -26,6 +26,14 @@ THE PHY WAS SET UP ALREADY`.
 - [ ] On the Ryzen, after a cold start: stage 2 logs the long path, first light comes up, and the firmware's pipe stays
   unchanged. This holds for that start only (MC-12.9).
 
+## Not reached by taking the cables out (2026-11-27)
+
+A start through Linux with no monitor in either HDMI socket does not give a cold PHY. On boot 117 (release 202611271414,
+`display` of 213-DRV-0113's branch) Linux had both HDMI connectors `disconnected disabled`, and still each PHY was set up
+already when its monitor was plugged in under MIND Core: `THE PHY SET UP ALREADY: THE SHORT PATH` on PHY A (321 steps,
+33 writes) and on PHY B (331 steps, 32 writes). Most likely the VBIOS sets them up when the machine starts. So the long
+path still needs a start where nothing did, as this task says.
+
 ## Related
 
 [213-DRV-0086](../issues-done/213-DRV-0086-display-the-second-output-lit.done) (the procedure), [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md).
