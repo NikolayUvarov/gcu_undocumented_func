@@ -66,8 +66,8 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 
 - [x] Step 1 reads the second socket's blocks, with host cases that it writes nothing; its values from the Ryzen
   recorded here (boot 108, the socket empty and with the monitor in it).
-- [ ] The EDID read over DDC2, with host cases on the model of the engine; on the Ryzen its checksums good and the
-  engine left as found.
+- [x] The EDID read over DDC2, with host cases on the model of the engine; on the Ryzen its checksums good and the
+  engine left as found (boot 109, below).
 - [x] Host cases: the stages on a model with the monitor on the second socket; the guard's refusals for the first
   socket's blocks then; a monitor in each socket.
 - [ ] On the Ryzen: a monitor in the second socket lit in its own mode with the mirror on it, stage 15's watch clean,
@@ -503,6 +503,39 @@ HDMI-A-2: D AN HDMI SINK: ...                         (or HDMI-A-2: D NO HDMI BL
 
 The build's first line then names them: `A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 EDID HDMI_FIRST HDMI-A-2; ONLY WHAT
 LIGHT DOES CHANGES`.
+
+## The second level on the Ryzen: the EDID over DDC2 (boot 109, 2026-11-26)
+
+Release 202611262214, boot 109: `claude/DRV-ryzen-bench-43-edid` f7a63ca79, which is `main` 9d6feac696 with this branch
+at 029649c43, 213-DRV-0111, the bench-only line of `init` and a bench-only `HDMI_A_2 = Edid`. A second monitor is in
+HDMI-A-1 and a third in HDMI-A-2. It holds for that machine, those monitors and that release (MC-12.1). Through QEMU
+before it: "x86: keys, shell, tools", "x86: services, storage, audio" and the update from the release before. The
+maintainer was away; the level writes nothing of the second socket but the I2C engine's registers, which it puts back.
+
+**The lines, 3.5 to 3.9 s:**
+- `A BRING-UP BUILD, NOT A RELEASE: HDMI_A_2 EDID; ONLY WHAT LIGHT DOES CHANGES`
+- `B12 HDMI-A-2 HPD 2 (HPD1_): SENSE 1, ENABLED 1; INT_STATUS 00000012, CONTROL 10FA09C4`, the other six notes as on
+  boot 108, `B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ, NOTHING WRITTEN`
+- `HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE TOO; HDMI-A-1 IS TAKEN FIRST, AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`
+- HDMI-A-1's own read first, as on every boot: `D STEP 2 DONE: 2 BLOCKS READ (256 BYTES) IN 25151 US … 18 WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCH 11 READ THEM`
+- `HDMI-A-2 NOT TAKEN: ITS EDID READ OVER DDC2 ALL THE SAME, THE I2C ENGINE GIVEN BACK AS FOUND; NOTHING ELSE OF IT WRITTEN`
+- `HDMI-A-2: D STEP 2 DONE: 2 BLOCKS READ (256 BYTES) IN 25208 US, THE TRANSFERS 12687 AND 12141 US FROM GO; 18 WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCHES 11 AND 12 READ THEM`
+- `HDMI-A-2: D EDID 1.3, FNV-1A 6B7A8223DF75D9C7: TFG PRODUCT 2032, 2016, "HD"; 1 EXTENSIONS ANNOUNCED, 2 BLOCKS READ`
+- `HDMI-A-2: D PREFERRED: 1366x768 AT 59.790 HZ, 85500 KHZ, IN 1792x798`
+- `HDMI-A-2: D AN HDMI SINK: TMDS AT MOST 165 MHZ (HDMI 1.4 BLOCK 0 MHZ, HDMI FORUM BLOCK 0 MHZ)`
+
+**What they say:**
+- The read over DDC2 worked at the first try, in the same time as DDC1's (25.2 ms for two blocks), with no write of the
+  pads' I2C mode. Both blocks' checksums were good, or step 2 would say `NOT DONE`.
+- The engine was given back: 18 writes put back, 6 of 6 registers as the batches read them.
+- **The third monitor** is another make and a small mode: 1366x768 at 85.5 MHz, an HDMI sink with no HDMI 1.4 clock
+  figure, so at most 165 MHz. Its first light would be within DVI's range, a quarter of the first monitor's clock.
+- **HDMI-A-1 beside it, undisturbed:** stage 15 `WATCHED 60 FRAMES IN 1001 MS CLEAN`, the second screen offered 2011.3 ms
+  after step 3 began (2012.8 on boot 108), `HPD 2 FOLLOWED TOO, FOR HDMI-A-2 (HDMI_A_2 EDID): SENSE 1; THE SECOND
+  OUTPUT Lit ON HDMI-A-1`. Step 2 as a whole took 240.0 ms with the two reads, against 113.2.
+
+**Not shown yet:** the read at a plug into the undriven socket while HDMI-A-1 is lit (the monitor was there from the
+start of this boot), and anything of first light.
 
 ## Related
 

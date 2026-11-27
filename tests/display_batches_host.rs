@@ -616,3 +616,92 @@ fn batch_12_is_read_whole_in_either_order_its_values_logged_in_both_and_what_ste
     assert_eq!(l.iter().filter(|x| x.starts_with("B12 WOULD READ ")).count(), 15);
     for x in sl.iter().chain(&pl).chain(&l) { assert!(x.len() + "[DISPLAY] ".len() <= 180, "{} bytes: {}", x.len(), x); }
 }
+
+// --- step 1 beside display's own pipe (213-DRV-0113) ---
+
+#[test]
+fn beside_display_s_running_otg_batches_9_and_10_still_read_the_firmwares_pipe_and_alone_they_read_none_as_before() {
+    // Display's pipe 1 running from OPP 1 beside the firmware's OTG 0.
+    let mut st = firmware_state();
+    st.insert(reg(R::OtgControl, 1), 0x0001_0001);
+    st.insert(reg(R::OptcDataSourceSelect, 1), 1 << 8);
+    let read = |ours: [bool; 4]| {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let mut model = Model { regs: st.clone(), events: events.clone(), unmapped: BTreeSet::new() };
+        let mut store = batches::Store::default();
+        let report = batches::read_into_beside(&mut model, BATCHES, batches::Order::Survey, &mut Log(events.clone()), &mut store, ours);
+        let ev = events.borrow().clone();
+        (report, store, lines(&ev).iter().map(|x| x.to_string()).collect::<Vec<_>>())
+    };
+    // Counted as running, two OTGs: no firmware's pipe, batches 9 and 10 empty, as step 1 has always said.
+    let (report, store, l) = read([false; 4]);
+    assert_eq!((report.batches_read, store.get(R::HubpreqRefFreqToPixFreq, 0)), (9, None));
+    assert!(l.iter().any(|x| x.starts_with("B9 PIPE REFERENCE: NOTHING TO READ")));
+    // OTG 1 counted out as display's: the firmware's pipe 0 read in full, nothing of pipe 1's reference.
+    let (report, store, l) = read([false, true, false, false]);
+    assert_eq!((report.batches_read, store.batches()), (11, 11));
+    assert!(store.get(R::HubpreqRefFreqToPixFreq, 0).is_some() && store.get(R::DppControl, 0).is_some() && store.get(R::DppControl, 1).is_none());
+    assert!(l[1] == "STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING; MARKS OTG0 0000 OTG1 0000 OTG2 0000 OTG3 0000 (5A5A: DISPLAY'S)", "{:?}", &l[..3]);
+    assert_eq!((0..4u8).map(|t| store.get(R::OtgVerticalInterrupt2Position, t)).collect::<Vec<_>>(), vec![Some(0); 4]);
+    assert!(l.iter().any(|x| x.starts_with("B9 HUBP0: VIEWPORT 2560x1600")));
+    // read_into is the same as beside nothing.
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let mut model = Model { regs: st.clone(), events: events.clone(), unmapped: BTreeSet::new() };
+    batches::read_into(&mut model, BATCHES, batches::Order::Survey, &mut Log(events.clone()), &mut batches::Store::default());
+    let alone: Vec<String> = lines(&events.borrow()).iter().map(|x| x.to_string()).collect();
+    assert_eq!(alone, read([false; 4]).2);
+}
+
+#[test]
+fn batches_13_and_14_read_pipe_2_as_the_firmware_left_it_whole_in_either_order_and_its_plane_only_where_powered() {
+    let mut st = firmware_state();
+    st.insert(reg(R::OtgControl, 1), 0x0001_0001);
+    st.insert(reg(R::OtgVerticalInterrupt2Position, 1), 0x5A5A);
+    let run_pipe = |regs: HashMap<u32, u32>, production: bool| {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let mut model = Model { regs, events: events.clone(), unmapped: BTreeSet::new() };
+        let mut store = batches::Store::default();
+        let mut buf = vec![0u8; batches::HELD_BYTES];
+        let report = if production {
+            let mut held = batches::Held::new(Log(events.clone()), &mut buf);
+            batches::read_pipe(&mut model, 2, &mut held, &mut store)
+        } else { batches::read_pipe(&mut model, 2, &mut Log(events.clone()), &mut store) };
+        let ev = events.borrow().clone();
+        (report, store, reads(&ev), lines(&ev).iter().map(|x| x.to_string()).collect::<Vec<_>>())
+    };
+    let (report, store, read, l) = run_pipe(st.clone(), false);
+    // Batch 13: the other OTGs' marks, OTG2's 19, its pixel rate, OPP2 and its DPG, the two domains, DCCG's DTO, MPCC2 and
+    // mux 2 (36); batch 14: HUBP2's 45 and DPP2's 17, both domains on.
+    assert_eq!((report.registers_read, read.len()), (36 + 45 + 17, 36 + 45 + 17));
+    for &o in &read {
+        assert!(dcn::DCN_BYTES.contains(&o) && !dcn::MSIX_BYTES.contains(&o), "{:05X}", o);
+        for p in 0..5u8 { let (a, b) = light::phy_block(p); assert!(!(a..b).contains(&o), "{:05X} in PHY {}'s DPCS", o, p); }
+        assert_ne!(o, reg(R::DcI2cData, 0));
+    }
+    // Of pipe 2 only, and the marks: nothing of pipes 0, 1 or 3 but their mark.
+    for (r, i) in [(R::HubpCntl, 2), (R::DppControl, 2), (R::MpccControl, 2), (R::MpcOutMux, 2), (R::DppclkDtoParam, 2), (R::OtgHTotal, 2), (R::OppPipeControl, 2), (R::OtgVerticalInterrupt2Position, 3)] {
+        assert!(read.contains(&reg(r, i)), "{} {}", r.name(), i);
+    }
+    for (r, i) in [(R::HubpCntl, 1), (R::DppControl, 0), (R::OtgHTotal, 1), (R::MpccControl, 3)] { assert!(!read.contains(&reg(r, i)), "{} {}", r.name(), i); }
+    for x in ["B13 PIPE 2: OTG2 RUNNING 0, CLOCK_ON 0, FROM OPP 2; MARKS OTG0 0000 OTG1 5A5A OTG2 0000 OTG3 0000 (5A5A: DISPLAY'S)",
+              "B13 PIPE 2: HUBP2 DOMAIN ON, DPP2 DOMAIN ON; DPPCLK DTO CTRL 00000000, DTO2 0/0 (00000000)",
+              "B13 PIPE 2: MPCC2 TOP 15 BOT 15 OPP 15 MODE 0 ALPHA 0 (CONTROL 00000000); MPC_OUT MUX 2: 15 (15: NONE)",
+              "B13 PIPE 2 DONE: 36 OF 36 REGISTERS READ, NOTHING WRITTEN",
+              "B14 PIPE 2 PLANE DONE: 62 OF 62 REGISTERS READ, NOTHING WRITTEN"] {
+        assert!(l.iter().any(|y| y == x), "no {:?} in {:#?}", x, l.iter().filter(|y| y.starts_with("B13 PIPE 2:") || y.starts_with("B14")).collect::<Vec<_>>());
+    }
+    assert!(l.iter().any(|y| y.starts_with("B14 PIPE 2 PLANE: HUBP2 DCHUBP_CNTL 000F002B (BLANK 1, VTG_SEL 2, TTU_DISABLE 0), SURFACE 0000_00000000")), "{:#?}", l);
+    assert_eq!((store.get(R::HubpCntl, 2), store.get(R::OtgVerticalInterrupt2Position, 1)), (Some(0x000F_002B), Some(0x5A5A)));
+    // The production order: the same reads, the notes alone.
+    let (_, _, pread, pl) = run_pipe(st.clone(), true);
+    assert_eq!(pread, read);
+    assert!(pl.iter().all(|y| y.starts_with("B13 PIPE 2") || y.starts_with("B14 PIPE 2")) && pl.len() == 9, "{:#?}", pl);
+    // HUBP2's domain off: none of its registers read; DPP2's still.
+    let mut off = st.clone();
+    off.insert(reg(R::DomainPgStatus, 4), 2 << 30);
+    let (report, _, read, l) = run_pipe(off, false);
+    assert_eq!(report.registers_read, 36 + 17);
+    assert!(!read.contains(&reg(R::HubpCntl, 2)) && read.contains(&reg(R::DppControl, 2)));
+    assert!(l.iter().any(|y| y == "B14 PIPE 2 PLANE: HUBP2'S DOMAIN NOT ON: ITS REGISTERS NOT READ"));
+    for y in &l { assert!(y.len() + "[DISPLAY] ".len() <= 180, "{} bytes: {}", y.len(), y); }
+}

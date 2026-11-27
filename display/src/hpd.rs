@@ -95,14 +95,15 @@ pub enum Event {
 /// Both sockets' senses followed (213-DRV-0112). The lit socket's unplug takes it back, and if the other socket's monitor
 /// is in, that one lights at the next poll. With none lit a plug lights its socket; with one lit a plug into the other is
 /// busy. A stopped output does nothing more. A socket whose sense is not followed (None) is passed over. With the second
-/// socket not followed it acts as `Follow` does.
+/// socket not followed it acts as `Follow` does. When display lights the other socket too (213-DRV-0113, `set_second`),
+/// that socket's unplug takes its run back, and the first's unplug lights nothing in its place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pair { state: State, on: usize, settle: [Option<Settle>; 2], pending: Option<usize> }
+pub struct Pair { state: State, on: usize, settle: [Option<Settle>; 2], pending: Option<usize>, second: Option<State> }
 
 impl Pair {
     /// `on`: the socket the state is of (the lit one, or the last taken); `senses`: each followed socket's sense now.
     pub fn new(state: State, on: usize, senses: [Option<bool>; 2]) -> Pair {
-        Pair { state, on: on.min(1), settle: senses.map(|s| s.map(Settle::new)), pending: None }
+        Pair { state, on: on.min(1), settle: senses.map(|s| s.map(Settle::new)), pending: None, second: None }
     }
     pub fn state(&self) -> State { self.state }
     pub fn on(&self) -> usize { self.on }
@@ -110,10 +111,14 @@ impl Pair {
     pub fn sense(&self, socket: usize) -> Option<bool> { self.settle.get(socket).copied().flatten().map(|s| s.sense()) }
     /// After display acted on an event: the state its run or take-back left, and the socket it was on.
     pub fn set(&mut self, state: State, on: usize) { (self.state, self.on) = (state, on.min(1)); }
+    /// The other socket's own run (213-DRV-0113): its state, or None while display lights one socket only.
+    pub fn set_second(&mut self, state: Option<State>) { self.second = state; }
+    pub fn second(&self) -> Option<State> { self.second }
     /// One read of each followed socket at `now_us`; the lit socket's change first. One event a poll; a change of the
     /// other socket in the same poll counts at the next.
     pub fn feed(&mut self, senses: [Option<bool>; 2], now_us: u64) -> Event {
-        if self.state == State::Stopped { return Event::None; }
+        let second_lit = self.second == Some(State::Lit);
+        if self.state == State::Stopped && !second_lit { return Event::None; }
         if let Some(s) = self.pending.take() {
             if self.state == State::Dark && self.sense(s) == Some(true) { return Event::LightUp(s); }
         }
@@ -122,8 +127,10 @@ impl Pair {
             let Some(new) = settle.feed(sense, now_us) else { continue };
             let other = 1 - s;
             return match (self.state, s == self.on, new) {
-                (State::Lit, true, false) => { if self.sense(other) == Some(true) { self.pending = Some(other); } Event::TakeBack(s) }
-                (State::Lit, true, true) => Event::None,
+                (State::Lit, true, false) => { if !second_lit && self.sense(other) == Some(true) { self.pending = Some(other); } Event::TakeBack(s) }
+                (State::Lit, true, true) | (State::Stopped, true, _) => Event::None,
+                (_, false, false) if second_lit => Event::TakeBack(s),
+                (_, false, true) if second_lit => Event::None,
                 (State::Lit, false, true) => Event::Busy(s),
                 (_, _, false) => Event::Gone(s),
                 (_, _, true) => Event::LightUp(s),

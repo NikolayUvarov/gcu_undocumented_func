@@ -172,3 +172,31 @@ fn a_bounce_on_either_socket_and_a_stopped_output_do_nothing_and_with_hpd_2_not_
         assert_eq!(got, want, "{:?} {} {:?}", state, sense, senses);
     }
 }
+
+// --- both sockets lit at once (213-DRV-0113) ---
+
+#[test]
+fn with_the_other_socket_lit_too_each_unplug_takes_back_its_own_and_the_first_lights_nothing_in_its_place() {
+    // Both lit: HDMI-A-2's unplug takes its own run back; a bounce on either does nothing.
+    let mut p = Pair::new(State::Lit, 0, both(true, true));
+    p.set_second(Some(State::Lit));
+    let away = SETTLE_US - POLL_US;
+    assert!(trace2(&mut p, 0, &[(both(false, true), away), (both(true, false), away), (both(true, true), S)]).is_empty());
+    let mut got = vec![];
+    let mut t = 3 * S;
+    while t < 5 * S { let e = p.feed(both(true, false), t); if e != Event::None { got.push((t, e)); if e == Event::TakeBack(1) { p.set_second(Some(State::Dark)); } } t += POLL_US; }
+    assert_eq!(got, [(3 * S + SETTLE_US, Event::TakeBack(1))]);
+    // HDMI-A-2's plugged back while the first is lit: busy, as before; display may light it as its second.
+    assert_eq!(trace2(&mut p, 5 * S, &[(both(true, true), S)]), [(5 * S + SETTLE_US, Event::Busy(1))]);
+    // Both lit again: the first's unplug takes the first back and lights nothing in its place (the other is lit already).
+    p.set_second(Some(State::Lit));
+    let got = trace2(&mut p, 7 * S, &[(both(false, true), 2 * S)]);
+    assert_eq!(got, [(7 * S + SETTLE_US, Event::TakeBack(0))]);
+    // The first stopped, the second lit: the second's unplug still takes it back.
+    let mut p = Pair::new(State::Stopped, 0, both(true, true));
+    p.set_second(Some(State::Lit));
+    assert_eq!(trace2(&mut p, 0, &[(both(true, false), S)]), [(SETTLE_US, Event::TakeBack(1))]);
+    // With no second run (None) every case above acts as before: the second socket's unplug is gone, not taken back.
+    let mut p = Pair::new(State::Lit, 0, both(true, true));
+    assert_eq!(trace2(&mut p, 0, &[(both(true, false), S)]), [(SETTLE_US, Event::Gone(1))]);
+}

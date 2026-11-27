@@ -35,13 +35,16 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// (step 1's batch 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages,
 /// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
 /// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
+/// SECOND_HDMI (213-DRV-0113): the other socket's monitor beside the first lit: Off (the release's), Read (its pipe read
+/// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
 const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
 const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
+const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Off;
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
-                                                     hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST };
+                                                     hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST, second_hdmi: SECOND_HDMI };
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 
@@ -86,7 +89,7 @@ fn main(_info: &'static BootInfo) {
     let begun = start::start(&mut radeon, &plan, id, engine, image, build, started, out);
     if let Ok(after) = device_config(ENGINE, 4) { mind::println!("[DISPLAY] COMMAND {:04X} AFTER STEP 1", after & 0xFFFF); }
     if let Some(mut w) = begun.writer {
-        if let Some(mut follower) = start::Follower::new(&mut radeon, &mut w, begun.run, &plan) {
+        if let Some(mut follower) = start::Follower::new(&mut radeon, &mut w, begun.run, &plan).map(|f| f.with_second(begun.second)) {
             loop {
                 mind::time::sleep(follower.sleep_ms());
                 follower.poll(&mut radeon, &mut w, &plan, image, build, out);
