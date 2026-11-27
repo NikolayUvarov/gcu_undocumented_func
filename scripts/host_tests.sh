@@ -10,13 +10,16 @@ rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
 # Every tests/*_host.rs, but those built on a line of their own (flags, a crate, an order): a new test needs no line
 # here, so tracks that add tests do not meet in this file (000-KRN-0238).
-OWN_LINES=" blockstore hostname index journal listen network_budget nts regdb rtw89_service rtw89_station_filter tls_exporter tts vector voice "
+OWN_LINES=" audio_btsink blockstore hostname index journal listen network_budget nts regdb rtw89_service rtw89_station_filter tls_exporter tts vector voice "
 for file in tests/*_host.rs; do
     test=$(basename "$file" _host.rs)
     [[ $OWN_LINES == *" $test "* ]] && continue
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
+# audio_gw's Bluetooth sink keeps one ring in a static, as the gateway has one sink: its cases on one thread (000-KRN-0288).
+rustc --edition=2021 --test tests/audio_btsink_host.rs -o "$OUT/audio_btsink-tests"
+"$OUT/audio_btsink-tests" --test-threads=1
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
