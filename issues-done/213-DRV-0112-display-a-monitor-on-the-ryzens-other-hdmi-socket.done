@@ -1,6 +1,6 @@
-# 213-DRV-0112 — `display`: a monitor on the Ryzen's other HDMI socket (HDMI-A-2)
+# 213-DRV-0112 — `display`: a monitor on the Ryzen's other HDMI socket (HDMI-A-2) — done
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-26) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.5
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-27) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.5
 
 ## Problem
 
@@ -20,7 +20,7 @@ the maintainer.
 
 ## What is known
 
-From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-engine-surveyed.done),
+From the survey ([213-DRV-0085](213-DRV-0085-the-radeons-display-engine-surveyed.done),
 `hwdocs/cezanne-display.md`, "The display paths"):
 
 | | HDMI-A-1, driven today | HDMI-A-2, this task |
@@ -45,7 +45,7 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 
   The firmware's picture takes one pipe and the second screen another. That `display` lights one HDMI socket at a time is
   its own limit, for now: one second pipe, and one second screen offered (`display.wit` 1.3). Both at once is
-  [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
+  [213-DRV-0113](../issues/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
 
 ## Plan
 
@@ -370,7 +370,7 @@ bits 18-19 are `RDPCS_PHY_DP_MPLLB_V2I` (`dpcs_2_1_0_sh_mask.h`).
   the value already, `MPLLB_V2I` 2, before `display` wrote anything.
 - So in those boots HDMI-A-2's stage 2 would have left the register as it is and gone on.
 - All eight were starts out of Linux (the machine starts MIND Core from Ubuntu). A start not through Linux is still not
-  known, as for table 12's cold path ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
+  known, as for table 12's cold path ([213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
 - The same logs show the register changed later in stage 2, on HDMI-A-1's own route (`= B038003E (WAS B008003E)`): bits
   20 and 21, not the field in question.
 - The real image was fetched from the machine's own log volume to the owner session's private directory for these
@@ -429,7 +429,7 @@ Whether that hub is in the monitor is still asked of the maintainer. It costs th
 
 **Before first light there, known and not known:**
 - **PHY B is most likely cold.** Table 12 then takes its long path (530 steps, 111 writes on the model with the real
-  image), which has never run on this hardware for any PHY ([213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
+  image), which has never run on this hardware for any PHY ([213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md)).
   Whether it is cold is said by stage 2's own line; step 1 does not read RDPCS.
 - So first light on the second socket is to be made with a person at the machine, in the survey's order and undone
   after its stages on the first run.
@@ -443,7 +443,7 @@ After boot 108's read-only run, with the maintainer's second monitor in HDMI-A-1
   and DPPs powered, and Linux drove two monitors on all four.
 - The lines now say `... AND DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`: `display`'s own limit, one second pipe
   and one second screen (`display.wit` 1.3).
-- Both at once is [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), a design for now.
+- Both at once is [213-DRV-0113](../issues/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), a design for now.
 
 **2. The EDID of a socket with a monitor but not taken** (`start.rs`: `untaken_edid`, `engine_now`, `Naming`;
 `batches.rs`: `read_one`).
@@ -591,19 +591,39 @@ HDMI-A-2`. **The maintainer's look:** «цветные квадратики на
 **After it, at the maintainer's word** («до поддержки пусть работает HDMI2 (который у нас заработал первым)»): the
 machine is back on an image that takes HDMI-A-1 first (release 202611270607, boot 113: `HDMI-A-2 NOT DRIVEN … HDMI-A-1
 IS TAKEN FIRST`, its EDID read, HDMI-A-1 lit as before). Both at once is
-[213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
+[213-DRV-0113](../issues/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
 
 ## Both sockets at once, and the monitors swapped (2026-11-27)
 
 The second socket now lights beside the first, not only alone: that is
-[213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), which carries this branch. On its release
+[213-DRV-0113](../issues/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), which carries this branch. On its release
 202611271414 (boot 116, no bench-only commit) the maintainer swapped the two monitors between the sockets: HDMI-A-2 then
 drove the 3440x1440 monitor at 324 MHz on PHY B, and HDMI-A-1 the 1366x768 one, each in its own mode, «Поменял,
 показывает». Table 12 met PHY B warm here too, as every start came through Linux.
 
 ## Related
 
-[213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (the mode from the EDID),
-[213-DRV-0096](../issues-done/213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (the plug followed),
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
-[213-DRV-0078](../issues-done/213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) (the driver's main record).
+[213-DRV-0095](213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (the mode from the EDID),
+[213-DRV-0096](213-DRV-0096-display-the-second-output-plugged-and-unplugged.done) (the plug followed),
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
+[213-DRV-0078](213-DRV-0078-a-display-driver-for-the-ryzens-radeon.done) (the driver's main record).
+
+## Resolution
+
+Done on 2026-11-27. `display` drives the Ryzen's second HDMI socket, HDMI-A-2: VBIOS path 1, PHY B, DDC2 and HPD 2.
+It lands with [213-DRV-0113](../issues/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), whose branch carries this one.
+
+**Shown on the Ryzen** (that machine, its monitors, the releases named above; MC-12.1):
+- the socket's blocks read with nothing written, empty and with a monitor in it (boot 108);
+- the third monitor's EDID read over DDC2 beside a lit HDMI-A-1, the I2C engine given back as found (boot 109);
+- first light and then all 16 stages on HDMI-A-2 alone (boots 110 to 112). The maintainer saw the colour squares and
+  then MIND Core's picture there;
+- the two monitors swapped between the sockets and swapped back, each lit each time (release 202611271414, with 0113).
+- **On the way:** the printed labels are the reverse of Linux's names. The maintainer's "HDMI2" is HDMI-A-1, his "HDMI1"
+  is HDMI-A-2.
+
+**By host cases only:** the guard's refusals of the other socket's blocks, and table 12's write of PHY A's FUSE0 being
+left unmade where it would change nothing.
+
+**Not shown:** table 12's long path on PHY B. Every start came through Linux, which lit that socket, so PHY B was always
+set up already. A start not through Linux was not shown either.

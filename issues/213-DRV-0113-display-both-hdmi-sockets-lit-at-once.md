@@ -10,7 +10,7 @@ The maintainer wants three screens at once on the Ryzen:
 - HDMI-A-2, with a third monitor in it since 2026-11-26.
 
 `display` lights one HDMI socket at a time
-([213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.md)). With a monitor in each, the one not
+([213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done)). With a monitor in each, the one not
 taken is named `NOT DRIVEN ... DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`.
 
 The limit is `display`'s and its interface's, not the engine's:
@@ -755,7 +755,7 @@ between two while lit. Two lines say `DARK 1 TIMES, 6 S IN ALL` and `7 S`: the p
 
 ## Related
 
-[213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.md) (HDMI-A-2 alone, one socket at a time),
+[213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done) (HDMI-A-2 alone, one socket at a time),
 [213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
 [213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md) (table 12's cold path),
 [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md) (the setting),
