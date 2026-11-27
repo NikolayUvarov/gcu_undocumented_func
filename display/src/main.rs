@@ -37,12 +37,12 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
 /// SECOND_HDMI (213-DRV-0113): the other socket's monitor beside the first lit: Off (the release's), Read (its pipe read
 /// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone).
-const SURVEY_ORDER: bool = false;
+const SURVEY_ORDER: bool = true; // BENCH ONLY, NEVER TO LAND
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::FirstLight; // BENCH ONLY, NEVER TO LAND
 const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
-const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Off;
+const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::FirstLightUndone; // BENCH ONLY, NEVER TO LAND
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
                                                      hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST, second_hdmi: SECOND_HDMI };
 /// Between two log lines, so that a burst is not dropped.
