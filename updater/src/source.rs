@@ -15,7 +15,7 @@ use mind::parse::Session as Parser;
 use mind::idl::update::Error;
 use mind::cid::Cid;
 use mind::dag::{self, CHUNK};
-use crate::{bundle, kept, store::Store};
+use crate::{bundle, kept, plan, store::Store};
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
@@ -180,15 +180,15 @@ impl Sink for Memory {
     }
 }
 
-// A body written into a file of the slot, `size` bytes at most, in pieces of STAGE bytes.
-struct Output<'f> { file: &'f mut File, size: u64, stage: Vec<u8>, staged: usize, at: u64, failed: bool }
+// A body written into a file of the slot, `size` bytes at most, in pieces of STAGE bytes; `path` names it in the log.
+struct Output<'f> { file: &'f mut File, path: &'f str, size: u64, stage: Vec<u8>, staged: usize, at: u64, failed: bool }
 
 impl Output<'_> {
     fn flush(&mut self) -> Result<(), http::Error> {
         if self.staged > 0 {
             // The slot's writes keep no limit: CALL_MS is for the network's side.
-            let written = wire::with_timeout(0, || self.file.write_at(self.at as usize, &self.stage[..self.staged]));
-            if written != Ok(self.staged) { self.failed = true; return Err(http::Error::Sink); }
+            let written = wire::with_timeout(0, || write_at(self.file, self.at as usize, &self.stage[..self.staged], self.path));
+            if !written { self.failed = true; return Err(http::Error::Sink); }
             self.at += self.staged as u64;
             self.staged = 0;
         }
@@ -294,7 +294,7 @@ impl Source {
         if have > 0 { mind::println!("[UPDATER] {}: RESUMING AT {} OF {}", path, have, size); }
         match self {
             Source::Https { base, pin } => {
-                let mut output = Output { file, size, stage: alloc::vec![0; STAGE], staged: 0, at: have, failed: false };
+                let mut output = Output { file, path, size, stage: alloc::vec![0; STAGE], staged: 0, at: have, failed: false };
                 let result = get(base, pin.as_ref(), path, have, &mut output, parser);
                 let flushed = output.flush();
                 if output.failed || flushed.is_err() { return Err(Error::Write); }
@@ -303,13 +303,13 @@ impl Source {
             Source::Directory(dir) => {
                 let from = File::open(&format!("{}/{}", dir, path)).map_err(|_| Error::Missing)?;
                 if from.size() as u64 != size { return Err(Error::Digest); }
-                copy(&from, file, have as usize, size as usize)?;
+                copy(&from, file, have as usize, size as usize, path)?;
                 Ok(size - have)
             }
             Source::Bundle(bundle) => {
                 let (start, length) = bundle.find(path)?;
                 if length != size { return Err(Error::Digest); }
-                copy_from(&bundle.file, start as usize, file, have as usize, size as usize)?;
+                copy_from(&bundle.file, start as usize, file, have as usize, size as usize, path)?;
                 Ok(size - have)
             }
             Source::Store(root) => {
@@ -321,7 +321,7 @@ impl Source {
                 while at < size {
                     let got = dag::read_at(&mut Store, &cid, at, &mut stage[..STAGE.min((size - at) as usize)], &mut buffer).map_err(unstored)?;
                     if got == 0 { return Err(Error::Digest); }
-                    if file.write_at(at as usize, &stage[..got]) != Ok(got) { return Err(Error::Write); }
+                    if !write_at(file, at as usize, &stage[..got], path) { return Err(Error::Write); }
                     at += got as u64;
                 }
                 Ok(size - have)
@@ -330,19 +330,34 @@ impl Source {
     }
 }
 
-/// Bytes `at..size` of `from` into the same place of `file`.
-pub fn copy(from: &File, file: &mut File, at: usize, size: usize) -> Result<(), Error> { copy_from(from, 0, file, at, size) }
+/// Bytes `at..size` of `from` into the same place of `file`, which `path` names in the log.
+pub fn copy(from: &File, file: &mut File, at: usize, size: usize, path: &str) -> Result<(), Error> { copy_from(from, 0, file, at, size, path) }
 
 /// Bytes `at..size` of `from`, read `base` bytes further on, into `file` at `at..size`.
-fn copy_from(from: &File, base: usize, file: &mut File, mut at: usize, size: usize) -> Result<(), Error> {
+fn copy_from(from: &File, base: usize, file: &mut File, mut at: usize, size: usize, path: &str) -> Result<(), Error> {
     let mut buffer = alloc::vec![0u8; STAGE];
     while at < size {
         let got = from.read_at(base + at, &mut buffer[..STAGE.min(size - at)]).map_err(|_| Error::Network)?;
         if got == 0 { return Err(Error::Network); }
-        if file.write_at(at, &buffer[..got]) != Ok(got) { return Err(Error::Write); }
+        if !write_at(file, at, &buffer[..got], path) { return Err(Error::Write); }
         at += got;
     }
     Ok(())
+}
+
+/// `bytes` written whole into `file` at `at`; a write the store refuses is done again after each pause of
+/// plan::WRITE_AGAIN_MS, every try logged with `path` and its offset (801-UPD-0051). Whether it was written.
+pub fn write_at(file: &mut File, at: usize, bytes: &[u8], path: &str) -> bool {
+    let tries = plan::WRITE_AGAIN_MS.len() + 1;
+    let write = || match file.write_at(at, bytes) { Ok(n) if n == bytes.len() => Ok(()), Ok(n) => Err(format!("{} WRITTEN", n)), Err(e) => Err(format!("{:?}", e)) };
+    let result = plan::tried(write, |refused, next, pause| {
+        mind::println!("[UPDATER] {}: {} BYTES AT {} REFUSED ({}): WRITTEN AGAIN IN {} MS, TRY {} OF {}", path, bytes.len(), at, refused, pause, next, tries);
+        mind::time::sleep(pause as usize);
+    });
+    match result {
+        Ok(()) => true,
+        Err(refused) => { mind::println!("[UPDATER] {}: {} BYTES AT {} REFUSED {} TIMES ({})", path, bytes.len(), at, tries, refused); false }
+    }
 }
 
 /// The SHA-256 of a file as it is on the disk.
