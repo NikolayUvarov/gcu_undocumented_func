@@ -289,7 +289,7 @@ Main task [100003](../issues/100003-mind-hub-requests-conversation-check-and-upd
 
 Done when an agent in a cloud session reads its queue on the hub with `mindhub call`, and the host, the name and the pin are recorded in 100003.
 
-## 19. The Ryzen's MIND Core stick refused a write once (a medium error)
+## 19. The Ryzen's MIND Core boot drive refused writes twice (a medium error): replace it?
 
 The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-26. One fault is not a verdict on the stick, but it is the stick that holds both slots, the data and the logs.
 
@@ -306,4 +306,15 @@ The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-
 - [ ] Whether to go on with this stick or write a new one. A second fault would settle it. Writing a stick is yours (`./build-and-write.sh` from the fast-test clone).
 - [ ] If Ubuntu is started on that machine for any reason, the stick's own health record can be read there first (`smartctl -a` seldom works on a stick; `dmesg` after a read of the whole device shows medium errors if any stand).
 
-**Asked for nothing else:** no code changes follow from one fault. If it comes again, DRV writes it up as an issue with both records.
+**It came again on 2026-11-27** (boot 113, release 202611270607 running; uptime in seconds):
+- 4616.286 the updater began to take release 202611270726 (31 MB) through the Effector server.
+- 4681.495 `[USB] STORAGE: WRITE REFUSED: SENSE KEY 3 ASC 03 ASCQ 00 (MEDIUM ERROR)`; `[UPDATER] INSTALL: REFUSED: Write`; `EFFECTOR: THE GATEWAY REFUSED 32768 BYTES AT 29196288: Io`. The first fault was at 5668864 of its bundle: a different place.
+- The drive: `152D:2329 ON PORT 4 (HIGH SPEED)`, `MASS STORAGE: 31277232 SECTORS` (16 GB). 152D is JMicron, a USB-to-SATA bridge, so the fault may be the drive behind it, the bridge, or its power; the log cannot tell which.
+- Between the two faults, 5 releases were written to it whole (202611262214, 202611270508, 0515, 0533 and 0607).
+- Nothing was installed and the machine runs on as it was. **DRV sends no more releases to this drive** until you decide: a third try might pass, as the first retry did, but each try writes 31 MB to a drive that refuses writes.
+
+**For you to decide, now:**
+- [ ] Replace the drive (or the stick and its adapter) and write a new one. Before you do, DRV gives you the exact `./build-and-write.sh` line and the list of what a new drive needs again (the Effector agent's enrolment, the Wi-Fi network, the Bluetooth pairings, `data/displays.txt`).
+- [ ] Or let DRV go on trying releases on this drive, knowing each may fail.
+
+**What waits on it:** 213-DRV-0113's three bench images (three screens lit at once), built and through QEMU, cannot reach the machine until then.
