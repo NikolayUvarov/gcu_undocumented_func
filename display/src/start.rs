@@ -233,8 +233,10 @@ fn done(r: &Run) -> u8 { match r.outcome { light::Outcome::Stopped { done } | li
 /// The second HDMI run (213-DRV-0113): on `o`, the socket with a monitor not taken first, beside `first`, display's lit run,
 /// as SECOND_HDMI asks; nothing at Off. Step 1 read again with the first's timing generator counted out of the running,
 /// the pipe it takes read as the firmware left it (batches 13 and 14), then first light's stages there with the firmware's
-/// pipe and the first's read after each, or their description. The first's guard refuses the second's blocks from its
-/// stages on, and reads its pipe while they stay. The run when its stages ran.
+/// pipe and the first's read after each, or their description; at `Full` all sixteen, its picture in the screen the first
+/// does not hold (the third: slot 7's pixels offered through slot 8), and after first light only when that screen's slots
+/// are granted. The first's guard refuses the second's blocks from its stages on, and reads its pipe while they stay. The
+/// run when its stages ran.
 fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>, o: Output, edid: Option<&edid::Edid>, w: &mut D::Writer,
                              vfct: Option<&'a [u8]>, build: &'static str, out: &mut dyn Out) -> Option<Run<'a>> {
     let s = plan.second_hdmi;
@@ -260,8 +262,22 @@ fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>
     if plan.edid_on(&o) {
         d.say(format_args!("{}: STEP 3'S MODE: {}x{} AT {} KHZ IN {:?} SIGNALLING, {}", name, timing.h_active, timing.v_active, timing.pixel_khz, signal, why));
     }
-    let second = match light::prepare_beside(&store, o, &first.light, timing, signal, build) { Ok(l) => l.with_watch(plan.watch_frames), Err(why) => { refused(d, &why); return None; } };
-    let stages = plan.second_stages(&o);
+    let screen = first.light.screen.other();
+    let second = match light::prepare_beside(&store, o, &first.light, timing, signal, build) {
+        Ok(l) => l.with_watch(plan.watch_frames).with_screen(screen),
+        Err(why) => { refused(d, &why); return None; }
+    };
+    let mut stages = plan.second_stages(&o);
+    // Past first light only with its screen's pixels and client granted: the third's are slots 7 and 8 (213-KRN-0285).
+    if stages > dcn::FIRST_LIGHT && screen == light::Screen::Third {
+        let (pixels, client) = light::Screens::third_granted(w);
+        if !(pixels && client) {
+            let word = |g: bool| if g { "GRANTED" } else { "NOT GRANTED" };
+            d.say(format_args!("{}: THE THIRD SCREEN'S SLOTS: SLOT 7 (ITS PIXELS) {}, SLOT 8 (ITS CLIENT) {}: THE SECOND HDMI RUN STOPS AFTER FIRST LIGHT, ITS PATTERN LEFT",
+                               name, word(pixels), word(client)));
+            stages = dcn::FIRST_LIGHT;
+        }
+    }
     if stages == 0 {
         light::describe(&second, false, &mut named);
         d.say(format_args!("{}: SECOND HDMI RUN SHOWN FOR OTG{}, {} REGISTERS READ, NOTHING WRITTEN (SECOND_HDMI {}, HDMI_A_2 {})", name, next, read, s.word(), plan.hdmi_a_2.word()));
@@ -280,8 +296,9 @@ fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>
         if let Err(why) = first.light.watch_beside(&run.light.choice, &mut first.journal, w) { d.say(format_args!("{}: ITS PIPE NOT READ BESIDE {}: {}", name, light::name(&lit.output), why)); }
     }
     let ms = d.now_us().saturating_sub(start) / 1000;
-    d.say(format_args!("{}: SECOND HDMI RUN ON OTG{} {:?}: {} STAGES IN PLACE, {} REGISTERS READ, {} WRITES, {} MS; {} {:?} ON OTG{}", name, next, state, done(&run), read,
-                       run.journal.len(), ms, light::name(&lit.output), hpd::state_after(Some(first.outcome)), lit.pipe.otg));
+    let offered = if run.times.offered_us.is_some() { if screen == light::Screen::Third { "; OFFERED AS THE THIRD SCREEN THROUGH SLOT 8" } else { "; OFFERED AS THE SECOND SCREEN" } } else { "" };
+    d.say(format_args!("{}: SECOND HDMI RUN ON OTG{} {:?}: {} STAGES IN PLACE, {} REGISTERS READ, {} WRITES, {} MS; {} {:?} ON OTG{}{}", name, next, state, done(&run), read,
+                       run.journal.len(), ms, light::name(&lit.output), hpd::state_after(Some(first.outcome)), lit.pipe.otg, offered));
     Some(run)
 }
 
@@ -290,15 +307,22 @@ fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>
 /// lit socket that holds takes its stages back (screen_gone first), and lights the other socket if its monitor is in; a
 /// monitor plugged in that holds, while none is lit, runs steps 1 to 4 again on its socket on the same writer, step 1 and
 /// the EDID read anew; one plugged into the socket not lit is named, not driven, or with SECOND_HDMI gets the second HDMI
-/// run beside the lit one (213-DRV-0113), whose unplug takes back its own stages, the first's left lit. The first's unplug
-/// with the second lit leaves the second the only one, followed as the first was. A new underflow or request timeout undoes
-/// the stages as the watch does; after a failure nothing more is tried.
+/// run beside the lit one (213-DRV-0113), whose unplug takes back its own stages (screen_gone through its own client first),
+/// the first's left lit. The first's unplug with the second lit leaves the second the only one, on its pipe and screen,
+/// followed as the first was; a monitor plugged in again then gets the pipe and screen left free. Each run's picture has
+/// its standing check, which reads the other display pipe too: a new underflow or request timeout undoes the run on whose
+/// pipe it is (the firmware's: the run whose check found it), as the watch does; after a failure nothing more is tried.
 pub struct Follower<'a> {
     run: Option<Run<'a>>, state: hpd::State, f: Option<hpd::Pair>, account: light::Standing, next: u64, standing: bool,
     /// Each socket's HPD sense, when it is followed.
     senses: [Option<Reg>; 2],
-    /// The second HDMI run beside the first, while its stages are in place (213-DRV-0113).
-    second: Option<Run<'a>>,
+    /// The second HDMI run beside the first, while its stages are in place (213-DRV-0113), and its standing check's account.
+    second: Option<Run<'a>>, account2: light::Standing,
+}
+
+/// The display pipe a standing check's failure is on, if it names one (213-DRV-0113).
+fn pipe_hit(why: &light::Failure) -> Option<u8> {
+    match why { light::Failure::Underflow { offset, .. } | light::Failure::RequestTimeout { offset, .. } => light::status_pipe(*offset).map(|(_, n)| n), _ => None }
 }
 
 /// A socket's index in `light::SOCKETS`.
@@ -335,7 +359,7 @@ impl<'a> Follower<'a> {
         }
         let account = light::Standing::new(w.now_us());
         let next = w.now_us() + light::STANDING_US;
-        Some(Follower { run, state, f, account, next, standing: plan.standing_check, senses, second: None })
+        Some(Follower { run, state, f, account, next, standing: plan.standing_check, senses, second: None, account2: account })
     }
 
     /// With the start's second HDMI run (213-DRV-0113): its socket's unplug followed while its stages are in place; after a
@@ -350,6 +374,9 @@ impl<'a> Follower<'a> {
     pub fn second_state(&self) -> Option<hpd::State> { self.f.as_ref().and_then(|f| f.second()) }
     /// The output the second HDMI run is lit on, if any.
     pub fn second_output(&self) -> Option<Output> { self.second.as_ref().map(|r| r.light.choice.output) }
+    /// The pipe (OTG) and screen each run holds (213-DRV-0113).
+    pub fn held(&self) -> Option<(u8, light::Screen)> { self.run.as_ref().map(|r| (r.light.choice.pipe.otg, r.light.screen)) }
+    pub fn second_held(&self) -> Option<(u8, light::Screen)> { self.second.as_ref().map(|r| (r.light.choice.pipe.otg, r.light.screen)) }
 
     /// How long display sleeps between two polls.
     pub fn sleep_ms(&self) -> usize { if self.f.is_some() { hpd::POLL_MS } else { (light::STANDING_US / 1000) as usize } }
@@ -357,21 +384,81 @@ impl<'a> Follower<'a> {
     /// The output steps 3 and 4 last ran on (lit while the state is), if any.
     pub fn output(&self) -> Option<Output> { self.run.as_ref().map(|r| r.light.choice.output) }
 
+    /// The first run's picture undone after its standing check (213-DRV-0103): the mark kept, nothing tried again on it.
+    fn undo_first<E: light::Engine>(&mut self, w: &mut E, why: light::Failure, out: &mut dyn Out) {
+        let Some(r) = self.run.as_mut() else { return };
+        let since = r.times.offered_us.map_or(0, |o| w.now_us().saturating_sub(r.times.start_us + o));
+        let stages = done(r);
+        light::standing_undo(&r.light, w, &mut r.interp, &mut r.journal, stages, why, since, out);
+        r.outcome = light::Outcome::Failed { stage: 15, why };
+        self.state = hpd::State::Stopped;
+        if let Some(s) = self.second.as_mut() { s.light.alone(&mut s.journal); }
+        if let Some(f) = self.f.as_mut() { let on = f.on(); f.set(self.state, on); }
+    }
+    /// The second HDMI run's picture undone after a standing check (213-DRV-0113): its screen let go through its own
+    /// client first, its mark kept; the first's lit pipe no longer reads it.
+    fn undo_second<E: light::Engine>(&mut self, w: &mut E, why: light::Failure, out: &mut dyn Out) {
+        let Some(mut r) = self.second.take() else { return };
+        let since = r.times.offered_us.map_or(0, |o| w.now_us().saturating_sub(r.times.start_us + o));
+        let stages = done(&r);
+        light::standing_undo(&r.light, w, &mut r.interp, &mut r.journal, stages, why, since, &mut Naming { inner: out, name: light::name(&r.light.choice.output) });
+        if let Some(first) = self.run.as_mut() { first.light.alone(&mut first.journal); }
+        if let Some(f) = self.f.as_mut() { f.set_second(Some(hpd::State::Stopped)); }
+    }
+    /// A standing check's failure named with its pipe and the run it undoes, in a build with a second HDMI run.
+    fn say_hit<D: Device>(&self, d: &mut D, plan: &Plan, why: &light::Failure, second: bool) {
+        if plan.second_hdmi == setting::SecondHdmi::Off { return; }
+        let run = if second { self.second.as_ref() } else { self.run.as_ref() };
+        let Some(r) = run else { return };
+        let (unit, n) = match why { light::Failure::Underflow { offset, .. } | light::Failure::RequestTimeout { offset, .. } => light::status_pipe(*offset).unwrap_or(("?", 9)), _ => ("?", 9) };
+        let whose = if n == r.light.firmware.otg { "THE FIRMWARE'S" } else if n == r.light.choice.pipe.otg { light::name(&r.light.choice.output) } else { "THE OTHER LIT PIPE'S" };
+        d.say(format_args!("THE STANDING CHECK: {} ON PIPE {}'S {} ({}): {}'S RUN ON OTG{} UNDONE", why, n, unit, whose, light::name(&r.light.choice.output), r.light.choice.pipe.otg));
+    }
+    /// Both sockets as they are now, after each change, in a build with a second HDMI run (213-DRV-0113).
+    fn say_sockets<D: Device>(&self, d: &mut D, plan: &Plan) {
+        if plan.second_hdmi == setting::SecondHdmi::Off { return; }
+        let lit = |r: &Run| {
+            let screen = if r.times.offered_us.is_some() { r.light.screen.name() } else { "NO" };
+            (r.light.choice.pipe.otg, done(r), screen)
+        };
+        let mut said: [(&str, Option<(u8, u8, &str)>); 2] = [("", None); 2];
+        for i in 0..light::SOCKETS.len() {
+            let first = self.run.as_ref().filter(|r| socket(&r.light.choice.output) == i);
+            let second = self.second.as_ref().filter(|r| socket(&r.light.choice.output) == i);
+            said[i] = match (first, second) {
+                (Some(r), _) if self.state == hpd::State::Lit => ("LIT", Some(lit(r))),
+                (Some(_), _) if self.state == hpd::State::Stopped => ("STOPPED AFTER A FAILURE", None),
+                (_, Some(r)) => ("LIT", Some(lit(r))),
+                _ => (match self.f.as_ref().and_then(|f| f.sense(i)) { Some(true) => "A MONITOR, NOT LIT", Some(false) => "NO MONITOR", None => "NOT FOLLOWED" }, None),
+            };
+        }
+        let part = |i: usize| -> Sockets { Sockets(light::name(&light::SOCKETS[i]), said[i].0, said[i].1) };
+        d.say(format_args!("HDMI SOCKETS NOW: {}; {}", part(0), part(1)));
+    }
+
     /// One poll after the sleep: the standing check when it is due, then both HPD senses.
     pub fn poll<D: Device>(&mut self, d: &mut D, w: &mut D::Writer, plan: &Plan, vfct: Option<&'a [u8]>, build: &'static str, out: &mut dyn Out) {
-        // The standing check, once a second, while pipe 1 scans the picture (stage 15 in place).
-        if self.standing && self.state == hpd::State::Lit && w.now_us() >= self.next {
+        // The standing checks, once a second, of each run whose picture is up (stage 15 in place), the first's then the second's.
+        if self.standing && w.now_us() >= self.next {
             self.next = w.now_us() + light::STANDING_US;
-            if let Some(r) = self.run.as_mut().filter(|r| done(r) >= 15) {
-                if let Err(why) = light::standing_check(&r.light, w, &r.journal, &mut self.account, out) {
-                    let since = r.times.offered_us.map_or(0, |o| w.now_us().saturating_sub(r.times.start_us + o));
-                    let stages = done(r);
-                    light::standing_undo(&r.light, w, &mut r.interp, &mut r.journal, stages, why, since, out);
-                    r.outcome = light::Outcome::Failed { stage: 15, why };
-                    self.state = hpd::State::Stopped;
-                    if let Some(s) = self.second.as_mut() { s.light.alone(&mut s.journal); }
-                    if let Some(f) = self.f.as_mut() { let on = f.on(); f.set(self.state, on); }
-                }
+            let first_up = self.state == hpd::State::Lit && self.run.as_ref().is_some_and(|r| done(r) >= 15);
+            let found = match self.run.as_mut() { Some(r) if first_up => light::standing_check(&r.light, w, &r.journal, &mut self.account, out).err(), _ => None };
+            if let Some(why) = found {
+                let on_second = self.second.as_ref().is_some_and(|s| pipe_hit(&why) == Some(s.light.choice.pipe.otg));
+                self.say_hit(d, plan, &why, on_second);
+                if on_second { self.undo_second(w, why, out); } else { self.undo_first(w, why, out); }
+                self.say_sockets(d, plan);
+            }
+            let second_up = self.second.as_ref().is_some_and(|r| done(r) >= 15);
+            let found = match self.second.as_mut() {
+                Some(r) if second_up => { let name = light::name(&r.light.choice.output); light::standing_check(&r.light, w, &r.journal, &mut self.account2, &mut Naming { inner: out, name }).err() }
+                _ => None,
+            };
+            if let Some(why) = found {
+                let on_first = self.run.as_ref().is_some_and(|r| self.state == hpd::State::Lit && pipe_hit(&why) == Some(r.light.choice.pipe.otg));
+                self.say_hit(d, plan, &why, !on_first);
+                if on_first { self.undo_first(w, why, out); } else { self.undo_second(w, why, out); }
+                self.say_sockets(d, plan);
             }
         }
         let Some(pair) = self.f.as_mut() else { return };
@@ -383,7 +470,9 @@ impl<'a> Follower<'a> {
                 let stages = done(&r);
                 let unchanged = light::take_back(&r.light, w, &mut r.interp, &mut r.journal, stages, &mut Naming { inner: out, name: light::name(&light::SOCKETS[i]) });
                 if let Some(first) = self.run.as_mut() { first.light.alone(&mut first.journal); }
+                self.account2.dark(w.now_us());
                 pair.set_second(Some(if unchanged { hpd::State::Dark } else { hpd::State::Stopped }));
+                self.say_sockets(d, plan);
             }
             hpd::Event::TakeBack(i) => {
                 let Some(r) = self.run.as_mut() else { pair.set(hpd::State::Dark, i); self.state = hpd::State::Dark; return };
@@ -401,9 +490,11 @@ impl<'a> Follower<'a> {
                     pair.set(self.state, socket(&o));
                     pair.set_second(None);
                     self.run = Some(s);
+                    self.account = self.account2;
                     self.next = w.now_us() + light::STANDING_US;
                     d.say(format_args!("{} NOW THE ONLY HDMI SOCKET LIT, ON OTG{}: FOLLOWED AS THE FIRST WAS; THE SECOND OUTPUT {:?}", light::name(&o), otg, self.state));
                 }
+                self.say_sockets(d, plan);
             }
             hpd::Event::LightUp(i) => {
                 let output = light::SOCKETS[i];
@@ -426,6 +517,7 @@ impl<'a> Follower<'a> {
                 self.next = w.now_us() + light::STANDING_US;
                 if i == 0 { d.say(format_args!("A MONITOR PLUGGED IN: STEPS 1 TO 4 RAN AGAIN, THE SECOND OUTPUT {:?}", self.state)); }
                 else { d.say(format_args!("A MONITOR ON {}: STEPS 1 TO 4 RAN AGAIN ON IT, THE SECOND OUTPUT {:?}", light::name(&output), self.state)); }
+                self.say_sockets(d, plan);
             }
             // A monitor beside the lit socket with SECOND_HDMI on, and no second run failed or undone: the second run there.
             hpd::Event::Busy(i) if plan.second_hdmi != setting::SecondHdmi::Off && matches!(pair.second(), None | Some(hpd::State::Dark)) => {
@@ -437,6 +529,8 @@ impl<'a> Follower<'a> {
                 let state = second.as_ref().map(|r| hpd::state_after(Some(r.outcome)));
                 pair.set_second(state);
                 self.second = second.filter(|_| state == Some(hpd::State::Lit));
+                self.account2 = light::Standing::new(w.now_us());
+                self.say_sockets(d, plan);
             }
             hpd::Event::Busy(i) => {
                 let (o, lit) = (light::SOCKETS[i], light::SOCKETS[pair.on()]);
@@ -456,6 +550,17 @@ impl<'a> Follower<'a> {
                 if i == 1 { batches::read_second(w, true, out, &mut Store::default()); }
             }
             hpd::Event::Gone(_) | hpd::Event::None => {}
+        }
+    }
+}
+
+// One socket in the sockets' line: its name, its state, and where a lit one is (OTG, stages, screen).
+struct Sockets(&'static str, &'static str, Option<(u8, u8, &'static str)>);
+impl fmt::Display for Sockets {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.2 {
+            Some((otg, stages, screen)) => write!(f, "{} {} ON OTG{} ({} STAGES, {} SCREEN)", self.0, self.1, otg, stages, screen),
+            None => write!(f, "{} {}", self.0, self.1),
         }
     }
 }

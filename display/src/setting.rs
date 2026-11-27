@@ -122,18 +122,23 @@ impl HdmiFirst {
 
 /// The second HDMI run (213-DRV-0113), beside the first socket lit, on the other socket's monitor: none, as a release does;
 /// the pipe it would take read first and its stages described; first light's eight stages there, left in place or undone
-/// after them. On HDMI-A-2 never further than `HdmiA2` lets display go; STAGES_ALLOWED bounds it too.
+/// after them; or all sixteen, its picture offered as the screen its run holds (stage 4). On HDMI-A-2 never further than
+/// `HdmiA2` lets display go; STAGES_ALLOWED bounds it too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SecondHdmi { Off, Read, FirstLight, FirstLightUndone }
+pub enum SecondHdmi { Off, Read, FirstLight, FirstLightUndone, Full }
 
 impl SecondHdmi {
     pub fn word(self) -> &'static str {
-        match self { SecondHdmi::Off => "OFF", SecondHdmi::Read => "READ", SecondHdmi::FirstLight => "FIRST_LIGHT", SecondHdmi::FirstLightUndone => "FIRST_LIGHT_UNDONE" }
+        match self {
+            SecondHdmi::Off => "OFF", SecondHdmi::Read => "READ", SecondHdmi::FirstLight => "FIRST_LIGHT", SecondHdmi::FirstLightUndone => "FIRST_LIGHT_UNDONE",
+            SecondHdmi::Full => "FULL",
+        }
     }
     pub fn what(self) -> &'static str {
         match self {
             SecondHdmi::Off => "NONE", SecondHdmi::Read => "ITS PIPE READ FIRST, ITS STAGES DESCRIBED",
             SecondHdmi::FirstLight => "FIRST LIGHT'S 8 STAGES, LEFT IN PLACE", SecondHdmi::FirstLightUndone => "FIRST LIGHT'S 8 STAGES, UNDONE AFTER THEM",
+            SecondHdmi::Full => "ALL 16 STAGES, ITS PICTURE OFFERED AS ITS OWN SCREEN",
         }
     }
 }
@@ -172,9 +177,10 @@ impl Plan {
     pub fn takes(&self, o: &Output) -> bool { *o != HDMI_A_2 || !self.writes() || self.hdmi_a_2 >= HdmiA2::Edid }
     /// Whether step 2 reads `o`'s EDID.
     pub fn edid_on(&self, o: &Output) -> bool { self.edid && (*o != HDMI_A_2 || self.hdmi_a_2 >= HdmiA2::Edid) }
-    /// How many stages the second HDMI run may run on `o` (213-DRV-0113): first light's at most, as `stages_on` bounds `o`.
+    /// How many stages the second HDMI run may run on `o` (213-DRV-0113): as `stages_on` bounds `o`, first light's at most
+    /// but at `Full`.
     pub fn second_stages(&self, o: &Output) -> u8 {
-        match self.second_hdmi { SecondHdmi::Off | SecondHdmi::Read => 0, _ => self.stages_on(o).min(FIRST_LIGHT) }
+        match self.second_hdmi { SecondHdmi::Off | SecondHdmi::Read => 0, SecondHdmi::Full => self.stages_on(o), _ => self.stages_on(o).min(FIRST_LIGHT) }
     }
     /// Whether the second HDMI run's stages are undone after they ran.
     pub fn second_undone(&self) -> bool { self.second_hdmi == SecondHdmi::FirstLightUndone }

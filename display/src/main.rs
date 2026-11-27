@@ -36,7 +36,8 @@ use mind::dev::{cap_info, device_config, Mmio};
 /// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
 /// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
 /// SECOND_HDMI (213-DRV-0113): the other socket's monitor beside the first lit: Off (the release's), Read (its pipe read
-/// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone).
+/// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone), Full
+/// (all 16, its picture in slot 7 offered as the third screen through slot 8, 213-KRN-0285).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
@@ -55,6 +56,9 @@ const ENGINE: usize = SLOT_DEV0;
 const MAILBOX: usize = SLOT_DEV1;
 const SECOND_SCREEN: usize = SLOT_MEM;
 const VBIOS: usize = SLOT_IRQ;
+// The third screen's pixels (BAR 0 [0x2400000, 0x3800000)) and display's second client of the compositor (213-KRN-0285).
+const THIRD_PIXELS: usize = mind::display::SLOT_THIRD_PIXELS;
+const THIRD_SCREEN: usize = mind::display::SLOT_THIRD_SCREEN;
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
@@ -74,6 +78,11 @@ fn main(_info: &'static BootInfo) {
     let size = |slot: usize, kind: usize| { let (k, _, len) = cap_info(slot); (k == kind).then_some(len) };
     match size(MAILBOX, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] THE SMU MAILBOX: {} BYTES GRANTED", len), None => mind::println!("[DISPLAY] NO SMU MAILBOX GRANTED") }
     match size(SECOND_SCREEN, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A SECOND SCREEN: {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO SECOND SCREEN'S MEMORY GRANTED") }
+    // Said only in a build that runs a second HDMI run, so that the release's lines stay as they were.
+    if BRINGUP.second_hdmi != setting::SecondHdmi::Off {
+        match size(THIRD_PIXELS, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A THIRD SCREEN (SLOT 7): {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO THIRD SCREEN'S MEMORY GRANTED (SLOT 7)") }
+        mind::println!("[DISPLAY] A SECOND CLIENT OF THE COMPOSITOR (SLOT 8, THE THIRD SCREEN'S): {}", if screen::granted(THIRD_SCREEN) { "GRANTED" } else { "NOT GRANTED" });
+    }
     let vfct = size(VBIOS, CAP_KIND_MEMORY).and_then(|_| mind::mem::Mapping::new(VBIOS).ok());
     match &vfct {
         Some(table) => { let length = table.as_slice().get(4..8).map_or(0, |l| u32::from_le_bytes([l[0], l[1], l[2], l[3]]) as usize); vbios(&table.as_slice()[..length.min(table.len())]) }
@@ -108,7 +117,11 @@ impl start::Device for Radeon {
     type Window = Registers;
     type Writer = Writer;
     fn map(&mut self) -> Option<Registers> { Mmio::map(ENGINE).ok().map(Registers) }
-    fn writer(&mut self, window: Registers) -> Writer { Writer(window.0, Mmio::map(SECOND_SCREEN).ok()) }
+    // Slot 7 mapped only in a build that may light the third screen.
+    fn writer(&mut self, window: Registers) -> Writer {
+        let third = (BRINGUP.second_hdmi != setting::SecondHdmi::Off).then(|| Mmio::map(THIRD_PIXELS).ok()).flatten();
+        Writer(window.0, Mmio::map(SECOND_SCREEN).ok(), third)
+    }
     fn now_us(&mut self) -> u64 { now_us() }
     fn say(&mut self, args: core::fmt::Arguments) { mind::println!("[DISPLAY] {}", args); }
 }
@@ -139,8 +152,8 @@ impl batches::Bus for Registers {
 }
 
 /// Step 2's and steps 3 and 4's engine: reads, writes (only a `light::Writable`), time, and step 4's surface in BAR 0's slot 5
-/// (its start, write-combined). Made only when the setting writes (start.rs).
-struct Writer(Mmio, Option<Mmio>);
+/// (its start, write-combined), and the third screen's in slot 7 (213-DRV-0113). Made only when the setting writes (start.rs).
+struct Writer(Mmio, Option<Mmio>, Option<Mmio>);
 impl batches::Bus for Writer {
     fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
         let offset = reg.offset() as usize;
@@ -157,19 +170,28 @@ impl light::Poke for Writer {
 impl light::Screens for Writer {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.offer(width, height, pitch) }
     fn gone(&mut self) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.gone() }
+    // The third screen through display's second client, slot 7 lent as its pixels (213-DRV-0113).
+    fn offer_third(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), light::ScreenRefused> { screen::Client { pixels: THIRD_PIXELS, client: THIRD_SCREEN }.offer(width, height, pitch) }
+    fn gone_third(&mut self) -> Result<(), light::ScreenRefused> { screen::Client { pixels: THIRD_PIXELS, client: THIRD_SCREEN }.gone() }
+    fn third_granted(&mut self) -> (bool, bool) { (self.2.is_some(), screen::granted(THIRD_SCREEN)) }
+}
+// A row into a mapped surface, and a pixel read back.
+fn row_into(surface: Option<&Mmio>, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+    let (Some(surface), start) = (surface, y * pitch * 4) else { return false };
+    if pixels.len() > pitch || start + pixels.len() * 4 > surface.len() { return false; }
+    for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
+    true
+}
+fn sample_of(surface: Option<&Mmio>, x: usize, y: usize, pitch: usize) -> Option<u32> {
+    let surface = surface?;
+    let at = (y * pitch + x) * 4;
+    (x < pitch && at + 4 <= surface.len()).then(|| surface.read32(at))
 }
 impl light::Canvas for Writer {
-    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool {
-        let (Some(surface), start) = (&self.1, y * pitch * 4) else { return false };
-        if pixels.len() > pitch || start + pixels.len() * 4 > surface.len() { return false; }
-        for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
-        true
-    }
-    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> {
-        let surface = self.1.as_ref()?;
-        let at = (y * pitch + x) * 4;
-        (x < pitch && at + 4 <= surface.len()).then(|| surface.read32(at))
-    }
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { row_into(self.1.as_ref(), y, pitch, pixels) }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { sample_of(self.1.as_ref(), x, y, pitch) }
+    fn third_row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { row_into(self.2.as_ref(), y, pitch, pixels) }
+    fn third_sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { sample_of(self.2.as_ref(), x, y, pitch) }
 }
 impl light::Clock for Writer {
     fn now_us(&mut self) -> u64 { mind::time::monotonic_ns() / 1000 }

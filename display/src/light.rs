@@ -38,17 +38,24 @@ pub trait Poke { fn write(&mut self, reg: Writable, value: u32); }
 /// A monotonic clock and a delay.
 pub trait Clock { fn now_us(&mut self) -> u64; fn delay_us(&mut self, us: u32); }
 /// Step 4's surface (BAR 0's slot 5): a row of pixels written, a pixel read back; false or None when it is not mapped.
-pub trait Canvas { fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32>; }
+pub trait Canvas {
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool;
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32>;
+    /// The third screen's surface (BAR 0's slot 7, 213-DRV-0113, 213-KRN-0285): none unless the engine has it.
+    fn third_row(&mut self, _y: usize, _pitch: usize, _pixels: &[u32]) -> bool { false }
+    fn third_sample(&mut self, _x: usize, _y: usize, _pitch: usize) -> Option<u32> { None }
+}
 /// Why the compositor did not take the second screen (213-KRN-0272): no client of it was granted (it does not run), its
 /// own answers (`display.wit` 1.3's errors), or the call itself failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScreenRefused { Unavailable, NoScreen, NoMemory, Denied, BadScreen, Call }
+pub enum ScreenRefused { Unavailable, NoScreen, NoMemory, Denied, BadScreen, Call, ThirdUnavailable }
 impl fmt::Display for ScreenRefused {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
             ScreenRefused::Unavailable => "NO CLIENT OF IT (SLOT_DISPLAY) WAS GRANTED", ScreenRefused::NoScreen => "NO SCREEN",
             ScreenRefused::NoMemory => "NO MEMORY TO MAP IT", ScreenRefused::Denied => "DENIED", ScreenRefused::BadScreen => "THE SHAPE DOES NOT FIT THE RANGE",
             ScreenRefused::Call => "THE CALL FAILED",
+            ScreenRefused::ThirdUnavailable => "NO SECOND CLIENT OF IT (SLOT 8) WAS GRANTED",
         })
     }
 }
@@ -56,7 +63,37 @@ impl fmt::Display for ScreenRefused {
 pub trait Screens {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused>;
     fn gone(&mut self) -> Result<(), ScreenRefused>;
+    /// The third screen through display's second client of the compositor (slot 8, display.wit 1.5, 213-KRN-0285), its
+    /// pixels slot 7's: none unless the engine has them.
+    fn offer_third(&mut self, _width: u16, _height: u16, _pitch: u32) -> Result<(), ScreenRefused> { Err(ScreenRefused::ThirdUnavailable) }
+    fn gone_third(&mut self) -> Result<(), ScreenRefused> { Err(ScreenRefused::ThirdUnavailable) }
+    /// Whether init granted the third screen's pixels (slot 7) and its client (slot 8).
+    fn third_granted(&mut self) -> (bool, bool) { (false, false) }
 }
+
+/// The driver screen a run's picture goes to (213-DRV-0113): the second (slot 5's pixels, offered through SLOT_DISPLAY)
+/// or the third (slot 7's, through slot 8: display.wit 1.5). A run keeps its screen while it lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen { Second, Third }
+impl Screen {
+    pub fn name(self) -> &'static str { match self { Screen::Second => "SECOND", Screen::Third => "THIRD" } }
+    /// Its pixels' slot and its client's.
+    pub fn slot(self) -> u8 { match self { Screen::Second => 5, Screen::Third => 7 } }
+    pub fn client(self) -> u8 { match self { Screen::Second => 15, Screen::Third => 8 } }
+    /// Its pixels' place in BAR 0, so past the frame buffer's base.
+    pub fn offset(self) -> u64 { match self { Screen::Second => SURFACE_OFFSET, Screen::Third => THIRD_SURFACE_OFFSET } }
+    pub fn other(self) -> Screen { match self { Screen::Second => Screen::Third, Screen::Third => Screen::Second } }
+}
+fn row_on<E: Engine>(s: Screen, e: &mut E, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+    match s { Screen::Second => e.row(y, pitch, pixels), Screen::Third => e.third_row(y, pitch, pixels) }
+}
+fn sample_on<E: Engine>(s: Screen, e: &mut E, x: usize, y: usize, pitch: usize) -> Option<u32> {
+    match s { Screen::Second => e.sample(x, y, pitch), Screen::Third => e.third_sample(x, y, pitch) }
+}
+fn offer_on<E: Engine>(s: Screen, e: &mut E, w: u16, h: u16, pitch: u32) -> Result<(), ScreenRefused> {
+    match s { Screen::Second => e.offer(w, h, pitch), Screen::Third => e.offer_third(w, h, pitch) }
+}
+fn gone_on<E: Engine>(s: Screen, e: &mut E) -> Result<(), ScreenRefused> { match s { Screen::Second => e.gone(), Screen::Third => e.gone_third() } }
 /// What steps 3 and 4 run on: reads, guarded writes, time, step 4's surface, and the compositor.
 pub trait Engine: Bus + Poke + Clock + Canvas + Screens {}
 impl<T: Bus + Poke + Clock + Canvas + Screens> Engine for T {}
@@ -150,6 +187,8 @@ pub struct Derived {
     pub min_dst_y_next_start: u32, pub line_delivery_pre: u32, pub req_delivery_pre: u32,
     /// The underflow statuses as stage 9 found them: HUBP and ODM of the firmware's pipe, then of pipe 1.
     pub underflow: [u32; 4],
+    /// The pipe lit beside this run's HUBP and ODM statuses as stage 9 found them (213-DRV-0113).
+    pub lit_underflow: Option<[u32; 2]>,
     /// Pipe 1's OTG's global sync for its plane (VUPDATE's offset and width, VREADY's offset, in pixels), the HUBP's
     /// HUBP_VREADY_AT_OR_AFTER_VSYNC by hubp2_vready_at_or_After_vsync's rule, and its QoS high watermark.
     pub vupdate_offset: u32, pub vupdate_width: u32, pub vready_offset: u32, pub vready_after_vsync: u32, pub qos_high_wm: u32,
@@ -174,8 +213,10 @@ const SKIPPED: u8 = 0x80;
 
 /// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
 pub const SURFACE_OFFSET: u64 = 0x0100_0000;
-/// Slot 5's length: [0x0100_0000, 0x0240_0000) of BAR 0 (213-KRN-0271).
+/// Slot 5's length: [0x0100_0000, 0x0240_0000) of BAR 0 (213-KRN-0271); slot 7's the same.
 pub const SURFACE_BYTES: usize = 0x0140_0000;
+/// The third screen's place in BAR 0 (slot 7's start): [0x0240_0000, 0x0380_0000) (213-KRN-0285).
+pub const THIRD_SURFACE_OFFSET: u64 = 0x0240_0000;
 
 /// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
 /// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row, and the
@@ -705,15 +746,15 @@ pub struct Journal {
     items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize, mark: Option<(Writable, u32)>, baseline: Option<[u32; WATCH]>,
     /// The two pipes' HUBP and ODM statuses as stage 9 found them, for the standing check (213-DRV-0103).
     statuses: Option<[u32; 4]>,
-    /// The pipe lit beside this run as step 3 began (213-DRV-0113).
-    beside: Option<[u32; WATCH]>,
+    /// The pipe lit beside this run as step 3 began (213-DRV-0113), and its HUBP's and ODM's statuses for the standing check.
+    beside: Option<[u32; WATCH]>, lit_statuses: Option<[u32; 2]>,
 }
-impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None, statuses: None, beside: None } } }
+impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None, statuses: None, beside: None, lit_statuses: None } } }
 impl Journal {
     /// Nothing journaled, for a run of the stages again.
     pub fn clear(&mut self) {
         for item in self.items[..self.len].iter_mut() { *item = None; }
-        (self.len, self.mark, self.baseline, self.statuses, self.beside) = (0, None, None, None, None);
+        (self.len, self.mark, self.baseline, self.statuses, self.beside, self.lit_statuses) = (0, None, None, None, None, None);
     }
     fn push(&mut self, w: Writable, old: u32, stage: u8) -> bool {
         if self.len == JOURNAL { return false; }
@@ -787,6 +828,8 @@ pub struct Light {
     pub watch_frames: u32,
     /// The pipe display has lit beside this run, if any (213-DRV-0113): read after each stage as the firmware's is.
     pub lit: Option<Choice>, beside: Watch,
+    /// The driver screen its picture goes to (213-DRV-0113).
+    pub screen: Screen,
 }
 
 impl Light {
@@ -801,7 +844,7 @@ impl Light {
         let surface = picture::Size::for_mode(timing.h_active as usize, timing.v_active as usize);
         if surface.bytes() > SURFACE_BYTES || surface.width > picture::MAX_WIDTH { return Err(Refusal::Surface { bytes: surface.bytes() }); }
         Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN", watch_frames: WATCH_FRAMES,
-                   lit: None, beside: Watch::none() })
+                   lit: None, beside: Watch::none(), screen: Screen::Second })
     }
     /// Beside `lit`, the pipe display has lit already (213-DRV-0113): its blocks refused to this run, its registers read after
     /// each stage.
@@ -815,15 +858,18 @@ impl Light {
     /// The pipe lit beside this run, read after each stage.
     pub fn beside_watch(&self) -> &Watch { &self.beside }
     /// The pipe beside this run taken back (213-DRV-0113): no longer read with it; its blocks stay refused.
-    pub fn alone(&mut self, journal: &mut Journal) { (self.lit, self.beside, journal.beside) = (None, Watch::none(), None); }
+    pub fn alone(&mut self, journal: &mut Journal) { (self.lit, self.beside, journal.beside, journal.lit_statuses) = (None, Watch::none(), None, None); }
     /// This lit run with `other` lit after it (213-DRV-0113): `other`'s registers read now, kept in `journal` and read again
     /// when this run is undone or taken back.
     pub fn watch_beside(&mut self, other: &Choice, journal: &mut Journal, bus: &mut impl Bus) -> Result<(), Failure> {
         let beside = Watch::pipe(other);
         journal.beside = Some(beside.read(bus)?);
+        journal.lit_statuses = Some(statuses_of(other.pipe.otg, bus)?);
         (self.lit, self.beside) = (Some(*other), beside);
         Ok(())
     }
+    /// With its picture going to `screen`.
+    pub fn with_screen(mut self, screen: Screen) -> Light { self.screen = screen; self }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
     /// With stage 15's watch of `frames` (at most `WATCH_FRAMES`): the build gives `SHORT_WATCH_FRAMES` only together
@@ -886,12 +932,14 @@ impl Light {
             Step::Reference => out.line(format_args!("S{} {} COUNT {} FRAMES OF THE FIRMWARE'S OTG{} (AT MOST {} MS) AND DERIVE PIPE {}'S DLG AND TTU FROM PIPE {}'S; NOTHING WRITTEN",
                 n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
                 self.reference.map_or(0, |r| r.pipe))),
-            Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
-                n, verb, self.surface.width, self.surface.height, self.surface.pitch, self.build)),
+            Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT {} (BAR 0 + {:#X}, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
+                n, verb, self.surface.width, self.surface.height, self.screen.slot(), self.screen.offset(), self.surface.pitch, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
             Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
             Step::Watch { frames } => out.line(format_args!("S{} {} WATCH {} FRAMES OF OTG{} WITH THE PATTERN OFF, READING WITHOUT SLEEP: AT EACH FRAME BOTH PIPES' HUBP AND ODM; THE FIRMWARE'S UNDERFLOWING OR TIMING OUT UNDOES AT ONCE; PIPE {}'S KEPT BY FRAME, CLEARED AND WATCHED ON, THEN FAIL THE STAGE",
                 n, verb, frames, self.choice.pipe.otg, self.choice.pipe.otg)),
+            Step::Offer if self.screen == Screen::Third => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE THIRD SCREEN THROUGH SLOT 8: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.5); UNDO: SCREEN_GONE FIRST",
+                n, verb, self.surface.width, self.surface.height, self.surface.pitch * 4)),
             Step::Offer => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST",
                 n, verb, self.surface.width, self.surface.height, self.surface.pitch * 4)),
             Step::Hold { us } => out.line(format_args!("S{} {} HOLD IT {} US", n, verb, us)),
@@ -915,7 +963,7 @@ impl Light {
                 match n {
                     11 => out.line(format_args!("S{} {} TURN ON DPP{}'S AND HUBP{}'S CLOCKS (ITS WRITES SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q)),
                     12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
-                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.surface.pitch - 1)),
+                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + {:#X}, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.screen.offset(), self.surface.pitch - 1)),
                     14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
                     _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, self.watch_frames)),
                 }
@@ -959,8 +1007,8 @@ pub enum Failure {
     OutputMuxInUse { opp: u8, mux: u32 },
     /// Stages 11 to 15 do not fit a plan.
     PlanFull,
-    /// Stage 16: the compositor did not take the second screen.
-    Screen(ScreenRefused),
+    /// Stage 16: the compositor did not take the second screen, or the third (213-DRV-0113).
+    Screen(ScreenRefused), ThirdScreen(ScreenRefused),
     /// An underflow, new since stage 9, at this HUBP's or ODM's register.
     Underflow { offset: u32, value: u32 },
     /// A request timed out at this HUBP (its HUBP_TIMEOUT_STATUS new since stage 9).
@@ -985,7 +1033,7 @@ impl Failure {
     /// A failure of what step 4 found or prepared, not of the hardware: stage 9, 10 or 16 then stops without undoing.
     pub fn not_ready(&self) -> bool {
         matches!(self, Failure::NoReference | Failure::NoFrames(_) | Failure::MpccInUse { .. } | Failure::OutputMuxInUse { .. }
-            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. } | Failure::Screen(_))
+            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. } | Failure::Screen(_) | Failure::ThirdScreen(_))
     }
 }
 
@@ -1003,6 +1051,7 @@ impl fmt::Display for Failure {
             Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
             Failure::RequestTimeout { offset, value } => write!(f, "A REQUEST TIMEOUT AT {:05X} ({:08X})", offset, value),
             Failure::Screen(why) => write!(f, "THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: {}", why),
+            Failure::ThirdScreen(why) => write!(f, "THE COMPOSITOR DID NOT TAKE THE THIRD SCREEN: {}", why),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
@@ -1016,6 +1065,19 @@ impl fmt::Display for Failure {
             Failure::JournalFull => f.write_str("MORE WRITES THAN THE UNDO CAN HOLD"),
         }
     }
+}
+
+/// The pipe whose HUBP or ODM status register is at `offset`, if one is (213-DRV-0113: an underflow named with its pipe).
+pub fn status_pipe(offset: u32) -> Option<(&'static str, u8)> {
+    (0..4u8).find_map(|n| {
+        if R::HubpCntl.at(n).map(|r| r.offset()) == Some(offset) { Some(("HUBP", n)) }
+        else if R::OptcInputGlobalControl.at(n).map(|r| r.offset()) == Some(offset) { Some(("ODM", n)) } else { None }
+    })
+}
+/// A pipe's HUBP and ODM statuses now, as stage 9 keeps them for the checks after it.
+fn statuses_of(q: u8, bus: &mut impl Bus) -> Result<[u32; 2], Failure> {
+    let at = |r: R| r.at(q).ok_or(Failure::NoReference);
+    Ok([read(bus, at(R::HubpCntl)?)?, read(bus, at(R::OptcInputGlobalControl)?)?])
 }
 
 /// A table's run, for its stage's line (213-DRV-0098): its index, steps and writes, and its time without the log's.
@@ -1053,10 +1115,10 @@ struct Done<'a> { light: &'a Light, n: u8, us: u64, t: &'a Tally, d: Option<&'a 
 impl fmt::Display for Done<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (l, n, t) = (self.light, self.n, self.t);
-        // Beside a lit pipe both named without their counts (the S0 lines give them), so that the line keeps to 180 bytes.
+        // Beside a lit pipe, the firmware's and that one, named and counted in the S0 lines: the line keeps to 180 bytes.
         match l.lit {
             None => write!(f, "S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, STAGE_NAMES[n as usize - 1], l.watch.len())?,
-            Some(lit) => write!(f, "S{} {} DONE; THE FIRMWARE'S AND {}'S PIPES UNCHANGED", n, STAGE_NAMES[n as usize - 1], name(&lit.output))?,
+            Some(_) => write!(f, "S{} {} DONE; THE OTHER TWO PIPES UNCHANGED", n, STAGE_NAMES[n as usize - 1])?,
         }
         write!(f, "; {}.{} MS", self.us / 1000, self.us % 1000 / 100)?;
         if t.writes > 0 { write!(f, ", {} WRITES", t.writes)?; }
@@ -1243,14 +1305,20 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                     if field.get(v) & !field.get(d.underflow[i]) != 0 { return Err(Failure::Underflow { offset: x.offset(), value: v }); }
                     if reg == R::HubpCntl && HUBP_TIMEOUT_STATUS.get(v) & !HUBP_TIMEOUT_STATUS.get(d.underflow[i]) != 0 { return Err(Failure::RequestTimeout { offset: x.offset(), value: v }); }
                 }
-                out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
+                // The pipe lit beside, as the firmware's (213-DRV-0113).
+                if let (Some(l), Some(was)) = (light.lit, d.lit_underflow) { lit_new(l.pipe.otg, e, &was)?; }
+                match light.lit {
+                    None => out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q)),
+                    Some(l) => out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}, HUBP{} AND ODM{} ({}'S)", n, r.pipe, r.otg, q, q,
+                        l.pipe.otg, l.pipe.otg, name(&l.output))),
+                }
             }
             Step::Offer => {
                 let (w, h, pitch) = (light.surface.width as u16, light.surface.height as u16, (light.surface.pitch * 4) as u32);
-                e.offer(w, h, pitch).map_err(Failure::Screen)?;
+                offer_on(light.screen, e, w, h, pitch).map_err(|why| if light.screen == Screen::Third { Failure::ThirdScreen(why) } else { Failure::Screen(why) })?;
                 tally.offered = true;
-                out.line(format_args!("S{} OFFERED THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
-                    n, w, h, pitch));
+                out.line(format_args!("S{} OFFERED THE {} SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT {}'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
+                    n, light.screen.name(), w, h, pitch, light.screen.slot()));
             }
             Step::Watch { frames } => {
                 let d = derived.as_ref().ok_or(Failure::NoReference)?;
@@ -1262,6 +1330,17 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
         }
     }
     Ok(tally)
+}
+
+/// The pipe lit beside a run (`q`): a new underflow or request timeout on it since `was` (213-DRV-0113).
+fn lit_new(q: u8, e: &mut impl Bus, was: &[u32; 2]) -> Result<(), Failure> {
+    let (h, o) = (R::HubpCntl.at(q).ok_or(Failure::NoReference)?, R::OptcInputGlobalControl.at(q).ok_or(Failure::NoReference)?);
+    let (v, w) = (read(e, h)?, read(e, o)?);
+    let new = |field: dcn::Field, v: u32, before: u32| field.get(v) & !field.get(before) != 0;
+    if new(HUBP_UNDERFLOW_STATUS, v, was[0]) { return Err(Failure::Underflow { offset: h.offset(), value: v }); }
+    if new(HUBP_TIMEOUT_STATUS, v, was[0]) { return Err(Failure::RequestTimeout { offset: h.offset(), value: v }); }
+    if new(OPTC_UNDERFLOW_OCCURRED_STATUS, w, was[1]) { return Err(Failure::Underflow { offset: o.offset(), value: w }); }
+    Ok(())
 }
 
 /// Stage 15's watch with the pattern off: OTG1's frame count read without sleeping, both pipes' HUBP and ODM statuses at
@@ -1298,6 +1377,8 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
         // later than a frame shows in the frames passed between two reads and in the longest gap (213-DRV-0111).
         if c <= seen { e.delay_us(ASLEEP_POLL_US); continue; }
         let (v0, w0, v1, w1) = (read(e, h0)?, read(e, o0)?, read(e, h1)?, read(e, o1)?);
+        // The pipe lit beside (213-DRV-0113): at once, as the firmware's.
+        if let (Some(l), Some(was)) = (light.lit, d.lit_underflow) { lit_new(l.pipe.otg, e, &was)?; }
         // The firmware's pipe: at once.
         if new(HUBP_UNDERFLOW_STATUS, v0, d.underflow[0]) { return Err(Failure::Underflow { offset: h0.offset(), value: v0 }); }
         if new(HUBP_TIMEOUT_STATUS, v0, d.underflow[0]) { return Err(Failure::RequestTimeout { offset: h0.offset(), value: v0 }); }
@@ -1329,6 +1410,7 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
     match &found {
         Some((f, why)) => out.line(format_args!("S{} HUBP{}: UNDERFLOW IN {} FRAMES, REQUEST TIMEOUT IN {}; ODM{} UNDERFLOW IN {}; THE FIRST AT FRAME {} (ABOUT {} MS AFTER THE PATTERN WENT OFF): {}; CLEARED {} TIMES",
             n, q, with(1), with(2), q, with(4), f, *f as u64 * us / frames as u64 / 1000, why, cleared)),
+        None if light.lit.is_some() => out.line(format_args!("S{} NO UNDERFLOW OR REQUEST TIMEOUT ON ANY OF THE THREE PIPES IN {} FRAMES", n, frames)),
         None => out.line(format_args!("S{} NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN {} FRAMES", n, frames)),
     }
     for (i, chunk) in marked.chunks(60).enumerate() {
@@ -1435,6 +1517,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let status = |e: &mut E, reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference).and_then(|x| read(e, x));
     let underflow = [status(e, R::HubpCntl, r.pipe)?, status(e, R::OptcInputGlobalControl, r.otg)?, status(e, R::HubpCntl, q)?,
                      status(e, R::OptcInputGlobalControl, q)?];
+    let lit_underflow = match light.lit { Some(l) => Some(statuses_of(l.pipe.otg, e)?), None => None };
     // Pipe 1's global sync for its plane, as dcn20_program_tg writes DML's before the plane goes live: VSTARTUP stage
     // 3's; VUPDATE's offset a quarter line (DML's VUpdateOffsetPix); its width and VREADY's offset the firmware's times
     // (DCFCLK deep sleep and DPPCLK cycles, clocks both pipes share) at pipe 1's pixel clock, rounded up.
@@ -1452,7 +1535,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
         // The prefetch's at the same rate as the line's (Display Core's for a vertical ratio of 1), or the firmware's proportion.
         line_delivery_pre: if r.line_delivery == 0 { line1 } else { scaled(line1, r.line_delivery_pre, r.line_delivery) },
         req_delivery_pre: if r.req_delivery == 0 { req1 } else { scaled(req1, r.req_delivery_pre, r.req_delivery) },
-        underflow,
+        underflow, lit_underflow,
     };
     out.line(format_args!("S{} PIPE {} FOR {}x{} AT {} KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} ({} REQUESTS A LINE)",
         n, light.choice.pipe.otg, light.timing.h_active, light.timing.v_active, pix1, crate::batches::Ratio19(Some(d.ref_to_pix)),
@@ -1514,7 +1597,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, HubpreqTtuQosWm, q, &[(QOS_LEVEL_LOW_WM, 0), (QOS_LEVEL_HIGH_WM, d.qos_high_wm)])?;
     put(&mut p, HubpreqCur0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, REFCYC_PER_REQ_DELIVERY.get(copied(r, HubpreqCur0TtuCntl0))),
         (QOS_LEVEL_FIXED, QOS_LEVEL), (QOS_RAMP_DISABLE, 0)])?;
-    let surface = r.fb_base + SURFACE_OFFSET;
+    let surface = r.fb_base + light.screen.offset();
     put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, light.surface.pitch as u32 - 1)])?;
     p.push(Step::ReadBack { reg: at(HubpreqSurfacePitch, q)?, field: PITCH }).map_err(|_| Failure::PlanFull)?;
     put(&mut p, HubpreqPrimarySurfaceAddressHigh, q, &[(WHOLE, (surface >> 32) as u32)])?;
@@ -1554,14 +1637,14 @@ fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> 
     let mut row = [0u32; picture::MAX_WIDTH];
     for y in 0..size.height {
         picture::row(&lines, y, &mut row);
-        if !e.row(y, size.pitch, &row[..size.width]) { return Err(Failure::NoSurface); }
+        if !row_on(light.screen, e, y, size.pitch, &row[..size.width]) { return Err(Failure::NoSurface); }
     }
     let samples = picture::samples(size);
     for (x, y) in samples {
-        if e.sample(x, y, size.pitch) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
+        if sample_on(light.screen, e, x, y, size.pitch) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
     }
-    out.line(format_args!("S{} DRAWN: {}x{} AT SLOT 5'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
-        size.width, size.height, size.pitch, size.pitch * 4, samples.len()));
+    out.line(format_args!("S{} DRAWN: {}x{} AT SLOT {}'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
+        size.width, size.height, light.screen.slot(), size.pitch, size.pitch * 4, samples.len()));
     out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / {} {}X{} / BUILD {}", n, name(&light.choice.output), size.width, size.height, light.build));
     Ok(())
 }
@@ -1621,7 +1704,8 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
     if n == 10 { out.line(format_args!("U{} THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET", n)); }
     // Stage 16's undo, before stage 15's blanks the pipe: the compositor lets the surface go (screen_gone).
     if n == 16 {
-        match e.gone() {
+        match gone_on(light.screen, e) {
+            Ok(()) if light.screen == Screen::Third => out.line(format_args!("U{} SCREEN_GONE THROUGH SLOT 8: THE COMPOSITOR HAS LET THE THIRD SCREEN'S SURFACE GO", n)),
             Ok(()) => out.line(format_args!("U{} SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO", n)),
             Err(why) => { out.line(format_args!("U{} SCREEN_GONE NOT TAKEN: {}; THE UNDO GOES ON", n, why)); wrong = true; }
         }
@@ -1720,7 +1804,7 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
             let now = light.beside.read(e)?;
             if let Some((reg, before, after)) = light.beside.changed(&beside, &now) { return Err(Failure::LitChanged { offset: reg.offset(), before, after }); }
             // Stage 9 done: stages 11 to 15 built from its reference.
-            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); journal.statuses = Some(d.underflow); }
+            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); (journal.statuses, journal.lit_statuses) = (Some(d.underflow), d.lit_underflow); }
             // The attached HUBP is guarded until step 4 takes it, from stage 11.
             if n < ATTACHED_FROM || n >= dcn::PIPE_WRITES_FROM || light.attached.is_empty() { return Ok(tally); }
             let now = light.attached.read(e)?;
@@ -1847,6 +1931,9 @@ pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, ac
         if underflow { return Err(Failure::Underflow { offset: reg.offset(), value: v }); }
         if timeout { return Err(Failure::RequestTimeout { offset: reg.offset(), value: v }); }
     }
+    // The pipe lit beside this run too (213-DRV-0113): named with its pipe; the follower undoes the run it is on.
+    if let (Some(l), Some(w)) = (light.lit, journal.lit_statuses) { lit_new(l.pipe.otg, e, &w)?; }
+    let pipes = if light.lit.is_some() && journal.lit_statuses.is_some() { "ANY OF THE THREE PIPES" } else { "EITHER PIPE" };
     let now = e.now_us();
     if let Some(since) = account.dark_since.take() { account.dark_us += now.saturating_sub(since); }
     if let Some(last) = account.last_us { account.longest_us = account.longest_us.max(now.saturating_sub(last)); }
@@ -1854,10 +1941,10 @@ pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, ac
     if now.saturating_sub(account.said_us) >= STANDING_SAID_US {
         let minutes = now.saturating_sub(account.said_us) / 60_000_000;
         match account.dark {
-            0 => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE",
-                account.checks, minutes, account.longest_us / 1000)),
-            d => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO WHILE LIT; DARK {} TIMES, {} S IN ALL; NOTHING NEW ON EITHER PIPE",
-                account.checks, minutes, account.longest_us / 1000, d, account.dark_us / 1_000_000)),
+            0 => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON {}",
+                account.checks, minutes, account.longest_us / 1000, pipes)),
+            d => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO WHILE LIT; DARK {} TIMES, {} S IN ALL; NOTHING NEW ON {}",
+                account.checks, minutes, account.longest_us / 1000, d, account.dark_us / 1_000_000, pipes)),
         }
         (account.checks, account.longest_us, account.dark, account.dark_us, account.said_us) = (0, 0, 0, 0, now);
     }
