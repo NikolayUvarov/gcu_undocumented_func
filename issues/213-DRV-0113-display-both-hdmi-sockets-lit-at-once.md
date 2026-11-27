@@ -1,6 +1,6 @@
 # 213-DRV-0113 — `display`: both HDMI sockets lit at once (three screens)
 
-**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-27); stages 1 to 3 built on `claude/213-DRV-0113-display-both-hdmi-sockets`, shown by host cases only, not yet run on the Ryzen (see "Progress") · **Blocked by:** for stage 4, `KRN`: `display.wit` 1.5, the compositor's second driver screen, and init's second window of BAR 0 (the asks below) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-27); stages 1 to 4 built on `claude/213-DRV-0113-display-both-hdmi-sockets`, shown by host cases only, not yet run on the Ryzen (see "Progress" and "Stage 4") · **Blocked by:** 213-KRN-0285 (the third screen's slots and `display.wit` 1.5, made on `claude/213-KRN-0285-three-screens`, merged into this branch; 0113 lands after it or with it, round 181) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -198,14 +198,15 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    - [ ] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop;
    - [ ] the firmware's pipe and pipe 1 read as before after each stage;
    - [ ] the maintainer's look (MC-12.1).
-4. **The third screen offered** (after KRN's asks):
-   - [ ] HDMI-A-2's surface in the second window, offered as screen 1 through `display.wit` 1.5;
+4. **The third screen offered** (213-KRN-0285; settings (d) and (e) in "Stage 4"):
+   - [x] HDMI-A-2's surface in the second window (slot 7), offered as the third screen through slot 8, `display.wit`
+     1.5 (on the model only);
    - [ ] the mirror on both HDMI monitors in their own modes;
    - [ ] the standing check clean on three pipes for an hour.
 5. **Plugged and unplugged:**
-   - [ ] either HDMI monitor taken out and put back, the other's picture undisturbed;
-   - [ ] a monitor moved from one socket to the other;
-   - [ ] the watch and the standing check clean.
+   - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model only);
+   - [x] a monitor moved from one socket to the other (on the model only);
+   - [ ] the watch and the standing check clean (on the machine).
 
 **Before any hardware run, host cases can show:** the choice and the guards with two runs; each watch; the follower's
 states; the standing check per pipe; the tables' writes for pipe 2 and PHY B on the image; and, on KRN's side, the
@@ -327,7 +328,8 @@ How it combines with the others:
 - `HDMI-A-2: S0 STEP 3'S PIPE: OTG2 OPP2 DIG B FRONT END, PHY B (HDMI-A-2), HPD 2; MODE ...` and
   `HDMI-A-2: S0 HDMI-A-1'S PIPE, LIT BY DISPLAY: OTG1 OPP1 DIG A FRONT END, PHY A, HUBP1; NEVER WRITTEN, READ AFTER EACH STAGE (30 REGISTERS)`.
 - Read: `HDMI-A-2: SECOND HDMI RUN SHOWN FOR OTG2, <N> REGISTERS READ, NOTHING WRITTEN (SECOND_HDMI READ, HDMI_A_2 EDID)`.
-- First light: `HDMI-A-2: S<N> <STAGE> DONE; THE FIRMWARE'S AND HDMI-A-1'S PIPES UNCHANGED; ...` for 1 to 8,
+- First light: `HDMI-A-2: S<N> <STAGE> DONE; THE OTHER TWO PIPES UNCHANGED; ...` for 1 to 8 (since stage 4's commit; it
+  named both pipes before, which took the line past 180 bytes at stage 15),
   `HDMI-A-2: S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: ...`, then
   `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit: 8 STAGES IN PLACE, <R> REGISTERS READ, <W> WRITES, <MS> MS; HDMI-A-1 Lit ON OTG1`.
 - Undone: `HDMI-A-2: STEP 3 UNDONE AFTER STAGE 8 OF 16 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE UNCHANGED`,
@@ -350,8 +352,126 @@ How it combines with the others:
    second run again); then HDMI-A-1's out (HDMI-A-2 the only one, still showing the squares) and back in (HDMI-A-1
    gets the second run, first light on OTG1, with no picture: the picture is stage 9 onwards, not run for a second).
 
-**Not built:** stage 4 (each output's own picture and screen, blocked by KRN's asks), stages 9 to 16 for the second
-run, the second's standing check, and the scaler (assessed below).
+**Not built in stages 1 to 3:** stage 4 and the second's standing check (both built since: "Stage 4"), and the scaler
+(assessed below).
+
+## Stage 4 (2026-11-27, fifth round): the second HDMI run lit whole, offered as the third screen
+
+On this branch after merging `claude/213-KRN-0285-three-screens` (9e8fe6b58): merge bdf65c18e, then c19b6a10f. What the
+host cases show is on the model only; nothing of it has run on the Ryzen (its boot drive refused a write twice,
+`issues-human` §19).
+
+**What 213-KRN-0285 gives `display`** (`mind::display`): slot 7 (`SLOT_THIRD_PIXELS`), BAR 0 [0x2400000, 0x3800000),
+20 MiB, write-combining as slot 5; slot 8 (`SLOT_THIRD_SCREEN`), a second client of the compositor badged
+`BADGE_THIRD_SCREEN` (4), granted only with slot 7. `offer-screen` and `screen-gone` through slot 8 are the third
+screen's; through SLOT_DISPLAY (15) the second's, as before.
+
+**What changed in `display`:**
+- **Each run holds a screen** (`light::Screen`): the second (slot 5's pixels, offered through slot 15) or the third (slot
+  7's, through slot 8). The start's first run holds the second; the second run takes the one the first does not hold,
+  and keeps it while it lives. Its HUBP scans its own window (FB + 0x1000000 or + 0x2400000), stage 10 draws there in its
+  own mode (1366x768 at a pitch of 1408 pixels, 5632 bytes), stage 16 offers it through its own client, and an undo's
+  screen_gone goes through that client first.
+- **Stages 9 to 16 for the second run** as for the first: stage 9's reference is the firmware's pipe (step 1 beside
+  display's own OTG names it), its DLG and TTU derived for its own mode; its DPP2, HUBP2 and MPCC2 into OPP2 (mux 2);
+  stage 15's unblank, its check and its watch read the firmware's pipe and the other display pipe too, and a new
+  underflow or request timeout on either fails the stage at once.
+- **No table runs in stages 9 to 16:** on the Ryzen's image, the second run's sixteen stages call tables 12, 4 and 76
+  in stages 2, 6 and 8 only, as the first's do; every write of the second is in its own blocks, refused to the first.
+- **A missing slot 7 or 8:** said, and the second run stops after first light with its pattern, as in round 4. A third
+  screen the compositor refuses: stage 16 not ready, stages 1 to 15 stay, the picture up and not offered.
+- **The standing checks:** each picture's every second, the first's then the second's; each reads the firmware's pipe,
+  its own and the other display pipe. An underflow or request timeout undoes the run on whose pipe it is (on the
+  firmware's: the run whose check found it), named in its own line; the other run stops reading that pipe and goes on.
+  During a run's stage 15 watch, a new underflow on the other display pipe fails that run at once (as the firmware's
+  does); the status stays latched, so the other run's standing check then undoes its own run too: both end undone.
+- **The follower:** either unplug takes back only its own run, its screen let go through its own client first. A plug
+  back in relights it beside the other: the lowest free OTG and the screen left free, so the same pipe and client as
+  before. The first's unplug while the second is lit leaves the second on its pipe (2) and its screen (the third, slot
+  8): nothing of it moves. After each change `HDMI SOCKETS NOW: ...` says both sockets.
+- **The switch:** `SECOND_HDMI` gains `Full` (all sixteen stages and the offer), committed at `Off`; `FirstLight` and
+  `FirstLightUndone` keep their meaning. Slots 7 and 8 are said, and slot 7 mapped, only in a build with it on.
+
+**Settings for the bench:**
+- (d) three screens at once, the mirror on both HDMI monitors: `SECOND_HDMI = Full`, `HDMI_A_2 = Full`, `HDMI_FIRST =
+  HdmiA1`, `SURVEY_ORDER = true` (every value and write logged, for the first boot), `UNDO_AFTER_STAGES = false`,
+  `STAGES_ALLOWED = 16`; init's `output second light` as before, and an init carrying 213-KRN-0285 (slots 7 and 8).
+- (e) the same in the production order: as (d) with `SURVEY_ORDER = false`.
+
+**The lines to look for** (the second run's prefixed with its socket's name):
+- At start: `BAR 0 FOR A THIRD SCREEN (SLOT 7): 20480 KIB GRANTED` and `A SECOND CLIENT OF THE COMPOSITOR (SLOT 8, THE
+  THIRD SCREEN'S): GRANTED` (said only with SECOND_HDMI on).
+- `HDMI-A-2 TAKEN SECOND, AFTER HDMI-A-1'S STAGES: ... (SECOND_HDMI FULL: ALL 16 STAGES, ITS PICTURE OFFERED AS ITS OWN SCREEN)`.
+- `HDMI-A-2: S9 REFERENCE DONE; THE OTHER TWO PIPES UNCHANGED; ...`, `HDMI-A-2: S10 DRAWN: 1366x768 AT SLOT 7'S START, PITCH 1408 PIXELS (5632 BYTES); ...`.
+- `HDMI-A-2: S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP2 AND ODM2, HUBP1 AND ODM1 (HDMI-A-1'S)`,
+  `HDMI-A-2: S15 NO UNDERFLOW OR REQUEST TIMEOUT ON ANY OF THE THREE PIPES IN 60 FRAMES`.
+- `HDMI-A-2: S16 OFFERED THE THIRD SCREEN: 1366x768, PITCH 5632 BYTES, BGR, ITS PIXELS SLOT 7'S SURFACE; ...`, then the
+  compositor's own `THIRD SCREEN ...` line with its three times (`THE ONE BEFORE LET GO IN … US`, `MAPPED IN … US`,
+  `DRAWN IN … US`).
+- `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit: 16 STAGES IN PLACE, ...; HDMI-A-1 Lit ON OTG1; OFFERED AS THE THIRD SCREEN THROUGH SLOT 8`.
+- `HDMI SOCKETS NOW: HDMI-A-1 LIT ON OTG1 (16 STAGES, SECOND SCREEN); HDMI-A-2 LIT ON OTG2 (16 STAGES, THIRD SCREEN)`
+  after each plug change; `... NO MONITOR`, `... A MONITOR, NOT LIT`, `... STOPPED AFTER A FAILURE` for the others.
+- An unplug of HDMI-A-2: `HDMI-A-2: U16 SCREEN_GONE THROUGH SLOT 8: THE COMPOSITOR HAS LET THE THIRD SCREEN'S SURFACE GO`,
+  then `HDMI-A-2: STEP 3 TAKEN BACK IN ... HDMI-A-1'S PIPE UNCHANGED`.
+- Every ten minutes: `S15 STANDING CHECK: ... NOTHING NEW ON ANY OF THE THREE PIPES` and the same prefixed `HDMI-A-2: `.
+- Not granted: `HDMI-A-2: THE THIRD SCREEN'S SLOTS: SLOT 7 (ITS PIXELS) ..., SLOT 8 (ITS CLIENT) ...: THE SECOND HDMI RUN STOPS AFTER FIRST LIGHT, ITS PATTERN LEFT`.
+- Refused: `HDMI-A-2: S16 OFFER NOT READY: THE COMPOSITOR DID NOT TAKE THE THIRD SCREEN: <WHY>; ...`.
+- An underflow: `HDMI-A-2: S15 UNBLANK FAILED: AN UNDERFLOW AT <OFFSET> (...)` during its watch, or `S15 STANDING CHECK:
+  AN UNDERFLOW AT <OFFSET> ...` and `THE STANDING CHECK: AN UNDERFLOW AT <OFFSET> (...) ON PIPE <N>'S HUBP|ODM (<WHOSE>): <SOCKET>'S RUN ON OTG<N> UNDONE`.
+  The offsets: DCHUBP_CNTL 0EACC (HUBP0, the firmware's), 0EE3C (HUBP1), 0F1AC (HUBP2); OPTC_INPUT_GLOBAL_CONTROL
+  13E28, 13E68, 13EA8 (ODM0 to ODM2).
+
+**The bench, for (d) then (e)** (the 3440x1440 monitor in HDMI-A-1, the 1366x768 one in HDMI-A-2, DP-2 as ever):
+1. (d), a person at the machine: DP-2's desktop throughout; HDMI-A-1's colour squares then the mirror, as on boots 95 to
+   112; then HDMI-A-2's squares from its stage 8, its own picture (MIND CORE / DISPLAY / HDMI-A-2 1366X768) at stage 15,
+   the mirror once the compositor takes the third screen. HDMI-A-1's picture must not move while HDMI-A-2's stages run.
+2. Ten minutes and more: both standing lines every ten minutes, nothing undone; the compositor's three times at each
+   offer.
+3. Plug changes, one at a time, a few seconds apart: HDMI-A-2 out and in; HDMI-A-1 out (HDMI-A-2 must stay lit on
+   OTG2, the third screen) and in; then the 1366x768 monitor moved to HDMI-A-1 with HDMI-A-2 empty. Each ends with an
+   `HDMI SOCKETS NOW:` line that matches the monitors.
+4. (e): the same start in the production order, the times of `THE SECOND SCREEN OFFERED ...` and of the second run's
+   line for comparison with (d).
+
+**Host cases** (`tests/display_light_host.rs`, `tests/display_screen_host.rs`), on the model:
+- two offers through two clients, 3440x1440 through slot 15 and 1366x768 through slot 8, each from its own slot, the
+  first's writes exactly as alone, every one of the second's in its own blocks;
+- slot 7 or 8 (or both) not granted, and a third screen refused;
+- each unplug order, a plug back on the same pipe and client, both out with every register as before;
+- a monitor moved from one socket to the other, the state said after each change;
+- an underflow on pipe 1 during the second's watch, on pipe 2 during the first's (relit) watch, and on either in the
+  standing checks, each named with its pipe;
+- the Ryzen's tables for the second's sixteen stages beside HDMI-A-1's sixteen, cold and set up (`MIND_AMD_VBIOS`);
+- `screen.rs`'s third client through the compositor's badge rule (`screen_of`), slot 8 missing, a badge naming no
+  screen.
+
+**The bandwidth, by arithmetic (text only; only the machine can answer it, MC-12.2):**
+
+| Pipe | Mode | Active fetch, average | At the line rate (H and V blank left out) | One DET (164 KiB) lasts |
+|---|---|---|---|---|
+| DP-2 (OTG0) | 2560x1600 at 60 Hz | 0.98 GB/s | 1.08 GB/s | 156 us |
+| HDMI-A-1 (OTG1) | 3440x1440 at 60 Hz | 1.19 GB/s | 1.30 GB/s | 129 us |
+| HDMI-A-2 (OTG2) | 1366x768 at 59.79 Hz | 0.25 GB/s | 0.34 GB/s | 491 us |
+| All three | | 2.42 GB/s | 2.71 GB/s | |
+
+- **Against Display Core's own bounds for DCN 2.1** (`dcn2_1_soc`, `dcn2_1_ip` in `dcn20_fpu.c`, Linux v7.0; defaults
+  that Linux replaces with the SMU's clock table at run time): at the lowest state (DCFCLK 400 MHz, fabric 400 MHz, DRAM
+  1600 MT/s) the return bus carries 64 B a DCFCLK (25.6 GB/s), the fabric 32 B a cycle (12.8 GB/s, 60% of it the normal
+  average, 7.7 GB/s), the DRAM 4 channels of 4 B (25.6 GB/s). The latencies a pipe's DET must cover: urgent 4 us, self
+  refresh exit 12.5 us (enter and exit 17 us), the DRAM clock change 23.84 us: the 3440x1440 pipe needs some 30 KiB for
+  the longest of them, its DET holds 164 KiB. By this arithmetic three pipes fit with room.
+- **What is known to carry:** two pipes, DP-2's and HDMI-A-1's 3440x1440 linear surface (about 2.2 GB/s), the standing
+  check clean on boots 95 to 100 and 112. The third adds 0.25 GB/s on average.
+- **What is not known:** the DCFCLK and fabric the SMU runs at (`display` sets neither), and whether the watermark sets
+  A to D the firmware set for its one pipe (batch 10's `DCHUBBUB_ARB_WATERMARK` lines, in the boot logs) hold when three
+  pipes ask at once: the urgent and the DRAM clock-change watermarks, and when the SMU lets the DRAM change its clock.
+  The arithmetic above is Display Core's model, not a measure.
+- **What the log shows first if they do not carry:** an underflow on the HUBP that ran dry, `HUBP_UNDERFLOW_STATUS`
+  (DCHUBP_CNTL bits 30:28) at 0EACC, 0EE3C or 0F1AC, or a request timeout (`HUBP_TIMEOUT_STATUS`, bits 23:20); then its
+  ODM's `OPTC_UNDERFLOW_OCCURRED_STATUS` (OPTC_INPUT_GLOBAL_CONTROL bit 10) at 13E28, 13E68 or 13EA8. During the second
+  run's stage 15 it is `HDMI-A-2: S15 UNBLANK FAILED: AN UNDERFLOW AT ...` (its frames line marks `U`, `T` or `O`);
+  later it is the standing check's line and the `THE STANDING CHECK: ... ON PIPE <N>'S ...` line, the pipe undone. An
+  underflow on HUBP0 is DP-2's: the firmware's picture, which display does not drive, glitches first on the monitor.
 
 ## The scaler, assessed (not built)
 
@@ -427,7 +547,13 @@ build that undoes after the watch, and Linux's dtn log for the same two modes as
 ## Not known
 
 - Whether the firmware's DISPCLK, DPPCLK (DTO2), DCFCLK and watermarks carry three pipes without underflow. First
-  light on pipe 2 fetches nothing (the pattern is OPP2's), so stage 3 does not answer it; stage 4 or the scaler would.
+  light on pipe 2 fetches nothing (the pattern is OPP2's), so stage 3 does not answer it; stage 4's (d) will (the
+  arithmetic in "Stage 4" is a model).
+- Whether DPP2 runs on the firmware's DTO2 as found: stage 11 turns on DPP2's clock and writes no DTO, as for DPP1
+  (batch 13 reads DTO2 first).
+- Whether the compositor takes and mirrors into two driver screens on the Ryzen (213-KRN-0285 has not run there), and
+  what its three times show at each offer.
+- Whether the windows stay clear of the GOP's screen: init does not check it (KRN's note; [0, 0xFA0000) today).
 - DPP2's and pipe 2's request state as found: batches 13 and 14 read it, not yet run on the machine.
 - What the Ryzen's tables write with crtc 2 on PHY B on the hardware. On the model: only the second's blocks (above);
   the model answers the tables' status reads as `answered_on` does, and its counts differ from the bench's.
@@ -436,6 +562,8 @@ build that undoes after the watch, and Linux's dtn log for the same two modes as
   it, stage 2 is refused and undone (the lit pipe's register), and the value goes in this file.
 - The firmware's DPPCLK frequency (for the scaler's DLG).
 - Whether the compositor's frame time stays within its budget with two copies a change (KRN's to measure).
+- Whether an underflow on the lit pipe during the other's watch should undo both: today it does (the newcomer at once,
+  the lit one at its next standing check), the cautious side; the bench may show it too strict.
 - Whether starts not through Linux leave the same state. Every boot of this machine so far was a start out of Linux.
 
 ## Related
