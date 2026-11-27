@@ -30,8 +30,9 @@ So any scope made a minute or more after `link` started ended `link`'s two, if n
 
 ## Acceptance criteria
 
-- [x] `init` builds for x86.
-- [ ] The link suite passes on x86 with the new case. Without the change, the case fails: link's scopes end.
+- [x] `init` builds for x86 and aarch64.
+- [x] The link suite passes with the new case on both arches (2026-11-27, QEMU): "aarch64: the link" on x32-2, and "x86: services, storage, audio" on x32, which runs the x86 link suite.
+- [x] Without the change, the case fails. On `claude/000-KRN-0287-case-without-the-mend` (c1dc73f70f, `main` with the case alone), "aarch64: the link" on pcu failed at its check: `[VFS] SCOPE 0x100 ENDED` once `check`'s scope was made a minute on. That is DRV's bug of boot 104, seen in QEMU.
 - [ ] The gate's groups pass with it.
 - [ ] On the Ryzen, a restart of a scoped service a minute or more after the boot leaves the cable's `put` working. This is DRV's run.
 
