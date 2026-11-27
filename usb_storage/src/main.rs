@@ -16,7 +16,7 @@ use mind::block::{self, Driver, DriverError, Outcome};
 use mind::ipc::Endpoint;
 use mind::sys::Error;
 use mind::usb::Host;
-use recovery::{Answer, Claim, Found, Port, Verdict, Why};
+use recovery::{Again, Answer, Claim, Found, Port, Verdict, Why};
 
 const CBW: usize = 0; const CSW: usize = 64; const DATA: usize = 4096; // in the buffer lent to usb_host
 const PROBE: usize = 512; // probes and sense data: never where a write's data waits for a retry
@@ -33,7 +33,7 @@ impl Bot {
 
 // `lost`: the device stopped answering and was not claimed again; `returned`: a device came back, and no command runs
 // on it here (000-DRV-0058); `seen`: refusals already logged.
-struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, returned: bool, seen: [(u8, Sense); SEEN], seen_count: usize }
+struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, returned: bool, seen: [(u8, Sense); SEEN], seen_count: usize, retried: usize }
 
 // How a BOT cycle ended: done with the bytes moved, refused by the device (CHECK CONDITION), or the interface is gone.
 enum Cycle { Done(usize), Refused, Gone }
@@ -80,6 +80,30 @@ fn sense(host: &mut Host, bot: &mut Bot) -> Option<Sense> {
         Cycle::Done(n) if n >= 14 => { let b = &host.buffer()[PROBE..PROBE + 14]; Some(Sense { key: b[2] & 0x0F, asc: b[12], ascq: b[13] }) }
         _ => None,
     }
+}
+
+// The fixed-format sense's information field (bytes 3 to 6) when its VALID bit is set: for a READ or WRITE, the first
+// sector the device could not do. Read from the last REQUEST SENSE's answer.
+fn information(host: &Host) -> Option<u32> {
+    let b = &host.buffer()[PROBE..PROBE + 7];
+    (b[0] & 0x80 != 0).then(|| u32::from_be_bytes([b[3], b[4], b[5], b[6]]))
+}
+
+// A sense in a log line, and the sector it names.
+struct Said(Option<Sense>);
+impl core::fmt::Display for Said {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self.0 { Some(s) => write!(f, "KEY {:X} ASC {:02X} ASCQ {:02X}{}", s.key, s.asc, s.ascq, s.meaning()), None => f.write_str("NOT READ") }
+    }
+}
+struct At(Option<u32>);
+impl core::fmt::Display for At {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { match self.0 { Some(n) => write!(f, "{}", n), None => f.write_str("NOT SAID") } }
+}
+
+// A READ(10) or WRITE(10)'s first sector and count, for the log.
+fn extent(command: &[u8]) -> Option<(u32, u16)> {
+    matches!(command[0], 0x28 | 0x2A).then(|| (u32::from_be_bytes([command[2], command[3], command[4], command[5]]), u16::from_be_bytes([command[7], command[8]])))
 }
 
 fn name(operation: u8) -> &'static str {
@@ -147,6 +171,7 @@ impl Port<Bot> for Claims<'_> {
 }
 
 const SEEN: usize = 16;
+const RETRY_LINES: usize = 64; // tries again logged in a boot; a device that needs more is failing anyway
 
 impl Storage {
     fn probe() -> Option<Self> {
@@ -163,7 +188,7 @@ impl Storage {
         // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
         // writable; a write it refuses fails anyway.
         let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false, PROBE), Cycle::Done(_)) && host.buffer()[PROBE + 2] & 0x80 != 0;
-        Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0 })
+        Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0, retried: 0 })
     }
 
     // A refusal in the log, each kind once (211-DRV-0019).
@@ -173,6 +198,37 @@ impl Storage {
         if self.seen_count < SEEN { self.seen[self.seen_count] = (operation, sense); self.seen_count += 1; }
         mind::println!("[USB] STORAGE: {} REFUSED: SENSE KEY {:X} ASC {:02X} ASCQ {:02X}{}{}", name(operation), sense.key, sense.asc, sense.ascq, sense.meaning(),
                        if operation == 0x35 && sense.key == 5 { "; A FLUSH CANNOT EMPTY THE DEVICE'S CACHE" } else { "" });
+    }
+
+    // A refused READ or WRITE tried again while its sense allows it (000-DRV-0115). Its data is still at `at`: probes and
+    // sense data use PROBE (211-DRV-0019). Every try again is logged, with the sectors and what the device said.
+    fn again(&mut self, command: &[u8], length: usize, send: bool, at: usize, first: Option<Sense>) -> Result<usize, DriverError> {
+        let Some(extent) = extent(command) else { return Err(DriverError::Io) };
+        let mut last = first;
+        let mut info = information(&self.host);
+        for tried in 1.. {
+            let decision = match last { Some(s) => recovery::again(s.key, s.asc, s.ascq, tried), None => Again::GiveUp };
+            let Again::After(pause) = decision else {
+                self.retry_line(command[0], extent, tried - 1, last, info, false);
+                return Err(DriverError::Io);
+            };
+            if pause > 0 { mind::time::sleep(pause as usize); }
+            match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) {
+                Cycle::Done(moved) => { self.retry_line(command[0], extent, tried, last, info, true); return Ok(moved); }
+                Cycle::Refused => { last = sense(&mut self.host, &mut self.bot); info = information(&self.host); }
+                Cycle::Gone => { self.retry_line(command[0], extent, tried, last, info, false); return Err(DriverError::Io); }
+            }
+        }
+        Err(DriverError::Io)
+    }
+
+    // What became of a refused READ or WRITE: done on a try again, or given up; the first RETRY_LINES of a boot.
+    fn retry_line(&mut self, operation: u8, (lba, count): (u32, u16), tries: usize, sense: Option<Sense>, info: Option<u32>, done: bool) {
+        self.retried += 1;
+        if self.retried > RETRY_LINES { return; }
+        mind::println!("[USB] STORAGE: {} OF {} SECTORS AT {}: {} AFTER {} TRIES AGAIN; THE LAST SENSE {}, ITS SECTOR {}{}", name(operation), count, lba,
+                       if done { "DONE" } else { "GIVEN UP" }, tries, Said(sense), At(info),
+                       if self.retried == RETRY_LINES { "; FURTHER ONES THIS BOOT NOT LOGGED" } else { "" });
     }
 
     // A device that came back: the command that found it is not run, and `returned` reports it (000-DRV-0058).
@@ -194,8 +250,10 @@ impl Storage {
                 let sense = sense(&mut self.host, &mut self.bot);
                 self.refused(command[0], sense);
                 if sense.is_some_and(Sense::changed) { return self.came_back(Why::MediumChanged, command[0]); }
-                if !sense.is_some_and(Sense::attention) { return Err(DriverError::Io); }
-                return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) };
+                if sense.is_some_and(Sense::attention) {
+                    return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Ok(moved), _ => Err(DriverError::Io) };
+                }
+                return self.again(command, length, send, at, sense);
             }
             Cycle::Gone => {}
         }
