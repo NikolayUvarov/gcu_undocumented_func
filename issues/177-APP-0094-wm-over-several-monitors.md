@@ -28,7 +28,7 @@ With QEMU's two outputs (or two screens in `BootInfo`), `wm` shows a window on e
   - `layout(first, others)`: each `Beside { size, side, of }` placed in turn on its side of an earlier screen, aligned at that one's top or left edge, and past any screen already on that side;
   - `beside`: of the screens wholly on that side that share rows (or columns) with this one, the nearest;
   - `Desk::arrange`: a window whose screen is gone goes to the first.
-- **Tested** in this container, x86_64: `tests/wm_host.rs`'s `the_desk_over_three_screens` (DP-2's 3440x1440 between two 1366x768 HDMI monitors: a window from the left one to the middle and on to the right, the middle's edges crossed, the right one gone), with the 51 tests before it.
+- **Tested** in this container, x86_64: `tests/wm_host.rs`'s `the_desk_over_three_screens` (DP-2's 3440x1440 between two 1366x768 HDMI monitors: a window from the left one to the middle and on to the right, the middle's edges crossed, the right one gone), with the 51 tests before it; the QEMU `wm` suite passes (17 checks) on its one screen.
 - **For KRN's 1.5,** what `wm` needs of it is the same for three as for two: each screen's size and where it lies. The layout is planned as lines `screen N SIDE of M` in the shell's `data/displays.txt`, given to `wm` at its start; not written yet.
 
 ## Related
