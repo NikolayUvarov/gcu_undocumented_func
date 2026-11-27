@@ -110,4 +110,4 @@ Each stage's criteria above, in order. The main task is split into `APP` tasks p
 
 ## Related
 
-[255](255-text-web-browser.md) (the text browser: the HTML parser, URL, fetching and cookies shared); [650](650-building-on-the-target.md) (a POSIX layer and threads, which a ported engine might need instead).
+[255](255-text-web-browser.md) (the text browser: the HTML parser, URL, fetching and cookies shared); [650](650-building-on-the-target.md) (a POSIX layer and threads, which a ported engine might need instead). [264](264-ladybird-on-mind-core-a-port-kept-outside-the-os.md) (Ladybird ported, kept outside the OS's own code: a road beside this one, not a part of it).
