@@ -1,6 +1,6 @@
 # 213-DRV-0113 — `display`: both HDMI sockets lit at once (three screens)
 
-**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-27), a design only, no code · **Blocked by:** for stage 4, `KRN`: `display.wit` 1.5, the compositor's second driver screen, and init's second window of BAR 0 (the asks below) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-27); stages 1 to 3 built on `claude/213-DRV-0113-display-both-hdmi-sockets`, shown by host cases only, not yet run on the Ryzen (see "Progress") · **Blocked by:** for stage 4, `KRN`: `display.wit` 1.5, the compositor's second driver screen, and init's second window of BAR 0 (the asks below) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -21,8 +21,9 @@ The limit is `display`'s and its interface's, not the engine's:
 - **Linux** drove two monitors on all four pipes.
 - **What is taken today:** the firmware's picture takes one pipe and `display`'s second screen another, so two are free.
 
-This file is a design from the code and Linux's Display Core as they are (Linux v7.0). Nothing of it is built, and none
-of it is a guarantee (MC-12.3).
+This file began as a design from the code and Linux's Display Core as they are (Linux v7.0). Stages 1 to 3 are now
+built and shown on the host model ("Progress"); nothing of them has run on the Ryzen, and none of it is a guarantee
+(MC-12.3).
 
 ## The pipe a second HDMI output would take
 
@@ -51,7 +52,8 @@ of it is a guarantee (MC-12.3).
 - **MPC_OUT mux 2 and MPCC2** (batch 10 reads all four), to confirm that `pipe_plan`'s checks pass for instance 2.
 - **DPP2's own registers.** Step 1 reads the firmware's DPP only; the stages read each register they write before
   writing it, as for pipe 1.
-- **OTG2's `OTG_VERTICAL_INTERRUPT2_POSITION`,** where the pipe's restart mark would go (batch 2 reads it).
+- **OTG2's `OTG_VERTICAL_INTERRUPT2_POSITION`,** where the pipe's restart mark would go (batch 2 reads it in the survey's
+  order only; step 1 beside display's own OTG now reads all four marks in either order, "Progress").
 
 ## What in `display` is single today, and must become per output
 
@@ -177,17 +179,22 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    - the firmware's pipe found once and kept; display's pipes told by their mark;
    - a `Run` per output, with each guard denying the other lit pipe;
    - each watch reading the other lit pipe; the follower and the standing check per socket.
-   - Criteria, on the model:
-     - [ ] both sockets lit, each on its own pipe;
-     - [ ] every stage of the second refused at the first's blocks, which read as before after each stage;
-     - [ ] each unplug takes back only its own run, the other's picture and the firmware's unchanged;
-     - [ ] HDMI-A-1 alone behaves as before (its cases unchanged).
-   - The Ryzen's own tables with crtc 2 and PHY B's parameters, when `MIND_AMD_VBIOS` names the image.
-2. **Read on the machine first** (a bench build in the survey's order, HDMI-A-1 lit, nothing written for the second):
+   - Criteria, on the model (host cases, not proofs: MC-12.2):
+     - [x] both sockets lit, each on its own pipe (HDMI-A-1 on OTG1 in 16 stages, HDMI-A-2 on OTG2 to first light; and
+       the other way round with `HDMI_FIRST HdmiA2`);
+     - [x] every stage of the second refused at the first's blocks, which read as before after each stage;
+     - [x] each unplug takes back only its own run, the other's picture and the firmware's unchanged;
+     - [x] HDMI-A-1 alone behaves as before (its cases unchanged).
+   - [x] The Ryzen's own tables with crtc 2 and PHY B's parameters, when `MIND_AMD_VBIOS` names the image (the model's
+     counts in "Progress").
+2. **Read on the machine first** (a bench build in the survey's order, HDMI-A-1 lit, nothing written for the second;
+   setting (a) in "Progress"):
    - [ ] step 1 with pipe 1 running, its batches 9 and 10 naming the firmware's pipe;
-   - [ ] DPP2's DTO, MPCC2 and mux 2 recorded here.
-3. **First light on the third pipe** (`FirstLight` for HDMI-A-2, `UNDO_AFTER_STAGES` on the first boot, the survey's
-   order, a person at the machine; PHY B's table 12 takes its long path, never run on this hardware, 213-DRV-0097):
+   - [ ] DPP2's DTO, MPCC2 and mux 2 recorded here (batches 13 and 14).
+3. **First light on the third pipe** (setting (b) on the first boot, `SECOND_HDMI FirstLightUndone`; then (c); the
+   survey's order, a person at the machine. `UNDO_AFTER_STAGES` stays off: it would undo HDMI-A-1 too, and then no second
+   run is made. PHY B's table 12 took its short path on boots 110 and 111; its long path has never run on this
+   hardware, 213-DRV-0097):
    - [ ] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop;
    - [ ] the firmware's pipe and pipe 1 read as before after each stage;
    - [ ] the maintainer's look (MC-12.1).
@@ -205,12 +212,229 @@ states; the standing check per pipe; the tables' writes for pipe 2 and PHY B on 
 compositor with two screens on its own model. They cannot show the bandwidth, the clocks or the watermarks: only the
 machine can (MC-12.2).
 
+## Progress (2026-11-27, branch `claude/213-DRV-0113-display-both-hdmi-sockets`)
+
+Commits on 213-DRV-0112's head (246850205): f6843550e (stage 1, `light.rs`), 531305776 (stage 2, `batches.rs`),
+f78830912 (stage 3 and the switch, `start.rs`, `setting.rs`, `main.rs`), then the image case and this section. What
+host cases show is on the model only.
+
+**Stage 1, two runs each guarded against the other** (`light.rs`):
+- `assess_beside`: the firmware's pipe as found at start, kept; display's lit pipe told by its mark; refused if the
+  firmware's OTG stopped or its back end is off (`FirmwareMoved`), if the lit OTG lost its mark (`NotMarked`), another
+  OTG holds the mark (`MarkedElsewhere`), a third OTG runs (`OtherRunning`) or another back end is on (`OtherBackEnd`).
+  The second output takes the lowest free OTG (2 beside OTG1) and its own front end letter.
+- `Guard::beside`: the lit pipe's OTG, ODM, VTG, OPP, DPG, HUBP, DPP, MPCC, mux, DIG front and back end, PHY, PLL resync,
+  SYMCLK and pixel rate refused (`Refused::Lit`), checked before the run's own allow list; an overlap refuses the
+  choice (`SharesLit`); a guard with no room left refuses the pipe whole (`GuardFull`).
+- `Watch::pipe`: the lit pipe's 30 registers (its OTG's 21 of batches 2 and 7, its DIG front and back end, its PHY's
+  PLL resync, its HUBP's surface and `DCHUBP_CNTL`) read before and after each stage of the other run; a change fails the
+  stage (`LitChanged`) and undoes it. The first run reads the second's pipe the same way once the second's stages stay.
+- Table 12's write of PHY A's `RDPCSTX_PHY_FUSE0` (1783C), which it makes for every PHY: left unmade where it holds the
+  value, refused otherwise, whether PHY A is off the route or lit.
+- `batches::read_into_beside`: step 1 with display's own OTGs counted out of the running, so that batches 9 and 10 name
+  the firmware's pipe beside display's (`assess_for` and batch 2 refuse two running OTGs as before).
+
+**Stage 2, the pipe read first** (`batches.rs` batches 13 and 14, `read_pipe`), each time a second run is about to be
+made, never written, whole in either order, its values summed up in notes that both orders log:
+
+| Batch | Registers of pipe 2 (bytes in BAR 5) | Source |
+|---|---|---|
+| 13 | the other OTGs' marks (`OTGn_OTG_VERTICAL_INTERRUPT2_POSITION`, OTG1's at 14298); OTG2's state as `optc1_read_otg_state` reads it (from `OTG2_OTG_H_TOTAL` 143A8); `OTG2_PIXEL_RATE_CNTL` 520, `OTG2_PHYPLL_PIXEL_RATE_CNTL` 52C; `OPP_PIPE2_OPP_PIPE_CONTROL` 13800; `DPG2_DPG_CONTROL` 13720 and `DIMENSIONS` 13728; `DOMAIN4/5_PG_STATUS` (HUBP2, DPP2) D524, D52C; `DPPCLK_DTO_CTRL` 5D8, `DPPCLK2_DTO_PARAM` 56C; `MPCC2`'s top, bottom, OPP and control (from 11D9C); `MPC_OUT2_MUX` 12134 | `dcn_2_1_0_offset.h` (`dcn.rs`), `optc1_read_otg_state`, `dcn20_hubp_pg_control` |
+| 14 | HUBP2's state and the registers stages 11 to 15 write there (from F174), and DPP2's (from 1116C), each only where batch 13 finds its domain on | as batch 4 and stage 12 read them |
+
+The batches' counts on the model: 36 registers for batch 13, 62 for batch 14 with both domains on.
+
+**Stage 3, first light on the third pipe** (`start.rs` `second_run`): after the first socket's stages, when SECOND_HDMI
+asks and the other socket senses a monitor:
+1. step 1 again beside display's own OTG, the four OTGs' marks read first; batch 12 again for HDMI-A-2;
+2. batches 13 and 14 for the pipe `assess_beside` gives;
+3. the mode from the other socket's EDID where the plan reads it (`STEP 3'S MODE`), else the socket's fallback;
+4. `prepare_beside`, then the 8 first-light stages on pipe 2 with the firmware's pipe and the first's read after each;
+   or only their description (Read, or where `HDMI_A_2` or `STAGES_ALLOWED` lets display go no further).
+
+The first's guard refuses the second's blocks from then on. What follows (`Follower`):
+- the second's unplug takes back its own stages, the first left lit;
+- the first's unplug with the second lit takes back the first (screen_gone first), and the second is then the only one,
+  followed as the first was;
+- a monitor plugged in beside the lit socket makes the second run; after a failure or the build's undo it is not tried
+  again this boot;
+- the standing check stays the first's: the second stops at first light, before stage 15.
+
+Its writes on the model: only DIG B's, UNIPHYB's, RDPCSTX1/DPCSTX1's, PHYPLLB's resync, SYMCLKB's and pipe 2's OTG,
+ODM, VTG, OPP and DPG and OTG2's pixel rate; HDMI-A-1's pipe and the firmware's read as before after every stage.
+
+**The Ryzen's own tables on CRTC 2 and PHY B beside a lit HDMI-A-1** (`the_ryzens_own_tables_on_crtc_2_and_phy_b_beside_a_lit_hdmi_a_1_...`,
+with `MIND_AMD_VBIOS`; HDMI-A-1 lit first by its own tables at 3440x1440, then 1366x768 at 85.5 MHz in HDMI on pipe 2;
+PHY A's FUSE0 set to the Ryzen's values after HDMI-A-1's stage 2):
+
+| PHY B | Table 12 (PLL1, CRTC 2) | Table 4 | Table 76 | Writes in all | Outside the second's blocks |
+|---|---|---|---|---|---|
+| cold (SCRATCH 0) | 540 steps, 4 calls, 110 writes, 1 left | 33 steps, 2 calls, 5 writes | 289 steps, 9 calls, 23 writes | 191 | none |
+| set up (SCRATCH 0x300) | 318 steps, 4 calls, 32 writes, 1 left | 33 steps, 2 calls, 5 writes | 241 steps, 9 calls, 18 writes | 108 | none |
+
+- The one write left is table 12's of PHY A's FUSE0: with PHY A lit it holds B038003E or B038A034, both with MPLLB_V2I
+  already 2, so the write would not change it and is not made (`S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS:
+  ... (B038003E)`). A value that the write would change is refused as the lit pipe's (`Refused::Lit`), and stage 2 is
+  undone (the synthetic case). On the model HDMI-A-1's own table 12 leaves B028003E there.
+- Table 12's writes: PHY B's RDPCSTX1 block (17B00 to 17BA8), `PHYPLL1_PIXCLK_RESYNC_CNTL` 404, SYMCLKB 584,
+  `OTG2_PIXEL_RATE_CNTL` 520 and `OTG2_PHYPLL_PIXEL_RATE_CNTL` 52C. Table 4's: DIG B's front end (158A0, 158AC, 15A68).
+  Table 76's: DIG B's back end (159BC, 159C0, 15A84), UNIPHYB (174BC, 174C0) and RDPCSTX1.
+- The bench's own counts on HDMI-A-2 on CRTC 1 (boots 110 and 111): table 12 318 steps, 32 writes, 1 left; table 4 33
+  steps, 5 writes; table 76 289 steps, 23 writes. The model's are a model's.
+- The second's unplug puts back every register it wrote but PHY B's control-register bus (by design); then HDMI-A-1's
+  puts back everything else.
+
+**The bring-up switch** (`main.rs`): `const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Off;`, committed off.
+
+| Value | What the second run does |
+|---|---|
+| `Off` (the release's) | nothing; the start's lines as before |
+| `Read` | its pipe read first (step 1 beside, batches 12 to 14), its stages described, nothing written |
+| `FirstLight` | first light's 8 stages on pipe 2, left in place |
+| `FirstLightUndone` | the same, undone after them (its mark kept: not tried again this boot) |
+
+How it combines with the others:
+- `HDMI_A_2`: on HDMI-A-2 the second run goes no further than this lets display go. At `Read` or `Edid` its stages are
+  described only; at `Read` its EDID is not read either (the mode is VIC 16's). At `FirstLight` or `Full`, 8 stages.
+- `HDMI_FIRST`: which socket is first; the other gets the second run. HDMI-A-2 is first only where `HDMI_A_2` is
+  `FirstLight` or `Full`.
+- `SURVEY_ORDER`: both runs' order. The second's notes are logged in either; every register's value and every write
+  only in the survey's.
+- `UNDO_AFTER_STAGES`: undoes the first run, so no second run is made (`THE FIRST SOCKET'S FIRST LIGHT IS NOT IN
+  PLACE`), and nothing is followed. Keep it off; `FirstLightUndone` undoes only the second.
+- `STAGES_ALLOWED`: bounds both. The first must reach first light (8) for a second run; the second runs at most 8.
+- The setting word: only `light` makes a second run (`read` and `off` plan none).
+
+**Settings for the bench:**
+- (a) the read-only run, HDMI-A-1 lit, a monitor in HDMI-A-2: `SECOND_HDMI = Read`, `HDMI_A_2 = Edid` (its EDID read
+  over DDC2 as on boot 109, so that its stages are shown in its own mode; `Read` writes nothing of it at all and shows
+  VIC 16's), `HDMI_FIRST = HdmiA1`, `SURVEY_ORDER = true` (every register's value), `UNDO_AFTER_STAGES = false`,
+  `STAGES_ALLOWED = 16`.
+- (b) first light on the third pipe, undone after its stages: `SECOND_HDMI = FirstLightUndone`, `HDMI_A_2 = FirstLight`,
+  `HDMI_FIRST = HdmiA1`, `SURVEY_ORDER = true`, `UNDO_AFTER_STAGES = false`, `STAGES_ALLOWED = 16`.
+- (c) the same, left in place: as (b) with `SECOND_HDMI = FirstLight`.
+
+**The lines to look for** (each of the second run's is prefixed with its socket's name):
+- `A BRING-UP BUILD, NOT A RELEASE: ... SECOND_HDMI; ONLY WHAT LIGHT DOES CHANGES` (the switch named, its word in the
+  lines below: the line would pass 180 bytes with every switch set).
+- `HDMI-A-2 TAKEN SECOND, AFTER HDMI-A-1'S STAGES: HPD 2 SENSES A MONITOR THERE TOO (SECOND_HDMI <WORD>: <WHAT>)`.
+- `HDMI-A-2: SECOND HDMI RUN BESIDE HDMI-A-1 ON OTG1 (SECOND_HDMI <WORD>): <WHAT>`.
+- `HDMI-A-2: STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING; MARKS OTG0 .... OTG1 5A5A OTG2 .... OTG3 ....`.
+- `HDMI-A-2: B9 ...` (the firmware's pipe named beside display's), `HDMI-A-2: B12 HDMI-A-2 DONE: 15 OF 15 REGISTERS READ`.
+- `HDMI-A-2: B13 PIPE 2: ...` (five notes), `HDMI-A-2: B13 PIPE 2 DONE: 36 OF 36 REGISTERS READ, NOTHING WRITTEN`,
+  `HDMI-A-2: B14 PIPE 2 PLANE: HUBP2 ...`, `... DPP2 ...`, `HDMI-A-2: B14 PIPE 2 PLANE DONE: ...`.
+- `HDMI-A-2: STEP 3'S MODE: 1366x768 AT 85500 KHZ IN Hdmi SIGNALLING, ...` (expected from boot 109's EDID).
+- `HDMI-A-2: S0 STEP 3'S PIPE: OTG2 OPP2 DIG B FRONT END, PHY B (HDMI-A-2), HPD 2; MODE ...` and
+  `HDMI-A-2: S0 HDMI-A-1'S PIPE, LIT BY DISPLAY: OTG1 OPP1 DIG A FRONT END, PHY A, HUBP1; NEVER WRITTEN, READ AFTER EACH STAGE (30 REGISTERS)`.
+- Read: `HDMI-A-2: SECOND HDMI RUN SHOWN FOR OTG2, <N> REGISTERS READ, NOTHING WRITTEN (SECOND_HDMI READ, HDMI_A_2 EDID)`.
+- First light: `HDMI-A-2: S<N> <STAGE> DONE; THE FIRMWARE'S AND HDMI-A-1'S PIPES UNCHANGED; ...` for 1 to 8,
+  `HDMI-A-2: S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: ...`, then
+  `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit: 8 STAGES IN PLACE, <R> REGISTERS READ, <W> WRITES, <MS> MS; HDMI-A-1 Lit ON OTG1`.
+- Undone: `HDMI-A-2: STEP 3 UNDONE AFTER STAGE 8 OF 16 AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE UNCHANGED`,
+  then `HDMI-A-2: SECOND HDMI RUN ON OTG2 Stopped: 0 STAGES IN PLACE, ...`.
+- Not made: `HDMI-A-2: SECOND HDMI RUN NOT MADE: <WHY>`, `... NOT MADE (SECOND_HDMI <WORD>): THE FIRST SOCKET'S FIRST LIGHT IS NOT IN PLACE`,
+  `SECOND HDMI RUN NOT MADE (SECOND_HDMI <WORD>): NO MONITOR SENSED IN THE OTHER HDMI SOCKET`.
+- A failure: `HDMI-A-2: S<N> ... FAILED: ...`, `HDMI-A-2: STEP 3 FAILED AT STAGE <N> AND WAS UNDONE; ...; HDMI-A-1'S PIPE UNCHANGED|CHANGED`.
+- What follows: `HDMI-A-2: STEP 3 TAKEN BACK IN <MS> MS: ...; THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE UNCHANGED`;
+  `HDMI-A-2: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT: THE SECOND HDMI RUN NEXT (SECOND_HDMI <WORD>)`;
+  `STEP 3 TAKEN BACK IN ... THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-2'S PIPE UNCHANGED` then
+  `HDMI-A-2 NOW THE ONLY HDMI SOCKET LIT, ON OTG2: FOLLOWED AS THE FIRST WAS; THE SECOND OUTPUT Lit`;
+  `HDMI-A-2 NOT DRIVEN: A MONITOR PLUGGED IN THERE; HDMI-A-1 IS LIT, AND THE SECOND HDMI RUN FAILED OR WAS UNDONE: NOT TRIED AGAIN THIS BOOT`.
+
+**The bench, stage by stage** (HDMI-A-1's monitor and the third monitor in HDMI-A-2, DP-2 as ever):
+1. (a): HDMI-A-1 lit as before; HDMI-A-2 stays dark; nothing of its pipe written. Record batches 13 and 14 here (DTO2,
+   MPCC2, mux 2, HUBP2 and DPP2 as found) and check that step 1 beside names the firmware's pipe in batches 9 and 10.
+2. (b), a person at the machine: the colour squares on HDMI-A-2 from stage 8 for the survey's pause, then dark again;
+   HDMI-A-1's picture and DP-2's desktop unchanged throughout. Every stage's line names both pipes unchanged.
+3. (c): the squares stay. Then HDMI-A-2's monitor out (its stages taken back, HDMI-A-1 untouched) and back in (the
+   second run again); then HDMI-A-1's out (HDMI-A-2 the only one, still showing the squares) and back in (HDMI-A-1
+   gets the second run, first light on OTG1, with no picture: the picture is stage 9 onwards, not run for a second).
+
+**Not built:** stage 4 (each output's own picture and screen, blocked by KRN's asks), stages 9 to 16 for the second
+run, the second's standing check, and the scaler (assessed below).
+
+## The scaler, assessed (not built)
+
+The question: pipe 2 scanning the same surface as pipe 1 (slot 5, 3440x1440), through DPP2's scaler, down to the third
+monitor's 1366x768 at 59.790 Hz: the mirror on all three without the compositor's second driver screen or another
+window of BAR 0.
+
+**Within DCN 2.1's limits, as Display Core states them:**
+- Ratios 3440/1366 = 2.5183 across and 1440/768 = 1.875 down (`calculate_scaling_ratios`, truncated to 19 bits).
+- The plane's limit: `max_downscale_factor` 250 for ARGB8888 (`dcn21_resource.c` `plane_cap`), which `amdgpu_dm_plane.c`
+  reads as dst/src at least 250/1000: 4:1. (`dc->caps.max_downscale_ratio` 200 is set, and used by none of the files
+  read.) DML's:
+  `max_hscl_ratio` and `max_vscl_ratio` 4, `max_hscl_taps` and `max_vscl_taps` 8 (`dcn2_1_ip`, `dcn20_fpu.c`).
+- The source width: `max_downscale_src_width` 4096 (`debug_defaults_drv`).
+- DPPCLK: DML's rule (`display_mode_vba_21.c`) gives pclk x max(vtaps/6 x min(1, hratio), hratio x vratio / PSCL, 1).
+  PSCL = min(4, 2 x hratio / ceil(htaps/6)) = 4 with 4 taps, so DPPCLK >= 85.5 x 1.18 = 101 MHz. Pipe 1 at 324 MHz
+  1:1 needs more already. With 8 taps the rule asks 2 x pclk, 171 MHz.
+
+**What Display Core programs for it** (`dpp1_dscl_set_scaler_manual_scale`, `dcn10_dpp_dscl.c`, used by DCN 2.x; DPP2's
+DSCL registers from 1116C, `DSCL2_SCL_MODE` at 11208):
+
+| Register | Value for 3440x1440 to 1366x768, RGB |
+|---|---|
+| `DSCL_AUTOCAL` | 0 (manual) |
+| `DSCL_CONTROL` | `SCL_BOUNDARY_MODE` 0 |
+| `RECOUT_START`, `RECOUT_SIZE` | 0,0; 1366x768 |
+| `MPC_SIZE` | 1366x768 |
+| `SCL_MODE` | `DSCL_MODE` 1 (`SCALING_444_RGB_ENABLE`), then `SCL_COEF_RAM_SELECT` flipped after the coefficients |
+| `LB_DATA_FORMAT` | `INTERLEAVE_EN` 0, `ALPHA_EN` per-pixel alpha (DCN 2 processes float data) |
+| `LB_MEMORY_CTRL` | `MEMORY_CONFIG` 0 (`use_max_lb`), `LB_MAX_PARTITIONS` 63 |
+| `SCL_BLACK_OFFSET` | RGB's black for both fields |
+| `SCL_HORZ_FILTER_SCALE_RATIO` (and `_C`) | u3.19 of 2.5183 << 5 = 0x0284AF60 |
+| `SCL_VERT_FILTER_SCALE_RATIO` (and `_C`) | 1.875 << 24 = 0x01E00000 |
+| `SCL_HORZ_FILTER_INIT` | (ratio + taps + 1) / 2 = 3.7591: INT 3, FRAC 0xC257A0 |
+| `SCL_VERT_FILTER_INIT` (and `_BOT`) | 3.4375: INT 3, FRAC 0x700000 (`_BOT` adds the ratio) |
+| `SCL_TAP_CONTROL` | 4 taps each way (Display Core's default for RGB: fields 3 and 3; chroma 1 and 1) |
+| `DSCL_2TAP_CONTROL` | hard-coded 2-tap filters off (more than 2 taps) |
+| `SCL_COEF_RAM_TAP_SELECT` and `_DATA` | 64-phase filters, 33 phases x 2 tap pairs = 66 writes each for luma across and down; S1.12 coefficients, 14 bits (0x1000 is 1.0) |
+
+- **The viewport** (HUBP2's `DCSURF_PRI_VIEWPORT_*`): 3440x1440 at 0,0. `calculate_init_and_vp` gives 3441 and 1441,
+  each cut to the surface.
+- **The line buffer:** one line takes (1366 + 5) / 6 = 228 entries, so configuration 0's 2744 hold 12 lines
+  (`dscl2_calc_lb_num_partitions`). 4 vertical taps at a ratio below 2 need 4: it fits.
+- **The coefficients:** Display Core picks its 4-tap table for ratios of 5/3 and more (`get_filter_4tap_64p`). The
+  tables are AMD's data; `display` would compute its own (a windowed sinc, each phase summing to 1.0), which a host case
+  can check.
+
+**What is beyond what `display` does today:**
+- **The DLG and TTU of a scaled plane.** With vratio above 1, DML's line and request delivery times use
+  `delivery_width / hscale_pixel_rate` rather than `recout_width / pclk` (`get_refcyc_per_delivery`,
+  `display_rq_dlg_calc_21.c`). `hscale_pixel_rate` is 4 x DPPCLK here (`min_hratio_fact` 4 for hratio 2.52 and 6 taps
+  or fewer), and the firmware's DPPCLK frequency is not read. The prefetch's `vratio_prefetch`, and the scaler's delay
+  (`dppclk_delay_scl` 50 cycles, not `_lb_only` 16) in VSTARTUP and the after-scaler offsets, change too. Stage 9's rule
+  (pipe n's DLG and TTU from the firmware's 1:1 pipe) does not give these; DML's formulas would have to be built anew,
+  and checked against what Linux's `amdgpu_dm_dtn_log` shows for the same two pipes.
+- **The bandwidth.** Pipe 2 fetches the whole 3440x1440 surface at 59.79 Hz: 1.18 GB/s more, as much as a full-size third
+  screen (a 1366x768 surface of its own would be 0.26 GB/s). The firmware's watermarks are the same risk as for stage 4.
+- **The picture.** 4 taps across at 2.52:1 cover fewer source pixels than a low-pass filter for that ratio wants (about
+  twice the ratio, 5 or 6): thin lines and text alias. 8 taps fit the line buffer (12 lines) and DPPCLK; Display Core
+  uses 4 unless asked.
+
+**What a host case could show:** the register values above from the two modes; the coefficients' sums per phase; the
+line buffer's count; DPP2's and HUBP2's writes refused nowhere else; the DLG formulas against hand-worked numbers. Not
+whether it underflows, nor how it looks.
+
+**Recommendation:** not as the interim now. The DSCL part is small and well defined, but the scaled plane's DLG and TTU
+are new derivations that `display` cannot check against the hardware's own values, and it costs the bandwidth of a full
+third screen while still waiting on the same watermark question. Stage 4 (each output its own surface in its own mode,
+1:1, with stage 9's rule as it stands) needs KRN's asks but no new derivation. If KRN's asks wait long, the scaler is the
+way to a picture on HDMI-A-2 without them: then 2.52 by 1.875 at 4 taps (or 8), DLG built from DML's formulas, a bench
+build that undoes after the watch, and Linux's dtn log for the same two modes as the reference.
+
 ## Not known
 
-- Whether the firmware's DISPCLK, DPPCLK (DTO2), DCFCLK and watermarks carry three pipes without underflow.
-- DPP2's and pipe 2's request state as found. Only the firmware's pipe is read today.
-- What the Ryzen's tables write with crtc 2 on PHY B. Host cases with the image can tell, before any write.
-- Whether a cold PHY B's long path (table 12, 530 steps on the model) behaves on the hardware (213-DRV-0097).
+- Whether the firmware's DISPCLK, DPPCLK (DTO2), DCFCLK and watermarks carry three pipes without underflow. First
+  light on pipe 2 fetches nothing (the pattern is OPP2's), so stage 3 does not answer it; stage 4 or the scaler would.
+- DPP2's and pipe 2's request state as found: batches 13 and 14 read it, not yet run on the machine.
+- What the Ryzen's tables write with crtc 2 on PHY B on the hardware. On the model: only the second's blocks (above);
+  the model answers the tables' status reads as `answered_on` does, and its counts differ from the bench's.
+- Whether a cold PHY B's long path (table 12, 540 steps on the model with CRTC 2) behaves on the hardware (213-DRV-0097).
+- Whether PHY A's FUSE0 still reads B038003E or B038A034 when the second run starts: if not, and table 12 would change
+  it, stage 2 is refused and undone (the lit pipe's register), and the value goes in this file.
+- The firmware's DPPCLK frequency (for the scaler's DLG).
 - Whether the compositor's frame time stays within its budget with two copies a change (KRN's to measure).
 - Whether starts not through Linux leave the same state. Every boot of this machine so far was a start out of Linux.
 
