@@ -206,9 +206,12 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    - [x] the mirror on both HDMI monitors in their own modes (the Ryzen, release 202611271307, below);
    - [ ] the standing check clean on three pipes for an hour.
 5. **Plugged and unplugged:**
-   - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model only);
-   - [x] a monitor moved from one socket to the other (on the model only);
-   - [ ] the watch and the standing check clean (on the machine).
+   - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model, and on the Ryzen
+     with the maintainer's look: release 202611271414, below);
+   - [x] a monitor moved from one socket to the other (on the model, and on the Ryzen: the two monitors swapped,
+     below);
+   - [x] the watch clean on the machine at every plug change (release 202611271414, below); the standing check's hour
+     is stage 4's open item.
 
 **Before any hardware run, host cases can show:** the choice and the guards with two runs; each watch; the follower's
 states; the standing check per pipe; the tables' writes for pipe 2 and PHY B on the image; and, on KRN's side, the
@@ -693,6 +696,35 @@ messages), and, asked whether the third has bars at its sides: «Да, поло�
   not known.
 - Not yet: an hour of the standing check on three pipes, plug changes on the machine, the production order (setting
   (e)), table 12's long path, and a start not through Linux.
+
+## The release's behaviour on the Ryzen, and plug changes (2026-11-27, release 202611271414)
+
+The bench image `claude/DRV-ryzen-bench-49-release-three-screens` 7898901a1: this branch at c2f00edea, 000-DRV-0115 and
+`main` c0a3a7e8e, with **no bench-only commit**: what a release of this branch does. Through QEMU first: acc-1 "x86:
+keys, shell, tools" (597 s) and "x86: services, storage, audio" (1146 s), and the update from the release before on
+x32-128. Boot 116. It holds for that machine, those monitors and that release (MC-12.1).
+
+**At the start, in the production order:**
+- `THE SECOND OUTPUT: LIGHT, THE WORD AFTER DEVICE 24: STEPS 1 TO 4 ON EACH HDMI SOCKET WITH A MONITOR IN ITS EDID'S MODE, THEN BOTH HPDS FOLLOWED AND THE STANDING CHECKS`, no bring-up line.
+- HDMI-A-1: `THE SECOND SCREEN OFFERED 2453.3 MS AFTER DISPLAY'S START`; the compositor `… MAPPED IN 48 US, DRAWN IN 5199 US`.
+- HDMI-A-2: `STEP 3'S TIMES (MS): IN ALL 2041.8`, `S15 … WATCHED 60 FRAMES IN 1002 MS CLEAN`, `[COMPOSITOR] THIRD SCREEN 1366X768 … MAPPED IN 60 US, DRAWN IN 1543 US`, `SECOND HDMI RUN ON OTG2 Lit: … 2471 MS`.
+- So all three screens were lit 8.6 s after `display` started.
+- **The maintainer:** «Светятся» (they are lit).
+
+**Plug changes by the maintainer** (uptime in seconds; each `TAKEN BACK IN` 25 to 26 ms, each light-up 2.3 to 2.5 s):
+- **The big monitor's cable out and in** (HDMI-A-1): 3101.353 `STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR`, `SECOND SCREEN GONE (PID 39): LET GO IN 615 US`, `… HDMI-A-2'S PIPE UNCHANGED`, `HDMI-A-2 NOW THE ONLY HDMI SOCKET LIT, ON OTG2`; 3103.592 `HDMI-A-1: A MONITOR PLUGGED IN THERE; HDMI-A-2 IS LIT: THE SECOND HDMI RUN NEXT`, lit again on OTG1 as the second screen. **The maintainer: «Не гас»** (the other did not go dark).
+- **The third monitor's cable out and in** (HDMI-A-2): 3111.604 taken back, `THIRD SCREEN GONE (PID 39): LET GO IN 641 US`, `… HDMI-A-1'S PIPE UNCHANGED`; 3115.177 plugged in, lit again on OTG2 as the third screen. **«Не гас»**.
+- **The two monitors swapped between the sockets:** both taken back (3120.6, 3122.8), then `HDMI SOCKETS NOW: HDMI-A-1 NO MONITOR; HDMI-A-2 LIT ON OTG1 (16 STAGES, SECOND SCREEN)` with the 3440x1440 monitor at 324 MHz on PHY B, and `HDMI-A-1: … SECOND HDMI RUN ON OTG2 Lit … OFFERED AS THE THIRD SCREEN THROUGH SLOT 8` with the 1366x768 one on PHY A. **«Поменял, показывает»** (swapped, it shows).
+- No underflow, no request timeout, no stage failed, and the firmware's pipe unchanged throughout.
+
+**What it shows:** the release lights both sockets, each unplug takes back only its own run, each plug lights its socket
+again beside the other, and either socket drives either monitor (PHY B at 324 MHz too).
+
+**Not shown yet:**
+- an hour of the standing checks on three pipes;
+- the monitors swapped back;
+- table 12's long path: every PHY was warm here, since every start came through Linux, which lights both sockets;
+- a start not through Linux.
 
 ## Not known
 

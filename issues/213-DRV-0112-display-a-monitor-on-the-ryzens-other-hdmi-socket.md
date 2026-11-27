@@ -74,7 +74,8 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 - [x] On the Ryzen: a monitor in the second socket lit in its own mode with the mirror on it, stage 15's watch clean,
   the firmware's pipe unchanged, and the maintainer's look (MC-12.1). Boot 112, below, on a bench image that takes
   HDMI-A-2 first.
-- [ ] On the Ryzen: the monitor moved from one socket to the other and back, lit each time.
+- [ ] On the Ryzen: the monitor moved from one socket to the other and back, lit each time. (Moved once on 2026-11-27,
+  the two monitors swapped and each lit, below; not moved back yet.)
 - [x] HDMI-A-1 alone behaves as before: its host cases pass unchanged and its lines on the Ryzen are the same (boots
   108, 109 and 113: the same mode, stage 15's watch clean, the offer 2011 to 2013 ms after step 3 began).
 
@@ -591,6 +592,14 @@ HDMI-A-2`. **The maintainer's look:** «цветные квадратики на
 machine is back on an image that takes HDMI-A-1 first (release 202611270607, boot 113: `HDMI-A-2 NOT DRIVEN … HDMI-A-1
 IS TAKEN FIRST`, its EDID read, HDMI-A-1 lit as before). Both at once is
 [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
+
+## Both sockets at once, and the monitors swapped (2026-11-27)
+
+The second socket now lights beside the first, not only alone: that is
+[213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md), which carries this branch. On its release
+202611271414 (boot 116, no bench-only commit) the maintainer swapped the two monitors between the sockets: HDMI-A-2 then
+drove the 3440x1440 monitor at 324 MHz on PHY B, and HDMI-A-1 the 1366x768 one, each in its own mode, «Поменял,
+показывает». Table 12 met PHY B warm here too, as every start came through Linux.
 
 ## Related
 
