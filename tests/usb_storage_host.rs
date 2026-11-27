@@ -3,7 +3,7 @@
 #[path = "../usb_storage/src/recovery.rs"]
 mod recovery;
 
-use recovery::{reclaim, verdict, Answer, Claim, Found, Port, Verdict, Why, HELD};
+use recovery::{again, reclaim, verdict, Again, Answer, Claim, Found, Port, Verdict, Why, HELD, RETRIES};
 
 // One interface in the model's table: its handle, whether it is SCSI over Bulk-Only, its medium's sectors (0: none), the
 // round from which usb_host offers it (a device still being set up), and whether a client holds it.
@@ -151,4 +151,31 @@ fn the_verdicts() {
     assert_eq!(verdict(Found::Other(2000), true, 1000, None), Verdict::Unused(2000));
     // Each return is logged with what tests/usb_image_smoke.py looks for.
     for why in [Why::Enumerated, Why::NewHost, Why::MediumChanged] { assert!(why.text().contains("CAME BACK"), "{:?}", why); }
+}
+
+// 000-DRV-0115: a refused READ or WRITE is tried again as Linux's SCSI layer would (scsi_check_sense, v7.0). The Ryzen's
+// boot drive refused two writes with sense key 3 ASC 03h (a write fault from its JMicron bridge), and the driver gave up
+// at once, ending a release's install.
+#[test]
+fn a_write_fault_is_tried_again_five_times_with_growing_pauses_then_given_up() {
+    let pauses: Vec<Again> = (1..=RETRIES).map(|tried| again(3, 0x03, 0x00, tried)).collect();
+    assert_eq!(pauses, [Again::After(0), Again::After(10), Again::After(20), Again::After(50), Again::After(100)]);
+    assert_eq!(again(3, 0x03, 0x00, RETRIES + 1), Again::GiveUp);
+    assert_eq!(RETRIES, 5, "Linux's SD_MAX_RETRIES");
+    // A medium error Linux takes as final is not tried again: an unrecovered read, no address mark, no record.
+    for asc in [0x11, 0x13, 0x14] { assert_eq!(again(3, asc, 0x00, 1), Again::GiveUp, "ASC {:02X}", asc); }
+    // Other medium errors are, as in Linux: a write error (0Ch) and a write fault (03h).
+    assert_eq!(again(3, 0x0C, 0x00, 1), Again::After(0));
+}
+
+#[test]
+fn an_aborted_command_and_a_device_becoming_ready_are_tried_again_but_not_what_cannot_change() {
+    // ABORTED COMMAND: an interface CRC error behind a bridge, for one (47h 03h).
+    assert_eq!(again(0xB, 0x47, 0x03, 1), Again::After(0));
+    assert_eq!(again(0xB, 0x47, 0x03, 2), Again::After(10));
+    // NOT READY: only "becoming ready" is worth a wait; no medium (3Ah) is not.
+    assert_eq!(again(2, 0x04, 0x01, 1), Again::After(0));
+    assert_eq!(again(2, 0x3A, 0x00, 1), Again::GiveUp);
+    // A hardware error, an illegal request, a protected medium, a recovered error and no sense key: never.
+    for (key, asc) in [(4u8, 0x44u8), (5, 0x24), (7, 0x27), (0, 0), (1, 0x17)] { assert_eq!(again(key, asc, 0, 1), Again::GiveUp, "key {:X}", key); }
 }
