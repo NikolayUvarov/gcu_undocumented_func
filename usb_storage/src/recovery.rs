@@ -96,3 +96,25 @@ pub fn verdict(found: Found, new_host: bool, sectors: u64, same: Option<Answer>)
         (Found::Same, Some(_)) => Verdict::Back,
     }
 }
+
+// A refused command tried again (000-DRV-0115), as Linux's SCSI layer does (scsi_check_sense, v7.0): a medium error
+// other than an unrecovered read (ASC 11h), a missing address mark (13h) or a record not found (14h), an aborted
+// command, and a device becoming ready are retried; a hardware error, an illegal request and a protected medium are
+// not. A unit attention is the driver's own case (a reset or a medium change) and is not decided here.
+/// The tries a refused READ or WRITE gets after its first, as Linux's SD_MAX_RETRIES.
+pub const RETRIES: usize = 5;
+/// What to do with a command refused with this sense: try it again after so many milliseconds, or give up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Again { After(u32), GiveUp }
+/// The decision for the `tried`-th try again (1 is the first), from the sense key, ASC and ASCQ.
+pub fn again(key: u8, asc: u8, ascq: u8, tried: usize) -> Again {
+    if tried > RETRIES { return Again::GiveUp; }
+    let retryable = match key {
+        3 => !matches!(asc, 0x11 | 0x13 | 0x14), // MEDIUM ERROR: a write fault (03h) and the like are retried
+        0xB => true,                               // ABORTED COMMAND: an interface error on the bridge's far side
+        2 => asc == 0x04 && ascq == 0x01,          // NOT READY, becoming ready
+        _ => false,
+    };
+    // Linux asks again at once; a pause that grows lets a bridge settle first (ours, not Linux's).
+    if retryable { Again::After([0, 10, 20, 50, 100][(tried - 1).min(4)]) } else { Again::GiveUp }
+}
