@@ -1,6 +1,6 @@
 # 801-UPD-0051 — A write the store refuses is done again before an install or a fetch fails
 
-**Type:** updater · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (made and its QEMU groups passed, 2026-11-27; a refused write on a real configuration left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.1, MC-12.3
+**Type:** updater · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 181, 10f8602b4c, 2026-11-27, with DRV's 000-DRV-0115; a refused write on a real configuration left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.1, MC-12.3
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # 000-KRN-0286 — The kernel's minute line in the system log
 
-**Type:** kernel, `logd` (a new stat kind: an ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made on `claude/000-KRN-0286-minute-line-in-the-log`) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel, `logd` (a new stat kind: an ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 181, 10f8602b4c, 2026-11-27; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -26,9 +26,9 @@ Why `init` or `logd` cannot simply forward it:
 
 ## Acceptance criteria
 
-- [ ] In QEMU the minute line appears in `logd`'s records as the kernel's (`dmesg -s kernel`, the services suite), and so in the boot's file on the log volume.
-- [ ] `logs 1` still shows it.
-- [ ] The gate passes.
+- [x] In QEMU the minute line appears in `logd`'s records as the kernel's: the services suite reads it from `dmesg -s kernel` (`MIND CORE KERNEL: TIMED WAITS IN MINUTE …`), in round 181's gate. The boot's file is written from the same records; QEMU does not read the file back.
+- [ ] `logs 1` still shows it. The kernel's path to `init`'s log is unchanged, but no suite reads the line there.
+- [x] The gate passes: round 181, 64 groups of 64 (10f8602b4c). Its first candidate failed the host tests on `runtime.rs`'s ABI pin at 37; b7f5c9fdb4 set it to 38.
 - [ ] On the Ryzen, the boot's file holds the minute lines. This is DRV's run.
 
 ## Related
