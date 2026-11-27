@@ -6931,9 +6931,9 @@ def link_suite(args):
             assert len(ours) >= 2, files[-2000:]
             while int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) < 75e9:
                 time.sleep(5)
-            started = re.findall(r"\[INIT\] STARTED bt_hci PID=(\d+)", vm.command("dmesg -s init", raw=True))
-            assert started, vm.command("dmesg -s init", raw=True)[-2000:]
-            require(vm.command(f"kill {started[-1]}"), "KILLED PID=")
+            live = vm.services()
+            assert "bt_hci" in live, (live, vm.command("dmesg -s bt_hci", raw=True)[-1500:], re.findall(r"\[INIT\][^\n]*bt_hci[^\n]*", vm.command("dmesg -s init", raw=True)))
+            require(vm.command(f"kill {live['bt_hci']}"), "KILLED PID=")
             deadline = time.monotonic() + 90
             while len(re.findall(r"\[VFS\] SCOPE 0x[0-9a-f]+ FOR :/bluetooth", files := vm.command("dmesg -s vfs_server", raw=True))) < 2:
                 assert time.monotonic() < deadline, files[-2000:]
