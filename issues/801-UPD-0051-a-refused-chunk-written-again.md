@@ -1,6 +1,6 @@
 # 801-UPD-0051 — A write the store refuses is done again before an install or a fetch fails
 
-**Type:** updater · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-27) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.1, MC-12.3
+**Type:** updater · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (made and its QEMU groups passed, 2026-11-27; a refused write on a real configuration left) · **Blocked by:** — · **Main task:** [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -42,7 +42,10 @@ The release sent again by hand installed. The SSD's own error log held nothing.
 
 - [x] A refused write is done again three times and no more, with the pauses in order, and the last refusal comes back. A write done at once is tried once. Shown by `tests/updater_host.rs` `a_refused_write_is_done_again_three_times_and_no_more`.
 - [x] Every staging write listed in the plan goes through `write_at`. The updater builds with no warning.
-- [ ] The updater's QEMU groups pass: "x86: the updater and an update through the link", and aarch64's.
+- [x] The updater's QEMU groups pass (2026-11-27, f7182f65a0; these show the writes that are not refused go as before, not a retry):
+  - on x32: "x86: the updater and an update through the link" (1498 s), "x86: a developer's release through the Effector agent", "x86: an update from the previous release";
+  - on acc-2: "aarch64: the updater and the modes", "aarch64: an update through the link", "aarch64: a developer's release through the Effector agent";
+  - the host tests on x32.
 - [ ] A refused write is seen written again on a real configuration: a QEMU case where the disk refuses one write (for example QEMU's `blkdebug`), or a Ryzen run with DRV, with the `WRITTEN AGAIN` line in the log and the install going on.
 
 ## Related
