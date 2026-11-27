@@ -6946,6 +6946,19 @@ def link_suite(args):
             port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
             # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
             require(link(port, "hello"), '"MIND Core link"')
+            # 000-KRN-0287: link's scopes are its own from its start. A minute on, before any storage request, a new scope
+            # elsewhere (the loader's for `check`'s own directory, as on the Ryzen's boot 104 bt_hci's) ends neither, and
+            # the put below works.
+            files = vm.command("dmesg -s vfs_server", raw=True)
+            ours = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/(?:link|firmware) \(WRITABLE\)", files)
+            assert len(ours) >= 2, files[-2000:]
+            while int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) < 75e9:
+                time.sleep(5)
+            vm.command("check files", timeout=180)
+            files = vm.command("dmesg -s vfs_server", raw=True)
+            assert re.search(r"\[VFS\] SCOPE 0x[0-9a-f]+ FOR :/check \(WRITABLE\)", files), files[-2000:]
+            for badge in ours:
+                assert f"[VFS] SCOPE {badge} ENDED" not in files, (badge, files[-2000:])
             sent = Path(temp) / "sent.bin"
             sent.write_bytes(os.urandom(64 * 1024))
             require(link(port, "put", str(sent)), "put ")
