@@ -318,3 +318,12 @@ The USB stick the Ryzen starts MIND Core from reported a write fault on 2026-11-
 - [ ] Or let DRV go on trying releases on this drive, knowing each may fail.
 
 **What waits on it:** 213-DRV-0113's three bench images (three screens lit at once), built and through QEMU, cannot reach the machine until then.
+
+**What the drive is, and what was found (2026-11-27, read from Ubuntu on the Ryzen, nothing written; the maintainer asked that the cause be found first):**
+- A Kingston SNS4151S316G, a 16 GB mSATA SSD, behind a JMicron JM20329 USB 2.0 to SATA bridge.
+- **The SSD shows no failing medium.** Its SMART values: retired blocks 0, program and erase failures 0, uncorrectable 0. Its own error log holds no error. The whole device reads with no error (16 GB at about 37 MiB/s).
+- **On the SATA link between bridge and SSD:** 2 CRC errors and 2 PHY errors in the drive's life, when not known.
+- **So the refusals most likely came from the bridge**, its own or the link's. This is a reading, not shown.
+- **What made them break the update is ours:** `usb_storage` gave up at the first refused write, where Linux tries such a refusal again up to five times. DRV mends that in 000-DRV-0115 (branch `claude/000-DRV-0115-usb-storage-retries-like-linux`, with every try again logged with its sector; its issue comes to `main` with it).
+
+**What this changes for you:** the SSD need not be replaced for what was seen. Writing the same drive again would not change the bridge. Once 0115 is on the machine, its log says how often a write needs a second try. If that is often, the adapter is the part to change.

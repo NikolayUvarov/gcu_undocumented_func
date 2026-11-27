@@ -4,10 +4,15 @@
 #[path = "../audio_gw/src/btsink.rs"] #[allow(dead_code)] mod btsink;
 use btsink::{Sink, FRAME, RING, SILENT_MS};
 
+// btsink keeps one static ring for every Sink, as the gateway has one sink: the tests take turns with it (700-DRV-0114).
+static RING_TAKEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn ring_taken() -> std::sync::MutexGuard<'static, ()> { RING_TAKEN.lock().unwrap_or_else(|e| e.into_inner()) }
+
 fn frames(pairs: &[(i16, i16)]) -> Vec<u8> { pairs.iter().flat_map(|&(l, r)| [l.to_le_bytes(), r.to_le_bytes()].concat()).collect() }
 
 #[test]
 fn what_is_played_is_read_back_in_order() {
+    let _ring = ring_taken();
     let mut s = Sink::new(7, 1_000, 4096);
     assert_eq!(s.free(32), 31);
     // Whole frames only: the last 3 bytes are left.
@@ -38,6 +43,7 @@ fn what_is_played_is_read_back_in_order() {
 
 #[test]
 fn the_level_scales_and_a_tone_fills() {
+    let _ring = ring_taken();
     let mut s = Sink::new(7, 0, 4096);
     s.out_factor = 1 << 14;
     s.play(&frames(&[(1000, -1000), (i16::MAX, i16::MIN)]));
@@ -57,6 +63,7 @@ fn the_level_scales_and_a_tone_fills() {
 
 #[test]
 fn a_sink_not_read_is_taken_as_gone() {
+    let _ring = ring_taken();
     let mut s = Sink::new(7, 5_000, 4096);
     assert!(!s.silent(5_000 + SILENT_MS));
     assert!(s.silent(5_001 + SILENT_MS));
