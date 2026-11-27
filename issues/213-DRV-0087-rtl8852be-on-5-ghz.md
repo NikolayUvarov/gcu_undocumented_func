@@ -1,6 +1,6 @@
 # 213-DRV-0087 — The RTL8852BE on 5 GHz: 20 MHz channels at 802.11a's rates
 
-**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-26: the station joins channel 100 under `00` on the Ryzen with `main`'s driver, holds it and comes back to channel 8; left: at a boot the station takes channel 8 first, which is `NET`'s, and the second Linux reference) · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver (`rtw89_wifi`, its tables and their generators) · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (2026-11-26: the station joins channel 100 under `00` on the Ryzen with `main`'s driver, holds it and comes back to channel 8; left: at a boot the station takes channel 8 first, which is `NET`'s, the second Linux reference, and channel 40, refused under `00` on 2026-11-27 and joined under `UZ`) · **Blocked by:** one run on the Ryzen; NET's way to keep the station under `00` · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -303,6 +303,37 @@ The first was read with the chip in power save. A second wants power save off an
 - **Power:** MAC 0xD200-0xD3FF; Linux's `txpwr_table` and `btc_info` as before.
 
 Linux ran VHT 80 MHz there: SCO, the bandwidth fields, RF18's width and the limits differ from this driver's 20 MHz by design.
+
+## The access point moved to channel 40: refused under `00`, joined under `UZ` (the Ryzen, 2026-11-27)
+
+Boot 112 (release 202611270533: `main` 9d6feac696 with DRV's bench commits for `display`; `rtw89_wifi`, `wlan` and
+`netstack` are `main`'s). Overnight the maintainer's access point had moved its 5 GHz BSS from channel 100 to channel
+40. The kept country was `00`, set on 2026-11-26 for channel 100. It holds for that machine and that access point
+(MC-12.1).
+
+**Under `00`, channel 40 is refused, and the station loops:**
+- `LISTEN-ONLY CHANNEL 40: A0:36:BC:11:F8:8C HEARD 73 MS AFTER THE TUNE`, so the channel was opened for sending as on
+  channel 100;
+- `WLANHW SERVICE STOPPED 1: Admission(Admission { channel: 40, failure: Admission(TssiPower) })`: the calibration's
+  12 dBm is above that channel's maximum under the world's rules, which is the rule of this task's second change;
+- the driver then ends (`THE DEVICE STOPPED CLEANLY: EXITING, SO THAT INIT STARTS A FRESH DRIVER (DEBUG)`), `wlan`
+  joins the same BSS again, and after three such starts in a minute `init` quarantines the driver for 240 s;
+- in nine minutes the station never tried the network's 2.4 GHz BSS. That part is `NET`'s and is told there
+  (`NET/2026-11-27T0547Z-DRV-the-access-point-moved-to-channel-40-under-00-the-station-loops-on-it-and-never-tries-2-4-ghz.md` on `internal-dev-messages`).
+
+**Under `UZ`, the same channel joins** (`wifi country UZ`, taken at 508.3 s once the driver was started again):
+`COUNTRY UZ: 21 CHANNELS, 4 LISTEN ONLY`, `CALIBRATION ON 40 PATH 0: … PASS` and `PATH 1: … PASS`, `DATAPATH ADMITTED
+ON CHANNEL 40`, `THE FIRMWARE TOLD: CONNECTED TO A0:36:BC:11:F8:8C ON CHANNEL 40 AS AID 22`, `AUTO-JOIN CoolNet2:
+JOINED (TRY 15)`, then an address on card 2 and the gateway answering 3 of 3.
+
+**So neither setting serves this access point on both of its channels:** `00` serves channel 100 and not 40; `UZ`
+serves 40 and not 100. The kept country is `UZ` again since this boot.
+
+**Open, DRV's:**
+- Whether the calibration can be made at a lower power on a channel whose world maximum is under 12 dBm, as the
+  vendor's flow would have it, or whether such a channel must stay closed under `00`. Not looked at yet.
+- The driver's end on an admission failure is its debug behaviour. A refusal answered to `wlan` with its reason, the
+  radio staying up, would spare the restarts and the quarantine.
 
 ## Related
 

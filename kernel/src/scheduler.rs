@@ -159,12 +159,14 @@ const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
 #[derive(Clone, Copy)]
 struct Lateness {
     minute: u64, waits: u32, late: u32, most_ms: u64, most_pid: u64, most_cpu: usize, found_late: u32,
-    idle_ipi: u32, ipi_most_ms: u64, to_ipi_most_ms: u64, idle_other: u32, behind: u32, behind_most_ms: u64, behind_pid: u64, sent: u32, held: u32,
+    idle_ipi: u32, ipi_most_ms: u64, to_ipi_most_ms: u64, idle_other: u32, behind: u32, behind_most_ms: u64, behind_pid: u64, sent: u32, held: u32, resent: u32,
 }
 impl Lateness {
-    const NONE: Lateness = Lateness { minute: 0, waits: 0, late: 0, most_ms: 0, most_pid: 0, most_cpu: 0, found_late: 0, idle_ipi: 0, ipi_most_ms: 0, to_ipi_most_ms: 0, idle_other: 0, behind: 0, behind_most_ms: 0, behind_pid: 0, sent: 0, held: 0 };
+    const NONE: Lateness = Lateness { minute: 0, waits: 0, late: 0, most_ms: 0, most_pid: 0, most_cpu: 0, found_late: 0, idle_ipi: 0, ipi_most_ms: 0, to_ipi_most_ms: 0, idle_other: 0, behind: 0, behind_most_ms: 0, behind_pid: 0, sent: 0, held: 0, resent: 0 };
 }
 const LATE_MS: u64 = 2;
+// A wake IPI whose CPU has not selected within this is sent again: a lost one would leave that CPU asleep for good (000-KRN-0283).
+const WAKE_RESEND_MS: u64 = 10;
 
 struct Scheduler {
     boot: BootInfo, tasks: Table<TaskBox>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
@@ -351,15 +353,16 @@ impl Scheduler {
     // A minute's late timed waits, kept in the ring when there were any (000-KRN-0276).
     fn report_late(&mut self, now: u64) {
         let l = core::mem::replace(&mut self.late, Lateness { minute: now / 60_000, ..Lateness::NONE });
-        if l.late == 0 { return; }
+        if l.late == 0 && l.resent == 0 { return; }
         let line = alloc::format!(
-            "MIND CORE KERNEL: TIMED WAITS IN MINUTE {}: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING\n",
-            l.minute, l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held);
+            "MIND CORE KERNEL: TIMED WAITS IN MINUTE {}: {} ENDED, {} RAN OVER {} MS LATE (MOST {} MS, PID {} ON CPU {}): {} FOUND LATE BY THE BOOT CPU'S TICK, {} ON AN IDLE CPU AFTER A WAKE IPI (THE IPI UP TO {} MS AFTER THE END, THE RUN UP TO {} MS AFTER THE IPI), {} ON AN IDLE CPU WITHOUT ONE, {} BEHIND ANOTHER TASK (MOST {} MS, BEHIND PID {}); WAKE IPIS: {} SENT, {} HELD BACK AS ONE WAS PENDING, {} SENT AGAIN AFTER {} MS WITHOUT A SELECT\n",
+            l.minute, l.waits, l.late, LATE_MS, l.most_ms, l.most_pid, l.most_cpu, l.found_late, l.idle_ipi, l.to_ipi_most_ms, l.ipi_most_ms, l.idle_other, l.behind, l.behind_most_ms, l.behind_pid, l.sent, l.held, l.resent, WAKE_RESEND_MS);
         // Kept, and in init's log too, which the shell's `logs 1` drains: after boot nothing reads the kept lines.
         crate::klog::keep(&line);
         if let Some(init) = self.tasks.iter_mut().flatten().find(|t| t.pid == 1) { for byte in line.bytes() { init.log.push(byte); } }
     }
-    // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again.
+    // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again, or
+    // again once WAKE_RESEND_MS has passed without a select (000-KRN-0283).
     // After an event only the CPUs in `readied` are looked at; the boot CPU's tick looks at every task (`every`), which
     // also finds a task whose budget period ended and bounds a missed mark to one tick. A pass over the tasks after
     // every event held the lock most of the time with 16 CPUs (171-KRN-0009).
@@ -376,7 +379,8 @@ impl Scheduler {
         self.move_waiting(&mut ready, count);
         for other in 0..count {
             if !(ready.has(other) && other != this && self.current[other] == 0) { continue; }
-            if self.woken[other] { self.late.held += 1; continue; }
+            if self.woken[other] && interrupts::milliseconds().saturating_sub(self.woken_at[other]) < WAKE_RESEND_MS { self.late.held += 1; continue; }
+            if self.woken[other] { self.late.resent += 1; }
             self.woken[other] = true; self.woken_at[other] = interrupts::milliseconds(); self.late.sent += 1;
             unsafe { cpu::wake(other); }
         }

@@ -119,6 +119,8 @@ const POLICY_LOOK_MS: u32 = 1000;
 const DISPLAY_ENGINE: (usize, usize) = (0, 0x1B000);
 const DISPLAY_MAILBOX: (usize, usize) = (0x58000, 0x1000);
 const DISPLAY_SECOND_SCREEN: (usize, usize) = (0x100_0000, 0x140_0000);
+// A third screen's pixels in BAR 0, past the second's: 20 MiB, for a second large monitor too (213-KRN-0285, DRV's 213-DRV-0113).
+const DISPLAY_THIRD_SCREEN: (usize, usize) = (0x240_0000, 0x140_0000);
 
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
 impl Minted {
@@ -1236,9 +1238,19 @@ impl Init {
                                device, before, command(), DISPLAY_ENGINE.0, DISPLAY_ENGINE.1, DISPLAY_MAILBOX.0, DISPLAY_MAILBOX.1);
                 grants.add(SLOT_DEV0, engine, 0); grants.add(SLOT_DEV1, mailbox, 0);
                 // Without either, display still reads the engine's state (213-DRV-0086 step 1): each is said.
-                match Self::bar(&mut minted, device, 0, CAP_KIND_MMIO).and_then(|frames| minted.window(frames, DISPLAY_SECOND_SCREEN)) {
+                let frames = Self::bar(&mut minted, device, 0, CAP_KIND_MMIO);
+                match frames.and_then(|frames| minted.window(frames, DISPLAY_SECOND_SCREEN)) {
                     Ok(second) => grants.add(SLOT_MEM, second, 0),
                     Err(error) => mind::println!("[INIT] display: BAR 0 {:#X}+{:#X} NOT GRANTED: {:?}", DISPLAY_SECOND_SCREEN.0, DISPLAY_SECOND_SCREEN.1, error),
+                }
+                // The third screen's pixels, and display's second client of the compositor badged for that screen, only
+                // together (display.wit 1.5, 213-KRN-0285).
+                match frames.and_then(|frames| minted.window(frames, DISPLAY_THIRD_SCREEN)) {
+                    Ok(third) => {
+                        grants.add(mind::display::SLOT_THIRD_PIXELS, third, 0);
+                        if self.running(service_index("compositor")) { grants.add(mind::display::SLOT_THIRD_SCREEN, self.badged(&mut minted, "compositor", mind::display::BADGE_THIRD_SCREEN)?, CLIENT); }
+                    }
+                    Err(error) => mind::println!("[INIT] display: BAR 0 {:#X}+{:#X} FOR A THIRD SCREEN NOT GRANTED: {:?}", DISPLAY_THIRD_SCREEN.0, DISPLAY_THIRD_SCREEN.1, error),
                 }
                 match hardware::acpi_table(b"VFCT") {
                     Some((slot, bytes)) => { minted.keep(slot); grants.add(SLOT_IRQ, slot, 0); mind::println!("[INIT] display: VBIOS: THE VFCT TABLE, {} BYTES, READ-ONLY", bytes); }

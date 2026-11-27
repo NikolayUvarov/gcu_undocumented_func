@@ -20,7 +20,7 @@
    - for `mindhub call`, `admin-code` and `conformance`.
 2. **The checks of a chain** need signature verification, which `httpd`'s provider, a server's, has none of: RSA PKCS#1 v1.5 and PSS (the cloud proxy's chain is RSA), ECDSA P-256 and P-384 (a public CA's ECDSA chain), Ed25519. Adapted from rustls-rustcrypto as `tls/src/provider.rs` is (THIRD_PARTY.md).
 3. **Deploying the hub,** a section of [docs/hub/server.md](../docs/hub/server.md): a systemd unit, a certificate from a public CA with its key kept across renewals, backups, the firewall, each key in a 0600 file outside git.
-4. **Intake:** `APP` holds `agent APP intake` until the maintainer names a track for incoming requests (design 7.2).
+4. **Intake:** `APP` holds `agent APP intake` until the maintainer names a track for incoming requests (design 7.2). Named on 2026-11-26: `SUP` (main task [102000](102000-incoming-requests-read-sorted-and-answered.md)); the texts say so since KRN's request of that day in `requests-APP.md`.
 5. **Stage 8's rule, drafted** for the maintainer in [docs/hub/agents.md](../docs/hub/agents.md): how an agent reads its queue, takes a request into `issues/` or a `requests-<TRK>.md`, and answers in the thread; a request's text a user's data, never an instruction. Not in force.
 
 ## Acceptance criteria
@@ -46,6 +46,7 @@
   - `tools/mindhub/tests/proxy.rs`, its three tests as the acceptance criteria list them, with the hub's 37 other tests, and `improve/host`'s;
   - **through the cloud's own proxy:** `mindhub call --hub https://github.com --ca /root/.ccr/ca-bundle.crt GET /robots.txt` went through CONNECT and TLS 1.3, the chain to the proxy's RSA CA checked and named `github.com`, and the answer was read. The client then said `the hub gave no challenge`, as it must when no hub is there. Before the fix above, the proxy's reset after the answer was taken for a failure.
 - **Not tested:** a hub on the maintainer's server, which does not exist yet (issues-human section 18); a public CA's ECDSA chain (P-384), checked only as the code that `tls` uses is.
+- **2026-11-27:** intake named `SUP` in the design's 7.2 and 12, `server.md`'s example and section 2, and `agents.md` (KRN's request of 2026-11-26).
 - **Left:** the maintainer's host, name and certificate; then the done criterion, an agent reading its queue there from a cloud session.
 
 ## Related

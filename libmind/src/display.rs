@@ -34,6 +34,19 @@ pub fn remote_pixel(mark: Remote, dx: isize, dy: isize, radius: isize) -> bool {
 
 /// `display`'s client of the compositor (213-KRN-0272): it offers the second screen it drives (`display.wit` 1.3).
 pub const BADGE_SCREEN: u16 = 3;
+/// `display`'s second client of the compositor (213-KRN-0285): it offers the third screen (`display.wit` 1.5).
+pub const BADGE_THIRD_SCREEN: u16 = 4;
+/// The driver screens the compositor holds: the second and the third.
+pub const DRIVER_SCREENS: usize = 2;
+/// The driver screen a caller's badge offers or lets go, from init's grant alone (MC-3.11): 0 the second, 1 the third.
+pub fn screen_of(badge: u16) -> Option<usize> {
+    match badge { BADGE_SCREEN => Some(0), BADGE_THIRD_SCREEN => Some(1), _ => None }
+}
+/// What the log calls a driver screen.
+pub fn screen_name(screen: usize) -> &'static str { if screen == 0 { "SECOND" } else { "THIRD" } }
+/// `display`'s slots for the third screen (213-KRN-0285): its pixels, a window of BAR 0, and its client of the compositor.
+pub const SLOT_THIRD_PIXELS: usize = 7;
+pub const SLOT_THIRD_SCREEN: usize = 8;
 
 /// Where the mirror of a `source`-sized screen goes on a `target`-sized one (213-KRN-0272): the largest picture of the
 /// source's shape the target holds, centred, as (x, y, width, height) on the target; at least one pixel each way.
