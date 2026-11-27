@@ -3,7 +3,7 @@
 //! it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
 //! mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2);
 //! a display driver offers it a second screen, which it mirrors the first screen into (1.3, 213-KRN-0272), kept in shape or
-//! stretched as the shell chooses (1.4, 213-KRN-0273).
+//! stretched as the shell chooses (1.4, 213-KRN-0273), and a third screen through a second client (1.5, 213-KRN-0285).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,12 +13,12 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:display";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy; `denied`: a
-/// `remote` from a client with no mark of its own (1.2), or a second screen from a client not badged
-/// `BADGE_SCREEN` (1.3), or a fit from a client with a badge (1.4); `bad-screen`: a second screen whose shape the lent
+/// `remote` from a client with no mark of its own (1.2), or a driver screen from a client not badged
+/// `BADGE_SCREEN` (1.3) or `BADGE_THIRD_SCREEN` (1.5), or a fit from a client with a badge (1.4); `bad-screen`: a second screen whose shape the lent
 /// pixels do not hold, or whose format or size the compositor does not draw (1.3). `no-screen` also answers `mirror`
 /// while no second screen is offered (1.4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -151,6 +151,9 @@ pub fn remote(endpoint: Endpoint, state: RemoteState) -> Result<core::result::Re
 /// screen shows (capture, camera, remote) drawn on it too. Offering again replaces the screen before: a monitor
 /// plugged in anew, or another mode. Nothing is drawn there before the call returns; the driver shows the pixels
 /// (unblanks its pipe) when it wants.
+/// 1.5 (213-KRN-0285): a driver badged `BADGE_THIRD_SCREEN` by init, through its second client, offers a third screen
+/// the same way, a lease of its own: each badge names one screen, which only its client offers and lets go. Each
+/// screen shows the whole first screen at its own size, with the same fit and marks.
 pub fn offer_screen(endpoint: Endpoint, width: u16, height: u16, pitch: u32, format: PixelFormat, pixels: usize) -> Result<core::result::Result<(), Error>> {
     let words = [5 | MAJOR << 8 | ((width) as usize) << 16 | ((height) as usize) << 32, ((pitch) as usize) << 0 | ((format) as usize) << 32];
     let reply = wire::call(endpoint, words, Some((pixels, false)))?;
@@ -159,7 +162,7 @@ pub fn offer_screen(endpoint: Endpoint, width: u16, height: u16, pitch: u32, for
     Ok(Ok(()))
 }
 
-/// The second screen is gone (its monitor unplugged, its pipe off): the compositor stops drawing into it and lets
+/// The caller's screen is gone (its monitor unplugged, its pipe off): the compositor stops drawing into it and lets
 /// its mapping go before it answers.
 pub fn screen_gone(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
     let words = [6 | MAJOR << 8, 0];
@@ -169,7 +172,7 @@ pub fn screen_gone(endpoint: Endpoint) -> Result<core::result::Result<(), Error>
     Ok(Ok(()))
 }
 
-/// Chooses the fit, for the second screen now and those offered after it, until the next choice or the compositor's
+/// Chooses the fit, for the driver screens now and those offered after it, until the next choice or the compositor's
 /// restart. Only a client with no badge may choose (the shell's, and the copies it lends the programs it starts);
 /// a remote path's or a driver's gets `denied`.
 pub fn mirror_fit(endpoint: Endpoint, fit: Fit) -> Result<core::result::Result<(), Error>> {
@@ -180,7 +183,8 @@ pub fn mirror_fit(endpoint: Endpoint, fit: Fit) -> Result<core::result::Result<(
     Ok(Ok(()))
 }
 
-/// The second screen and how the first is shown on it; `no-screen` while none is offered. Any client may ask.
+/// The second screen and how the first is shown on it; `no-screen` while none is offered. Any client may ask. The
+/// third screen is not in the answer (1.5).
 pub fn mirror(endpoint: Endpoint) -> Result<core::result::Result<Mirror, Error>> {
     let mut buffer = wire::Wiped(Pages::new(4096).ok_or(SysError::NoMemory)?);
     let length = {

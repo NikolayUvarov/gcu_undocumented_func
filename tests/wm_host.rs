@@ -2471,19 +2471,19 @@ fn the_run_windows_history() {
 
 #[test]
 fn the_desk_over_two_screens() {
-    use screens::{layout, Side};
+    use screens::{layout, Beside, Side};
     use tui::Rect;
     // 177-APP-0094: a 2560x1440 first screen and a 1920x1080 second, in 8x16 cells: 320x90 and 240x67.
-    let one = layout((320, 90), None);
+    let one = layout((320, 90), &[]);
     assert_eq!((one.cols, one.rows, one.screens.len()), (320, 90, 1));
-    let right = layout((320, 90), Some(((240, 67), Side::Right)));
+    let right = layout((320, 90), &[Beside { size: (240, 67), side: Side::Right, of: 0 }]);
     assert_eq!((right.cols, right.rows), (560, 90));
     assert_eq!(right.screens, vec![Rect::new(0, 0, 320, 90), Rect::new(320, 0, 240, 67)], "aligned at the first's top");
-    let left = layout((320, 90), Some(((240, 67), Side::Left)));
+    let left = layout((320, 90), &[Beside { size: (240, 67), side: Side::Left, of: 0 }]);
     assert_eq!(left.screens, vec![Rect::new(240, 0, 320, 90), Rect::new(0, 0, 240, 67)]);
-    let below = layout((320, 90), Some(((240, 67), Side::Below)));
+    let below = layout((320, 90), &[Beside { size: (240, 67), side: Side::Below, of: 0 }]);
     assert_eq!((below.cols, below.rows, below.screens[1]), (320, 157, Rect::new(0, 90, 240, 67)), "aligned at the first's left");
-    let above = layout((320, 90), Some(((240, 67), Side::Above)));
+    let above = layout((320, 90), &[Beside { size: (240, 67), side: Side::Above, of: 0 }]);
     assert_eq!((above.screens[0], above.screens[1]), (Rect::new(0, 67, 320, 90), Rect::new(0, 0, 240, 67)));
     // Which screen a cell is on; the corner neither covers goes to the nearest.
     assert_eq!((right.screen_of(10, 10), right.screen_of(400, 10), right.screen_of(319, 89)), (0, 1, 0));
@@ -2500,11 +2500,11 @@ fn the_desk_over_two_screens() {
 
 #[test]
 fn the_windows_on_two_screens() {
-    use screens::{layout, Side};
+    use screens::{layout, Beside, Side};
     // 177-APP-0094: wm's desk over a 2560x1440 first screen and a 1920x1080 second on its right, 320x90 and 240x67 cells.
     let mut desk = Desk::new(320, 90);
     desk.add(text(1, "one"));
-    desk.arrange(layout((320, 90), Some(((240, 67), Side::Right))));
+    desk.arrange(layout((320, 90), &[Beside { size: (240, 67), side: Side::Right, of: 0 }]));
     assert_eq!((desk.cols, desk.rows, desk.area(), desk.screen_area(1)), (560, 90, Rect::new(0, 1, 320, 88), Rect::new(320, 0, 240, 67)), "the bars are the first screen's");
     assert_eq!(rect(&desk, 1), (0, 1, 160, 44), "a window keeps its screen and its place when a second comes");
     assert!(desk.status().ends_with(" SCREENS=2"));
@@ -2570,7 +2570,7 @@ fn the_windows_on_two_screens() {
     assert_ne!(grid.get(100, 50).ch, '.', "the first screen's desktop is still there");
     // Alt+Shift+arrows in wm; with no screen on that side it says so.
     let mut wm = Wm::new(320, 90);
-    wm.desk.arrange(layout((320, 90), Some(((240, 67), Side::Right))));
+    wm.desk.arrange(layout((320, 90), &[Beside { size: (240, 67), side: Side::Right, of: 0 }]));
     wm.desk.add(text(5, "five"));
     wm.desk.place(5, Rect::new(10, 10, 40, 10));
     assert_eq!(wm.key(Key(event(KEY_RIGHT, 0, MOD_ALT | MOD_SHIFT))), Action::Redraw);
@@ -2578,6 +2578,45 @@ fn the_windows_on_two_screens() {
     wm.key(Key(event(KEY_RIGHT, 0, MOD_ALT | MOD_SHIFT)));
     assert_eq!(wm.notice.as_deref(), Some("To another screen: no screen is to the right of this one"));
     // Back to one screen: the second's windows come onto the first at their place and share of it.
-    wm.desk.arrange(layout((320, 90), None));
+    wm.desk.arrange(layout((320, 90), &[]));
     assert_eq!((wm.desk.cols, rect(&wm.desk, 5)), (320, (9, 8, 53, 13)));
+}
+
+#[test]
+fn the_desk_over_three_screens() {
+    use screens::{layout, Beside, Side};
+    // The Ryzen's three monitors (the maintainer's word of 2026-11-27): DP-2's 3440x1440 first, an HDMI monitor's 1366x768
+    // on each side of it; in 8x16 cells, 430x90 and 170x48.
+    let three = layout((430, 90), &[Beside { size: (170, 48), side: Side::Left, of: 0 }, Beside { size: (170, 48), side: Side::Right, of: 0 }]);
+    assert_eq!((three.cols, three.rows), (770, 90));
+    assert_eq!(three.screens, vec![Rect::new(170, 0, 430, 90), Rect::new(0, 0, 170, 48), Rect::new(600, 0, 170, 48)]);
+    // The screen beside another: the nearest on that side that shares rows with it.
+    assert_eq!((three.beside(0, Side::Left), three.beside(0, Side::Right), three.beside(1, Side::Right), three.beside(2, Side::Left)), (Some(1), Some(2), Some(0), Some(0)));
+    assert_eq!((three.beside(1, Side::Left), three.beside(0, Side::Below)), (None, None));
+    // One asked for where another already is goes past it; one beside a screen not placed yet is beside the first.
+    let past = layout((100, 50), &[Beside { size: (80, 40), side: Side::Right, of: 0 }, Beside { size: (60, 30), side: Side::Right, of: 0 }]);
+    assert_eq!(past.screens, vec![Rect::new(0, 0, 100, 50), Rect::new(100, 0, 80, 40), Rect::new(180, 0, 60, 30)]);
+    let chained = layout((100, 50), &[Beside { size: (80, 40), side: Side::Below, of: 0 }, Beside { size: (60, 30), side: Side::Right, of: 1 }, Beside { size: (10, 10), side: Side::Left, of: 7 }]);
+    assert_eq!(chained.screens, vec![Rect::new(10, 0, 100, 50), Rect::new(10, 50, 80, 40), Rect::new(90, 50, 60, 30), Rect::new(0, 0, 10, 10)]);
+    assert_eq!((chained.beside(0, Side::Right), chained.beside(1, Side::Right), chained.beside(2, Side::Above)), (None, Some(2), Some(0)));
+    // wm over the three: a window from the left screen to the middle, then to the right; the middle's sides are crossed.
+    let mut desk = Desk::new(430, 90);
+    desk.arrange(three.clone());
+    desk.add(text(1, "one"));
+    desk.place(1, Rect::new(10, 10, 60, 20));
+    assert_eq!(desk.screen_of(desk.get(1).unwrap().rect), 1);
+    assert!(desk.to_screen(1, Side::Right));
+    assert_eq!(desk.screen_of(desk.get(1).unwrap().rect), 0);
+    assert!(desk.to_screen(1, Side::Right));
+    assert_eq!(desk.screen_of(desk.get(1).unwrap().rect), 2);
+    assert!(!desk.to_screen(1, Side::Right), "nothing right of the right one");
+    desk.place(1, Rect::new(171, 10, 60, 20));
+    desk.snap(1);
+    assert_eq!(rect(&desk, 1), (171, 10, 60, 20), "the middle's left edge has a screen beyond");
+    desk.place(1, Rect::new(160, 10, 60, 20));
+    assert_eq!(rect(&desk, 1), (160, 10, 60, 20), "across the left screen and the middle");
+    // A screen gone: its windows come onto the first.
+    desk.place(1, Rect::new(700, 10, 60, 20));
+    desk.arrange(layout((430, 90), &[Beside { size: (170, 48), side: Side::Left, of: 0 }]));
+    assert_eq!(desk.screen_of(desk.get(1).unwrap().rect), 0, "the right screen gone");
 }
