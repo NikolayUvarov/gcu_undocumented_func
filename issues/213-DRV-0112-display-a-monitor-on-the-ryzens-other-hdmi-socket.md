@@ -31,8 +31,9 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
 | DDC | line 0, `DC_GPIO_DDC1` | line 1, `DC_GPIO_DDC2` |
 | HPD | pin 1: `DC_GPIO_HPD_A` bit 0, HPD 1 | pin 2: bit 8, HPD 2 |
 
-- Linux names them in that order; which printed label each socket carries is not recorded. The maintainer calls the
-  undriven one "hdmi1".
+- Linux names them in that order. **The printed labels are the other way round** (the maintainer, 2026-11-27): the
+  socket he calls HDMI2 is HDMI-A-1, the one lit first, with the 3440x1440 monitor; the socket he calls HDMI1 is
+  HDMI-A-2, with the third monitor.
 - Nothing of PHY B, of DIG back end B, of DDC2 or of HPD 2 has been read on this machine by MIND Core. What the
   firmware leaves there is not known.
 - **Corrected 2026-11-27:** this line said there is "one spare pipe", and that is wrong. The engine has four pipes:
@@ -70,10 +71,12 @@ From the survey ([213-DRV-0085](../issues-done/213-DRV-0085-the-radeons-display-
   engine left as found (boot 109, below).
 - [x] Host cases: the stages on a model with the monitor on the second socket; the guard's refusals for the first
   socket's blocks then; a monitor in each socket.
-- [ ] On the Ryzen: a monitor in the second socket lit in its own mode with the mirror on it, stage 15's watch clean,
-  the firmware's pipe unchanged, and the maintainer's look (MC-12.1).
+- [x] On the Ryzen: a monitor in the second socket lit in its own mode with the mirror on it, stage 15's watch clean,
+  the firmware's pipe unchanged, and the maintainer's look (MC-12.1). Boot 112, below, on a bench image that takes
+  HDMI-A-2 first.
 - [ ] On the Ryzen: the monitor moved from one socket to the other and back, lit each time.
-- [ ] HDMI-A-1 alone behaves as before: its host cases pass unchanged and its lines on the Ryzen are the same.
+- [x] HDMI-A-1 alone behaves as before: its host cases pass unchanged and its lines on the Ryzen are the same (boots
+  108, 109 and 113: the same mode, stage 15's watch clean, the offer 2011 to 2013 ms after step 3 began).
 
 ## Progress (2026-11-26): built and host-tested on `claude/213-DRV-0112-display-hdmi-a-2`; nothing run on the Ryzen
 
@@ -536,6 +539,58 @@ maintainer was away; the level writes nothing of the second socket but the I2C e
 
 **Not shown yet:** the read at a plug into the undriven socket while HDMI-A-1 is lit (the monitor was there from the
 start of this boot), and anything of first light.
+
+## First light and the picture on HDMI-A-2 (boots 110 to 112, 2026-11-27)
+
+Three bench images, each this branch at 029649c43 on `main` 9d6feac696 with 213-DRV-0111, the bench-only line of `init`
+and one bench-only commit of switches: `HDMI_FIRST = HdmiA2`, so that HDMI-A-2 is taken first while a monitor also
+sits in HDMI-A-1, and the survey's order. The third monitor (1366x768) is in HDMI-A-2, the second (3440x1440) in
+HDMI-A-1, which these images leave dark by design. Each image went through QEMU first ("x86: keys, shell, tools",
+"x86: services, storage, audio", the update from the release before it). It holds for that machine, those monitors and
+those releases (MC-12.1). The maintainer was at the machine («продолжай»).
+
+**Boot 110, release 202611270508 (13788a11f): `HDMI_A_2 FirstLight`, undone after its stages.**
+- `HDMI-A-2 TAKEN: HPD 2 SENSES A MONITOR, TAKEN FIRST; HDMI_A_2 FIRST_LIGHT: ITS EDID AND FIRST LIGHT'S 8 STAGES`;
+  `HDMI-A-1 NOT DRIVEN: … HDMI-A-2 IS TAKEN FIRST (HDMI_FIRST HDMI-A-2) …`; `HDMI-A-1 NOT TAKEN: ITS EDID READ OVER DDC1 ALL THE SAME`.
+- `STEP 3'S MODE: 1366x768 AT 85500 KHZ IN Hdmi SIGNALLING, THE EDID'S PREFERRED TIMING`.
+- `S1 OTG CLOCKS DONE` to `S8 PHY DONE`, each with `THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`.
+- **Stage 2:** `S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE (B008003E)`;
+  `S2 TABLE 12 DONE: 318 STEPS, 4 CALLS, 10 US OF DELAYS, 32 WRITES, 1 LEFT AS IT IS`;
+  `S2 THE PHY WAS SET UP ALREADY (SCRATCH 0x300): THE SHORT PATH, NO WRITE THROUGH ITS BUS`.
+- **Stage 6:** table 4, 33 steps, 5 writes. **Stage 8:** table 76 with `01 01 03 04 66 21 00 00 02 02 0C …`, 289 steps,
+  23 writes, among them PHY B's block (0x17B04 to 0x17BA8) and `DIG1_DIG_BE_EN_CNTL = 00000101 (WAS 00000100)`.
+- `STEP 3 RAN 8 OF 16 STAGES (112 WRITES); UNDOING STAGES 8 TO 1 AS THIS BUILD ASKS`, `U8` to `U1` undone (28, 1, 24, 3,
+  4, 20, 33 and 2 writes restored), `STEP 3 UNDONE AFTER STAGE 8 OF 16 …; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED`.
+
+**Boot 111, release 202611270515 (e327fb61a): the same, left in place.** The same lines; `STEP 3 STOPPED AFTER STAGE 8
+OF 16 AS THIS BUILD ALLOWS; 112 WRITES MADE ARE LEFT IN PLACE`; `HPD 2 FOLLOWED TOO … SENSE 1; THE SECOND OUTPUT Lit ON
+HDMI-A-2`. **The maintainer's look:** «цветные квадратики на третьем, второй черный».
+
+**Boot 112, release 202611270533 (7bd2f9829): `HDMI_A_2 Full`, all 16 stages.**
+- `S9 OTG0 COUNTED 30 FRAMES IN 500251 US: 59.969 HZ, ITS PIXEL CLOCK 268492 KHZ; THE REFERENCE CLOCK 48000 KHZ`.
+- `S10 DRAW DONE; … 1366x768 DRAWN AND READ BACK`; `S13 HUBP DONE; … THE PITCH READ BACK AS WRITTEN`.
+- `S15 WATCHED 60 FRAMES OF OTG1 IN 990 MS (60.601 HZ) WITH THE PATTERN OFF: 0 PASSED BETWEEN TWO READS; THE LONGEST GAP BETWEEN READS 2470 US`,
+  `S15 NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN 60 FRAMES`. The 60.601 is the watch's own start and end
+  within a frame, not the mode's rate (59.790 Hz by its timing).
+- `[COMPOSITOR] SECOND SCREEN 1366X768, PITCH 5632, Bgr, FROM PID 39: THE FIRST MIRRORED AT 1228X768 FROM 69,0`;
+  `S16 OFFER DONE; … OFFERED 1366x768 PITCH 5632`; `STEP 3 STOPPED AFTER STAGE 16 OF 16 …; 178 WRITES MADE ARE LEFT IN PLACE`;
+  the standing check running.
+- Every stage ended with `THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS)`.
+- **The maintainer's look:** «на третьем монитре (hdma1) видна картинка загрузочного текста mind-core-os».
+
+**What it shows, and what it does not.**
+- HDMI-A-2 lights in its monitor's own mode with the mirror on it, on the pipe HDMI-A-1 otherwise takes.
+- The rule for PHY A's FUSE0 held on hardware: the write was left unmade, the value being there already.
+- **Table 12's long path did not run:** PHY B was set up already on all three boots. Each release restarts through
+  Linux, which lights that socket when a monitor is in it. The long path would be met by a monitor plugged into a socket
+  Linux did not light. Not shown.
+- Not shown either: a plug change on HDMI-A-2 while it is the lit one, the monitor moved between the sockets with
+  both levels at `Full`, and the production order on HDMI-A-2 (these three boots used the survey's).
+
+**After it, at the maintainer's word** («до поддержки пусть работает HDMI2 (который у нас заработал первым)»): the
+machine is back on an image that takes HDMI-A-1 first (release 202611270607, boot 113: `HDMI-A-2 NOT DRIVEN … HDMI-A-1
+IS TAKEN FIRST`, its EDID read, HDMI-A-1 lit as before). Both at once is
+[213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md).
 
 ## Related
 
