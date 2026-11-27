@@ -6924,22 +6924,17 @@ def link_suite(args):
             port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
             # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
             require(link(port, "hello"), '"MIND Core link"')
-            # 000-KRN-0287: link's scopes are its own from its start. A minute on, before any storage request, another
-            # service's new scope (bt_hci started again, as on the Ryzen's boot 104) ends neither, and the put below works.
+            # 000-KRN-0287: link's scopes are its own from its start. A minute on, before any storage request, a new scope
+            # elsewhere (the loader's for `check`'s own directory, as on the Ryzen's boot 104 bt_hci's) ends neither, and
+            # the put below works.
             files = vm.command("dmesg -s vfs_server", raw=True)
             ours = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/(?:link|firmware) \(WRITABLE\)", files)
             assert len(ours) >= 2, files[-2000:]
             while int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) < 75e9:
                 time.sleep(5)
-            live = vm.services()
-            assert "bt_hci" in live, (live, vm.command("dmesg -s bt_hci", raw=True)[-1500:], re.findall(r"\[INIT\][^\n]*bt_hci[^\n]*", vm.command("dmesg -s init", raw=True)))
-            killed = vm.command(f"kill {live['bt_hci']}")
-            assert "KILLED PID=" in killed, (killed, live, vm.command("ps", raw=True)[-3000:], vm.command("dmesg -s bt_hci", raw=True)[-1500:],
-                                             re.findall(r"\[INIT\][^\n]*bt_hci[^\n]*", vm.command("dmesg -s init", raw=True)), vm.command("faults", raw=True)[-1500:])
-            deadline = time.monotonic() + 90
-            while len(re.findall(r"\[VFS\] SCOPE 0x[0-9a-f]+ FOR :/bluetooth", files := vm.command("dmesg -s vfs_server", raw=True))) < 2:
-                assert time.monotonic() < deadline, files[-2000:]
-                time.sleep(2)
+            vm.command("check files", timeout=180)
+            files = vm.command("dmesg -s vfs_server", raw=True)
+            assert re.search(r"\[VFS\] SCOPE 0x[0-9a-f]+ FOR :/check \(WRITABLE\)", files), files[-2000:]
             for badge in ours:
                 assert f"[VFS] SCOPE {badge} ENDED" not in files, (badge, files[-2000:])
             sent = Path(temp) / "sent.bin"

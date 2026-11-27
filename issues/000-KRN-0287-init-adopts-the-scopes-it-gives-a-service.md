@@ -22,8 +22,10 @@ So any scope made a minute or more after `link` started ended `link`'s two, if n
 - **The QEMU case** is in `tests/qemu_smoke.py`'s link suite, before its first `put`:
   - link's two scopes are found in `vfs_server`'s log;
   - the suite waits until the machine is up 75 s;
-  - `bt_hci` is ended and `init` starts it again with a new scope;
+  - it runs `check files`, whose own directory the loader gives as a new scope;
   - neither of link's scopes may have ended, and the `put` that follows must work.
+
+  A first form ended `bt_hci` from the shell instead, but in the link suite's machine the shell found no `bt_hci` to end.
 - **The record.** `docs/profile/bootstrap.md` says that a service's scopes are adopted for its PID.
 
 ## Acceptance criteria
