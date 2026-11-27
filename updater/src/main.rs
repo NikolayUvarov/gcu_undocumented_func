@@ -47,7 +47,7 @@ use cid::Cid;
 use dag::{Builder, CHUNK};
 use slots::{Record, RECORD};
 use plan::Kind;
-use source::{copy, sha256, Bundle, Source};
+use source::{copy, sha256, write_at, Bundle, Source};
 use store::Store;
 
 #[cfg(target_arch = "x86_64")]
@@ -766,7 +766,7 @@ impl Updater {
             if kind(f.path.as_str()) == Kind::Application && !whole(&file) {
                 if let Some((from, held)) = self.held(f) {
                     file.truncate(0).map_err(|_| Error::Write)?;
-                    if copy(&held, &mut file, 0, f.size as usize).is_ok() && file.flush().is_ok() && whole(&file) {
+                    if copy(&held, &mut file, 0, f.size as usize, &path).is_ok() && file.flush().is_ok() && whole(&file) {
                         mind::println!("[UPDATER] {}: {} OF {}: {}, {} BYTES COPIED FROM {} IN {} MS", step, index + 1, files.len(), f.path.as_str(), f.size, from,
                                        mind::time::uptime_ms() - started);
                         continue;
@@ -797,8 +797,9 @@ impl Updater {
         let signed = [("MANIFEST", &manifest[..]), ("MANIFEST.SIG", &signature[..])].into_iter();
         let chain = names.iter().zip(&roots).map(|(name, data)| (*name, &data[..])).chain([("KEYS", keys_file), ("CHANNEL", channel_file)]);
         for (name, data) in signed.chain(chain) {
-            let mut file = File::create(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::Write)?;
-            if file.write_at(0, data) != Ok(data.len()) || file.flush().is_err() { return Err(Error::Write); }
+            let path = format!("MIND/{}/{}", slot, name);
+            let mut file = File::create(&path).map_err(|_| Error::Write)?;
+            if !write_at(&mut file, 0, data, &path) || file.flush().is_err() { return Err(Error::Write); }
         }
         Ok((fetched, manifest, signature, files))
     }
@@ -1150,7 +1151,7 @@ impl Updater {
                 mind::println!("[UPDATER] INSTALL: WRITTEN AGAIN FROM BYTE {} OF {}", offset, install.size);
                 install.file.truncate(offset as usize).map_err(|_| Error::Write)?;
             }
-            if install.file.write_at(offset as usize, bytes) != Ok(bytes.len()) { return Err(Error::Write); }
+            if !write_at(&mut install.file, offset as usize, bytes, "INSTALL: THE BUNDLE") { return Err(Error::Write); }
             install.written = offset + bytes.len() as u64;
             Ok(())
         })();

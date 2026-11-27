@@ -64,6 +64,12 @@ The public keys built in are the root set's alone: `$MIND_ROOT_KEYS` (`threshold
 
 The other slot is not written while the running slot is on trial and not yet confirmed on the disk: it is then the fallback. A request runs to its end before the next one is read.
 
+**A write the store refuses** (801-UPD-0051). The updater writes it again at the same offset with the same bytes. It tries three more times, after 200, 500 and 1000 ms, and only then refuses the install or the fetch.
+- This covers every write of staging: a bundle's chunk (`install-write`), a file fetched over HTTPS, a file from a directory, a bundle or the block store, an application copied from the volume, and the slot's metadata files.
+- Each refusal goes into the log with the file, the offset and the reason (`… BYTES AT <offset> REFUSED (<why>): WRITTEN AGAIN IN <ms> MS, TRY <k> OF 4`), and a write refused every time with `… REFUSED 4 TIMES`.
+- A chunk written twice cannot pass wrong: the bundle is still checked by size and SHA-256 at commit, and every slot file by the manifest.
+- The boot records are not covered: each is read back after it is written.
+
 **Confirming a trial.** On a trial boot the kernel restarts the machine at its deadline unless `init` confirmed the boot (351-KRN-0014). Where the Effector agent runs with a server configured, `init` lifts the kernel's deadline the same way but holds the trial until the server accepts the agent's heartbeat, within 10 min of its READY (801-KRN-0242).
 - **It asks `init`.** Every second the updater asks `init` how the boot went (`init.wit` 1.13 `boot`, 000-KRN-0102; 351-UPD-0021). `init` answers at once: confirmed, refused, or still deciding.
   - Confirmed: the updater writes the record that confirms the running slot at once, the same slot and fallback, confirmed (`[UPDATER] SLOT … CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT`). It removes `system/updater/refused` if a trial was refused before.
