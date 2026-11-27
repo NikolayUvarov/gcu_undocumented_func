@@ -6933,7 +6933,9 @@ def link_suite(args):
                 time.sleep(5)
             live = vm.services()
             assert "bt_hci" in live, (live, vm.command("dmesg -s bt_hci", raw=True)[-1500:], re.findall(r"\[INIT\][^\n]*bt_hci[^\n]*", vm.command("dmesg -s init", raw=True)))
-            require(vm.command(f"kill {live['bt_hci']}"), "KILLED PID=")
+            killed = vm.command(f"kill {live['bt_hci']}")
+            assert "KILLED PID=" in killed, (killed, live, vm.command("ps", raw=True)[-3000:], vm.command("dmesg -s bt_hci", raw=True)[-1500:],
+                                             re.findall(r"\[INIT\][^\n]*bt_hci[^\n]*", vm.command("dmesg -s init", raw=True)), vm.command("faults", raw=True)[-1500:])
             deadline = time.monotonic() + 90
             while len(re.findall(r"\[VFS\] SCOPE 0x[0-9a-f]+ FOR :/bluetooth", files := vm.command("dmesg -s vfs_server", raw=True))) < 2:
                 assert time.monotonic() < deadline, files[-2000:]
