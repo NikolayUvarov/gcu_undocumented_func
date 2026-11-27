@@ -850,6 +850,18 @@ impl Init {
         scoped
     }
 
+    // The scopes made for a service's start are its own from its start (000-KRN-0287), as the loader's are a program's:
+    // vfs_server then never ends one the service has not opened yet when another scope is made a minute on.
+    fn adopt(&mut self, name: &str, pid: u64, badges: &[u16]) {
+        if badges.is_empty() { return; }
+        let Ok(keeper) = self.keeper("vfs_server") else { return };
+        let Ok(client) = ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_READER) else { return };
+        for &badge in badges {
+            if !matches!(vfs::adopt(Endpoint(client), badge, pid), Ok(Ok(()))) { mind::println!("[INIT] {}: SCOPE {:#x} NOT KEPT FOR PID {}", name, badge, pid); }
+        }
+        let _ = ipc::drop_cap(client);
+    }
+
     // The capabilities boot service `index` starts with, and what was minted for them; Err(NotFound) if its hardware is
     // absent.
     fn plan(&mut self, index: usize) -> Result<(Plan, Minted)> {
@@ -1673,9 +1685,12 @@ impl Init {
         let replaced = match self.replaced[index] { Some((object, len)) => Some((ipc::mint(object, CAP_READ, 0, 0)?, len)), None => None };
         let image = replaced.map_or(Image::Boot(unit_image(index).0), |(cap, len)| Image::Memory { cap, len });
         self.mark_start(index);
+        // Each scope's badge, read while init still holds it: the spawn moves the scopes to the service.
+        let badges: [u16; 3] = core::array::from_fn(|i| if i < taken { mind::dev::cap_info(scopes[i]).1 as u16 } else { 0 });
         let spawned = mind::process::spawn_raw(&text[..length], image, &grants.list[..grants.count], plan.flags, plan.quota);
         if let Some((cap, _)) = replaced { let _ = ipc::drop_cap(cap); }
         let pid = spawned.inspect_err(|_| { for slot in receiver.into_iter().chain(scopes[..taken].iter().copied()) { let _ = ipc::drop_cap(slot); } })?;
+        self.adopt(name, pid, &badges[..taken]);
         self.pids[index] = pid;
         self.starts[index] += 1;
         self.stopped[index] = false;
