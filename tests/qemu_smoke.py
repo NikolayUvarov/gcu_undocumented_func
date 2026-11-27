@@ -6429,6 +6429,14 @@ def escrow_check(vm):
 
 
 def services_suite(vm):
+    # 000-KRN-0286: the kernel's minute line (timed waits, wake IPIs) reaches the system log as the kernel's record, as
+    # logd reads STAT_KERNEL_LINES, so the boot's file on the log volume keeps it; a minute with a late wait writes one.
+    deadline = time.monotonic() + 240
+    while "TIMED WAITS IN MINUTE" not in (kernel := vm.command("dmesg -s kernel", raw=True)):
+        assert time.monotonic() < deadline, kernel[-1500:]
+        time.sleep(10)
+    assert re.search(r"MIND CORE KERNEL: TIMED WAITS IN MINUTE \d+: \d+ ENDED", kernel), kernel[-1500:]
+    print("PASS: the kernel's minute line is in the system log as the kernel's record (STAT_KERNEL_LINES, 000-KRN-0286)", flush=True)
     # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor;
     # the clock's client that may set it (211-KRN-0051) and audio_gw's that may change the levels (000-KRN-0118).
     real = vm.services()

@@ -1,6 +1,6 @@
 # 000-KRN-0286 — The kernel's minute line in the system log
 
-**Type:** kernel, `logd` (a new stat kind: an ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel, `logd` (a new stat kind: an ABI change) · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made on `claude/000-KRN-0286-minute-line-in-the-log`) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -16,7 +16,7 @@ Why `init` or `logd` cannot simply forward it:
 - reading a task's log needs process control, which neither holds;
 - draining `init`'s log would take away the lines the QEMU suites read with `logs 1`.
 
-## Plan
+## Plan (made)
 
 - **A small ring of lines meant for the system log.** The kernel keeps them (the minute line now), apart from the kept ring.
 - **A new stat kind, `STAT_KERNEL_LINES`**, an observation, which `logd` already holds. It answers with the bytes written past a cursor the reader passes, and the new cursor, so a reader drains nothing.
@@ -26,7 +26,7 @@ Why `init` or `logd` cannot simply forward it:
 
 ## Acceptance criteria
 
-- [ ] In QEMU the minute line appears in `logd`'s records, and so in the boot's file on the log volume.
+- [ ] In QEMU the minute line appears in `logd`'s records as the kernel's (`dmesg -s kernel`, the services suite), and so in the boot's file on the log volume.
 - [ ] `logs 1` still shows it.
 - [ ] The gate passes.
 - [ ] On the Ryzen, the boot's file holds the minute lines. This is DRV's run.

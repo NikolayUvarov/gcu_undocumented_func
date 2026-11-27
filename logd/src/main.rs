@@ -12,10 +12,11 @@ use mind::idl::{log, wire};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 use mind::stat;
-use ring::{Ring, NAME};
+use ring::{Ring, NAME, TEXT};
 
 const RECEIVED: usize = 9;
 const CACHE: usize = 32;
+const KERNEL_LOOK_MS: u64 = 5000; // how often the kernel's lines for the log are read (000-KRN-0286)
 
 static mut RING: Ring = Ring::new();
 
@@ -35,6 +36,18 @@ impl Names {
     }
 }
 
+// The kernel's lines for the system log from sequence number `next` on (000-KRN-0286), recorded as the kernel's (PID 0)
+// in records of the ring's size; lines the kernel no longer keeps are said as missed.
+fn kernel_lines(ring: &mut Ring, next: &mut u64, scratch: &mut [u8], now: u64) {
+    let Ok(records) = stat::read(STAT_KERNEL_LINES, *next, scratch) else { return };
+    for line in records.iter::<StatLine>() {
+        if line.seq > *next { ring.push(now, 0, "kernel", 2, "[LOGD] KERNEL LINES MISSED BEFORE THE NEXT"); }
+        let text = core::str::from_utf8(&line.text[..(line.len as usize).min(STAT_LINE_BYTES)]).unwrap_or("[LOGD] A KERNEL LINE THAT IS NOT TEXT");
+        for start in (0..text.len().max(1)).step_by(TEXT) { ring.push(now, 0, "kernel", 1, &text[start..(start + TEXT).min(text.len())]); }
+        *next = line.seq + 1;
+    }
+}
+
 fn text(name: &[u8; NAME]) -> &str { let end = name.iter().position(|&b| b == 0).unwrap_or(NAME); core::str::from_utf8(&name[..end]).unwrap_or("?") }
 
 mind::entry!(main);
@@ -46,8 +59,13 @@ fn main(_info: &'static BootInfo) {
     let now = || mind::time::uptime_ms() as u64;
     ring.push(now(), own, "logd", 1, if observe { "[LOGD] READY: 2048 RECORDS OF 200 BYTES" } else { "[LOGD] NO OBSERVE PRIVILEGE: SOURCES ARE PIDS ONLY" });
     mind::println!("[LOGD] READY");
+    let (mut kernel_next, mut kernel_at, mut lines) = (0u64, 0u64, Pages::new(8192));
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        if now().saturating_sub(kernel_at) >= KERNEL_LOOK_MS {
+            kernel_at = now();
+            if let Some(scratch) = lines.as_mut() { kernel_lines(ring, &mut kernel_next, scratch.as_mut_slice(), kernel_at); }
+        }
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, KERNEL_LOOK_MS as u32) else { continue };
         let reader = request.badge & mind::log::BADGE_READ != 0;
         let _ = match log::decode(&request, RECEIVED) {
             Ok((log::Request::Write { level, text: line }, call)) => {
