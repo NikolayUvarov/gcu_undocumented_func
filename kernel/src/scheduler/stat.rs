@@ -57,6 +57,7 @@ impl Scheduler {
             STAT_TASKS => core::mem::size_of::<StatTask>(), STAT_CPUS => core::mem::size_of::<StatCpu>(), STAT_MEMORY => core::mem::size_of::<StatMemory>(),
             STAT_PHYSMAP => core::mem::size_of::<StatPhys>(), STAT_VMAP => core::mem::size_of::<StatRegion>(), STAT_CAPS => core::mem::size_of::<StatCap>(),
             STAT_ENDPOINTS => core::mem::size_of::<StatEndpoint>(), STAT_IRQS => core::mem::size_of::<StatIrq>(), STAT_DEVICES => core::mem::size_of::<StatDevice>(),
+            STAT_KERNEL_LINES => core::mem::size_of::<StatLine>(),
             _ => return Err(ERR_INVALID),
         };
         if request.msg[0] < HEADER { return Err(ERR_INVALID); }
@@ -229,6 +230,10 @@ impl Scheduler {
                 for (out, b) in endpoints.iter_mut().zip(self.irq_bind[line as usize].iter().flatten()) { *out = b.ep as u32; }
                 out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: (interrupts::irq_masked(line) || (line as usize).checked_sub(MSI_FIRST).is_some_and(|v| self.storms[v].masked)) as u32, holders,
                     holder, count: self.accounting.irqs[line as usize], endpoints });
+            },
+            // The kept lines from sequence number `argument` on, oldest first (000-KRN-0286).
+            STAT_KERNEL_LINES => for seq in (argument as u64).max(self.lines_next.saturating_sub(STAT_LINES as u64))..self.lines_next {
+                out.push(self.lines[(seq % STAT_LINES as u64) as usize]);
             },
             STAT_DEVICES => for device in self.devices.iter() {
                 let (mut bar_sizes, mut io_bars) = ([0u64; 6], 0u32);

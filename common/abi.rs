@@ -74,12 +74,12 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // ABI 35: it sets BOOT_LAST_RUN_FAULTED when the last run of the same slot ended in a fault of its own, recorded in a
 // firmware variable (801-KRN-0261). ABI 36: PLATFORM_BOOT_VOLUME gives the boot volume the loader read into memory, and
 // `ramdisk#2` serves it, read-only (352-KRN-0268). ABI 37 moves SLOT_DYNAMIC to 47 for SLOT_INSTALL, the shell's client of the
-// installer on a live boot (352-KRN-0269).
+// installer on a live boot (352-KRN-0269). ABI 38 adds STAT_KERNEL_LINES, the kernel's lines for the system log (000-KRN-0286).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 37;
+pub const ABI_VERSION: u32 = 38;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -815,6 +815,11 @@ pub const STAT_CAPS: usize = 6;
 pub const STAT_ENDPOINTS: usize = 7;
 pub const STAT_IRQS: usize = 8;
 pub const STAT_DEVICES: usize = 9;
+// The kernel's lines for the system log, the last STAT_LINES (000-KRN-0286): `msg[1]` is the first sequence number wanted,
+// so a reader drains nothing and sees what it missed as a gap in the numbers.
+pub const STAT_KERNEL_LINES: usize = 10;
+pub const STAT_LINES: usize = 8;
+pub const STAT_LINE_BYTES: usize = 496;
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatHeader { pub version: u32, pub record_size: u32, pub count: u32, pub total: u32 }
 // What a task waits for (StatTask.wait); wait_on is the endpoint index, IRQ line or the server's PID.
 pub const WAIT_NONE: u8 = 0; pub const WAIT_SEND: u8 = 1; pub const WAIT_RECEIVE: u8 = 2; pub const WAIT_REPLY: u8 = 3;
@@ -861,3 +866,5 @@ pub const REGION_READ: u32 = 1; pub const REGION_WRITE: u32 = 2; pub const REGIO
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub holders: u32, pub holder: u64, pub count: u64, pub endpoints: [u32; IRQ_SHARERS] }
 // `location`: bus << 8 | device << 3 | function; `io_bars`: bit i set if BAR i is an I/O port range.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatDevice { pub class: u32, pub irq: u32, pub bar_sizes: [u64; 6], pub holder: u64, pub location: u32, pub io_bars: u32 }
+// One kernel line: its sequence number from the boot, its length and its text (ASCII, no newline).
+#[derive(Clone, Copy)] #[repr(C)] pub struct StatLine { pub seq: u64, pub len: u32, pub reserved: u32, pub text: [u8; STAT_LINE_BYTES] }

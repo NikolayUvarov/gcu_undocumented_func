@@ -6726,6 +6726,14 @@ def services_suite(vm):
     blockstore_check(vm)
     escrow_check(vm)
     reader_badges_check(vm)
+    # 000-KRN-0286, last (each dmesg is a program, which moves the PIDs the checks above expect): the kernel's minute line
+    # reaches the system log as the kernel's record, as logd reads STAT_KERNEL_LINES, so the boot's file keeps it.
+    deadline = time.monotonic() + 240
+    while "TIMED WAITS IN MINUTE" not in (kernel := vm.command("dmesg -s kernel", raw=True)):
+        assert time.monotonic() < deadline, kernel[-1500:]
+        time.sleep(10)
+    assert re.search(r"MIND CORE KERNEL: TIMED WAITS IN MINUTE \d+: \d+ ENDED", kernel), kernel[-1500:]
+    print("PASS: the kernel's minute line is in the system log as the kernel's record (STAT_KERNEL_LINES, 000-KRN-0286)", flush=True)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
