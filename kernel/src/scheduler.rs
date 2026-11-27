@@ -177,7 +177,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize, u64); EXIT_STATUSES], ended_next: usize, // (PID, reason, spawner's PID) of the last tasks that ended (EXIT_STATUS)
-    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], woken_at: [u64; cpu::MAX], late: Lateness, readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
+    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], woken_at: [u64; cpu::MAX], late: Lateness, lines: [StatLine; STAT_LINES], lines_next: u64, readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
     on_cpu: [Vec<usize>; cpu::MAX], // each CPU's task slots in order, sized to them: added at spawn, removed at reap
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
@@ -262,7 +262,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], woken_at: [0; cpu::MAX], late: Lateness::NONE, readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], woken_at: [0; cpu::MAX], late: Lateness::NONE, lines: [StatLine { seq: 0, len: 0, reserved: 0, text: [0; STAT_LINE_BYTES] }; STAT_LINES], lines_next: 0, readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, tree: tree::Tree::new(), revoking: Vec::new(), revocation: [const { None }; cpu::MAX], devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, wanted: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS], console: None, states_second: 0 }); }
     crate::serial_only(&alloc::format!("MIND CORE KERNEL: TASK STATES AT {:#X}, {} BYTES, EACH SECOND\n", core::ptr::addr_of!(STATES) as usize, STATES_BYTES));
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
@@ -360,6 +360,15 @@ impl Scheduler {
         // Kept, and in init's log too, which the shell's `logs 1` drains: after boot nothing reads the kept lines.
         crate::klog::keep(&line);
         if let Some(init) = self.tasks.iter_mut().flatten().find(|t| t.pid == 1) { for byte in line.bytes() { init.log.push(byte); } }
+        self.for_the_log(line.trim_end());
+    }
+    // A line for the system log, which logd reads with STAT_KERNEL_LINES (000-KRN-0286): the last STAT_LINES are kept.
+    fn for_the_log(&mut self, text: &str) {
+        let len = text.len().min(STAT_LINE_BYTES);
+        let line = &mut self.lines[(self.lines_next % STAT_LINES as u64) as usize];
+        (line.seq, line.len) = (self.lines_next, len as u32);
+        line.text[..len].copy_from_slice(&text.as_bytes()[..len]);
+        self.lines_next += 1;
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again, or
     // again once WAKE_RESEND_MS has passed without a select (000-KRN-0283).
