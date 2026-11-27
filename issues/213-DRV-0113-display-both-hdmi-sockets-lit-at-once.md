@@ -189,19 +189,21 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
      counts in "Progress").
 2. **Read on the machine first** (a bench build in the survey's order, HDMI-A-1 lit, nothing written for the second;
    setting (a) in "Progress"):
-   - [ ] step 1 with pipe 1 running, its batches 9 and 10 naming the firmware's pipe;
-   - [ ] DPP2's DTO, MPCC2 and mux 2 recorded here (batches 13 and 14).
+   - [x] step 1 with pipe 1 running, its batches 9 and 10 naming the firmware's pipe (boot of 202611271307, below);
+   - [x] DPP2's DTO, MPCC2 and mux 2 recorded here (batches 13 and 14; below).
 3. **First light on the third pipe** (setting (b) on the first boot, `SECOND_HDMI FirstLightUndone`; then (c); the
    survey's order, a person at the machine. `UNDO_AFTER_STAGES` stays off: it would undo HDMI-A-1 too, and then no second
    run is made. PHY B's table 12 took its short path on boots 110 and 111; its long path has never run on this
    hardware, 213-DRV-0097):
-   - [ ] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop;
-   - [ ] the firmware's pipe and pipe 1 read as before after each stage;
-   - [ ] the maintainer's look (MC-12.1).
+   - [ ] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop (not looked at apart: the
+     run below went through first light to the picture in one boot);
+   - [x] the firmware's pipe and pipe 1 read as before after each stage (below: `THE OTHER TWO PIPES UNCHANGED` after
+     each of the 16);
+   - [x] the maintainer's look (MC-12.1), at the picture of stage 4 (below).
 4. **The third screen offered** (213-KRN-0285; settings (d) and (e) in "Stage 4"):
    - [x] HDMI-A-2's surface in the second window (slot 7), offered as the third screen through slot 8, `display.wit`
      1.5 (on the model only);
-   - [ ] the mirror on both HDMI monitors in their own modes;
+   - [x] the mirror on both HDMI monitors in their own modes (the Ryzen, release 202611271307, below);
    - [ ] the standing check clean on three pipes for an hour.
 5. **Plugged and unplugged:**
    - [x] either HDMI monitor taken out and put back, the other's picture undisturbed (on the model only);
@@ -543,6 +545,53 @@ third screen while still waiting on the same watermark question. Stage 4 (each o
 1:1, with stage 9's rule as it stands) needs KRN's asks but no new derivation. If KRN's asks wait long, the scaler is the
 way to a picture on HDMI-A-2 without them: then 2.52 by 1.875 at 4 taps (or 8), DLG built from DML's formulas, a bench
 build that undoes after the watch, and Linux's dtn log for the same two modes as the reference.
+
+## Three screens at once on the Ryzen (2026-11-27, release 202611271307)
+
+The bench image `claude/DRV-ryzen-bench-48-three-screens-retries` 0256effd5: `main` f32ba90c93 (which carries
+213-KRN-0285's slots and 700-KRN-0284), this branch, 000-DRV-0115, and one bench-only commit of switches, setting (d):
+`SECOND_HDMI Full`, `HDMI_A_2 Full`, `HDMI_FIRST HdmiA1`, the survey's order. Through QEMU first: "x86: keys, shell,
+tools" and "x86: services, storage, audio" on LEG9, and the update from the release before on x32-128. On acc-1 the same
+two groups failed early once, at a step that is not display's (`svc stop tts`); see the bench log. The monitors: DP-2
+2560x1600 (the firmware's), HDMI-A-1 3440x1440, HDMI-A-2 1366x768. It holds for that machine, those monitors and that
+release (MC-12.1).
+
+**The first HDMI run, as before:** HDMI-A-1 lit in 16 stages; `[COMPOSITOR] SECOND SCREEN 3440X1440, PITCH 13824 …
+THE FIRST MIRRORED AT 2304X1440 FROM 568,0; THE ONE BEFORE LET GO IN 0 US, MAPPED IN 42 US, DRAWN IN 8568 US`.
+
+**The second HDMI run, beside it** (142.3 s to 283.0 s of uptime; slow because of the survey's order):
+- `BAR 0 FOR A THIRD SCREEN (SLOT 7): 20480 KIB GRANTED`, `A SECOND CLIENT OF THE COMPOSITOR (SLOT 8, THE THIRD SCREEN'S): GRANTED`.
+- `HDMI-A-2 TAKEN SECOND, AFTER HDMI-A-1'S STAGES: HPD 2 SENSES A MONITOR THERE TOO (SECOND_HDMI FULL …)`.
+- `HDMI-A-2: STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING; MARKS OTG0 0000 OTG1 5A5A OTG2 0000 OTG3 0000`,
+  then `S0 THE FIRMWARE'S PIPE (AS STEP 1 FOUND): OTG0 OPP0 DIG E FRONT END, PHY E` and `S0 STEP 3'S PIPE: OTG2 OPP2 DIG B
+  FRONT END, PHY B (HDMI-A-2), HPD 2`.
+- **Pipe 2 as the firmware left it** (batches 13 and 14, 36 and 62 registers, nothing written): OTG2 not running, its
+  clock off; OPP2's clock off, DPG2 off; HUBP2's and DPP2's power domains on; `DPPCLK DTO CTRL 00000000, DTO2 0/0`;
+  `MPCC2 TOP 2 BOT 2 OPP 2 MODE 1 ALPHA 255 (CONTROL FFFF0461); MPC_OUT MUX 2: 2`; `HUBP2 DCHUBP_CNTL 000F002B (BLANK 1,
+  VTG_SEL 2, TTU_DISABLE 0)`; `DPP2 CONTROL F0000000 (CLOCK 0)`.
+- **Stage 2:** `S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS … (B028003E)`, the value HDMI-A-1's own stage 2
+  had left; `S2 TABLE 12 DONE: 318 STEPS, 4 CALLS, 10 US OF DELAYS, 32 WRITES, 1 LEFT AS IT IS`; `THE PHY WAS SET UP
+  ALREADY (SCRATCH 0x300): THE SHORT PATH`.
+- `S1` to `S16` each `DONE; THE OTHER TWO PIPES UNCHANGED`. Table 4: 33 steps, 5 writes; table 76: 289 steps, 23
+  writes; `S9 … OTG0 AT 268498 KHZ`; `S10 DRAW DONE; … 1366x768 DRAWN AND READ BACK`; `S13 … THE PITCH READ BACK AS
+  WRITTEN`.
+- `S15 NO NEW UNDERFLOW: HUBP0 AND ODM0 (THE FIRMWARE'S), HUBP2 AND ODM2, HUBP1 AND ODM1 (HDMI-A-1'S)`;
+  `S15 WATCHED 60 FRAMES OF OTG2 IN 990 MS … 0 PASSED BETWEEN TWO READS`;
+  `S15 NO UNDERFLOW OR REQUEST TIMEOUT ON ANY OF THE THREE PIPES IN 60 FRAMES`.
+- `[COMPOSITOR] THIRD SCREEN 1366X768, PITCH 5632, Bgr, FROM PID 39: THE FIRST MIRRORED AT 1228X768 FROM 69,0; THE ONE
+  BEFORE LET GO IN 0 US, MAPPED IN 35 US, DRAWN IN 2171 US`.
+- `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit: 16 STAGES IN PLACE, 422 REGISTERS READ, 178 WRITES, 140767 MS; HDMI-A-1 Lit ON
+  OTG1; OFFERED AS THE THIRD SCREEN THROUGH SLOT 8`.
+
+**The maintainer's look:** «все три светятся и отображают загрузочные сообщения» (all three lit, showing the boot
+messages), and, asked whether the third has bars at its sides: «Да, полосы есть».
+
+**What it shows and what not:**
+- Three pipes fetched at once, each with no underflow or request timeout, on the firmware's clocks and watermarks.
+- DPP2 ran on DTO2 as the firmware left it (0/0): stage 11 writes no DTO, and the picture came. Why that suffices is
+  not known.
+- Not yet: an hour of the standing check on three pipes, plug changes on the machine, the production order (setting
+  (e)), table 12's long path, and a start not through Linux.
 
 ## Not known
 
