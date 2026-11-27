@@ -399,13 +399,19 @@ pub fn read_into(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Ou
 }
 
 /// Step 1 as `read_into`, with `ours` the timing generators display runs itself (213-DRV-0113): batch 2 counts them out of
-/// the running, so that batches 9 and 10 still name the firmware's pipe beside display's.
+/// the running, so that batches 9 and 10 still name the firmware's pipe beside display's. First the four timing
+/// generators' marks, read in either order, kept and named: a second run tells display's own by them.
 pub fn read_into_beside(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Out, store: &mut Store, ours: [bool; 4]) -> Report {
     let allowed = allowed.min(BATCHES);
     out.line(format_args!("STEP 1: THE ENGINE'S STATE IN {} BATCHES, READ ONLY; THIS BUILD MAY READ {}", BATCHES, allowed));
     let mut known = Known::default();
     let mut report = Report::default();
-    if ours.iter().any(|&o| o) { out.line(format_args!("STEP 1 BESIDE DISPLAY'S OWN OTG{}{}{}{}: COUNTED OUT OF THE RUNNING", ours[0] as u8, ours[1] as u8, ours[2] as u8, ours[3] as u8)); }
+    if ours.iter().any(|&o| o) {
+        let marks = [0u8, 1, 2, 3].map(|t| R::OtgVerticalInterrupt2Position.at(t).and_then(|r| bus.read(r)));
+        for (t, v) in marks.iter().enumerate() { if let Some(v) = v { store.set(R::OtgVerticalInterrupt2Position, t as u8, *v); report.registers_read += 1; } }
+        out.note(format_args!("STEP 1 BESIDE DISPLAY'S OWN OTG{}{}{}{}: COUNTED OUT OF THE RUNNING; MARKS OTG0 {} OTG1 {} OTG2 {} OTG3 {} ({:04X}: DISPLAY'S)",
+            ours[0] as u8, ours[1] as u8, ours[2] as u8, ours[3] as u8, Mark(marks[0]), Mark(marks[1]), Mark(marks[2]), Mark(marks[3]), crate::light::RESTART_MARK));
+    }
     for batch in 1..=BATCHES {
         out.part();
         let list = plan(batch, &known);

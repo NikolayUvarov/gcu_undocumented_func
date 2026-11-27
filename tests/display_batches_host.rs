@@ -641,7 +641,8 @@ fn beside_display_s_running_otg_batches_9_and_10_still_read_the_firmwares_pipe_a
     let (report, store, l) = read([false, true, false, false]);
     assert_eq!((report.batches_read, store.batches()), (11, 11));
     assert!(store.get(R::HubpreqRefFreqToPixFreq, 0).is_some() && store.get(R::DppControl, 0).is_some() && store.get(R::DppControl, 1).is_none());
-    assert!(l[1] == "STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING", "{:?}", &l[..3]);
+    assert!(l[1] == "STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING; MARKS OTG0 0000 OTG1 0000 OTG2 0000 OTG3 0000 (5A5A: DISPLAY'S)", "{:?}", &l[..3]);
+    assert_eq!((0..4u8).map(|t| store.get(R::OtgVerticalInterrupt2Position, t)).collect::<Vec<_>>(), vec![Some(0); 4]);
     assert!(l.iter().any(|x| x.starts_with("B9 HUBP0: VIEWPORT 2560x1600")));
     // read_into is the same as beside nothing.
     let events: Events = Rc::new(RefCell::new(Vec::new()));

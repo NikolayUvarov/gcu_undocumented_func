@@ -65,14 +65,17 @@ impl fmt::Display for Args<'_> {
 
 /// The build switches kept for bring-up (213-DRV-0099), all off in a release: the survey's order (213-DRV-0098), the
 /// stages undone after they ran, fewer stages than all 16, HDMI-A-2 driven further than its blocks read, and HDMI-A-2
-/// taken first when both sockets have a monitor (213-DRV-0112). They change only what `Light` does.
+/// taken first when both sockets have a monitor (213-DRV-0112), and a second HDMI run beside the first (213-DRV-0113).
+/// They change only what `Light` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2, pub hdmi_first: HdmiFirst }
+pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2, pub hdmi_first: HdmiFirst, pub second_hdmi: SecondHdmi }
 
 impl Bringup {
-    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1 };
+    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1,
+                                           second_hdmi: SecondHdmi::Off };
     pub fn is_release(&self) -> bool {
         !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES && self.hdmi_a_2 == HdmiA2::Read && self.hdmi_first == HdmiFirst::HdmiA1
+            && self.second_hdmi == SecondHdmi::Off
     }
 }
 
@@ -85,6 +88,8 @@ impl fmt::Display for Bringup {
         if self.stages_allowed < STAGES { write!(f, " STAGES_ALLOWED {} OF {}", self.stages_allowed, STAGES)?; }
         if self.hdmi_a_2 != HdmiA2::Read { write!(f, " HDMI_A_2 {}", self.hdmi_a_2.word())?; }
         if self.hdmi_first != HdmiFirst::HdmiA1 { write!(f, " HDMI_FIRST {}", self.hdmi_first.word())?; }
+        // Named only: its word, with every switch set, would take the line past 180 bytes; the start's lines name it.
+        if self.second_hdmi != SecondHdmi::Off { f.write_str(" SECOND_HDMI")?; }
         f.write_str("; ONLY WHAT LIGHT DOES CHANGES")
     }
 }
@@ -115,6 +120,24 @@ impl HdmiFirst {
     pub fn word(self) -> &'static str { match self { HdmiFirst::HdmiA1 => "HDMI-A-1", HdmiFirst::HdmiA2 => "HDMI-A-2" } }
 }
 
+/// The second HDMI run (213-DRV-0113), beside the first socket lit, on the other socket's monitor: none, as a release does;
+/// the pipe it would take read first and its stages described; first light's eight stages there, left in place or undone
+/// after them. On HDMI-A-2 never further than `HdmiA2` lets display go; STAGES_ALLOWED bounds it too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecondHdmi { Off, Read, FirstLight, FirstLightUndone }
+
+impl SecondHdmi {
+    pub fn word(self) -> &'static str {
+        match self { SecondHdmi::Off => "OFF", SecondHdmi::Read => "READ", SecondHdmi::FirstLight => "FIRST_LIGHT", SecondHdmi::FirstLightUndone => "FIRST_LIGHT_UNDONE" }
+    }
+    pub fn what(self) -> &'static str {
+        match self {
+            SecondHdmi::Off => "NONE", SecondHdmi::Read => "ITS PIPE READ FIRST, ITS STAGES DESCRIBED",
+            SecondHdmi::FirstLight => "FIRST LIGHT'S 8 STAGES, LEFT IN PLACE", SecondHdmi::FirstLightUndone => "FIRST LIGHT'S 8 STAGES, UNDONE AFTER THEM",
+        }
+    }
+}
+
 /// What display's start does, from the setting and the build's bring-up switches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
@@ -137,6 +160,8 @@ pub struct Plan {
     pub hdmi_a_2: HdmiA2,
     /// Which socket is taken when both have a monitor (213-DRV-0112).
     pub hdmi_first: HdmiFirst,
+    /// The second HDMI run beside the first (213-DRV-0113).
+    pub second_hdmi: SecondHdmi,
 }
 
 impl Plan {
@@ -147,6 +172,12 @@ impl Plan {
     pub fn takes(&self, o: &Output) -> bool { *o != HDMI_A_2 || !self.writes() || self.hdmi_a_2 >= HdmiA2::Edid }
     /// Whether step 2 reads `o`'s EDID.
     pub fn edid_on(&self, o: &Output) -> bool { self.edid && (*o != HDMI_A_2 || self.hdmi_a_2 >= HdmiA2::Edid) }
+    /// How many stages the second HDMI run may run on `o` (213-DRV-0113): first light's at most, as `stages_on` bounds `o`.
+    pub fn second_stages(&self, o: &Output) -> u8 {
+        match self.second_hdmi { SecondHdmi::Off | SecondHdmi::Read => 0, _ => self.stages_on(o).min(FIRST_LIGHT) }
+    }
+    /// Whether the second HDMI run's stages are undone after they ran.
+    pub fn second_undone(&self) -> bool { self.second_hdmi == SecondHdmi::FirstLightUndone }
     /// How many stages `o` may run.
     pub fn stages_on(&self, o: &Output) -> u8 {
         if *o != HDMI_A_2 { return self.stages; }
@@ -160,7 +191,7 @@ impl Plan {
 pub fn plan(setting: Setting, b: Bringup) -> Plan {
     let order = if b.survey_order { Order::Survey } else { Order::Production };
     let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES,
-                      hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1 };
+                      hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1, second_hdmi: SecondHdmi::Off };
     match setting {
         Setting::Off => none,
         Setting::Read => Plan { batches: BATCHES, ..none },
@@ -170,7 +201,7 @@ pub fn plan(setting: Setting, b: Bringup) -> Plan {
             let follows = stages > 0 && !b.undo_after_stages;
             let standing_check = follows && stages >= 15;
             Plan { batches: BATCHES, edid: true, stages, undo_after_stages: b.undo_after_stages && stages > 0, hotplug: follows, standing_check,
-                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, hdmi_first: b.hdmi_first, ..none }
+                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, hdmi_first: b.hdmi_first, second_hdmi: b.second_hdmi, ..none }
         }
     }
 }

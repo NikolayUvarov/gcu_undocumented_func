@@ -335,6 +335,10 @@ pub enum Refusal {
     OtherRunning(u8),
     /// A back end of the board's is enabled that is neither the firmware's nor display's lit one.
     OtherBackEnd(u8),
+    /// The chosen pipe's blocks overlap those of the pipe display has lit (213-DRV-0113).
+    SharesLit,
+    /// The guard has no room left for the blocks of another lit pipe.
+    GuardFull,
     Plan(PlanError),
 }
 
@@ -357,6 +361,8 @@ impl fmt::Display for Refusal {
             Refusal::MarkedElsewhere(t) => write!(f, "OTG{} HOLDS DISPLAY'S MARK, BUT IS NOT A PIPE THIS DISPLAY LIT", t),
             Refusal::OtherRunning(t) => write!(f, "OTG{} RUNS, AND IS NEITHER THE FIRMWARE'S NOR DISPLAY'S", t),
             Refusal::OtherBackEnd(p) => write!(f, "DIG BACK END {} IS ENABLED, AND IS NEITHER THE FIRMWARE'S NOR DISPLAY'S", LETTERS[*p as usize % 5]),
+            Refusal::SharesLit => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE PIPE DISPLAY HAS LIT"),
+            Refusal::GuardFull => f.write_str("THE GUARD HAS NO ROOM LEFT FOR ANOTHER LIT PIPE'S BLOCKS"),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
             Refusal::Surface { bytes } => write!(f, "THE MODE'S SURFACE, {} BYTES, DOES NOT FIT SLOT 5'S {}", bytes, SURFACE_BYTES),
         }
@@ -525,6 +531,8 @@ fn socket_blocks(o: &Output, fe_shared: bool, add: &mut impl FnMut(u32, u32)) {
 /// route, so that table's write of it is left unmade where the register holds that value already, and refused otherwise.
 pub const TABLE12_SETS_FOR_EVERY_PHY: u32 = seg2(0x294F);
 
+/// The spans a guard refuses as other lit pipes': two pipes' blocks (18 spans each).
+const LITS: usize = 40;
 /// PHY `p`'s DPCS/RDPCS block, whose sequence the VBIOS owns.
 pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x2928 + 0xD8 * (p as u32 + 1))) }
 
@@ -534,12 +542,12 @@ pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x
 pub struct Guard {
     allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4], other: [(u32, u32); 16], others: usize,
     /// The other pipe display has lit (213-DRV-0113): its blocks, refused as the firmware's are.
-    lit: [(u32, u32); 24], lits: usize,
+    lit: [(u32, u32); LITS], lits: usize,
 }
 
 impl Guard {
     pub fn new(firmware: &Firmware, choice: &Choice) -> Result<Guard, Refusal> {
-        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4], other: [(0, 0); 16], others: 0, lit: [(0, 0); 24], lits: 0 };
+        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4], other: [(0, 0); 16], others: 0, lit: [(0, 0); LITS], lits: 0 };
         let mut deny = |a: u32, b: u32| { if g.denies < 32 { g.deny[g.denies] = (a, b); g.denies += 1; } };
         blocks(firmware.otg, firmware.opp, firmware.dig_fe, firmware.phy, &mut deny);
         for n in 0..4u32 {
@@ -569,15 +577,21 @@ impl Guard {
     /// when this route shares a block with it.
     pub fn beside(mut self, lit: &Choice) -> Result<Guard, Refusal> {
         let (Pipe { otg, opp, dig_fe }, phy) = (lit.pipe, lit.output.phy);
-        let mut refuse = |a: u32, b: u32| { if self.lits < 24 { self.lit[self.lits] = (a, b); self.lits += 1; } };
+        // A span refused already is not kept twice; one that finds no room refuses the whole pipe.
+        let mut full = false;
+        let mut refuse = |a: u32, b: u32| {
+            if self.lit[..self.lits].contains(&(a, b)) { return; }
+            if self.lits < LITS { self.lit[self.lits] = (a, b); self.lits += 1; } else { full = true; }
+        };
         blocks(otg, opp, dig_fe, phy, &mut refuse);
         let (q, o) = (otg as u32, opp as u32);
         refuse(seg2(0x5E5 + 0xDC * q), seg2(0x5E5 + 0xDC * (q + 1)));
         refuse(seg2(0xCC5 + 0x16B * q), seg2(0xCC5 + 0x16B * (q + 1)));
         refuse(seg2(0x1271 + 0x1B * q), seg2(0x1271 + 0x1B * (q + 1)));
         refuse(seg2(0x1385 + 4 * o), seg2(0x1386 + 4 * o));
+        if full { return Err(Refusal::GuardFull); }
         let overlap = self.allow[..self.allows].iter().chain(self.late.iter()).any(|&(a, b)| self.lit[..self.lits].iter().any(|&(c, d)| a < d && c < b));
-        if overlap { Err(Refusal::Overlap) } else { Ok(self) }
+        if overlap { Err(Refusal::SharesLit) } else { Ok(self) }
     }
 
     /// A write to `reg` in stage `n`: as `check`, and from stage 11 pipe 1's HUBP, DPP, MPCC and output mux too.
@@ -800,6 +814,16 @@ impl Light {
     pub fn refuse(&mut self, other: &Choice) -> Result<(), Refusal> { self.guard = self.guard.beside(other)?; Ok(()) }
     /// The pipe lit beside this run, read after each stage.
     pub fn beside_watch(&self) -> &Watch { &self.beside }
+    /// The pipe beside this run taken back (213-DRV-0113): no longer read with it; its blocks stay refused.
+    pub fn alone(&mut self, journal: &mut Journal) { (self.lit, self.beside, journal.beside) = (None, Watch::none(), None); }
+    /// This lit run with `other` lit after it (213-DRV-0113): `other`'s registers read now, kept in `journal` and read again
+    /// when this run is undone or taken back.
+    pub fn watch_beside(&mut self, other: &Choice, journal: &mut Journal, bus: &mut impl Bus) -> Result<(), Failure> {
+        let beside = Watch::pipe(other);
+        journal.beside = Some(beside.read(bus)?);
+        (self.lit, self.beside) = (Some(*other), beside);
+        Ok(())
+    }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
     /// With stage 15's watch of `frames` (at most `WATCH_FRAMES`): the build gives `SHORT_WATCH_FRAMES` only together
@@ -1029,8 +1053,11 @@ struct Done<'a> { light: &'a Light, n: u8, us: u64, t: &'a Tally, d: Option<&'a 
 impl fmt::Display for Done<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (l, n, t) = (self.light, self.n, self.t);
-        write!(f, "S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, STAGE_NAMES[n as usize - 1], l.watch.len())?;
-        if let Some(lit) = l.lit { write!(f, ", {}'S TOO ({})", name(&lit.output), l.beside.len())?; }
+        // Beside a lit pipe both named without their counts (the S0 lines give them), so that the line keeps to 180 bytes.
+        match l.lit {
+            None => write!(f, "S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, STAGE_NAMES[n as usize - 1], l.watch.len())?,
+            Some(lit) => write!(f, "S{} {} DONE; THE FIRMWARE'S AND {}'S PIPES UNCHANGED", n, STAGE_NAMES[n as usize - 1], name(&lit.output))?,
+        }
         write!(f, "; {}.{} MS", self.us / 1000, self.us % 1000 / 100)?;
         if t.writes > 0 { write!(f, ", {} WRITES", t.writes)?; }
         if t.waits > 0 { write!(f, ", {} WAITS {} US", t.waits, t.wait_us)?; }
@@ -1850,7 +1877,8 @@ pub fn standing_undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpret
     if done >= 16 { undo(light, e, interp, journal, 16, false, out); }
     for m in (1..=done.min(14)).rev() { undo(light, e, interp, journal, m, false, out); }
     let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
-    out.note(format_args!("STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT",
-        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
-    same == Some(true)
+    let lit = journal.beside.and_then(|b| light.beside.read(e).ok().map(|now| light.beside.changed(&b, &now).is_none()));
+    out.note(format_args!("STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT",
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, light.lit_too(lit)));
+    same == Some(true) && (light.lit.is_none() || lit == Some(true))
 }
