@@ -1,6 +1,6 @@
-# 000-DRV-0115 — `usb_storage` tries a refused READ or WRITE again, as Linux does
+# 000-DRV-0115 — `usb_storage` tries a refused READ or WRITE again, as Linux does — done
 
-**Type:** driver (`usb_storage`) · **Owner:** `DRV` · **Priority:** P1 (the Ryzen's self-update failed on it twice) · **Status:** in progress (2026-11-27: the change and its host cases on the branch; not run on the Ryzen) · **Blocked by:** — · **Main task:** — · **Roadmap:** the drivers track · **Constitution:** MC-6.6, MC-12.1, MC-12.2, MC-12.3
+**Type:** driver (`usb_storage`) · **Owner:** `DRV` · **Priority:** P1 (the Ryzen's self-update failed on it twice) · **Status:** done (2026-11-27) · **Blocked by:** — · **Main task:** — · **Roadmap:** the drivers track · **Constitution:** MC-6.6, MC-12.1, MC-12.2, MC-12.3
 
 ## Problem
 
@@ -40,10 +40,27 @@ Linux's quirk for this bridge (`unusual_devs.h`: `US_FL_IGNORE_RESIDUE | US_FL_S
 ## Acceptance criteria
 
 - [x] Host cases (`tests/usb_storage_host.rs`): a write fault tried again five times with its pauses and then given up; the medium errors Linux takes as final not tried again; an aborted command and a device becoming ready tried again; a hardware error, an illegal request and a protected medium never. The write-fault case fails if medium errors are not tried again.
-- [ ] The QEMU groups that use `usb_storage` pass as before.
-- [ ] On the Ryzen: releases installed through the server, and every try again (if any) in the log with its sector.
-- [ ] In `main`.
+- [x] The QEMU groups that use `usb_storage` pass as before (on the branch, on bench images that carry it, and round 181's gate).
+- [x] On the Ryzen: releases installed through the server, and every try again (if any) in the log with its sector (release 202611271414: installed by this driver, no refusal, so no try again).
+- [x] In `main` (round 181, 10f8602b4c).
 
 ## Related
 
 `issues-human/README.md` §19 (the drive), 211-DRV-0019 (a refused command explained, the data kept for a repeat), 000-DRV-0058 (a device that came back).
+
+## Resolution
+
+Done on 2026-11-27. `usb_storage` tries a refused READ or WRITE again as Linux v7.0's SCSI layer does, and logs every
+try with its sectors and the sector the device names. In `main` with round 181 (10f8602b4c).
+
+- **Why:** the Ryzen's self-update failed twice on one refused write. The boot drive's JMicron JM20329 bridge answered a
+  write fault (sense key 3, ASC 03h), and the driver gave up at once. The SSD behind the bridge shows no failing medium
+  in SMART, its own error log is empty and the whole drive reads (`issues-human/README.md` §19).
+- **Shown:**
+  - host cases of the rule;
+  - QEMU's groups on the branch and on bench images that carry it, and round 181's gate;
+  - on the Ryzen, release 202611271414 (31 MB) installed by this driver with no `STORAGE` line at all.
+- **Beside it:** UPD's 801-UPD-0051 (round 181) writes a refused chunk again in the updater before an install fails,
+  one layer up.
+- **Not shown:** a refusal met by this driver on hardware. None has come since it runs. When one comes, its line says
+  the sector and whether a try again did it.
