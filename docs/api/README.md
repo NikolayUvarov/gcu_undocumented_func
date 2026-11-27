@@ -126,7 +126,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS (1 for MEMORY: also find the largest free block), `msg[2]` = the first record to write (0: from the start; pages through any number of records, issue 171) → records written (`StatHeader` with `STAT_VERSION`, then records; a reader accepts records larger than it knows) [observe or process control] |
+| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS (1 for MEMORY: also find the largest free block; for KERNEL_LINES the first sequence number wanted: the kernel's last `STAT_LINES` lines for the system log, `StatLine`, which `logd` reads, ABI 38, 000-KRN-0286), `msg[2]` = the first record to write (0: from the start; pages through any number of records, issue 171) → records written (`StatHeader` with `STAT_VERSION`, then records; a reader accepts records larger than it knows) [observe or process control] |
 | 34 | `TASK_LIST` | `arg1` = `TaskInfo` array, `arg2` = capacity → count [observe or process control] |
 | 40 | `FAULTS` | `arg1` = `FaultInfo` array, `arg2` = capacity → count [observe or process control] |
 | 41 | `CPU_INFO` | `arg1` = CPU index → APIC id; `arg2` = online, `msg[2]` = ticks [observe or process control] |
