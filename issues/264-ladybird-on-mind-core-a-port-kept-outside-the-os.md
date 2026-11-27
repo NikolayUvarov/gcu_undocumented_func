@@ -1,8 +1,8 @@
 # 264 — Ladybird on MIND Core: a port kept outside the OS's own code
 
-**Type:** main task (a proposal) · **Owner:** tools track (`APP`), until the maintainer names another · **Priority:** the maintainer's to set · **Status:** proposal (2026-11-27): not started; the maintainer decides whether it starts · **Blocked by:** `KRN` (images over 8 MiB, TLS and threads, an application's own helper programs: `requests-KRN.md`), `DEV` ([650](650-building-on-the-target.md) stage 3: a C/C++ toolchain and a POSIX layer, no owner yet) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.3, MC-11.1, MC-11.8, MC-12.1, MC-12.3
+**Type:** main task · **Owner:** the track `LBD` (opened 2026-11-27, **later**: no session yet; written by `APP`) · **Priority:** the maintainer's to set · **Status:** later (2026-11-27): it starts when the prerequisites below are in `main` · **Blocked by:** `KRN` (images over 8 MiB, asked; TLS, threads and an application's own helpers, to be asked), `NET` (a grant for browsing, to be asked), `DEV` ([650](650-building-on-the-target.md) stages 2 and 3: a C/C++ cross toolchain and a POSIX layer in Rust; the track is open, with no owner), `UPD` (a package of this size, to be checked) · **Roadmap:** track G · **Constitution:** MC-3.1, MC-3.3, MC-11.1, MC-11.8, MC-12.1, MC-12.3
 
-**Recorded by:** the tools track, 2026-11-27, at the maintainer's question «можно ли портировать https://github.com/ladybirdbrowser/ladybird в нашу ОС», and his words on how: «создай план портирования в наиболее коротком и простом виде так, чтобы не загрязнять основную ОС другими языками». Our own browser stays a development of its own ([256](256-graphical-web-browser-current-standards-only.md), [255](255-text-web-browser.md)).
+**Recorded by:** the tools track, 2026-11-27, at the maintainer's question «можно ли портировать https://github.com/ladybirdbrowser/ladybird в нашу ОС», and his words on how: «создай план портирования в наиболее коротком и простом виде так, чтобы не загрязнять основную ОС другими языками». Our own browser stays a development of its own ([256](256-graphical-web-browser-current-standards-only.md), [255](255-text-web-browser.md)). The maintainer then: «хорошо создай план. Порт ladybird выделим в отдельный трек и начнем, когда вся подготовительная работа в других треках это позволит начать».
 
 ## What was measured (2026-11-27)
 
@@ -47,13 +47,30 @@
   - So MIND's capabilities stand where Linux's seccomp and Landlock stand.
   - Ladybird's memory safety is then the content task's own concern (MC-11.1, 11.8), and its profile says so.
 
+## When it starts
+
+It starts when every row below is done in `main` and the maintainer says so. Until then nothing of Ladybird enters the repository, not even `ports/ladybird/`.
+
+| Track | What it gives | Recorded | State (2026-11-27) |
+|---|---|---|---|
+| `KRN` | images over 8 MiB (also for large inference modules) | `requests-KRN.md`, "Programs larger than 8 MiB" | asked |
+| `KRN` | `PT_TLS`; threads in one address space and a wait on a memory word; an application starting the helpers its package names; a `vfs` file mapped with private copy-on-write pages; a larger address space and memory quota | the same request's second item, and 650 stage 3's list | to be asked when DEV's stage 3 starts |
+| `DEV` | a C/C++ cross toolchain for `x86_64-unknown-mind` and `aarch64-unknown-mind`: clang, libc++, libunwind, compiler-rt, static | [650](650-building-on-the-target.md), stage 2 | not started (the track is open; it starts after the Ryzen's network) |
+| `DEV` | the POSIX layer in Rust over `libmind`, and Rust's `std` for MIND on it | 650, stage 3, whose acceptance is a set of C and Rust `std` programs passing in QEMU | not started |
+| `NET` | a grant broad enough for browsing, and names resolved, for the package's network process | [255](255-text-web-browser.md)'s and 256's ask | to be asked when 255 or this starts |
+| `UPD` | a package of about 330 MB, with files up to about 100 MB and possibly more than `apppkg`'s 256 files | [750-UPD-0019](750-UPD-0019-signed-application-packages.md) | to be checked |
+
+Nothing is asked of `APP`: `wm` already shows a window of a program's pixels at any size.
+
 ## Plan
+
+**Steps 1 and 2 are the prerequisites above; steps 3 to 5 are `LBD`'s own,** numbered `264-LBD-0001` and on when the track starts.
 
 1. **The kernel (`KRN`, Rust):**
    - images up to some hundreds of MiB;
    - TLS (`PT_TLS`), and threads in one address space with a futex;
    - an application's package naming the helper programs it may start.
-2. **The toolchain and the runtime (`DEV`, in `ports/`):**
+2. **The toolchain and the runtime (`DEV`, in its own directories, never in the OS's):**
    - clang for `x86_64-unknown-mind` and `aarch64-unknown-mind`, static, with libc++, libunwind and compiler-rt;
    - the Rust POSIX layer over `libmind`: files, `mmap` over `MEM_SHARE`, threads, time, sockets over `netstack`, `poll`, spawn and wait;
    - Rust's `std` for MIND on it, for Ladybird's Rust parts.
