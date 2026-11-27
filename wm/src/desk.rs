@@ -84,7 +84,7 @@ pub struct Desk {
 }
 
 impl Desk {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), background: false, held: None, screens: screens::layout((cols, rows), None) } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), background: false, held: None, screens: screens::layout((cols, rows), &[]) } }
 
     /// Where windows go on the first screen: below the top bar, above the status line.
     pub fn area(&self) -> Rect { self.screen_area(0) }
@@ -96,18 +96,18 @@ impl Desk {
     pub fn area_of(&self, id: u32) -> Rect { self.get(id).map_or(self.area(), |w| self.screen_area(self.screen_of(w.rect))) }
 
     /// One screen of `cols` × `rows` after wm's scale changed (000-APP-0061), as `arrange` lays them out.
-    pub fn rescale(&mut self, cols: usize, rows: usize) { self.arrange(screens::layout((cols, rows), None)); }
+    pub fn rescale(&mut self, cols: usize, rows: usize) { self.arrange(screens::layout((cols, rows), &[])); }
 
     /// The screens laid out anew (177-APP-0094), or their cells changed with the scale: each frame keeps its screen
-    /// (the last one when its own is gone), its place and its share of it, within the new area; one maximized there
-    /// stays maximized. Every frame counts as changed.
+    /// (the first when its own is gone), its place and its share of it, within the new area; one maximized there stays
+    /// maximized. Every frame counts as changed.
     pub fn arrange(&mut self, layout: Layout) {
         let old = core::mem::replace(&mut self.screens, layout);
         (self.cols, self.rows) = (self.screens.cols, self.screens.rows);
         let frames: Vec<(u32, Rect)> = self.windows.iter().map(|w| (w.id, w.rect)).collect();
         for (id, r) in frames {
             let s = old.screen_of(r.x + r.w / 2, r.y + r.h / 2);
-            let to = s.min(self.screens.screens.len() - 1);
+            let to = if s < self.screens.screens.len() { s } else { 0 };
             let (from, dest) = (old.screens[s], self.screens.screens[to]);
             let rect = if r == screens::area(&old, s) { self.screen_area(to) } else {
                 let along = |at: usize, start: usize, len: usize, to_start: usize, to_len: usize| to_start + at.saturating_sub(start) * to_len / len.max(1);
