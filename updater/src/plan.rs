@@ -142,3 +142,19 @@ pub fn manifest_version(text: &[u8]) -> u64 {
     let line = text.split(|&b| b == b'\n').take_while(|l| !l.starts_with(b"file ")).find(|l| l.starts_with(b"version "));
     line.and_then(|l| core::str::from_utf8(&l[8..]).ok()).and_then(|v| v.parse().ok()).unwrap_or(0)
 }
+
+/// Pauses in ms before each new try of a write the store refused (801-UPD-0051): a drive's USB bridge refused one for a
+/// while on the Ryzen, and its driver's own tries take about 180 ms.
+pub const WRITE_AGAIN_MS: [u32; 3] = [200, 500, 1000];
+
+/// `write` done, and while it is refused done again after each pause of WRITE_AGAIN_MS (801-UPD-0051); `again` hears each
+/// refusal, the try that follows it (2 to 4) and the pause before it. The last refusal is what comes back.
+pub fn tried<E>(mut write: impl FnMut() -> Result<(), E>, mut again: impl FnMut(&E, usize, u32)) -> Result<(), E> {
+    let mut result = write();
+    for (index, &pause) in WRITE_AGAIN_MS.iter().enumerate() {
+        let Err(refused) = &result else { break };
+        again(refused, index + 2, pause);
+        result = write();
+    }
+    result
+}

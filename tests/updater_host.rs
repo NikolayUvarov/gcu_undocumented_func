@@ -506,3 +506,22 @@ fn a_kept_tree_out_of_shape_or_damaged_is_refused() {
     // A file's block where the root belongs.
     assert_eq!(kept::version(&mut store, &one.cid, "x86_64", &mut buffer), Err(dag::Error::Shape));
 }
+
+#[test]
+fn a_refused_write_is_done_again_three_times_and_no_more() {
+    // Refused twice, then written: three tries, the pauses before the second and the third.
+    let (mut tries, mut heard) = (0, Vec::new());
+    let result = plan::tried(|| { tries += 1; if tries <= 2 { Err(tries) } else { Ok(()) } }, |&e, next, pause| heard.push((e, next, pause)));
+    assert_eq!((result, tries), (Ok(()), 3));
+    assert_eq!(heard, [(1, 2, 200), (2, 3, 500)]);
+    // Refused every time: four tries over 1.7 s of pauses, and the last refusal back.
+    let (mut tries, mut heard) = (0, Vec::new());
+    let result = plan::tried(|| { tries += 1; Err::<(), _>(tries) }, |&e, next, pause| heard.push((e, next, pause)));
+    assert_eq!((result, tries), (Err(4), 4));
+    assert_eq!(heard, [(1, 2, 200), (2, 3, 500), (3, 4, 1000)]);
+    assert_eq!(plan::WRITE_AGAIN_MS.iter().sum::<u32>(), 1700);
+    // Written at once: one try, nothing heard.
+    let mut tries = 0;
+    assert_eq!(plan::tried(|| { tries += 1; Ok::<(), u8>(()) }, |_, _, _| panic!("no refusal")), Ok(()));
+    assert_eq!(tries, 1);
+}
