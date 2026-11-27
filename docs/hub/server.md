@@ -14,7 +14,7 @@ mindhub key admin.key        # prints the public half; the file is 0600 and stay
 mindhub key intake.key       # one key for each agent: intake, each track's, the integrator's
 mkdir hub && cat > hub/hub.conf <<EOF
 admin maintainer <admin public key>
-agent APP intake <intake public key>
+agent SUP intake <intake public key>
 agent APP track <APP's agent public key>
 agent KRN integrator <the integrator's public key>
 setting global-cap 60
@@ -83,7 +83,7 @@ WantedBy=multi-user.target
   - each admin's and agent's private key is a 0600 file on that person's or agent's machine, outside git, as the Effector key is kept; `hub.conf` holds only the public halves;
   - a cloud agent's key reaches its session the way the Effector key does, never through the chat or the repository;
   - a key that leaks is removed from `hub.conf` and the hub restarted; a new one is made and added.
-- **Intake:** `agent APP intake <key>` until the maintainer names a track for incoming requests (design 7.2).
+- **Intake:** `agent SUP intake <key>`, the key of the session that takes the track `SUP` (design 7.2, [102000](../../issues/102000-incoming-requests-read-sorted-and-answered.md)). Each track that owns requests has its `agent <TRK> track <key>`; `APP`'s is for MIND Hub's own requests.
 
 ## 3. Its data: one directory
 

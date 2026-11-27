@@ -256,7 +256,7 @@ Every request has a thread. Its messages:
 
 ### 7.2 From a request to a task
 
-1. **The intake agent** reads `new` requests as data. The maintainer names that agent; the tools session at first.
+1. **The intake agent** reads `new` requests as data. It is the track `SUP`'s (the maintainer, 2026-11-26: «заводи трек SUP для приёма заявок»; main task [102000](../../issues/102000-incoming-requests-read-sorted-and-answered.md)), so that the session that sorts users' requests is not the one that writes the hub's code.
 2. **It decides,** each answer posted in the thread:
    - it asks (`question`); or
    - it rejects, or marks a duplicate, with the reason; or
@@ -400,7 +400,7 @@ The same as `httpd` ([server.md](../update/server.md)):
 The maintainer: «Rust, остальное как предлагаешь, начинай с крейта».
 
 1. **The separate hub is in Rust,** sharing `improve/proto` and `tools/httpd`'s code (section 3). Go is not planned.
-2. **Intake is taken first by the tools session** (`APP`).
+2. **Intake is taken first by the tools session** (`APP`). Since 2026-11-26 it is `SUP`'s, at the maintainer's word (7.2).
 3. **The channels:**
    - the public channel is `stable`;
    - `test` opens at band 2 (trust 256);
