@@ -3,7 +3,7 @@
 #[allow(dead_code)]
 #[path = "../libmind/src/display.rs"]
 mod display;
-use display::{fit, placed, shown, source_of};
+use display::{fit, placed, screen_name, screen_of, shown, source_of, BADGE_REMOTE_EFFECTOR, BADGE_REMOTE_LINK, BADGE_SCREEN, BADGE_THIRD_SCREEN, DRIVER_SCREENS};
 
 #[test]
 fn the_ryzens_screens_fit_centred() {
@@ -60,4 +60,15 @@ fn a_stretched_mirror_fills_the_second_screen_each_axis_on_its_own() {
             if p >= s { assert_eq!(source_of(p - 1, p, s), s - 1); }
         }
     }
+}
+
+#[test]
+fn each_drivers_badge_names_one_screen_and_no_other_badge_names_any() {
+    // 213-KRN-0285: the second screen through BADGE_SCREEN, the third through BADGE_THIRD_SCREEN; a remote mark's client,
+    // the shell's (no badge) and any other badge offer none (MC-3.11).
+    assert_eq!(screen_of(BADGE_SCREEN), Some(0));
+    assert_eq!(screen_of(BADGE_THIRD_SCREEN), Some(1));
+    for badge in [0, BADGE_REMOTE_LINK, BADGE_REMOTE_EFFECTOR, 5, u16::MAX] { assert_eq!(screen_of(badge), None, "badge {badge}"); }
+    assert!((0..=u16::MAX).filter_map(screen_of).all(|s| s < DRIVER_SCREENS));
+    assert_eq!((screen_name(0), screen_name(1)), ("SECOND", "THIRD"));
 }
