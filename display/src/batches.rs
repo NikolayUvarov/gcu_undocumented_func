@@ -392,10 +392,17 @@ pub fn run_into(bus: &mut impl Bus, allowed: u8, out: &mut dyn Out, store: &mut 
 /// Step 1 in `order`, every value read kept in `store`. The production order reads of each batch only the registers
 /// steps 2 to 4 take (`List::used`), in the survey's order, and counts the batch read when none of them is in it.
 pub fn read_into(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Out, store: &mut Store) -> Report {
+    read_into_beside(bus, allowed, order, out, store, [false; 4])
+}
+
+/// Step 1 as `read_into`, with `ours` the timing generators display runs itself (213-DRV-0113): batch 2 counts them out of
+/// the running, so that batches 9 and 10 still name the firmware's pipe beside display's.
+pub fn read_into_beside(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Out, store: &mut Store, ours: [bool; 4]) -> Report {
     let allowed = allowed.min(BATCHES);
     out.line(format_args!("STEP 1: THE ENGINE'S STATE IN {} BATCHES, READ ONLY; THIS BUILD MAY READ {}", BATCHES, allowed));
     let mut known = Known::default();
     let mut report = Report::default();
+    if ours.iter().any(|&o| o) { out.line(format_args!("STEP 1 BESIDE DISPLAY'S OWN OTG{}{}{}{}: COUNTED OUT OF THE RUNNING", ours[0] as u8, ours[1] as u8, ours[2] as u8, ours[3] as u8)); }
     for batch in 1..=BATCHES {
         out.part();
         let list = plan(batch, &known);
@@ -420,7 +427,7 @@ pub fn read_into(bus: &mut impl Bus, allowed: u8, order: Order, out: &mut dyn Ou
             }
             values.push(n, v);
         }
-        summarize(batch, &values, &mut known, out);
+        summarize(batch, &values, &mut known, ours, out);
         report.batches_read += 1;
         // The store counts the batches read one after another from the first: steps 3 and 4 need 1 to 10 all read,
         // and batch 11 after an empty 9 or 10 does not stand for them.
@@ -487,7 +494,7 @@ pub fn read_one(bus: &mut impl Bus, batch: u8, order: Order, out: &mut dyn Out, 
         }
         values.push(n, v);
     }
-    summarize(batch, &values, &mut known, out);
+    summarize(batch, &values, &mut known, [false; 4], out);
     report.batches_read = 1;
     report
 }
@@ -512,7 +519,7 @@ fn name_only(batch: u8, list: &List, known: &Known, allowed: u8, out: &mut dyn O
 
 const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 
-fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut dyn Out) {
+fn summarize(batch: u8, v: &Values, known: &mut Known, ours: [bool; 4], out: &mut dyn Out) {
     use R::*;
     match batch {
         1 => {
@@ -523,7 +530,7 @@ fn summarize(batch: u8, v: &Values, known: &mut Known, out: &mut dyn Out) {
         }
         2 => {
             for n in 0..4 { summarize_otg(v, n, out); }
-            let running: [bool; 4] = [0u8, 1, 2, 3].map(|n| v.field(OtgControl, n, OTG_CURRENT_MASTER_EN_STATE) == Some(1));
+            let running: [bool; 4] = [0u8, 1, 2, 3].map(|n| !ours[n as usize] && v.field(OtgControl, n, OTG_CURRENT_MASTER_EN_STATE) == Some(1));
             if running.iter().filter(|&&r| r).count() == 1 { known.running_otg = running.iter().position(|&r| r).map(|t| t as u8); }
         }
         3 => {

@@ -616,3 +616,37 @@ fn batch_12_is_read_whole_in_either_order_its_values_logged_in_both_and_what_ste
     assert_eq!(l.iter().filter(|x| x.starts_with("B12 WOULD READ ")).count(), 15);
     for x in sl.iter().chain(&pl).chain(&l) { assert!(x.len() + "[DISPLAY] ".len() <= 180, "{} bytes: {}", x.len(), x); }
 }
+
+// --- step 1 beside display's own pipe (213-DRV-0113) ---
+
+#[test]
+fn beside_display_s_running_otg_batches_9_and_10_still_read_the_firmwares_pipe_and_alone_they_read_none_as_before() {
+    // Display's pipe 1 running from OPP 1 beside the firmware's OTG 0.
+    let mut st = firmware_state();
+    st.insert(reg(R::OtgControl, 1), 0x0001_0001);
+    st.insert(reg(R::OptcDataSourceSelect, 1), 1 << 8);
+    let read = |ours: [bool; 4]| {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let mut model = Model { regs: st.clone(), events: events.clone(), unmapped: BTreeSet::new() };
+        let mut store = batches::Store::default();
+        let report = batches::read_into_beside(&mut model, BATCHES, batches::Order::Survey, &mut Log(events.clone()), &mut store, ours);
+        let ev = events.borrow().clone();
+        (report, store, lines(&ev).iter().map(|x| x.to_string()).collect::<Vec<_>>())
+    };
+    // Counted as running, two OTGs: no firmware's pipe, batches 9 and 10 empty, as step 1 has always said.
+    let (report, store, l) = read([false; 4]);
+    assert_eq!((report.batches_read, store.get(R::HubpreqRefFreqToPixFreq, 0)), (9, None));
+    assert!(l.iter().any(|x| x.starts_with("B9 PIPE REFERENCE: NOTHING TO READ")));
+    // OTG 1 counted out as display's: the firmware's pipe 0 read in full, nothing of pipe 1's reference.
+    let (report, store, l) = read([false, true, false, false]);
+    assert_eq!((report.batches_read, store.batches()), (11, 11));
+    assert!(store.get(R::HubpreqRefFreqToPixFreq, 0).is_some() && store.get(R::DppControl, 0).is_some() && store.get(R::DppControl, 1).is_none());
+    assert!(l[1] == "STEP 1 BESIDE DISPLAY'S OWN OTG0100: COUNTED OUT OF THE RUNNING", "{:?}", &l[..3]);
+    assert!(l.iter().any(|x| x.starts_with("B9 HUBP0: VIEWPORT 2560x1600")));
+    // read_into is the same as beside nothing.
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let mut model = Model { regs: st.clone(), events: events.clone(), unmapped: BTreeSet::new() };
+    batches::read_into(&mut model, BATCHES, batches::Order::Survey, &mut Log(events.clone()), &mut batches::Store::default());
+    let alone: Vec<String> = lines(&events.borrow()).iter().map(|x| x.to_string()).collect();
+    assert_eq!(alone, read([false; 4]).2);
+}

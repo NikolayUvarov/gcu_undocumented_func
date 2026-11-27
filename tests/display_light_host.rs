@@ -3616,3 +3616,175 @@ fn hdmi_first_takes_hdmi_a_2_first_where_its_level_lets_it_and_hdmi_a_1_stays_da
     assert!(said(&m, "HDMI-A-2 NOT DRIVEN: HPD 2 SENSES A MONITOR THERE; THIS BUILD GOES NO FURTHER THAN ITS BLOCKS READ ONLY (HDMI_A_2 READ)"), "{:#?}", m.said);
     assert!(!m.at.0.borrow().i2c.writes.iter().any(|w| hdmi_a_2s(w.0)), "a transaction on DDC2 at level Read");
 }
+
+// --- two runs at once, each guarded against the other (213-DRV-0113) ---
+
+// Step 1's values with display's pipe 1 lit on HDMI-A-1 (OTG1 running from OPP1 with its mark, DIG A's back end fed by
+// front end A) and a monitor in HDMI-A-2.
+fn found_lit() -> Store {
+    let mut s = found_2();
+    s.set(R::HpdIntStatus, 0, 0b10);
+    s.set(R::OtgControl, 1, 0x0001_0001);
+    s.set(R::OptcDataSourceSelect, 1, 1 << 8);
+    s.set(R::OtgVerticalInterrupt2Position, 1, light::RESTART_MARK);
+    for t in [0u8, 2, 3] { s.set(R::OtgVerticalInterrupt2Position, t, 0); }
+    s.set(R::DigFeCntl, 0, 1 << 24);
+    s.set(R::DigBeCntl, 0, (1 << 0) << 8 | 2 << 16);
+    s.set(R::DigBeEnCntl, 0, 0x101);
+    s
+}
+fn choice_2() -> Choice { Choice { pipe: dcn::Pipe { otg: 2, opp: 2, dig_fe: 1 }, output: light::HDMI_A_2, attached: [false, false, true, false] } }
+
+#[test]
+fn beside_display_s_lit_pipe_the_second_output_takes_pipe_2_with_its_own_dig_and_is_refused_where_step_1_does_not_find_things_as_left() {
+    use light::{assess_beside, HDMI_A_2};
+    let (f, c1) = EXPECTED;
+    assert_eq!(assess_beside(&found_lit(), HDMI_A_2, &f, &c1), Ok((f, choice_2())));
+    // The single path refuses as before: two timing generators run.
+    assert_eq!(assess(&found_lit()), Err(Refusal::RunningOtgs(2)));
+    let refuse = |change: &dyn Fn(&mut Store)| { let mut s = found_lit(); change(&mut s); assess_beside(&s, HDMI_A_2, &f, &c1).unwrap_err() };
+    assert_eq!(refuse(&|s| s.set(R::OtgVerticalInterrupt2Position, 1, 0)), Refusal::NotMarked(1));
+    assert_eq!(refuse(&|s| s.set(R::OtgVerticalInterrupt2Position, 3, light::RESTART_MARK)), Refusal::MarkedElsewhere(3));
+    assert_eq!(refuse(&|s| s.set(R::OtgControl, 3, 0x0001_0001)), Refusal::OtherRunning(3));
+    assert_eq!(refuse(&|s| s.set(R::OtgControl, 0, 0)), Refusal::FirmwareMoved);
+    assert_eq!(refuse(&|s| s.set(R::DigBeEnCntl, 4, 0)), Refusal::FirmwareMoved);
+    assert_eq!(refuse(&|s| s.set(R::DigBeEnCntl, 1, 1)), Refusal::HdmiDriven(HDMI_A_2));
+    assert_eq!(refuse(&|s| s.set(R::DigBeEnCntl, 3, 1)), Refusal::OtherBackEnd(3));
+    assert_eq!(refuse(&|s| s.set(R::HpdIntStatus, 1, 0)), Refusal::NoMonitor(HDMI_A_2));
+    assert_eq!(refuse(&|s| s.set(R::HubpCntl, 2, 2 << 4)), Refusal::AttachedHubp(2));
+    assert_eq!(refuse(&|s| s.set(R::DmcubCntl, 0, 1 << 16)), Refusal::DmcubRuns);
+    assert_eq!(refuse(&|s| for t in 2..4u8 { s.set(R::OptcDataSourceSelect, 0, 0); s.set(R::OtgVerticalInterrupt2Position, t, light::RESTART_MARK); }), Refusal::MarkedElsewhere(2));
+    for r in [Refusal::FirmwareMoved, Refusal::NotMarked(1), Refusal::MarkedElsewhere(3), Refusal::OtherRunning(3), Refusal::OtherBackEnd(3)] { assert!(r.to_string().len() < 120, "{}", r); }
+    // HDMI-A-1 beside HDMI-A-2 lit on pipe 1 with front end B: pipe 2 and front end A.
+    let mut s = found_lit();
+    s.set(R::DigFeCntl, 0, 7); s.set(R::DigBeCntl, 0, 0); s.set(R::DigBeEnCntl, 0, 0);
+    s.set(R::DigFeCntl, 1, 1 << 24); s.set(R::DigBeCntl, 1, (1 << 1) << 8 | 3 << 16); s.set(R::DigBeEnCntl, 1, 0x101);
+    let lit2 = light::expected(HDMI_A_2).1;
+    let (_, c) = assess_beside(&s, HDMI_A_1, &f, &lit2).unwrap();
+    assert_eq!((c.pipe, c.output), (dcn::Pipe { otg: 2, opp: 2, dig_fe: 0 }, HDMI_A_1));
+}
+
+#[test]
+fn the_second_runs_guard_refuses_the_lit_pipe_as_the_firmwares_and_lets_pipe_2_and_phy_b_through() {
+    let (f, c1) = EXPECTED;
+    let l = Light::new_with(f, choice_2(), timing::CEA_1080P60, dcn::Signal::Dvi).unwrap().beside(&c1).unwrap();
+    let g = l.guard();
+    let check = |o: u32| g.check(Reg::new(o).unwrap());
+    // Pipe 1 and HDMI-A-1's output, display's lit ones: refused as the other lit pipe's, at every stage.
+    for o in [reg(R::OtgHTotal, 1), reg(R::OtgControl, 1), reg(R::OtgVerticalInterrupt2Position, 1), reg(R::OptcDataSourceSelect, 1), reg(R::VtgControl, 1),
+              reg(R::OppPipeControl, 1), reg(R::DpgControl, 1), reg(R::HubpCntl, 1), reg(R::HubpreqPrimarySurfaceAddress, 1), reg(R::DppControl, 1),
+              reg(R::MpccTopSel, 1), reg(R::MpcOutMux, 1), reg(R::DigFeCntl, 0), reg(R::DigBeCntl, 0), reg(R::DigBeEnCntl, 0), seg(2, 0x2940), seg(2, 0x286D),
+              reg(R::PhypllPixclkResyncCntl, 0), seg(1, 0xA0), reg(R::OtgPixelRateCntl, 1)] {
+        for n in [1u8, 8, 16] { assert_eq!(g.check_at(Reg::new(o).unwrap(), n).err(), Some(Refused::Lit(o)), "{:05X} at stage {}", o, n); }
+    }
+    // The firmware's first, as ever.
+    for o in [reg(R::OtgControl, 0), reg(R::DigBeCntl, 4), reg(R::HubpCntl, 0)] { assert_eq!(check(o).err(), Some(Refused::Firmware(o)), "{:05X}", o); }
+    // Pipe 2's and PHY B's: through, every write of its plan.
+    for o in [reg(R::OtgHTotal, 2), reg(R::OppPipeControl, 2), reg(R::DpgControl, 2), reg(R::DigFeCntl, 1), reg(R::DigBeCntl, 1), seg(2, 0x2940 + 0xD8), reg(R::OtgPixelRateCntl, 2), seg(1, 0xA1)] {
+        assert!(check(o).is_ok(), "{:05X}", o);
+    }
+    for n in 1..=STAGES { for s in l.stage(n) { if let Step::Update { reg, .. } = s { assert!(g.check_at(reg, n).is_ok(), "stage {} {:05X}", n, reg.offset()); } } }
+    // A choice sharing a block with the lit pipe is refused before anything runs; the lit run's guard refuses pipe 2's after.
+    let shared = Choice { pipe: dcn::Pipe { otg: 2, opp: 2, dig_fe: 0 }, ..choice_2() };
+    assert_eq!(Light::new_with(f, shared, timing::CEA_1080P60, dcn::Signal::Dvi).unwrap().beside(&c1).err(), Some(Refusal::Overlap));
+    let mut first = Light::new(f, c1, timing::CEA_1080P60).unwrap();
+    assert!(first.guard().check(Reg::new(reg(R::OtgHTotal, 2)).unwrap()).is_err());
+    first.refuse(&choice_2()).unwrap();
+    for o in [reg(R::OtgHTotal, 2), reg(R::DigBeCntl, 1), reg(R::DpgControl, 2)] { assert_eq!(first.guard().check(Reg::new(o).unwrap()).err(), Some(Refused::Lit(o)), "{:05X}", o); }
+    assert!(first.guard().check(Reg::new(reg(R::OtgHTotal, 1)).unwrap()).is_ok());
+}
+
+// Pipe 1 lit on HDMI-A-1 by first light's eight stages (tables that write nothing), as a second run finds it.
+fn first_lit<'a>(e: &mut Engine, img: &'a [u8]) -> Lit<'a> {
+    let (f, c) = EXPECTED;
+    let (outcome, lit, log) = light_up(Light::new(f, c, timing::CEA_1080P60).unwrap(), img, e, STAGES);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(6)..]);
+    lit
+}
+
+#[test]
+fn first_light_on_pipe_2_beside_a_lit_pipe_1_leaves_it_and_the_firmwares_unchanged_and_each_unplug_takes_back_its_own() {
+    let img = plain();
+    let mut e = engine();
+    let before = e.regs.clone();
+    let mut first = first_lit(&mut e, &img);
+    let with_first = e.regs.clone();
+    let (f, c1) = EXPECTED;
+    let second = Light::new_with(f, choice_2(), timing::CEA_1080P60, dcn::Signal::Dvi).unwrap().beside(&c1).unwrap();
+    first.l.refuse(&second.choice).unwrap();
+    let from = e.ev.len();
+    let (outcome, mut lit2, log) = light_up(second, &img, &mut e, STAGES);
+    assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:#?}", &log[log.len().saturating_sub(8)..]);
+    // Its lines name the lit pipe, read after every stage; OTG2 runs from OPP2 into DIG B.
+    assert!(log.iter().any(|x| x == "S0 HDMI-A-1'S PIPE, LIT BY DISPLAY: OTG1 OPP1 DIG A FRONT END, PHY A, HUBP1; NEVER WRITTEN, READ AFTER EACH STAGE (30 REGISTERS)"), "{:#?}", &log[..6]);
+    for n in 1..=STAGES { assert!(log.iter().any(|x| x.starts_with(&format!("S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED (30 REGISTERS), HDMI-A-1'S TOO (30); ", n, dcn::STAGE_NAMES[n as usize - 1]))), "stage {}", n); }
+    let ws: Vec<(u32, u32)> = e.ev[from..].iter().filter_map(|x| if let Ev::Write(o, v) = x { Some((*o, *v)) } else { None }).collect();
+    for (o, _) in &ws { assert!(first.l.guard().check(Reg::new(*o).unwrap()).is_err() || *o == reg(R::OtgVerticalInterrupt2Position, 2), "the second wrote the first's {:05X}", o); assert!(!hdmi_a_1s(*o), "{:05X}", o); }
+    assert_eq!(e.regs[&reg(R::OtgControl, 2)] & 0x1_0001, 0x1_0001, "OTG2 not running");
+    assert_eq!((e.regs[&reg(R::OptcDataSourceSelect, 2)] >> 8) & 0xF, 2);
+    for o in watched(&lit2.l).into_iter().chain(Watch_regs(&c1)) { assert_eq!(e.regs.get(&o), with_first.get(&o), "{:05X}", o); }
+    // The second's unplug: its registers as before it, the first still lit as it was.
+    let (same, log) = take_back(&mut lit2, &mut e, STAGES);
+    assert!(same, "{:#?}", log);
+    assert!(log.last().unwrap().ends_with("THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE UNCHANGED"), "{}", log.last().unwrap());
+    for (o, _) in &ws { assert_eq!(e.regs.get(o).copied().unwrap_or(0) & !follow_bits(&e, *o), with_first.get(o).copied().unwrap_or(0) & !follow_bits(&e, *o), "{:05X} not as before the second", o); }
+    // Then the first's: every register as before both.
+    assert!(take_back(&mut first, &mut e, STAGES).0);
+    as_before(&e, &before, &[]);
+}
+fn follow_bits(e: &Engine, o: u32) -> u32 { e.set.iter().chain(e.follow.iter()).filter(|(at, _)| *at == o).fold(0, |m, (_, b)| m | b) }
+#[allow(non_snake_case)]
+fn Watch_regs(c: &Choice) -> Vec<u32> {
+    let mut v = vec![];
+    for r in dcn::ALL { for i in 0..r.instances() { let o = reg(r, i); if light::Guard::new(&EXPECTED.0, &choice_2()).unwrap().beside(c).unwrap().check(Reg::new(o).unwrap()) == Err(Refused::Lit(o)) && [R::OtgHTotal, R::OtgVTotal, R::OtgControl, R::OptcDataSourceSelect, R::DigFeCntl, R::DigBeCntl, R::HubpCntl, R::HubpreqPrimarySurfaceAddress].contains(&r) { v.push(o); } } }
+    v
+}
+
+#[test]
+fn a_change_of_the_lit_pipe_under_the_seconds_stage_fails_it_and_a_table_writing_the_lit_pipe_is_refused_both_undone() {
+    let img = plain();
+    let (f, c1) = EXPECTED;
+    // When stage 3 writes OTG2's total, the model moves OTG1's: the stage fails, everything of the second undone.
+    let mut e = engine();
+    let _first = first_lit(&mut e, &img);
+    let with_first = e.regs.clone();
+    e.hook = Some((reg(R::OtgHTotal, 2), reg(R::OtgHTotal, 1), 0x777));
+    let l = Light::new_with(f, choice_2(), timing::CEA_1080P60, dcn::Signal::Dvi).unwrap().beside(&c1).unwrap();
+    let (outcome, log) = run_light(&l, &img, &mut e, STAGES, false);
+    assert!(matches!(outcome, Outcome::Failed { stage: 3, why: Failure::LitChanged { offset, after: 0x777, .. } } if offset == reg(R::OtgHTotal, 1)), "{:?}", outcome);
+    assert!(log.iter().any(|x| x.starts_with("STEP 3 FAILED AT STAGE 3 AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE UNCHANGED; HDMI-A-1'S PIPE CHANGED")), "{:#?}", &log[log.len() - 3..]);
+    assert_eq!(e.regs[&reg(R::OtgHTotal, 2)], with_first.get(&reg(R::OtgHTotal, 2)).copied().unwrap_or(0));
+    // A table of the second's writing the lit back end (DIG A's): refused as the lit pipe's, undone.
+    let mut e = engine();
+    let _first = first_lit(&mut e, &img);
+    let with_first = e.regs.clone();
+    let bad = image(&[(12, vec![EOT]), (4, vec![EOT]), (76, [mov(seg(2, 0x20B0), 1), vec![EOT]].concat())]);
+    let (outcome, _) = run_light(&l, &bad, &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 8, why: Failure::Refused(Refused::Lit(seg(2, 0x20B0))) });
+    assert_eq!(Failure::Refused(Refused::Lit(seg(2, 0x20B0))).to_string(), "A WRITE TO THE OTHER LIT PIPE'S 155C0 WAS REFUSED");
+    for (o, v) in &with_first { if *o != reg(R::OtgVerticalInterrupt2Position, 2) { assert_eq!(e.regs.get(o).copied().unwrap_or(0) & !follow_bits(&e, *o), v & !follow_bits(&e, *o), "{:05X}", o); } }
+}
+
+#[test]
+fn table_12s_write_of_phy_as_fuse0_beside_a_lit_phy_a_is_left_where_it_holds_the_value_and_refused_otherwise() {
+    // PHY A lit: its FUSE0 as HDMI-A-1's own stage 2 leaves it on the Ryzen (B038003E, B038A034: MPLLB_V2I 2).
+    let (f, c1) = EXPECTED;
+    let l = Light::new_with(f, choice_2(), timing::CEA_1080P60, dcn::Signal::Dvi).unwrap().beside(&c1).unwrap();
+    for lit_value in [0xB038_003Eu32, 0xB038_A034] {
+        let img = image(&[(12, [mov(PHY_A_FUSE0, lit_value), mov(seg(1, 0xA1), 1), vec![EOT]].concat()), (4, vec![EOT]), (76, vec![EOT])]);
+        let mut e = engine();
+        e.regs.insert(PHY_A_FUSE0, lit_value);
+        let (outcome, log) = run_light(&l, &img, &mut e, STAGES, false);
+        assert_eq!(outcome, Outcome::Stopped { done: 8 }, "{:08X}: {:#?}", lit_value, &log[log.len().saturating_sub(6)..]);
+        assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0) && e.regs[&PHY_A_FUSE0] == lit_value);
+        assert!(log.iter().any(|x| x == &format!("S2 T12 LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE ({:08X})", lit_value)));
+    }
+    // A write that would change the lit PHY A's: refused as the lit pipe's, PHY A untouched.
+    let img = image(&[(12, [mov(PHY_A_FUSE0, 0x0008_0000), vec![EOT]].concat()), (4, vec![EOT]), (76, vec![EOT])]);
+    let mut e = engine();
+    e.regs.insert(PHY_A_FUSE0, 0xB038_A034);
+    let (outcome, log) = run_light(&l, &img, &mut e, STAGES, false);
+    assert_eq!(outcome, Outcome::Failed { stage: 2, why: Failure::Refused(Refused::Lit(PHY_A_FUSE0)) });
+    assert!(log.iter().any(|x| x == "S2 T12 REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT 1783C: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM B038A034 TO 00080000"));
+    assert!(!writes(&e).iter().any(|w| w.0 == PHY_A_FUSE0) && e.regs[&PHY_A_FUSE0] == 0xB038_A034);
+}
