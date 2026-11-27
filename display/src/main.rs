@@ -4,9 +4,9 @@
 // 0271), then does what the setting after the device's index in its argument says (213-DRV-0099, setting.rs): `off`,
 // also with no word or one it does not know, maps no register; `read` runs step 1 (the firmware's display state read in
 // batches) and describes the stages; `light` runs steps 1 to 4 in the production order (213-DRV-0098: the EDID, first
-// light on HDMI-A-1 and MIND Core's picture, 213-DRV-0092 and 0095), then follows HPD 1 (213-DRV-0096) and reads both
-// pipes' underflow statuses (213-DRV-0103). HDMI-A-2, the second HDMI socket, is read and its HPD followed, and it is
-// driven as far as HDMI_A_2 below lets it (213-DRV-0112). start.rs is that order, on the Radeon's windows here.
+// light and MIND Core's picture, 213-DRV-0092 and 0095) on each HDMI socket with a monitor, the second beside the first
+// and offered as the third screen (213-DRV-0112, 0113), then follows both HPDs (213-DRV-0096) and checks each picture's
+// pipes for underflows (213-DRV-0103). start.rs is that order, on the Radeon's windows here.
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
@@ -25,25 +25,25 @@ use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, 
 use mind::{abi, dev, idl, ipc, sys};
 use mind::dev::{cap_info, device_config, Mmio};
 
-/// Bring-up only, all off in a release (213-DRV-0099): they change only what the `light` setting does, and a build with
-/// one set says so in its first line. SURVEY_ORDER: steps 1 to 4 in the survey's order of boots 70 to 81, every batch
+/// Bring-up only, each at the release's value below (213-DRV-0099): they change only what the `light` setting does, and a
+/// build with one set away from it says so in its first line. SURVEY_ORDER: steps 1 to 4 in the survey's order of boots 70 to 81, every batch
 /// named and paused, every value, write and plan logged before it is made, 1 s before each stage's writes and 3 s after
 /// it; else the production order (213-DRV-0098). UNDO_AFTER_STAGES: the stages that ran are undone, last first, before
 /// display idles, and nothing follows them. STAGES_ALLOWED: at most this many of the 16 stages (1 to 8 first light, 9 to
 /// 16 the picture); below 15 no standing check, at 0 the stages only described. HDMI_A_2 (213-DRV-0112): how far display
-/// goes on the Ryzen's second HDMI socket when its monitor is the one there: Read (the release's) reads its blocks only
-/// (step 1's batch 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages,
-/// FirstLight also runs first light's 8 stages there, Full all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
-/// socket taken when both have a monitor, HdmiA1 (the release's) or HdmiA2 (HDMI-A-1 then dark, named as not driven).
-/// SECOND_HDMI (213-DRV-0113): the other socket's monitor beside the first lit: Off (the release's), Read (its pipe read
+/// goes on the Ryzen's second HDMI socket when its monitor is the one there: Read reads its blocks only (step 1's batch
+/// 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages, FirstLight also runs
+/// first light's 8 stages there, Full (the release's) all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
+/// socket taken first when both have a monitor, HdmiA1 (the release's) or HdmiA2. SECOND_HDMI (213-DRV-0113): the other
+/// socket's monitor beside the first lit: Off (one socket at a time, the other named as not driven), Read (its pipe read
 /// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone), Full
-/// (all 16, its picture in slot 7 offered as the third screen through slot 8, 213-KRN-0285).
+/// (the release's: all 16, its picture in slot 7 offered as the third screen through slot 8, 213-KRN-0285).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Read;
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Full;
 const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
-const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Off;
+const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Full;
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
                                                      hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST, second_hdmi: SECOND_HDMI };
 /// Between two log lines, so that a burst is not dropped.
@@ -78,7 +78,7 @@ fn main(_info: &'static BootInfo) {
     let size = |slot: usize, kind: usize| { let (k, _, len) = cap_info(slot); (k == kind).then_some(len) };
     match size(MAILBOX, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] THE SMU MAILBOX: {} BYTES GRANTED", len), None => mind::println!("[DISPLAY] NO SMU MAILBOX GRANTED") }
     match size(SECOND_SCREEN, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A SECOND SCREEN: {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO SECOND SCREEN'S MEMORY GRANTED") }
-    // Said only in a build that runs a second HDMI run, so that the release's lines stay as they were.
+    // Said in a build that makes a second HDMI run, as a release does; a bring-up build with SECOND_HDMI off says nothing of them.
     if BRINGUP.second_hdmi != setting::SecondHdmi::Off {
         match size(THIRD_PIXELS, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A THIRD SCREEN (SLOT 7): {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO THIRD SCREEN'S MEMORY GRANTED (SLOT 7)") }
         mind::println!("[DISPLAY] A SECOND CLIENT OF THE COMPOSITOR (SLOT 8, THE THIRD SCREEN'S): {}", if screen::granted(THIRD_SCREEN) { "GRANTED" } else { "NOT GRANTED" });

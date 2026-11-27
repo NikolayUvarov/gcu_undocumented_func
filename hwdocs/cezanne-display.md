@@ -425,9 +425,14 @@ What the model showed about the undo, with the Ryzen's tables:
 
 ## HDMI-A-2, the second HDMI socket (213-DRV-0112)
 
-`display` takes HDMI-A-2 (path 1: PHY B, DIG back end B, DDC line 1, HPD 2) when its HPD alone senses a monitor, as far
-as the build's `HDMI_A_2` switch lets it; HDMI-A-1 is taken first when both do: display lights one HDMI socket at a time, for now. That is display's own limit (one second pipe, one second screen in `display.wit` 1.3), not the engine's: DCN 2.1 has four pipes (`dcn21_resource.c`: four timing generators, OPPs, HUBPs and DPPs), and the firmware powers all four ("Power" above). Host cases only: none of
-it has run on the Ryzen, and nothing of the second socket has been read there yet.
+`display` takes HDMI-A-2 (path 1: PHY B, DIG back end B, DDC line 1, HPD 2) when its HPD senses a monitor: alone, as the
+first socket; with HDMI-A-1's, second, beside it on a pipe of its own (OTG2, DIG B, PHY B) and offered as the third
+screen through slots 7 and 8 (213-DRV-0113, `display.wit` 1.5). A release does both; the build's `HDMI_A_2` and
+`SECOND_HDMI` switches can hold it back for bring-up. DCN 2.1 has four pipes (`dcn21_resource.c`: four timing
+generators, OPPs, HUBPs and DPPs), and the firmware powers all four ("Power" above). On the Ryzen, from starts through
+Linux with PHY B set up already: HDMI-A-2 alone in 16 stages (boots 110 to 112), and beside HDMI-A-1 with DP-2's
+desktop, three screens at once (release 202611271307, a bench build of those switches). A cold PHY B (table 12's long
+path) has not run there.
 
 - **Read first: step 1's batch 12**, after the eleven, whole in either order, never written: HPD1_ `DC_HPD_INT_STATUS` and
   `DC_HPD_CONTROL` (segment 2 dwords 0x1F1C, 0x1F1E), DIG1_ `DIG_FE_CNTL`, `DIG_BE_CNTL`, `DIG_BE_EN_CNTL` (0x2168, 0x21AF,

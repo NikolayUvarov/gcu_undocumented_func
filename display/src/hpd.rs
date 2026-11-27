@@ -1,8 +1,8 @@
 //! 213-DRV-0096: HDMI-A-1's monitor plugged and unplugged, after steps 1 to 4. The display engine's interrupt is not
 //! display's, so HPD 1's sense (`DC_HPD_INT_STATUS`, step 1's batch 1) is polled. A change counts once it has held
 //! `SETTLE_US`; a shorter one (a bounce) does nothing. An unplug takes the stages back (`light::take_back`, screen_gone
-//! first); a monitor plugged in runs steps 1 to 4 again. Both HDMI sockets are followed by `Pair` (213-DRV-0112): display
-//! lights one socket at a time, for now (213-DRV-0113 is both). `tests/display_hpd_host.rs` checks it.
+//! first); a monitor plugged in runs steps 1 to 4 again. Both HDMI sockets are followed by `Pair` (213-DRV-0112), with a
+//! second run lit beside the first (213-DRV-0113, `set_second`). `tests/display_hpd_host.rs` checks it.
 
 use crate::light::Outcome;
 

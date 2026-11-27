@@ -122,8 +122,8 @@ fn read_all(bus: &mut impl Bus, plan: &Plan, out: &mut dyn Out, store: &mut Stor
 }
 
 /// The socket steps 2 to 4 take (213-DRV-0112): the one whose HPD senses a monitor. When both do, HDMI-A-1, or HDMI-A-2 in
-/// a build that takes it first (`HdmiFirst`) where the plan takes it; the other is named as not driven (display lights
-/// one socket at a time). HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does, as before.
+/// a build that takes it first (`HdmiFirst`) where the plan takes it; the other is taken second beside it (213-DRV-0113),
+/// or named as not driven in a build with SECOND_HDMI off. HDMI-A-2 only where the plan takes it; HDMI-A-1 when none does.
 fn choose<D: Device>(d: &mut D, plan: &Plan, s: &Store) -> Output {
     let second_first = plan.hdmi_first == setting::HdmiFirst::HdmiA2;
     match (sensed(s, &light::HDMI_A_1), sensed(s, &light::HDMI_A_2)) {
@@ -161,7 +161,12 @@ fn sensed(s: &Store, o: &Output) -> bool { s.field(R::HpdIntStatus, o.hpd, DC_HP
 /// output reads, nor the other line's. What it says, for a second HDMI run's mode (213-DRV-0113).
 fn untaken_edid(plan: &Plan, o: Output, store: &Store, w: &mut impl light::Engine, out: &mut dyn Out) -> Option<edid::Edid> {
     let line = ddc::line_of(&o).filter(|_| plan.edid_on(&o))?;
-    out.note(format_args!("{} NOT TAKEN: ITS EDID READ OVER {} ALL THE SAME, THE I2C ENGINE GIVEN BACK AS FOUND; NOTHING ELSE OF IT WRITTEN", light::name(&o), line.name));
+    // With a second HDMI run the socket is taken second: its EDID read now, for its mode (213-DRV-0113).
+    if plan.second_hdmi == setting::SecondHdmi::Off {
+        out.note(format_args!("{} NOT TAKEN: ITS EDID READ OVER {} ALL THE SAME, THE I2C ENGINE GIVEN BACK AS FOUND; NOTHING ELSE OF IT WRITTEN", light::name(&o), line.name));
+    } else {
+        out.note(format_args!("{} TAKEN SECOND: ITS EDID READ OVER {} FIRST, THE I2C ENGINE GIVEN BACK AS FOUND; ITS STAGES AFTER THE FIRST SOCKET'S", light::name(&o), line.name));
+    }
     let mut named = Naming { inner: out, name: light::name(&o) };
     let r = ddc::read_on(line, store, w, &mut named).ok()?;
     ddc::describe(&r, &mut named)
@@ -234,9 +239,9 @@ fn done(r: &Run) -> u8 { match r.outcome { light::Outcome::Stopped { done } | li
 /// as SECOND_HDMI asks; nothing at Off. Step 1 read again with the first's timing generator counted out of the running,
 /// the pipe it takes read as the firmware left it (batches 13 and 14), then first light's stages there with the firmware's
 /// pipe and the first's read after each, or their description; at `Full` all sixteen, its picture in the screen the first
-/// does not hold (the third: slot 7's pixels offered through slot 8), and after first light only when that screen's slots
-/// are granted. The first's guard refuses the second's blocks from its stages on, and reads its pipe while they stay. The
-/// run when its stages ran.
+/// does not hold (the third: slot 7's pixels offered through slot 8). Without that screen's slots granted a full run is
+/// not made at all: the socket stays dark, said, rather than show a pattern no screen will follow. The first's guard
+/// refuses the second's blocks from its stages on, and reads its pipe while they stay. The run when its stages ran.
 fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>, o: Output, edid: Option<&edid::Edid>, w: &mut D::Writer,
                              vfct: Option<&'a [u8]>, build: &'static str, out: &mut dyn Out) -> Option<Run<'a>> {
     let s = plan.second_hdmi;
@@ -248,6 +253,17 @@ fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>
     };
     let lit = first.light.choice;
     d.say(format_args!("{}: SECOND HDMI RUN BESIDE {} ON OTG{} (SECOND_HDMI {}): {}", name, light::name(&lit.output), lit.pipe.otg, s.word(), s.what()));
+    // A full run needs its screen's slots: the third's are 7 and 8 (213-KRN-0285); without them nothing of it is read or written.
+    let screen = first.light.screen.other();
+    if plan.second_stages(&o) > dcn::FIRST_LIGHT && screen == light::Screen::Third {
+        let (pixels, client) = light::Screens::third_granted(w);
+        if !(pixels && client) {
+            let word = |g: bool| if g { "GRANTED" } else { "NOT GRANTED" };
+            d.say(format_args!("{}: SECOND HDMI RUN NOT MADE: THE THIRD SCREEN'S SLOTS: SLOT 7 (ITS PIXELS) {}, SLOT 8 (ITS CLIENT) {}; {} STAYS DARK",
+                               name, word(pixels), word(client), name));
+            return None;
+        }
+    }
     let start = d.now_us();
     let mut named = Naming { inner: out, name };
     let mut store = Store::default();
@@ -262,22 +278,11 @@ fn second_run<'a, D: Device>(d: &mut D, plan: &Plan, first: Option<&mut Run<'a>>
     if plan.edid_on(&o) {
         d.say(format_args!("{}: STEP 3'S MODE: {}x{} AT {} KHZ IN {:?} SIGNALLING, {}", name, timing.h_active, timing.v_active, timing.pixel_khz, signal, why));
     }
-    let screen = first.light.screen.other();
     let second = match light::prepare_beside(&store, o, &first.light, timing, signal, build) {
         Ok(l) => l.with_watch(plan.watch_frames).with_screen(screen),
         Err(why) => { refused(d, &why); return None; }
     };
-    let mut stages = plan.second_stages(&o);
-    // Past first light only with its screen's pixels and client granted: the third's are slots 7 and 8 (213-KRN-0285).
-    if stages > dcn::FIRST_LIGHT && screen == light::Screen::Third {
-        let (pixels, client) = light::Screens::third_granted(w);
-        if !(pixels && client) {
-            let word = |g: bool| if g { "GRANTED" } else { "NOT GRANTED" };
-            d.say(format_args!("{}: THE THIRD SCREEN'S SLOTS: SLOT 7 (ITS PIXELS) {}, SLOT 8 (ITS CLIENT) {}: THE SECOND HDMI RUN STOPS AFTER FIRST LIGHT, ITS PATTERN LEFT",
-                               name, word(pixels), word(client)));
-            stages = dcn::FIRST_LIGHT;
-        }
-    }
+    let stages = plan.second_stages(&o);
     if stages == 0 {
         light::describe(&second, false, &mut named);
         d.say(format_args!("{}: SECOND HDMI RUN SHOWN FOR OTG{}, {} REGISTERS READ, NOTHING WRITTEN (SECOND_HDMI {}, HDMI_A_2 {})", name, next, read, s.word(), plan.hdmi_a_2.word()));
@@ -429,6 +434,8 @@ impl<'a> Follower<'a> {
                 (Some(r), _) if self.state == hpd::State::Lit => ("LIT", Some(lit(r))),
                 (Some(_), _) if self.state == hpd::State::Stopped => ("STOPPED AFTER A FAILURE", None),
                 (_, Some(r)) => ("LIT", Some(lit(r))),
+                // The second run failed or was undone on the socket the first is not on: not tried again this boot.
+                (None, None) if self.second_state() == Some(hpd::State::Stopped) && self.run.as_ref().is_some_and(|r| socket(&r.light.choice.output) != i) => ("STOPPED AFTER A FAILURE", None),
                 _ => (match self.f.as_ref().and_then(|f| f.sense(i)) { Some(true) => "A MONITOR, NOT LIT", Some(false) => "NO MONITOR", None => "NOT FOLLOWED" }, None),
             };
         }
