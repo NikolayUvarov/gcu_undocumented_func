@@ -42,13 +42,15 @@ struct I2c {
     granted: bool, dmcu: bool, hang: bool, busy_until: u64, done: u32,
     // Time the log spent (the survey's pacing), added to the clock at the next access (213-DRV-0098).
     pace: Rc<Cell<u64>>,
+    // The DDC line the monitor is on (DC_I2C_DDC_SELECT: 0 DDC1, 1 DDC2; 213-DRV-0112): another line's transfer NACKs.
+    line: u32,
 }
 
 impl I2c {
     fn new(monitor: Vec<u8>) -> I2c {
         let mut i = I2c { regs: HashMap::new(), clock: 0, ev: vec![], buf: [0; 538], index: 0, reading: false, monitor, present: true, pointer: 0,
-                          granted: false, dmcu: false, hang: false, busy_until: 0, done: 0, pace: Rc::new(Cell::new(0)) };
-        for (o, v) in FOUND { i.regs.insert(o, v); }
+                          granted: false, dmcu: false, hang: false, busy_until: 0, done: 0, pace: Rc::new(Cell::new(0)), line: 0 };
+        for (o, v) in FOUND.into_iter().chain(FOUND2) { i.regs.insert(o, v); }
         i
     }
     // GO: the transactions run over the buffer, the reply after the bytes written.
@@ -56,13 +58,14 @@ impl I2c {
         if !self.granted { self.done = 1 << 4; return; }
         if self.hang { self.busy_until = u64::MAX; return; }
         let count = ((self.regs[&CONTROL] >> 20) & 3) as usize + 1;
+        let select = (self.regs[&CONTROL] >> 8) & 7;
         let mut p = 0;
         for t in 0..count {
             let tr = self.regs.get(&(TRANSACTION + 4 * t as u32)).copied().unwrap_or(0);
             let (read, n) = (tr & 1 == 1, ((tr >> 16) & 0x3FF) as usize);
             let address = self.buf[p];
             p += 1;
-            if !self.present || address >> 1 != 0x50 { self.done = 1 << 8; self.busy_until = self.clock + 300; return; }
+            if !self.present || address >> 1 != 0x50 || select != self.line { self.done = 1 << 8; self.busy_until = self.clock + 300; return; }
             if read {
                 for k in 0..n { self.buf[p + k] = self.monitor[(self.pointer + k) % self.monitor.len()]; }
                 self.pointer += n;
@@ -130,6 +133,13 @@ impl Out for Log {
 const FOUND: [(u32, u32); 12] = [(ARBITRATION, 0), (CONTROL, 0x0000_0002), (SW_STATUS, 0), (HW_STATUS, 0), (SPEED, 0x12C0_0102),
     (SETUP, 0x0300_0044), (TRANSACTION, 0x0001_1100), (TRANSACTION + 4, 0x0080_3101), (TRANSACTION + 8, 0), (TRANSACTION + 12, 0),
     (TIME_BASE, 0x0000_0130), (PADS, 0x0000_0101)];
+
+// DDC2's own registers as batch 12 would read them (213-DRV-0112): set up as DDC1's, its pads in GPIO mode.
+const HW_STATUS2: u32 = 0x14D74;
+const SPEED2: u32 = 0x14D90;
+const SETUP2: u32 = 0x14D94;
+const PADS2: u32 = 0x17650;
+const FOUND2: [(u32, u32); 4] = [(HW_STATUS2, 0), (SPEED2, 0x12C0_0102), (SETUP2, 0x0300_0044), (PADS2, 0x0000_0101)];
 
 fn store(found: &[(u32, u32)], monitor_plugged: bool) -> Store {
     let mut s = Store::default();
@@ -447,4 +457,90 @@ fn step_2_takes_from_step_1_only_the_registers_the_production_order_reads() {
         assert!(batches::USED.contains(&kind));
         assert_ne!(run_with(&store_of(&FOUND, &|r| r != kind)), full, "{}", kind.name());
     }
+}
+
+// --- HDMI-A-2's line, DDC2 (213-DRV-0112) ---
+
+// Batches 11 and 12 as a store: the engine's registers, DDC2's own, HPD 2's sense.
+fn store_2(found: &[(u32, u32)], found2: &[(u32, u32)], monitor_plugged: bool) -> Store {
+    let mut s = store(found, false);
+    for &(o, v) in found2 { let (r, i) = kind_at(o); s.set(r, i, v); }
+    s.set(R::HpdIntStatus, 1, (monitor_plugged as u32) << 1);
+    s.set_batches(12);
+    s
+}
+fn run_2(i2c: &mut I2c, s: &Store) -> (Result<ddc::Read, ddc::Failure>, Vec<String>) {
+    let mut log = Log(vec![]);
+    let r = ddc::read_on(ddc::DDC2, s, i2c, &mut log);
+    (r, log.0)
+}
+
+#[test]
+fn step_2_on_ddc2_reads_hdmi_a_2s_edid_on_line_1_writes_none_of_ddc1s_and_gives_the_engine_back() {
+    assert_eq!((ddc::line_of(&light::HDMI_A_1), ddc::line_of(&light::HDMI_A_2)), (Some(ddc::DDC1), Some(ddc::DDC2)));
+    let edid = monitor(true, true);
+    let mut i2c = I2c::new(edid.clone());
+    i2c.line = 1;
+    let (r, log) = run_2(&mut i2c, &store_2(&FOUND, &FOUND2, true));
+    let read = r.unwrap_or_else(|why| panic!("{} {:#?}", why, log));
+    assert_eq!((read.blocks, read.bytes()), (2, &edid[..]));
+    // DDC1's order on DDC2's own registers; the set-up and every GO select line 1.
+    let w = writes(&i2c);
+    let order: Vec<u32> = w.iter().map(|x| x.0).take(19).collect();
+    assert_eq!(order, [PADS2, CONTROL, ARBITRATION, SPEED2, CONTROL, SETUP2, ARBITRATION,
+                       TRANSACTION, DATA, DATA, TRANSACTION + 4, DATA, CONTROL, SETUP2, CONTROL, CONTROL, DATA, TRANSACTION, DATA]);
+    assert_eq!((w[0], w[3].1 >> 16, w[5].1 & 0xFF00_0044), ((PADS2, 0x0000_1010), 480, 0x0300_0044));
+    assert_eq!((w[4].0, (w[4].1 >> 8) & 7), (CONTROL, 1), "the set-up's DC_I2C_DDC_SELECT");
+    let gos: Vec<u32> = w.iter().filter(|&&(o, v)| o == CONTROL && v & 1 == 1).map(|&(_, v)| (v >> 8) & 7).collect();
+    assert!(gos.len() >= 2 && gos.iter().all(|&l| l == 1), "each GO on line 1: {:?}", gos);
+    for &(o, _) in &w {
+        assert!(![PADS, SPEED, SETUP, HW_STATUS].contains(&o), "DDC1's {:05X} written", o);
+        assert!(light::ddc_writable_on(&light::DDC2_WRITES, Reg::new(o).unwrap()).is_ok(), "{:05X}", o);
+    }
+    // Given back as batches 11 and 12 found it, DDC1's registers as they were.
+    for (o, v) in FOUND.into_iter().chain(FOUND2) { if [PADS, SPEED, SETUP, PADS2, SPEED2, SETUP2, CONTROL, TRANSACTION, TRANSACTION + 4].contains(&o) { assert_eq!(i2c.regs[&o], v, "{:05X}", o); } }
+    assert!(!i2c.granted);
+    assert_eq!(log[0], "D STEP 2: HDMI-A-2'S EDID OVER DDC2 THROUGH THE I2C ENGINE, AT 100 KHZ, IN DISPLAY CORE'S ORDER; THE ENGINE PUT BACK AS FOUND AFTER");
+    assert!(log.iter().any(|x| x == "D THE ENGINE GIVEN BACK: 18 WRITES PUT BACK; 6 OF 6 REGISTERS AS BATCHES 11 AND 12 READ THEM"), "{:#?}", log);
+    let done = log.last().unwrap();
+    assert!(done.starts_with("D STEP 2 DONE: 2 BLOCKS READ (256 BYTES) IN ") && done.ends_with("; 18 WRITES PUT BACK, 6 OF 6 REGISTERS AS BATCHES 11 AND 12 READ THEM"), "{}", done);
+    for x in &log { assert!(x.len() <= 180, "{} bytes: {}", x.len(), x); }
+}
+
+#[test]
+fn each_line_reads_only_its_own_monitor_and_ddc2_refuses_without_batch_12_or_hpd_2() {
+    // The monitor on DDC1 alone: DDC2's read finds no acknowledge and gives the engine back; DDC1's still reads it.
+    let mut i2c = I2c::new(monitor(true, true));
+    let (r, log) = run_2(&mut i2c, &store_2(&FOUND, &FOUND2, true));
+    assert!(matches!(r, Err(ddc::Failure::Nack { block: 0, .. })), "{:?}", r);
+    assert!(log.last().unwrap().starts_with("D STEP 2 NOT DONE: BLOCK 0: NO ACKNOWLEDGE") && !i2c.granted);
+    assert_eq!(i2c.regs[&PADS2], 0x0101);
+    let mut i2c = I2c::new(monitor(true, true));
+    i2c.line = 1;
+    assert!(matches!(run(&mut i2c, &store(&FOUND, true)).0, Err(ddc::Failure::Nack { block: 0, .. })), "DDC1 answered for a monitor on DDC2");
+    // Batch 12 not read, or HPD 2 sensing nothing: not one write, and the reason names DDC2's batch and HPD.
+    let mut i2c = I2c::new(monitor(true, true));
+    i2c.line = 1;
+    let (r, log) = run_2(&mut i2c, &store_2(&FOUND, &[], true));
+    assert_eq!(r.err(), Some(ddc::Failure::NotRead));
+    assert_eq!(log.last().unwrap(), "D STEP 2 NOT DONE: STEP 1'S BATCH 12 WAS NOT READ: THE ENGINE AS FOUND IS NOT KNOWN; STEPS 3 AND 4 GO ON WITHOUT IT");
+    let (r, log) = run_2(&mut i2c, &store_2(&FOUND, &FOUND2, false));
+    assert_eq!(r.err(), Some(ddc::Failure::NoMonitor));
+    assert_eq!(log.last().unwrap(), "D STEP 2 NOT DONE: HPD 2 SHOWS NO MONITOR; STEPS 3 AND 4 GO ON WITHOUT IT");
+    assert!(writes(&i2c).is_empty());
+    // HDMI-A-1's own refusals read as before.
+    assert_eq!(ddc::Failure::NoMonitor.to_string(), "HPD 1 SHOWS NO MONITOR");
+    assert_eq!(ddc::On(ddc::DDC2, ddc::Failure::Held { arbitration: 8, hw_status: 2 }).to_string(), "THE ENGINE IS HELD (ARBITRATION 00000008, DDC2 HW STATUS 00000002)");
+}
+
+#[test]
+fn each_lines_guard_lets_through_the_engine_and_its_own_pads_only() {
+    let (ddc1, ddc2) = (|o: u32| light::ddc_writable(Reg::new(o).unwrap()).is_ok(), |o: u32| light::ddc_writable_on(&light::DDC2_WRITES, Reg::new(o).unwrap()).is_ok());
+    for o in [CONTROL, ARBITRATION, TRANSACTION, TRANSACTION + 12, DATA] { assert!(ddc1(o) && ddc2(o), "{:05X}", o); }
+    for o in [SPEED, SETUP, PADS] { assert!(ddc1(o) && !ddc2(o), "DDC1's {:05X}", o); }
+    for o in [SPEED2, SETUP2, PADS2] { assert!(ddc2(o) && !ddc1(o), "DDC2's {:05X}", o); }
+    for (r, i) in [(R::DcI2cSwStatus, 0), (R::DcI2cDdc2HwStatus, 0), (R::DcGpioDdc2Y, 0), (R::DcGpioAuxCtrl5, 0), (R::PhyAuxCntl, 0), (R::HpdControl, 1), (R::DigBeCntl, 1)] {
+        assert!(light::ddc_writable_on(&light::DDC2_WRITES, r.at(i).unwrap()).is_err(), "{}", r.name());
+    }
+    assert_eq!((light::ddc_writes(&light::HDMI_A_1), light::ddc_writes(&light::HDMI_A_2)), (Some(&light::DDC_WRITES), Some(&light::DDC2_WRITES)));
 }

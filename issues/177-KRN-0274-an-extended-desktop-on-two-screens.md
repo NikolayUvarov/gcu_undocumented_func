@@ -47,6 +47,7 @@ The maintainer asked for this twice.
   - each screen's part of the desk, for 1, 2 and 3 screens of different sizes and places;
   - the copy within each screen's bounds and the surface's;
   - the mirror back when the task in front changes or the surface goes.
+- [ ] **No screen's part of the desk is scaled** (DRV's ask, 2026-11-27): text drawn on the desk is copied 1:1 to each screen. A host test shows each screen's part copied pixel for pixel, and no scaled copy can pass for it. The mirror, while another task is in front, blends what it shrinks ([213-KRN-0290](213-KRN-0290-the-mirror-averages-what-it-shrinks.md)).
 - [ ] QEMU: every gate group passes with no driver screen.
 - [ ] **On the Ryzen with its three monitors** (MC-12.1): one desk across them; the pointer and a window cross each edge; the marks show on all three.
 

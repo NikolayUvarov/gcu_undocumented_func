@@ -94,3 +94,24 @@ fn the_picture_follows_its_surface_the_monitors_own_mode_with_its_pitch_rounded(
     // First light's samples as stage 10 read them before.
     assert_eq!(picture::samples(picture::Size::FIRST), [(0, 0), (1919, 1079), (5, 540), (960, 100), (178, 100), (1741, 100), (300, 100), (695, 340), (705, 340)]);
 }
+
+#[test]
+fn the_picture_names_the_output_it_is_on() {
+    // 213-DRV-0112: HDMI-A-1's lines as before; HDMI-A-2's differ only in its name's last character.
+    let size = picture::Size::FIRST;
+    let (one, same, two) = (Lines::new("X", size), Lines::on("HDMI-A-1", "X", size), Lines::on("HDMI-A-2", "X", size));
+    assert_eq!((one.len(2), two.len(2)), (18, 18));
+    let line2 = picture::TEXT_TOP + 2 * picture::LINE_HEIGHT;
+    let left = (WIDTH - (18 * picture::ADVANCE - picture::SCALE)) / 2;
+    let mut differ = 0;
+    for y in line2..line2 + picture::LINE_HEIGHT {
+        for x in 0..WIDTH {
+            assert_eq!(pixel(&one, x, y), pixel(&same, x, y));
+            if pixel(&one, x, y) != pixel(&two, x, y) {
+                differ += 1;
+                assert!((left + 7 * picture::ADVANCE..left + 8 * picture::ADVANCE).contains(&x), "{},{} differs outside the 8th character", x, y);
+            }
+        }
+    }
+    assert!(differ > 0, "HDMI-A-2 drawn as HDMI-A-1");
+}

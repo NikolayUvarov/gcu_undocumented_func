@@ -4,12 +4,14 @@
 //! engine is given back as `release_engine` does, and every register written is put back as it was, so that the
 //! engine is left as step 1's batch 11 found it. A failure (the engine held, no grant, a NACK, a timeout, no answer
 //! within the limit, a bad block) ends the step there with the same give-back: no output is touched, and steps 3 and 4
-//! go on as without it. `tests/display_ddc_host.rs` checks it on a model of the engine.
+//! go on as without it. The line is a parameter (213-DRV-0112, `Line`): DDC1 for HDMI-A-1, DDC2 for HDMI-A-2, each with
+//! its own speed, set-up and pads and its DC_I2C_DDC_SELECT; the engine's other registers are shared.
+//! `tests/display_ddc_host.rs` checks it on a model of the engine.
 
 use crate::batches::{Bus, Out, Store};
-use crate::dcn::{field::DC_HPD_SENSE, Field, Reg, R};
+use crate::dcn::{field::DC_HPD_SENSE, Field, Output, Reg, R};
 use crate::edid::{Edid, BLOCK};
-use crate::light::{ddc_writable, Clock, Name, Poke, Writable};
+use crate::light::{ddc_writable_on, Clock, Name, Poke, Writable, DDC2_WRITES, DDC_WRITES, HDMI_A_1, HDMI_A_2};
 use core::fmt;
 
 const fn f(shift: u8, width: u8) -> Field { Field { shift, width } }
@@ -84,10 +86,32 @@ const POLL_US: u32 = 100;
 /// The blocks read: the base block and one extension (the CTA's); more would need E-DDC's segment pointer.
 pub const MAX_BLOCKS: usize = 2;
 const MAX_WRITES: usize = 48;
-/// The registers put back after the read and checked against batch 11: all but the arbitration (given back by its
-/// own bits) and the buffer.
-const RESTORED: [(R, u8); 6] = [(R::DcGpioDdc1Mask, 0), (R::DcI2cControl, 0), (R::DcI2cDdc1Speed, 0), (R::DcI2cDdc1Setup, 0),
-                                (R::DcI2cTransaction, 0), (R::DcI2cTransaction, 1)];
+/// A DDC line of the I2C engine (213-DRV-0112): its own registers, its DC_I2C_DDC_SELECT (the engine's index Display Core
+/// gives the line, dce_i2c_hw.c and dcn21_resource.c), the HPD that tells a monitor on it, the batch that reads its own
+/// registers, what step 2 may write, and its names in the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Line {
+    pub hw_status: R, pub speed: R, pub setup: R, pub pads: R, pub select: u32, pub hpd: u8, pub batch: u8,
+    pub writes: &'static [R; 7], pub name: &'static str, pub output: &'static str, pub found: &'static str,
+}
+/// HDMI-A-1's: the VBIOS's I2C line 0, DC_GPIO_DDC1, HPD 1.
+pub const DDC1: Line = Line { hw_status: R::DcI2cDdc1HwStatus, speed: R::DcI2cDdc1Speed, setup: R::DcI2cDdc1Setup, pads: R::DcGpioDdc1Mask,
+    select: 0, hpd: 0, batch: 11, writes: &DDC_WRITES, name: "DDC1", output: "HDMI-A-1", found: "BATCH 11" };
+/// HDMI-A-2's: the VBIOS's I2C line 1, DC_GPIO_DDC2, HPD 2; its own registers read by batch 12, the engine's by 11.
+pub const DDC2: Line = Line { hw_status: R::DcI2cDdc2HwStatus, speed: R::DcI2cDdc2Speed, setup: R::DcI2cDdc2Setup, pads: R::DcGpioDdc2Mask,
+    select: 1, hpd: 1, batch: 12, writes: &DDC2_WRITES, name: "DDC2", output: "HDMI-A-2", found: "BATCHES 11 AND 12" };
+/// The line of an output (the VBIOS's paths 0 and 1), if it has one here.
+pub fn line_of(o: &Output) -> Option<Line> {
+    if *o == HDMI_A_1 { Some(DDC1) } else if *o == HDMI_A_2 { Some(DDC2) } else { None }
+}
+
+impl Line {
+    /// The registers put back after the read and checked against step 1: all but the arbitration (given back by its own
+    /// bits) and the buffer.
+    fn restored(&self) -> [(R, u8); 6] {
+        [(self.pads, 0), (R::DcI2cControl, 0), (self.speed, 0), (self.setup, 0), (R::DcI2cTransaction, 0), (R::DcI2cTransaction, 1)]
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -117,11 +141,18 @@ pub enum Failure {
 }
 
 impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { On(DDC1, *self).fmt(f) }
+}
+
+/// A failure of step 2 on a line, as the log names it (213-DRV-0112).
+pub struct On(pub Line, pub Failure);
+impl fmt::Display for On {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Failure::NotRead => f.write_str("STEP 1'S BATCH 11 WAS NOT READ: THE ENGINE AS FOUND IS NOT KNOWN"),
-            Failure::NoMonitor => f.write_str("HPD 1 SHOWS NO MONITOR"),
-            Failure::Held { arbitration, hw_status } => write!(f, "THE ENGINE IS HELD (ARBITRATION {:08X}, DDC1 HW STATUS {:08X})", arbitration, hw_status),
+        let line = self.0;
+        match &self.1 {
+            Failure::NotRead => write!(f, "STEP 1'S BATCH {} WAS NOT READ: THE ENGINE AS FOUND IS NOT KNOWN", line.batch),
+            Failure::NoMonitor => write!(f, "HPD {} SHOWS NO MONITOR", line.hpd + 1),
+            Failure::Held { arbitration, hw_status } => write!(f, "THE ENGINE IS HELD (ARBITRATION {:08X}, {} HW STATUS {:08X})", arbitration, line.name, hw_status),
             Failure::NotGranted { status } => write!(f, "THE ENGINE WAS NOT GRANTED (STATUS {})", status),
             Failure::Busy { block, status } => write!(f, "BLOCK {}: A TRANSFER STILL RUNS (SW STATUS {:08X})", block, status),
             Failure::Nack { block, status } => write!(f, "BLOCK {}: NO ACKNOWLEDGE (SW STATUS {:08X})", block, status),
@@ -143,6 +174,7 @@ pub struct Read { pub bytes: [u8; MAX_BLOCKS * BLOCK], pub blocks: usize }
 impl Read { pub fn bytes(&self) -> &[u8] { &self.bytes[..self.blocks * BLOCK] } }
 
 struct Step2<'a, E: Bus + Poke + Clock> {
+    line: Line,
     e: &'a mut E,
     out: &'a mut dyn Out,
     // Each write's register, its value before, and whether the give-back puts it back.
@@ -164,7 +196,7 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
     // A read-modify-write, logged, its value before kept; `back`: the give-back writes that value back.
     fn update(&mut self, r: R, i: u8, fields: &[(Field, u32)], back: bool) -> Result<u32, Failure> {
         let x = at(r, i);
-        let w = ddc_writable(x).map_err(|_| Failure::Refused(x.offset()))?;
+        let w = ddc_writable_on(self.line.writes, x).map_err(|_| Failure::Refused(x.offset()))?;
         let old = self.read(r, i)?;
         let v = fields.iter().fold(old, |v, (f, val)| (v & !f.mask()) | ((val << f.shift) & f.mask()));
         if self.len == MAX_WRITES { return Err(Failure::JournalFull); }
@@ -177,7 +209,7 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
     // A write of DC_I2C_DATA as Display Core's REG_SET: no read first (a read of it moves its index), nothing kept.
     fn buffer(&mut self, v: u32) -> Result<(), Failure> {
         let x = at(R::DcI2cData, 0);
-        let w = ddc_writable(x).map_err(|_| Failure::Refused(x.offset()))?;
+        let w = ddc_writable_on(self.line.writes, x).map_err(|_| Failure::Refused(x.offset()))?;
         self.e.write(w, v);
         self.out.line(format_args!("D WROTE {} = {:08X}", Name(x), v));
         Ok(())
@@ -185,12 +217,13 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
 
     fn transfer(&mut self) -> Result<Read, Failure> {
         use R::*;
-        let (arbitration, hw_status) = (self.read(DcI2cArbitration, 0)?, self.read(DcI2cDdc1HwStatus, 0)?);
+        let line = self.line;
+        let (arbitration, hw_status) = (self.read(DcI2cArbitration, 0)?, self.read(line.hw_status, 0)?);
         let holder = RW_CNTL_STATUS.get(arbitration);
         if holder == USED_BY_HW || STATUS.get(hw_status) == USED_BY_HW { return Err(Failure::Held { arbitration, hw_status }); }
         // The pads, as hw_gpio's GPIO_MODE_HARDWARE (each pin's mask 0) and hw_ddc's I2C mode (pull-downs enabled,
         // the pad out of AUX mode) leave them.
-        self.update(DcGpioDdc1Mask, 0, &[(CLK_MASK, 0), (DATA_MASK, 0), (CLK_PD_EN, 1), (DATA_PD_EN, 1), (AUX_PAD1_MODE, 0)], true)?;
+        self.update(line.pads, 0, &[(CLK_MASK, 0), (DATA_MASK, 0), (CLK_PD_EN, 1), (DATA_PD_EN, 1), (AUX_PAD1_MODE, 0)], true)?;
         // setup_engine: out of soft reset, the engine taken.
         self.update(DcI2cControl, 0, &[(SOFT_RESET, 0)], true)?;
         if holder != USED_BY_SW {
@@ -205,10 +238,10 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         let (div, xtal) = (TIME_BASE.get(base), XTAL_REF_DIV.get(base));
         let reference = if div == 0 { CRYSTAL_KHZ } else { div * 1000 };
         let prescale = reference / if xtal == 0 { 2 } else { xtal } / SPEED_KHZ;
-        self.update(DcI2cDdc1Speed, 0, &[(PRESCALE, prescale), (THRESHOLD, 2), (START_STOP_TIMING_CNTL, 2)], true)?;
-        self.update(DcI2cControl, 0, &[(GO, 0), (SEND_RESET, 0), (SW_STATUS_RESET, 1), (TRANSACTION_COUNT, 0), (DDC_SELECT, 0)], true)?;
+        self.update(line.speed, 0, &[(PRESCALE, prescale), (THRESHOLD, 2), (START_STOP_TIMING_CNTL, 2)], true)?;
+        self.update(DcI2cControl, 0, &[(GO, 0), (SEND_RESET, 0), (SW_STATUS_RESET, 1), (TRANSACTION_COUNT, 0), (DDC_SELECT, line.select)], true)?;
         // Display Core writes its reset length 9 into this one-bit field, which keeps 1.
-        self.update(DcI2cDdc1Setup, 0, &[(TIME_LIMIT, SETUP_TIME_LIMIT), (SEND_RESET_LENGTH, 1), (ENABLE, 1)], true)?;
+        self.update(line.setup, 0, &[(TIME_LIMIT, SETUP_TIME_LIMIT), (SEND_RESET_LENGTH, 1), (ENABLE, 1)], true)?;
         self.update(DcI2cArbitration, 0, &[(NO_QUEUED_SW_GO, 0)], false)?;
         let mut read = Read { bytes: [0; MAX_BLOCKS * BLOCK], blocks: 1 };
         let mut block = 0;
@@ -239,7 +272,7 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         self.update(DcI2cTransaction, 1, &[(STOP_ON_NACK, 1), (START, 1), (RW, 1), (COUNT, BLOCK as u32), (STOP, 1)], true)?;
         self.buffer(read << DATA.shift)?;
         self.update(DcI2cControl, 0, &[(SW_STATUS_RESET, 1)], true)?;
-        self.update(DcI2cDdc1Setup, 0, &[(DATA_DRIVE_EN, 0), (CLK_DRIVE_EN, 0), (DATA_DRIVE_SEL, 0), (INTRA_TRANSACTION_DELAY, 0), (INTRA_BYTE_DELAY, 0)], true)?;
+        self.update(self.line.setup, 0, &[(DATA_DRIVE_EN, 0), (CLK_DRIVE_EN, 0), (DATA_DRIVE_SEL, 0), (INTRA_TRANSACTION_DELAY, 0), (INTRA_BYTE_DELAY, 0)], true)?;
         self.update(DcI2cControl, 0, &[(SOFT_RESET, 0), (SW_STATUS_RESET, 0), (SEND_RESET, 0), (GO, 0), (TRANSACTION_COUNT, 1)], true)?;
         // GO: the clock taken right after its write and the status polled at once; the write logged after the transfer,
         // so that no log line lies between GO and the first read of the status (boot 78 measured the poll only).
@@ -262,7 +295,7 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
     // DC_I2C_GO written and the status polled until the engine no longer has the transfer: (status, us from GO, reads).
     fn go(&mut self, block: u8) -> Result<(u32, u64, u32), Failure> {
         let x = at(R::DcI2cControl, 0);
-        let w = ddc_writable(x).map_err(|_| Failure::Refused(x.offset()))?;
+        let w = ddc_writable_on(self.line.writes, x).map_err(|_| Failure::Refused(x.offset()))?;
         let old = self.read(R::DcI2cControl, 0)?;
         let v = (old & !GO.mask()) | GO.mask();
         if self.len == MAX_WRITES { return Err(Failure::JournalFull); }
@@ -286,11 +319,12 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
         result.map(|s| (s, us, polls))
     }
 
-    // release_engine, then every register written put back, last first; then each checked against batch 11: how many
-    // were put back, and how many of `RESTORED` read as batch 11 read them.
+    // release_engine, then every register written put back, last first; then each checked against step 1: how many
+    // were put back, and how many of the line's `restored` read as step 1 read them.
     fn give_back(&mut self, store: &Store) -> (usize, usize) {
         use R::*;
-        if self.len == 0 { return (0, RESTORED.len()); }
+        let restored_regs = self.line.restored();
+        if self.len == 0 { return (0, restored_regs.len()); }
         let reset = match self.read(DcI2cSwStatus, 0) { Ok(s) => STATUS.get(s) == USED_BY_SW, Err(_) => false };
         let fields: &[(Field, u32)] = if reset { &[(SOFT_RESET, 1), (SW_STATUS_RESET, 1)] } else { &[(SW_STATUS_RESET, 1)] };
         let _ = self.update(DcI2cControl, 0, fields, true);
@@ -315,50 +349,56 @@ impl<E: Bus + Poke + Clock> Step2<'_, E> {
             self.out.line(format_args!("D RESTORED {} = {:08X}", Name(w.reg()), old));
         }
         let mut same = 0;
-        for (r, n) in RESTORED {
+        for (r, n) in restored_regs {
             match (self.read(r, n), store.get(r, n)) {
                 (Ok(now), Some(found)) if now == found => same += 1,
-                (Ok(now), Some(found)) => self.out.note(format_args!("D NOT AS FOUND: {} = {:08X}, BATCH 11 READ {:08X}", Name(at(r, n)), now, found)),
+                (Ok(now), Some(found)) => self.out.note(format_args!("D NOT AS FOUND: {} = {:08X}, BATCH {} READ {:08X}", Name(at(r, n)), now,
+                    if r == self.line.pads || r == self.line.speed || r == self.line.setup { self.line.batch } else { 11 }, found)),
                 _ => self.out.note(format_args!("D NOT CHECKED: {}", Name(at(r, n)))),
             }
         }
         let holder = self.read(DcI2cArbitration, 0).map(|a| RW_CNTL_STATUS.get(a)).ok();
         let found = store.field(DcI2cArbitration, 0, RW_CNTL_STATUS);
         out_held(self.out, holder, found);
-        self.out.line(format_args!("D THE ENGINE GIVEN BACK: {} WRITES PUT BACK; {} OF {} REGISTERS AS BATCH 11 READ THEM", restored, same, RESTORED.len()));
+        self.out.line(format_args!("D THE ENGINE GIVEN BACK: {} WRITES PUT BACK; {} OF {} REGISTERS AS {} READ THEM", restored, same, restored_regs.len(), self.line.found));
         (restored, same)
     }
 }
 
 fn out_held(out: &mut dyn Out, now: Option<u32>, found: Option<u32>) {
+    // The arbitration is the engine's own, read by batch 11 for either line.
     let name = |s: Option<u32>| match s { Some(IDLE) => "NOBODY", Some(USED_BY_SW) => "SOFTWARE", Some(USED_BY_HW) => "THE DMCU", Some(_) => "BOTH", None => "-" };
     out.line(format_args!("D THE ENGINE NOW HELD BY {}; BATCH 11 FOUND IT HELD BY {}", name(now), name(found)));
 }
 
-/// Step 2: the EDID's blocks, or why not; the engine given back as found either way. Its last line says how long it
-/// took, each transfer from GO and the give-back (213-DRV-0098); a transfer that fails logs its detail first.
-pub fn read<E: Bus + Poke + Clock>(store: &Store, e: &mut E, out: &mut dyn Out) -> Result<Read, Failure> {
+/// Step 2: HDMI-A-1's EDID over DDC1, as `read_on` reads it.
+pub fn read<E: Bus + Poke + Clock>(store: &Store, e: &mut E, out: &mut dyn Out) -> Result<Read, Failure> { read_on(DDC1, store, e, out) }
+
+/// Step 2 on `line`: the EDID's blocks, or why not; the engine given back as found either way. Its last line says how
+/// long it took, each transfer from GO and the give-back (213-DRV-0098); a transfer that fails logs its detail first.
+pub fn read_on<E: Bus + Poke + Clock>(line: Line, store: &Store, e: &mut E, out: &mut dyn Out) -> Result<Read, Failure> {
     out.part();
     let start = e.now_us();
-    out.line(format_args!("D STEP 2: HDMI-A-1'S EDID OVER DDC1 THROUGH THE I2C ENGINE, AT {} KHZ, IN DISPLAY CORE'S ORDER; THE ENGINE PUT BACK AS FOUND AFTER", SPEED_KHZ));
-    let (mut back, mut go) = ((0, RESTORED.len()), [0u64; MAX_BLOCKS]);
-    let result = if store.get(R::DcI2cArbitration, 0).is_none() || store.get(R::DcI2cDdc1Setup, 0).is_none() { Err(Failure::NotRead) }
-        else if store.field(R::HpdIntStatus, 0, DC_HPD_SENSE) != Some(1) { Err(Failure::NoMonitor) }
+    out.line(format_args!("D STEP 2: {}'S EDID OVER {} THROUGH THE I2C ENGINE, AT {} KHZ, IN DISPLAY CORE'S ORDER; THE ENGINE PUT BACK AS FOUND AFTER",
+        line.output, line.name, SPEED_KHZ));
+    let (mut back, mut go) = ((0, line.restored().len()), [0u64; MAX_BLOCKS]);
+    let result = if store.get(R::DcI2cArbitration, 0).is_none() || store.get(line.setup, 0).is_none() { Err(Failure::NotRead) }
+        else if store.field(R::HpdIntStatus, line.hpd, DC_HPD_SENSE) != Some(1) { Err(Failure::NoMonitor) }
         else {
-            let mut s = Step2 { e: &mut *e, out: &mut *out, journal: [None; MAX_WRITES], len: 0, granted: false, go_us: [0; MAX_BLOCKS] };
+            let mut s = Step2 { line, e: &mut *e, out: &mut *out, journal: [None; MAX_WRITES], len: 0, granted: false, go_us: [0; MAX_BLOCKS] };
             let r = s.transfer();
-            if let Err(why) = r { s.out.failed(); s.out.line(format_args!("D STOPPED: {}; THE ENGINE IS GIVEN BACK", why)); }
+            if let Err(why) = r { s.out.failed(); s.out.line(format_args!("D STOPPED: {}; THE ENGINE IS GIVEN BACK", On(line, why))); }
             back = s.give_back(store);
             go = s.go_us;
             r
         };
     let us = e.now_us().saturating_sub(start);
     match &result {
-        Ok(r) if r.blocks > 1 => out.note(format_args!("D STEP 2 DONE: {} BLOCKS READ ({} BYTES) IN {} US, THE TRANSFERS {} AND {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS BATCH 11 READ THEM",
-            r.blocks, r.blocks * BLOCK, us, go[0], go[1], back.0, back.1, RESTORED.len())),
-        Ok(r) => out.note(format_args!("D STEP 2 DONE: {} BLOCK READ ({} BYTES) IN {} US, THE TRANSFER {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS BATCH 11 READ THEM",
-            r.blocks, r.blocks * BLOCK, us, go[0], back.0, back.1, RESTORED.len())),
-        Err(why) => out.note(format_args!("D STEP 2 NOT DONE: {}; STEPS 3 AND 4 GO ON WITHOUT IT", why)),
+        Ok(r) if r.blocks > 1 => out.note(format_args!("D STEP 2 DONE: {} BLOCKS READ ({} BYTES) IN {} US, THE TRANSFERS {} AND {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS {} READ THEM",
+            r.blocks, r.blocks * BLOCK, us, go[0], go[1], back.0, back.1, line.restored().len(), line.found)),
+        Ok(r) => out.note(format_args!("D STEP 2 DONE: {} BLOCK READ ({} BYTES) IN {} US, THE TRANSFER {} US FROM GO; {} WRITES PUT BACK, {} OF {} REGISTERS AS {} READ THEM",
+            r.blocks, r.blocks * BLOCK, us, go[0], back.0, back.1, line.restored().len(), line.found)),
+        Err(why) => out.note(format_args!("D STEP 2 NOT DONE: {}; STEPS 3 AND 4 GO ON WITHOUT IT", On(line, *why))),
     }
     result
 }
