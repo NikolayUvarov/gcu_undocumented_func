@@ -17,7 +17,7 @@ use dot11::scan::{Bss, Security};
 use dot11::station::{Allowed, Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
 use mind::deadline::Deadline;
-use mind::idl::codec::List;
+use mind::idl::codec::{List, Text};
 use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BADGE_COUNTERS, BADGE_WIFI, BADGE_WIFI_CHANGE};
@@ -199,6 +199,8 @@ struct Wlan {
     // The access point (BSSID, channel) the automatic join's try is joining, and those set aside (550-NET-0097).
     joining: Option<([u8; 6], u8)>,
     set_aside: auto::SetAside,
+    // A client's join that came while a scan ran, answered once the scan ends (550-NET-0098).
+    held_join: Option<(wire::Call, List<u8, 32>, Text<64>, bool)>,
     // The radio's channels, as its `info` gave them.
     channels: ([u8; catalogue::CHANNELS], usize),
     // The country (550-NET-0035): the user's choice and whether `keystore` keeps it, the one the station runs under and
@@ -577,6 +579,11 @@ impl Wlan {
         }
         if self.station.state() != State::Scanning {
             for scan in 0..WAITERS { if let Some(call) = self.scans[scan].take() { let _ = wifi::reply_scan(call, Ok(self.networks().as_slice())); } }
+            // The scan ended: a client's join held for it joins from the whole list (550-NET-0098).
+            if let Some((call, ssid, passphrase, remember)) = self.held_join.take() {
+                let result = self.join(ssid.as_slice(), passphrase.as_str(), remember, now);
+                let _ = wifi::reply_join(call, result);
+            }
         }
     }
 
@@ -680,6 +687,18 @@ impl Wlan {
                 let result = self.set_country(code.as_str());
                 wifi::reply_set_country(call, result.as_ref().map_err(|e| *e))
             }
+            // A join from half a scan takes what it heard first: on the Ryzen the 2.4 GHz access point, before the scan
+            // reached channel 100 (550-NET-0098). So it waits for the scan's end; an automatic try's scan becomes its own.
+            wifi::Request::Join { ssid, passphrase, remember } if self.radio && self.station.state() == State::Scanning => {
+                let mut call = call;
+                if self.held_join.is_some() || call.defer().is_err() { wifi::reply_join(call, Err(wifi::Error::Busy)) } else {
+                    if let Some(Try::Scanning(number)) = self.trying.take() { mind::println!("[WLAN] AUTO-JOIN: TRY {} ENDED BY A CLIENT'S JOIN", number); }
+                    self.auto.idle(now);
+                    mind::println!("[WLAN] A CLIENT'S JOIN OF {} WAITS FOR THE SCAN UNDER WAY TO END", Name(ssid.as_slice()));
+                    self.held_join = Some((call, ssid, passphrase, remember));
+                    Ok(())
+                }
+            }
             wifi::Request::Join { ssid, passphrase, remember } => wifi::reply_join(call, self.join(ssid.as_slice(), passphrase.as_str(), remember, now)),
             wifi::Request::Leave => {
                 let mut out = Out::default();
@@ -724,8 +743,8 @@ impl Wlan {
 
     fn join(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
         if !self.radio { return Err(wifi::Error::NoDevice); }
-        // A client's join ends an automatic try (its scan is stopped, so the station takes the join), and the next try
-        // waits a first wait, so the client's outcome is the station's for a while.
+        // A client's join ends an automatic try, and the next try waits a first wait, so the client's outcome is the
+        // station's for a while. A join that came during a scan waited for its end (550-NET-0098), so none runs now.
         if let Some(Try::Scanning(_)) = self.trying.take() {
             if self.station.state() == State::Scanning { let mut out = Out::default(); self.station.leave(&mut out, &mut self.tx); self.apply(out); }
         }
@@ -962,7 +981,7 @@ fn main(_info: &'static BootInfo) {
                           backlog: Backlog { frames: alloc::vec![0; HELD_FRAMES * FRAME_MAX], slots: [(0, 0, false, 0); HELD_FRAMES], head: 0, count: 0, dropped: 0, said: 0, said_ms: 0 }, deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
-                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0), joining: None, set_aside: auto::SetAside::new(),
+                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0), joining: None, set_aside: auto::SetAside::new(), held_join: None,
                           channels: ([0; catalogue::CHANNELS], 0), chosen: None, kept: false, running: None, confirmed: false, refused: false, first: false,
                           reader: mind::ipc::mint_badged(Endpoint::SERVICE.0, mind::abi::CAP_WRITE | mind::abi::CAP_GRANT, BADGE_WIFI).ok(), tuned: false, checked: 0, restarted: None,
                           tuned_to: 0, again: None, had_radio: false, try_began: 0, nothing_kept: false, keystore_failed: false,
