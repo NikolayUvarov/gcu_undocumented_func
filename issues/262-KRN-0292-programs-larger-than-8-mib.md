@@ -32,7 +32,7 @@
 ## Acceptance criteria
 
 1. `common/abi.rs` at ABI 40 with `IMAGE_MAX`. `tests/runtime.rs` pins (48, 40). It also checks three things: `app.elf` grown to just under 512 MiB loads with its `.bss` zeroed; past 512 MiB it is refused with `ELF IMAGE ABOVE 512 MIB`; and the windows lie in order above the image. **Met on the branch** (48 host tests pass).
-2. The `memory` suite's `large_image_check`. `bigclock`, `clock.elf` whose image spans 72 MiB from a file of 6 MiB, starts and runs, and `stat` shows its image of 72 MiB. `hugeclock`, past `IMAGE_MAX`, is refused with nothing left allocated. **To be run** on x86 and aarch64.
+2. The `memory` suite's `large_image_check`. `bigclock`, `clock.elf` whose image spans 72 MiB from a file of 6 MiB, starts and runs, and `stat` shows its image of 72 MiB. `hugeclock`, past `IMAGE_MAX`, is refused with nothing left allocated. **To be run** on x86, the one architecture whose CI runs the `memory` suite. aarch64's groups run every other program with the moved windows.
 3. Every QEMU suite on both architectures passes with the windows moved: the landing gate.
 
 ## Related
