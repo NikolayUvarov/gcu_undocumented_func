@@ -437,7 +437,7 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant Question Choice;
     nn: Error Model Budget Usage Status;
-    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage HttpRefusal HttpMethod HttpRequest Signature PublicKey Role KeyFile Timestamp RecoveryOrder;
+    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage JsonText HttpRefusal HttpMethod HttpRequest Signature PublicKey Role KeyFile Timestamp RecoveryOrder;
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters KeyboardLayout LayoutSwitch Keymap;

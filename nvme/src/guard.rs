@@ -1,13 +1,16 @@
 // What an nvme instance sends its controller (213-DRV-0060): the first instance (init's argument empty or 0) every
 // command the driver uses; any other instance, or an argument that names none, only Identify, the I/O queues' bring-up
-// (their number, then their creation) and Read, so its disk is never written while it is tested. Built on the host for
-// tests (tests/nvme_host.rs).
+// (their number, then their creation) and Read, so its disk is never written while it is tested. And what a flush finds
+// to empty (307-DRV-0055). Built on the host for tests (tests/nvme_host.rs).
 use core::fmt;
 
 // Admin commands (NVMe 1.4, figure 139) and I/O commands (figure 346) the driver sends.
 pub const OP_CREATE_SQ: u8 = 0x01; pub const OP_CREATE_CQ: u8 = 0x05; pub const OP_IDENTIFY: u8 = 0x06; pub const OP_SET_FEATURES: u8 = 0x09;
+pub const OP_GET_FEATURES: u8 = 0x0A;
 // Set Features' command dword 10 for the Number of Queues (feature 07h), not saved (SV, bit 31, clear).
 pub const QUEUES_FEATURE: u32 = 0x07;
+// Get Features' command dword 10 for the Volatile Write Cache (feature 06h), its current value (SEL 0).
+pub const VWC_FEATURE: u32 = 0x06;
 pub const OP_FLUSH: u8 = 0x00; pub const OP_WRITE: u8 = 0x01; pub const OP_READ: u8 = 0x02;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,4 +87,14 @@ pub fn ascii<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
     for (slot, &b) in out.iter_mut().zip(bytes) { *slot = if (0x20..0x7F).contains(&b) { b } else { b'?' }; n += 1; }
     while n > 0 && (out[n - 1] == b' ' || bytes[n - 1] == 0) { n -= 1; }
     core::str::from_utf8(&out[..n]).unwrap_or("")
+}
+
+// The controller's volatile write cache (NVMe 1.4, 5.15.2.2 and 5.21.1.6): absent, present but off, or on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cache { Absent, Off, On }
+
+// From Identify Controller's VWC byte (bit 0: present) and Get Features' answer for the Volatile Write Cache (dword 0,
+// bit 0: WCE), None when it was not asked or not answered: then a present cache is taken as on, and a flush is sent.
+pub fn cache(vwc: u8, wce: Option<u32>) -> Cache {
+    if vwc & 1 == 0 { Cache::Absent } else if wce.is_some_and(|dword| dword & 1 == 0) { Cache::Off } else { Cache::On }
 }

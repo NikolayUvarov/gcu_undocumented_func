@@ -3,7 +3,8 @@
 // ramdisk: a block device in the service's own memory (8 MiB) for scratch files: vfs_server formats it as FAT on first
 // mount and serves it as `ram:`. Its contents never outlive the boot. Writes need the write badge like any drive's.
 // Given a memory object in SLOT_MEM (ramdisk#2, 352-KRN-0268), it serves that instead, read-only: the boot volume the
-// loader read into memory from an El Torito entry.
+// loader read into memory from an El Torito entry. A flush has nothing to reach: it is answered done, said once
+// (307-DRV-0055).
 use mind::abi::{BootInfo, BLOCK_SECTOR, CAP_KIND_MEMORY, SLOT_MEM};
 use mind::block::{self, Driver, Outcome};
 use mind::mem::{Mapping, Pages};
@@ -12,7 +13,8 @@ const BYTES: usize = 8 << 20;
 
 enum Store { Own(Pages), Lent(Mapping) }
 
-struct Ram { store: Store, sectors: u64 }
+// `said`: whether the log said what a flush reaches.
+struct Ram { store: Store, sectors: u64, said: bool }
 
 impl Ram {
     fn bytes(&self) -> &[u8] { match &self.store { Store::Own(pages) => pages.as_slice(), Store::Lent(map) => map.as_slice() } }
@@ -31,20 +33,24 @@ impl Driver for Ram {
         pages.as_mut_slice()[at..at + count * BLOCK_SECTOR].copy_from_slice(&data[..count * BLOCK_SECTOR]);
         Ok(())
     }
+    fn flush(&mut self) -> Outcome {
+        if !core::mem::replace(&mut self.said, true) { mind::println!("[RAMDISK] FLUSH: NOTHING TO REACH (THE DISK IS THIS SERVICE'S MEMORY, GONE AT EVERY RESET): ANSWERED DONE"); }
+        Ok(())
+    }
     fn read_only(&self) -> bool { matches!(self.store, Store::Lent(_)) }
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut ram = if mind::dev::cap_info(SLOT_MEM).0 == CAP_KIND_MEMORY {
-        let ram = Mapping::new(SLOT_MEM).ok().map(|map| { let sectors = (map.len() / BLOCK_SECTOR) as u64; Ram { store: Store::Lent(map), sectors } });
+        let ram = Mapping::new(SLOT_MEM).ok().map(|map| { let sectors = (map.len() / BLOCK_SECTOR) as u64; Ram { store: Store::Lent(map), sectors, said: false } });
         match &ram {
             Some(r) => mind::println!("[RAMDISK] THE BOOT VOLUME IN MEMORY: {} KB, READ-ONLY", r.sectors as usize * BLOCK_SECTOR / 1024),
             None => mind::println!("[RAMDISK] THE BOOT VOLUME IN MEMORY COULD NOT BE MAPPED"),
         }
         ram
     } else {
-        let ram = Pages::new(BYTES).map(|pages| Ram { store: Store::Own(pages), sectors: (BYTES / BLOCK_SECTOR) as u64 });
+        let ram = Pages::new(BYTES).map(|pages| Ram { store: Store::Own(pages), sectors: (BYTES / BLOCK_SECTOR) as u64, said: false });
         match &ram {
             Some(_) => mind::println!("[RAMDISK] {} KB", BYTES / 1024),
             None => mind::println!("[RAMDISK] NO MEMORY"),

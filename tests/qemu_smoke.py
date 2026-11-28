@@ -50,6 +50,8 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
+# Where a task's windows above its image start: IMAGE_MAX past the image's (kernel/src/paging.rs, 262-KRN-0292).
+ABOVE_IMAGE = 512 << 20
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "nvme#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
@@ -112,7 +114,7 @@ def task_states_text(page):
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False, drive="", trace=None):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
@@ -121,12 +123,14 @@ class VM:
         # `serial`: the console UART's chardev; "pty" gives it to a test's own tool (100000-KRN-0221), with no prompt to wait for.
         # Where the boot waits for keystore's passphrase, the shell asks for it in place of its first prompt (308-APP-0130):
         # Esc answers it (later) unless `passphrase`, which leaves the question to the test.
+        # `drive`: options added to the boot disk's -drive. `trace`: a file and QEMU trace events written to it from the
+        # kernel's start on, so that the firmware's commands to the disks are not among them (307-DRV-0055).
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
         self.temporary = []
         self.monitor_used, self.monitor_cpu = False, None
-        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
+        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off", *(["-D", str(trace[0])] if trace else []))
         if tablet:
             extra = (*extra, "-device", "virtio-tablet-pci")
         if usb_input:
@@ -137,7 +141,7 @@ class VM:
                      "-device", "qemu-xhci,id=xhci2")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
-        source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
+        source = (f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}") + drive
         storage = (["-drive", f"{source},if=none,id=usbdisk",
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
@@ -180,6 +184,10 @@ class VM:
         if not prompt:
             return
         try:
+            if trace:
+                self.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+                for event in trace[1]:
+                    self.qmp("trace-event-set-state", name=event, enable=True)
             # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
             if self.first_of(("MIND> ", BOOT_PASSPHRASE), timeout=90) == BOOT_PASSPHRASE:
                 if passphrase:
@@ -876,7 +884,7 @@ def stack_check(vm):
     vm.send("memstack 3072\n")
     require(vm.expect("MIND> ", timeout=60, after="memstack 3072\n"), "[MEMSTACK] 3072 KiB OF STACK USED")
     image = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    guard = image + 0x0100_1000 - 4096  # USER_STACK less one page
+    guard = image + ABOVE_IMAGE  # USER_STACK less one page
     def guard_faults():
         return [line for line in vm.command("faults").splitlines()
                 if (address := re.search(r"^FAULT PID=\d+ .* ADDR=(0x[0-9a-f]+)", line)) and guard <= int(address[1], 16) < guard + 4096]
@@ -1060,6 +1068,29 @@ def recover_lending_check(vm):
     task_rows_reaped(vm)
     print("PASS: the store's recovery client is the shell's alone, in slot 43; a program started without REQUEST_RECOVER "
           "holds no copy (308-KRN-0204)", flush=True)
+
+
+def update_reading_check(vm):
+    """100003-KRN-0291: the shell holds the updater's client badged BADGE_UPDATE_READ (2) in SLOT_UPDATE_READ (47) beside
+    its own unbadged one in SLOT_UPDATE (35); a program started without REQUEST_UPDATE_READ holds nothing in slot 47, as
+    the shell lends a copy only for that request (APP's part)."""
+    real = vm.services()
+    if "updater" not in real:
+        return
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    updaters = lambda held: {int(m[1]): int(m[2]) for m in re.finditer(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", held, re.M)
+                             if servers.get(int(m[3])) == real["updater"]}
+    shell = vm.command(f"stat caps {real['shell']}", raw=True)
+    assert updaters(shell) == {35: 0, 47: 2}, shell
+    shown = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    held = vm.command(f"stat caps {task}", raw=True)
+    require(held, "STAT CAPS VERSION=")
+    assert not updaters(held) and not re.search(r"^SLOT=47 ", held, re.M), held
+    require(vm.command(f"kill {shown}"), f"KILLED PID={shown}")
+    task_rows_reaped(vm)
+    print("PASS: the updater's reading client is the shell's, in slot 47, beside its own in slot 35; a program started without "
+          "REQUEST_UPDATE_READ holds none (100003-KRN-0291)", flush=True)
 
 
 def hardware_report_check(vm):
@@ -1274,6 +1305,7 @@ def normal_suite(vm):
             vm.command(f"kill {pid}")
     stack_check(vm)
     recover_lending_check(vm)
+    update_reading_check(vm)
     # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
@@ -2458,8 +2490,9 @@ def monitors_check(vm):
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
     # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
     base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
-                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+    for offset, rest in ((0, r"\S+ +r-x +image"), (ABOVE_IMAGE, r"4\.0K +--- +guard"), (ABOVE_IMAGE + 0x1000, r"64\.0K +rw- +stack"),
+                         (ABOVE_IMAGE + 0x0100_0000, r"\S+ +rw- +screen"), (ABOVE_IMAGE + 0x0300_0000, r"4\.0K +r-- +info"),
+                         (ABOVE_IMAGE + 0x0300_1000, r"4\.0K +rw- +mailbox"), (ABOVE_IMAGE + 0x0400_0000, r"4\.0K +r-x +exit")):
         line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
@@ -3875,7 +3908,29 @@ def protection_check(vm):
     return names
 
 
+def large_image_check(vm):
+    """262-KRN-0292: a program whose image spans 72 MiB, from a 6 MiB file, starts and runs: the kernel takes images up to
+    IMAGE_MAX (512 MiB, 8 MiB before) and the loader files of that size (4 MiB before). Its image is charged as its pages
+    are. One that spans past IMAGE_MAX is refused, and nothing of it stays."""
+    output = vm.command("run bigclock &")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=bigclock BACKGROUND", output)[1])
+    task = int(re.search(r"^(\d+) bigclock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    image = int(re.search(r"IMAGE=(\d+) ", vm.command(f"stat {task}", raw=True))[1])
+    assert image == 72 << 20, image
+    time.sleep(1)
+    assert re.search(r"^\d+ bigclock ", vm.command("ps", raw=True), re.M), "the large image ran on"
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    task_rows_reaped(vm)
+    before, frames_before = heap_used(vm), frames_free(vm)
+    require(vm.command("run hugeclock &"), "NOT A PROGRAM FILE")
+    assert not re.search(r"^\d+ hugeclock ", vm.command("ps", raw=True), re.M)
+    assert heap_used(vm) == before and frames_free(vm) == frames_before, "a refused image leaves nothing allocated"
+    print("PASS: a program spanning 72 MiB from a 6 MiB file ran; one past IMAGE_MAX (512 MiB) was refused, nothing kept "
+          "(262-KRN-0292)", flush=True)
+
+
 def memory_suite(vm):
+    large_image_check(vm)
     baseline, frames = heap_used(vm), frames_free(vm)
     # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of what applications may take, so spawns run out.
     holders = hold_frames(vm, frames, 40)
@@ -6496,7 +6551,7 @@ def services_suite(vm):
     heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
     assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
     layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
-    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", "0x8001000000 4096 GUARD ---"):
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", f"0x{0x80_0000_0000 + ABOVE_IMAGE:x} 4096 GUARD ---"):
         require(layout, region)
     cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
@@ -6587,10 +6642,11 @@ def services_suite(vm):
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
     assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
-    for line in ("0x0000008001001000     65536 rw- stack",
-                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+    above = 0x80_0000_0000 + ABOVE_IMAGE
+    for line in (f"0x{above + 0x1000:016x}     65536 rw- stack", f"0x{above + 0x0300_0000:016x}      4096 r-- info",
+                 f"0x{above + 0x0300_1000:016x}      4096 rw- mailbox", f"0x{above + 0x0400_0000:016x}      4096 r-x exit"):
         require(pmap, line)
-    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    assert re.search(rf"0x{above + 0x0100_0000:016x} +\d+ rw- screen", pmap), pmap
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
@@ -9325,6 +9381,118 @@ def block_suite(args, block_elf):
         fsck_volume(image, start, fs_sectors)
     print("PASS: block write: ATA, AHCI and USB drivers each give the test's vfs_server windows of the disk's two partitions and no client of the whole disk; "
           "it writes, flushes and reads back in the blank one, is refused past each window's end; the raw image holds the sectors; the file system is intact", flush=True)
+    flush_check(args, block_elf)
+
+
+# QEMU's trace events that show a flush, and a write, reach an emulated device (307-DRV-0055): IDE and AHCI commands, the
+# NVMe controller's flush of a namespace and its writes, SCSI commands (the USB disk's), and VirtIO block requests, of
+# which those neither a read nor a write are flushes, as the driver sends no other kind.
+FLUSH_TRACE = ("ide_bus_exec_cmd", "pci_nvme_flush_ns", "pci_nvme_write", "scsi_req_parsed", "virtio_blk_handle_read", "virtio_blk_handle_write", "virtio_blk_req_complete")
+# Each driver's tag and kind (tests/block_app.rs's KIND), its disk's -drive id and QEMU device, and its log's flush lines:
+# done, no cache to empty, refused.
+FLUSH_DRIVERS = {
+    "ata": (1, "fata", ["-device", "ide-hd,drive=fata,bus=ide.0,unit=0"], ("[ATA] FLUSH: FLUSH CACHE EXT SENT, THE DRIVE SAID DONE\n",
+                            "[ATA] FLUSH: NO WRITE CACHE TO EMPTY (IDENTIFY WORD 85 BIT 5 CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+                            "[ATA] FLUSH: FLUSH CACHE EXT REFUSED BY THE DRIVE: ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "ahci": (2, "fsata", ["-device", "ahci,id=fahci", "-device", "ide-hd,drive=fsata,bus=fahci.0"],
+             ("[AHCI] PORT 0: FLUSH: FLUSH CACHE EXT SENT, THE DRIVE SAID DONE\n",
+              "[AHCI] PORT 0: FLUSH: NO WRITE CACHE TO EMPTY (IDENTIFY WORD 85 BIT 5 CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+              "[AHCI] PORT 0: FLUSH: FLUSH CACHE EXT REFUSED BY THE DRIVE (ERROR 04, STATUS 41): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "usb_storage": (3, "fusb", ["-device", "qemu-xhci,id=fxhci", "-device", "usb-storage,drive=fusb,bus=fxhci.0"],
+                    ("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHING PAGE: WCE SET), THE DEVICE SAID DONE\n",
+                     "[USB] STORAGE: FLUSH: NO WRITE CACHE TO EMPTY (MODE SENSE'S CACHING PAGE, WCE CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+                     "[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) REFUSED BY THE DEVICE (ITS SENSE ABOVE): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "virtio_blk": (5, "fvirtio", ["-device", "virtio-blk-pci,drive=fvirtio"],
+                   ("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH SENT, THE DEVICE SAID DONE\n",
+                    "[VIRTIO_BLK] FLUSH: NO WRITE CACHE TO EMPTY (NO VIRTIO_BLK_F_FLUSH OFFERED: IT WRITES THROUGH): ANSWERED DONE, NO REQUEST SENT\n",
+                    "[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH REFUSED BY THE DEVICE (STATUS 1): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "nvme": (6, "fnvme", ["-device", "nvme,serial=flush,drive=fnvme"],
+             ("[NVME] FLUSH: FLUSH SENT, THE CONTROLLER SAID DONE\n",
+              "[NVME] FLUSH: NO WRITE CACHE TO EMPTY (GET FEATURES, VOLATILE WRITE CACHE: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+              "[NVME] FLUSH: FLUSH REFUSED BY THE CONTROLLER (STATUS TYPE 2, CODE 0x80): ANSWERED AS FAILED, NEVER AS DONE\n")),
+}
+
+
+def flushes_traced(trace):
+    """What QEMU's trace shows reach the devices: as flushes, the IDE buses that got FLUSH CACHE or FLUSH CACHE EXT (ata's
+    and ahci's), and how many reached the NVMe namespace, the SCSI disk (SYNCHRONIZE CACHE(10), 53) and the VirtIO disk;
+    as writes, the same for WRITE SECTORS or WRITE DMA EXT, the NVMe writes, WRITE(10) (42) and VirtIO's writes."""
+    def ide(commands):
+        return len({m[1] for m in re.finditer(rf"ide_bus_exec_cmd IDE exec cmd: bus (\S+); state \S+; cmd 0x(?:{commands})\b", trace)})
+    scsi = lambda command: len(re.findall(rf"scsi_req_parsed target \d+ lun \d+ tag \d+ command {command} ", trace))
+    writes = len(re.findall(r"virtio_blk_handle_write ", trace))
+    virtio = len(re.findall(r"virtio_blk_req_complete ", trace)) - len(re.findall(r"virtio_blk_handle_read ", trace)) - writes
+    flushes = {"ide buses": ide("ea|e7"), "nvme": trace.count("pci_nvme_flush_ns nsid "), "scsi": scsi(53), "virtio": virtio}
+    return flushes, {"ide buses": ide("30|35"), "nvme": trace.count("pci_nvme_write "), "scsi": scsi(42), "virtio": writes}
+
+
+def flush_check(args, block_elf):
+    """307-DRV-0055: what a flush reaches, per driver. The test's vfs_server boots from a disk no driver here serves (IDE's
+    secondary master) beside a disk on each bus: IDE's primary master (ata), AHCI, USB, VirtIO and NVMe, each holding a
+    blank partition, in which it writes, flushes and reads back. Three boots: QEMU's write caches on, where each device gets
+    its flush (QEMU's trace from the kernel's start) and each driver says once that it was done; the caches off
+    (cache.writeback=off; for VirtIO config-wce=off too, else QEMU offers VIRTIO_BLK_F_FLUSH and a driver that takes it
+    turns its cache on, virtio 1.1, 5.2.6.2), where no flush reaches any device and each driver says once it has none to
+    empty, the flush answered done; and every flush failed on the host (blkdebug, EINVAL, which the USB disk reports as ILLEGAL REQUEST, as
+    a stick that refuses SYNCHRONIZE CACHE does), where each driver answers it failed and says so once. Not blkdebug with
+    the caches off: QEMU then ends each write with a flush of its own. Each boot the images hold the sectors written.
+    QEMU's devices, not a machine's."""
+    import copy
+    one = copy.copy(args)
+    one.disk = "default"
+    with tempfile.TemporaryDirectory(prefix="smoke-flush-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        refuse = temp / "refuse.conf"
+        refuse.write_text('[inject-error]\nevent = "flush_to_os"\nerrno = "22"\niotype = "flush"\n')
+        seen = {}
+        for variant, options, debug in [("on", "", False), ("off", ",cache.writeback=off", False), ("refused", "", True)]:
+            where = temp / variant
+            where.mkdir()
+            boot, _, _ = raw_fat_image(where, {"vfs_server.elf": block_elf})
+            disks, extra = {}, ["-nic", "none", "-device", "ide-hd,drive=fboot,bus=ide.1,unit=0,bootindex=0"]
+            for name, (kind, drive, devices, _) in FLUSH_DRIVERS.items():
+                image = where / f"{name}.img"
+                with image.open("wb") as f:
+                    f.truncate(16 << 20)
+                    mbr = bytearray(512)
+                    mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x0C, b"\xfe\xff\xff", 2048, (16 << 11) - 2048)
+                    mbr[510:512] = b"\x55\xaa"
+                    f.write(mbr)
+                disks[name] = (image, (2048, (16 << 11) - 2048))
+                file = f"blkdebug:{refuse}:{image}" if debug else str(image)
+                devices = [device + (",config-wce=off" if variant == "off" and device.startswith("virtio-blk") else "") for device in devices]
+                extra += ["-drive", f"format=raw,file={file},if=none,id={drive}{options}", *devices]
+            trace = where / "trace.log"
+            vm = VM(one, str(boot), raw=True, snapshot=False, drive=",if=none,id=fboot", extra=extra, trace=(trace, FLUSH_TRACE))
+            try:
+                output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
+                logs = {name: vm.service_logs(name, "FLUSH: ") for name in FLUSH_DRIVERS}
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-flush-{variant}-{args.cpus}cpu.log").write_text(vm.log)
+            lines = {int(m[1]): m[0] for m in re.finditer(r"^\[BLOCKTEST\] SLOT=\d+ BADGE=\d+ KIND=(\d+) .*LBA=.*$", output, re.M)}
+            assert sorted(lines) == sorted(kind for kind, *_ in FLUSH_DRIVERS.values()), output
+            flushed = "FLUSH=FAIL" if variant == "refused" else "FLUSH=OK"
+            for name, (kind, _, _, said) in FLUSH_DRIVERS.items():
+                assert f"ATTACH=OK WRITE=OK UNSEALED=REFUSED {flushed} READBACK=OK" in lines[kind], (variant, lines[kind])
+                require(logs[name], said[["on", "off", "refused"].index(variant)])
+                assert logs[name].count(" FLUSH: ") == 1, (variant, logs[name])  # one kind of line in each boot, once
+                image, (first, count) = disks[name]
+                with image.open("rb") as f:
+                    f.seek((first + count - 8 * kind) * 512)
+                    assert f.read(8 * 512) == b"".join(block_pattern(kind, s) for s in range(8)), f"{variant}: {name}'s image does not hold the written sectors"
+            if variant == "refused":
+                require(logs["usb_storage"], "[USB] STORAGE: SYNCHRONIZE CACHE REFUSED: SENSE KEY 5 ASC 24 ASCQ 00 (ILLEGAL REQUEST); A FLUSH CANNOT EMPTY THE DEVICE'S CACHE\n")
+            seen[variant] = flushes_traced(trace.read_text(errors="replace"))
+        (on, _), (off, _) = seen["on"], seen["off"]
+        # Each boot the trace saw every device's writes, so it ran while the flushes were or were not sent.
+        assert all(writes["ide buses"] == 2 and writes["nvme"] and writes["scsi"] and writes["virtio"] for _, writes in seen.values()), seen
+        assert on["ide buses"] == 2 and on["nvme"] >= 1 and on["scsi"] >= 1 and on["virtio"] >= 1, on
+        assert not any(off.values()), off
+    print(f"PASS: what a flush reaches (307-DRV-0055): ata, ahci, usb_storage, virtio_blk and nvme each write, flush and read back on QEMU's disk; "
+          f"caches on, each device got its flush (QEMU's trace from the kernel's start: {on}) and each driver said once it was done; caches off, "
+          f"none reached a device ({off}) and each driver said once it had no cache to empty, the flush answered done; every flush failed by the host, "
+          f"each driver answered it failed, never done, and said so once; the images hold the sectors (QEMU's emulated devices only)", flush=True)
 
 
 def updater_suite(args, updater_elf):
@@ -10938,10 +11106,12 @@ def hub_check(args, disk):
         out = vm.command("cat data/improve/waiting", timeout=30)
         assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
-        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        # The admin's comment, which a verified request still takes.
+        # A text past 512 bytes (100003-NET-0100, parse.wit 5.1): `parse` takes the answer and gives the text's first piece, up
+        # to 512 bytes; the rest is improve's to read with json-text. The admin's comment, which a verified request still takes.
         call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
-        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        shown = vm.command("improve show 1", timeout=60)
+        require(shown, "long long long long")
+        assert "the parse service refused" not in shown, shown[-1500:]
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
         require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
@@ -12019,6 +12189,19 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def large_image(source, path, span, file_size):
+    """A copy of `source` whose loaded segments span `span` bytes (its last one's .bss grown), its file padded with zeros
+    after the segments to `file_size` bytes (262-KRN-0292)."""
+    data = bytearray(source.read_bytes())
+    offset, count = int.from_bytes(data[32:40], "little"), int.from_bytes(data[56:58], "little")
+    loads = [offset + i * 56 for i in range(count) if int.from_bytes(data[offset + i * 56:offset + i * 56 + 4], "little") == 1]
+    first = min(int.from_bytes(data[p + 16:p + 24], "little") for p in loads) & ~4095
+    last = max(loads, key=lambda p: int.from_bytes(data[p + 16:p + 24], "little"))
+    address = int.from_bytes(data[last + 16:last + 24], "little")
+    data[last + 40:last + 48] = (first + span - address).to_bytes(8, "little")
+    path.write_bytes(bytes(data) + bytes(max(0, file_size - len(data))))
+
+
 class _Http(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         body = f"hello from the host: {self.path}\n".encode()
@@ -12402,8 +12585,14 @@ def service_runs(vm, port):
     vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
     require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    # A string of 8 KiB read back whole in pieces of `json-text`, none splitting a character (parse.wit 5.1, 100003-NET-0100).
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/long --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    whole = LONG_JSON_TEXT.encode()
+    require(out, f"WEBCHECK JSON 1 String IN 0 KEY \"text\" LONG {len(whole)} BYTES IN {json_pieces(whole)} PIECES")
+    require(out, f"SHA-256 {hashlib.sha256(whole).hexdigest()[:16]}")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
-          "nesting refused and logged with the client's PID", flush=True)
+          f"nesting refused and logged with the client's PID; a string of {len(whole)} bytes read whole in its pieces", flush=True)
 
 
 def api_runs(vm, port):
@@ -14441,6 +14630,22 @@ class _Https(_Http):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
 
+
+# A JSON string past parse.wit 5.0's 512 bytes (100003-NET-0100): Cyrillic, a dash, quotes and a line break, about 8 KiB.
+LONG_JSON_TEXT = "".join("привет, мир — \"кавычки\" и перевод\nстроки; " for _ in range(110))
+
+
+def json_pieces(data):
+    """How many pieces parse.wit 5.1's `json-text` gives a string of `data`: at most 512 bytes, cut where a character ends."""
+    count, at = 0, 0
+    while at < len(data):
+        end = min(at + 512, len(data))
+        while end < len(data) and data[end] & 0xC0 == 0x80:
+            end -= 1
+        count, at = count + 1, end
+    return count
+
+
 class _Service(http.server.BaseHTTPRequestHandler):
     """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
     protocol_version = "HTTP/1.1"
@@ -14477,6 +14682,10 @@ class _Service(http.server.BaseHTTPRequestHandler):
             return
         if self.path.endswith("/deep"):
             self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        if self.path.endswith("/long"):
+            # A string past parse.wit 5.0's 512 bytes, multi-byte UTF-8 and an escape in it (100003-NET-0100).
+            self._chunked(json.dumps({"text": LONG_JSON_TEXT, "n": 1}, ensure_ascii=False).encode())
             return
         self._chunked(b"request %d" % type(self).served)
 
@@ -20842,6 +21051,8 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+                large_image(disk / "clock.elf", disk / "bigclock.elf", 72 << 20, 6 << 20)  # 262-KRN-0292
+                large_image(disk / "clock.elf", disk / "hugeclock.elf", (512 << 20) + (8 << 20), 0)
             sign_manifest.sign_volume(disk)
             if suite == "boot":
                 boot_suite(args, disk)

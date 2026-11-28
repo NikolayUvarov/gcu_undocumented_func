@@ -1,7 +1,8 @@
 //! Host tests of the boot records the updater writes (updater/src/plan.rs, 351-UPD-0007; MC-9.3): each goes into the
 //! file that does not hold the newer valid record, and the bootloader (bootloader/src/slots.rs) follows it as meant.
 //! The releases it keeps in the block store (updater/src/kept.rs, 351-UPD-0033): which ones stay, the tree of each, read
-//! back by the layout's paths with every block checked, and a tree out of shape or damaged refused.
+//! back by the layout's paths with every block checked, and a tree out of shape or damaged refused. Which calls each
+//! client's badge may make (updater/src/rights.rs, 100003-UPD-0052).
 extern crate alloc;
 #[allow(dead_code)]
 #[path = "../bootloader/src/slots.rs"]
@@ -31,6 +32,8 @@ mod dag;
 mod tree;
 #[path = "../updater/src/kept.rs"]
 mod kept;
+#[path = "../updater/src/rights.rs"]
+mod rights;
 
 use plan::{confirm, expired, floor, in_slot, keeps, keys, last_good, manifest_version, kind, may_stage, newest, other, period, raise, recover, spend, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
@@ -524,4 +527,18 @@ fn a_refused_write_is_done_again_three_times_and_no_more() {
     let mut tries = 0;
     assert_eq!(plan::tried(|| { tries += 1; Ok::<(), u8>(()) }, |_, _, _| panic!("no refusal")), Ok(()));
     assert_eq!(tries, 1);
+}
+
+#[test]
+fn the_reading_badge_reads_alone_and_the_gateway_changes_while_remote_update_counts() {
+    use rights::{rule, Call, Rule};
+    // The badges of mind::process: the shell's client has none, the gateway's is 1, the reading one 2.
+    let (shell, gateway, reader) = (0u16, 1u16, 2u16);
+    let at = |call, badge| rule(call, badge, gateway);
+    for call in [Call::Check, Call::Change, Call::Bundle] { assert_eq!(at(call, reader), Rule::Deny, "{:?} for the reading client", call); }
+    assert_eq!((at(Call::Check, shell), at(Call::Change, shell), at(Call::Bundle, shell)), (Rule::Answer, Rule::Answer, Rule::Deny));
+    assert_eq!((at(Call::Check, gateway), at(Call::Change, gateway), at(Call::Bundle, gateway)),
+        (Rule::Answer, Rule::WhileRemoteUpdate, Rule::WhileRemoteUpdate));
+    // A badge init does not mint may only read, as every client may (status, metadata and kept are no Call).
+    assert_eq!((at(Call::Check, 9), at(Call::Change, 9), at(Call::Bundle, 9)), (Rule::Deny, Rule::Deny, Rule::Deny));
 }

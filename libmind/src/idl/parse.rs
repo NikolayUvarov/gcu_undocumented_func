@@ -9,7 +9,8 @@
 //! to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
 //! that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
 //! 4.2 (351-UPD-0030): `order`, a recovery order. 5.0 (801-NET-0080): `http-response` also gives the server's `Date`;
-//! 4.x's response without it is gone.
+//! 4.x's response without it is gone. 5.1 (100003-NET-0100): a JSON string longer than 512 bytes no longer refuses `json`,
+//! which gives its first piece; `json-text` gives a string's pieces and its whole length.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -19,7 +20,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (5, 0, 0);
+pub const VERSION: (u8, u8, u8) = (5, 1, 0);
 const MAJOR: usize = 5;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -196,7 +197,9 @@ impl Wire for HttpResponse {
 }
 
 /// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
-/// values, nesting 16 deep, a key 64 bytes and a string 512 bytes once decoded; anything else is malformed. Its values
+/// values, nesting 16 deep, a key 64 bytes once decoded; anything else is malformed. 5.1 (100003-NET-0100): a string
+/// of any length the text holds; its `text` here is its first piece, at most 512 bytes cut where a character ends, so
+/// one of more than 508 bytes may go on: `json-text` gives the rest and its length. Its values
 /// in document order, 16 from `start` (a page fits a program's stack beside its own buffers): each with its kind, the index of the object or array it is in (65535 for the
 /// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme as written.
 /// The client still checks the tree against what it expects (MC-11.5); a key that comes twice is the client's to
@@ -228,6 +231,18 @@ impl Wire for JsonPage {
     const MAX: usize = <u32 as Wire>::MAX + <List<JsonValue, 16> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.values.encode(w)?; self.page.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { values: Wire::decode(r)?, page: Wire::decode(r)? }) }
+}
+
+/// 5.1 (100003-NET-0100): string value `index` of the same JSON text, read whole again: its length in bytes once
+/// decoded, and its piece from byte `offset`, at most 512 bytes cut where a character ends, so no piece splits a
+/// UTF-8 sequence. The next piece is at `offset` plus this one's length; an empty one is the end. Malformed: a text
+/// `json` refuses, a value that is no string, or an offset past the string or inside a character.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsonText { pub length: u32, pub piece: Text<512> }
+impl Wire for JsonText {
+    const MAX: usize = <u32 as Wire>::MAX + <Text<512> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.length.encode(w)?; self.piece.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { length: Wire::decode(r)?, piece: Wire::decode(r)? }) }
 }
 
 /// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
@@ -393,6 +408,22 @@ pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result:
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonPage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+pub fn json_text(endpoint: Endpoint, text: &[u8], index: u32, offset: u32) -> Result<core::result::Result<JsonText, Error>> {
+    let mut buffer = wire::Wiped(Pages::new(20480).ok_or(SysError::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<16384>(text, &mut w).ok_or(SysError::Invalid)?;
+        index.encode(&mut w).ok_or(SysError::Invalid)?;
+        offset.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 518, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonText as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// The head of an HTTP request: its request line and header lines, with or without the blank line that ends them.
 pub fn http_request(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpRequest, Error>> {
     let mut buffer = wire::Wiped(Pages::new(12288).ok_or(SysError::NoMemory)?);
@@ -401,7 +432,7 @@ pub fn http_request(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Res
         codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1291, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -422,6 +453,7 @@ pub enum Request<'a> {
     Model { text: &'a [u8], index: u32, start: u32 },
     HttpResponse { head: &'a [u8] },
     Json { text: &'a [u8], start: u32 },
+    JsonText { text: &'a [u8], index: u32, offset: u32 },
     HttpRequest { head: &'a [u8] },
 }
 
@@ -502,6 +534,16 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Json { text, start }, call))
         }
         9 => {
+            let (call, length) = wire::take_buffer(request, cap, 518, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let text = codec::decode_bytes::<16384>(&mut r).ok_or(Reject::Invalid)?;
+            let index = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let offset = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::JsonText { text, index, offset }, call))
+        }
+        10 => {
             let (call, length) = wire::take_buffer(request, cap, 1291, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -542,6 +584,10 @@ pub fn reply_http_response(call: Call, value: core::result::Result<&HttpResponse
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_json(call: Call, value: core::result::Result<&JsonPage, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_json_text(call: Call, value: core::result::Result<&JsonText, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

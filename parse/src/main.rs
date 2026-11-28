@@ -22,12 +22,15 @@ const RECEIVED: usize = 9;
 const IDLE_MS: u32 = 30_000; // a session's parser left alone this long ends
 // A request of up to 60 000 bytes (a model manifest): kept out of the stack.
 static mut SCRATCH: [u8; parse::REQUEST_MAX] = [0; parse::REQUEST_MAX];
+// A JSON string's decoded bytes, as long as a text holds (100003-NET-0100): kept out of the stack too.
+static mut STRING: [u8; json::STRING_MAX] = [0; json::STRING_MAX];
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let session = mind::process::args_str().split_whitespace().any(|a| a == "--session");
     if !session { mind::println!("[PARSE] READY: HTTP RESPONSE AND REQUEST HEADS, RELEASE CHANNELS, BOOT MANIFESTS, MODEL MANIFESTS, JSON"); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
+    let string = unsafe { &mut *core::ptr::addr_of_mut!(STRING) };
     loop {
         // SLOT_INIT is SLOT_SERVICE: a session's endpoint is served the same way.
         let request = if session { Endpoint::SERVICE.recv_timeout(RECEIVED, IDLE_MS) } else { Endpoint::SERVICE.recv(RECEIVED) };
@@ -51,7 +54,7 @@ fn main(_info: &'static BootInfo) {
             Ok((parse::Request::Json { text, start }, call)) => {
                 // The whole text is read on every page; the values from `start` are kept (750-NET-0021).
                 let mut page = parse::JsonPage::default();
-                let walked = json::walk(text, &mut |index, value| {
+                let walked = json::walk_with(text, string, &mut |index, value| {
                     if (index as u32) < start || page.page.as_slice().len() == 16 { return Ok(()); }
                     let kind = match value.kind {
                         json::Kind::Object => parse::JsonKind::Object, json::Kind::Array => parse::JsonKind::Array, json::Kind::String => parse::JsonKind::String,
@@ -59,7 +62,9 @@ fn main(_info: &'static BootInfo) {
                         json::Kind::Null => parse::JsonKind::Null,
                     };
                     let key = core::str::from_utf8(value.key).ok().and_then(Text::new).ok_or(json::Malformed)?;
-                    let text = core::str::from_utf8(value.text).ok().and_then(Text::new).ok_or(json::Malformed)?;
+                    // A string's first piece, cut where a character ends; `json-text` gives the rest (5.1).
+                    let first = if value.kind == json::Kind::String { json::piece(value.text, 0).ok_or(json::Malformed)? } else { value.text };
+                    let text = core::str::from_utf8(first).ok().and_then(Text::new).ok_or(json::Malformed)?;
                     page.page.push(parse::JsonValue { kind, parent: value.parent.unwrap_or(u16::MAX), key, text });
                     Ok(())
                 });
@@ -71,6 +76,26 @@ fn main(_info: &'static BootInfo) {
                     }
                 };
                 parse::reply_json(call, typed)
+            }
+            Ok((parse::Request::JsonText { text, index, offset }, call)) => {
+                // String value `index` read again, and its piece from `offset` (5.1, 100003-NET-0100).
+                let mut found = None;
+                let walked = json::walk_with(text, string, &mut |at, value| {
+                    if u32::from(at) != index { return Ok(()); }
+                    if value.kind != json::Kind::String { return Err(json::Malformed); }
+                    let piece = json::piece(value.text, offset as usize).ok_or(json::Malformed)?;
+                    let piece = core::str::from_utf8(piece).ok().and_then(Text::new).ok_or(json::Malformed)?;
+                    found = Some(parse::JsonText { length: value.text.len() as u32, piece });
+                    Ok(())
+                });
+                let typed = match (walked, found.as_ref()) {
+                    (Ok(_), Some(text)) => Ok(text),
+                    _ => {
+                        if !session { mind::println!("[PARSE] REFUSED JSON TEXT {} FROM {} FOR PID {}: NO SUCH STRING, OR MALFORMED ({} BYTES)", index, offset, request.sender, text.len()); }
+                        Err(Error::Malformed)
+                    }
+                };
+                parse::reply_json_text(call, typed)
             }
             Ok((parse::Request::Channel { file }, call)) => {
                 let typed = release::parse_channel(file).map(|(channel, signed)| mind::parse::channel_record(&channel, &signed)).map_err(|_| {

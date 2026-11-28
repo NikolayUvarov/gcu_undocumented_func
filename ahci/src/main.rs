@@ -1,12 +1,16 @@
 #![no_std]
 #![no_main]
 // Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region. READ DMA
-// EXT, WRITE DMA EXT and FLUSH CACHE EXT (writes only for clients with the write badge, see mind::block_protocol).
+// EXT, WRITE DMA EXT and the flush IDENTIFY calls for (cache.rs; writes only for clients with the write badge, see
+// mind::block_protocol): a drive without a write cache, or with it off, is answered done with no command, and one that
+// refuses or does not answer a flush is answered failed, each said once in the log (307-DRV-0055).
 // Every wait ends at a deadline; a request is checked against the DMA region here; a failed command restarts the port,
 // and the log names a run of failures once (000-DRV-0064, checks.rs). Each port's signature is received before it is
 // read, as a controller the firmware left untouched needs (307-DRV-0068, checks.rs).
+mod cache;
 mod checks;
 
+use cache::{Flush, Said};
 use checks::{Answer, Bohc, Clock, Handoff, Ports, CLB, CMD, CMD_CR, CMD_FR, CMD_FRE, CMD_ST, COMMAND_NS, FB, FLUSH_NS, READY_NS, SERR, STOP_NS, TFD};
 use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver, DriverError, Outcome};
@@ -43,8 +47,11 @@ impl Ports for Hba<'_> {
 }
 
 // `room`: the data area's bytes in the DMA region; `failing`: whether the last command failed, so that a run of
-// failures is logged once.
-struct Ahci { hba: Mmio, dma: Dma, port: usize, sectors: u64, room: usize, failing: bool }
+// failures is logged once; `cache`: what a flush does, from IDENTIFY.
+struct Ahci { hba: Mmio, dma: Dma, port: usize, sectors: u64, room: usize, failing: bool, cache: Flush, said: Said }
+
+// How a command failed: the drive ended it with an error (its TFD: error and status), or it did not end by its deadline.
+enum Failed { Error(u32), Late }
 
 impl Ahci {
     fn reg(&self, offset: usize) -> u32 { self.hba.read32(0x100 + self.port * 0x80 + offset) }
@@ -73,13 +80,14 @@ impl Ahci {
             Answer::Signature(_, false) => {}
         })?;
         let room = dma.len() - DATA;
-        let mut device = Self { hba, dma, port, sectors: 0, room, failing: false };
+        let mut device = Self { hba, dma, port, sectors: 0, room, failing: false, cache: Flush::Send(cache::FLUSH_CACHE_EXT), said: Said::new() };
         device.start()?;
         let mut identify = [0u8; 512];
         device.command(0xEC, 0, 0, &mut identify, COMMAND_NS)?;
         let word = |i: usize| u16::from_le_bytes([identify[i * 2], identify[i * 2 + 1]]) as u64;
         let lba48 = word(100) | word(101) << 16 | word(102) << 32 | word(103) << 48;
         device.sectors = if lba48 != 0 { lba48 } else { word(60) | word(61) << 16 };
+        device.cache = cache::flush(|i| word(i) as u16);
         (device.sectors != 0).then_some(device)
     }
 
@@ -99,7 +107,7 @@ impl Ahci {
 
     // One command in slot 0: H2D FIS and, with data, one PRDT entry for `bytes` of the data area (checked by the
     // caller against `room`); `write` sends them.
-    fn issue(&mut self, command: u8, lba: u64, count: usize, bytes: usize, write: bool, deadline_ns: u64) -> Option<()> {
+    fn issue(&mut self, command: u8, lba: u64, count: usize, bytes: usize, write: bool, deadline_ns: u64) -> Result<(), Failed> {
         let table = self.dma.physical(TABLE); let data = self.dma.physical(DATA);
         self.dma.zero(TABLE, 0x100);
         let fis = self.dma.bytes(TABLE, 20);
@@ -113,20 +121,21 @@ impl Ahci {
         self.set(CI, 1);
         let finished = wait(deadline_ns, || self.reg(CI) & 1 == 0 || self.reg(IS) & IS_TFES != 0);
         let ok = finished && self.reg(IS) & IS_TFES == 0 && self.reg(TFD) & 1 == 0;
-        if ok { if core::mem::take(&mut self.failing) { mind::println!("[AHCI] PORT {}: THE DRIVE ANSWERS AGAIN", self.port); } return Some(()); }
+        if ok { if core::mem::take(&mut self.failing) { mind::println!("[AHCI] PORT {}: THE DRIVE ANSWERS AGAIN", self.port); } return Ok(()); }
+        let failed = if finished { Failed::Error(self.reg(TFD) & 0xFFFF) } else { Failed::Late };
         // The slot stays issued, or the port halted on the error: it is stopped and started again (AHCI 6.2.2).
         if !core::mem::replace(&mut self.failing, true) {
             mind::println!("[AHCI] PORT {}: COMMAND {:02X} AT {} {} (TFD {:02X}); THE PORT IS RESTARTED", self.port, command, lba,
                            if finished { "ENDED WITH AN ERROR" } else { "DID NOT END BY ITS DEADLINE" }, self.reg(TFD) & 0xFF);
         }
         if self.start().is_none() { mind::println!("[AHCI] PORT {}: IT DID NOT START AGAIN", self.port); }
-        None
+        Err(failed)
     }
 
     // A command that reads `out.len()` bytes (checked by the caller against `room`) into `out`.
     fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8], deadline_ns: u64) -> Option<()> {
         let bytes = out.len();
-        self.issue(command, lba, count, bytes, false, deadline_ns)?;
+        self.issue(command, lba, count, bytes, false, deadline_ns).ok()?;
         out.copy_from_slice(self.dma.bytes(DATA, bytes));
         Some(())
     }
@@ -149,9 +158,29 @@ impl Driver for Ahci {
     fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome { // WRITE DMA EXT
         let bytes = self.checked("WRITE", lba, count, data.len()).ok_or(DriverError::Range)?;
         self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        self.issue(0x35, lba, count, bytes, true, COMMAND_NS).ok_or(DriverError::Io)
+        self.issue(0x35, lba, count, bytes, true, COMMAND_NS).map_err(|_| DriverError::Io)
     }
-    fn flush(&mut self) -> Outcome { self.issue(0xEA, 0, 0, 0, false, FLUSH_NS).ok_or(DriverError::Io) } // FLUSH CACHE EXT
+    fn flush(&mut self) -> Outcome {
+        let command = match self.cache {
+            Flush::Send(command) => command,
+            none => {
+                if self.said.first(Said::NO_CACHE) { mind::println!("[AHCI] PORT {}: FLUSH: NO WRITE CACHE TO EMPTY ({}): ANSWERED DONE, NO COMMAND SENT", self.port, cache::why(none)); }
+                return Ok(());
+            }
+        };
+        let (port, name) = (self.port, cache::name(command));
+        match self.issue(command, 0, 0, 0, false, FLUSH_NS) {
+            Ok(()) => { if self.said.first(Said::DONE) { mind::println!("[AHCI] PORT {}: FLUSH: {} SENT, THE DRIVE SAID DONE", port, name); } Ok(()) }
+            Err(Failed::Error(tfd)) => {
+                if self.said.first(Said::REFUSED) { mind::println!("[AHCI] PORT {}: FLUSH: {} REFUSED BY THE DRIVE (ERROR {:02X}, STATUS {:02X}): ANSWERED AS FAILED, NEVER AS DONE", port, name, tfd >> 8, tfd & 0xFF); }
+                Err(DriverError::Io)
+            }
+            Err(Failed::Late) => {
+                if self.said.first(Said::UNANSWERED) { mind::println!("[AHCI] PORT {}: FLUSH: {} NOT ANSWERED IN {} S: ANSWERED AS FAILED, NEVER AS DONE", port, name, FLUSH_NS / 1_000_000_000); }
+                Err(DriverError::Io)
+            }
+        }
+    }
     fn read_only(&self) -> bool { false }
 }
 

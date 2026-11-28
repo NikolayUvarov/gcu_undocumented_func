@@ -1,6 +1,6 @@
 # 550-NET-0099 — The stack answers echo requests, as RFC 1122 asks of every host
 
-**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), for [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md)'s bidirectional ping · **Constitution:** MC-12.1, MC-12.3
+**Type:** `netstack` · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), for [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md)'s bidirectional ping · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -25,7 +25,7 @@
 ## Acceptance criteria
 
 - [x] `netstack` builds with the feature.
-- [ ] The network groups pass: "x86: network, TLS and Effector", "aarch64: network, TLS and Effector".
+- [x] The network groups pass: "x86: network, TLS and Effector", "aarch64: network, TLS and Effector". **Met** in round 183's gate.
 - [ ] **On the Ryzen** (DRV's run, 213-DRV-0031): a ping from the LAN to each card's address is answered.
   - QEMU's user network sends the guest no echo request, so there is no QEMU case.
 
