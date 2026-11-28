@@ -1,6 +1,6 @@
 # 177-KRN-0274 — The desk over all the screens: one desktop shown across every monitor, the compositor's part of 177's step 2
 
-**Type:** `compositor`, IDL (`display.wit`), design with APP · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** open (plan revised for every screen, 2026-11-27) · **Blocked by:** APP's answer on one desk or one screen each (the first block, [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md)'s run on the Ryzen with 0285's mirror, lifted on 2026-11-27: all three screens lit, `ALL/2026-11-27T1338Z-DRV-three-screens-ran-on-the-ryzen-…`) · **Main task:** [177](177-display-output.md) (step 2), for [213](213-amd-ryzen-pc.md)'s three monitors · **Constitution:** MC-3.11, MC-6.1, MC-12.3, MC-12.4
+**Type:** `compositor`, IDL (`display.wit`), design with APP · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** open (plan revised for every screen, 2026-11-27) · **Blocked by:** APP's answer on one desk or one screen each (the first block, [213-DRV-0113](../issues-done/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.done)'s run on the Ryzen with 0285's mirror, lifted on 2026-11-27: all three screens lit, `ALL/2026-11-27T1338Z-DRV-three-screens-ran-on-the-ryzen-…`) · **Main task:** [177](177-display-output.md) (step 2), for [213](213-amd-ryzen-pc.md)'s three monitors · **Constitution:** MC-3.11, MC-6.1, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -55,4 +55,4 @@ The maintainer asked for this twice.
 
 - [177](177-display-output.md), [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), [213](213-amd-ryzen-pc.md).
 - [213-KRN-0285](213-KRN-0285-three-screens-a-client-of-the-compositor-per-driver-screen.md) (the mirror on three screens), [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md) (the fit), [213-KRN-0272](../issues-done/213-KRN-0272-a-second-screen-for-the-compositor.done) (the first mirror).
-- [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md) (both HDMI sockets lit), [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (a monitor's own mode).
+- [213-DRV-0113](../issues-done/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.done) (both HDMI sockets lit), [213-DRV-0095](../issues-done/213-DRV-0095-display-the-second-outputs-mode-from-its-edid.done) (a monitor's own mode).
