@@ -7,6 +7,9 @@ use core::arch::asm;
 mod abi;
 use abi::SyscallMailbox;
 
+// A task's windows above its image (kernel/src/paging.rs, 262-KRN-0292): the guard page, then the stack.
+const ABOVE_IMAGE: usize = 0x80_0000_0000 + abi::IMAGE_MAX;
+const GUARD: usize = ABOVE_IMAGE;
 unsafe fn call(mb: *mut SyscallMailbox, number: usize, a: usize, b: usize) -> usize {
     (*mb).syscall_num = number;
     (*mb).arg1 = a;
@@ -233,7 +236,7 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'g' => {
-                let _ = core::ptr::read_volatile(0x80_0100_0000 as *const u8);
+                let _ = core::ptr::read_volatile(GUARD as *const u8);
             }
             b's' => {
                 asm!("mov rsp, 1", "ud2", options(noreturn));
@@ -251,8 +254,8 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 for (pointer, size) in [
                     (0x100000, 16),
                     (usize::MAX - 1, 8),
-                    (0x80_0400_1ffe, 4),
-                    (0x80_0100_0000, 1),
+                    (ABOVE_IMAGE + 0x0300_1ffe, 4), // past the mailbox's page
+                    (GUARD, 1),
                     (0x8000_0000_0000, 1),
                 ] {
                     if call(mb, 3, pointer, size) != usize::MAX {
@@ -286,7 +289,7 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_MEM_MAP, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_PHYS, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_SHARE, image, 4096, abi::ERR_INVALID), // code is not shareable
-                    (abi::SYSCALL_MEM_SHARE, 0x80_0100_1000, 4096, abi::ERR_INVALID), // nor is the stack
+                    (abi::SYSCALL_MEM_SHARE, GUARD + 4096, 4096, abi::ERR_INVALID), // nor is the stack
                     (abi::SYSCALL_IPC_RECV, abi::SLOT_RTC, 0, abi::ERR_RIGHTS), // write-only access to another's service
                     (abi::SYSCALL_IPC_REPLY, 0, 0, abi::ERR_INVALID),
                     (abi::SYSCALL_SPAWN, image, 4, abi::ERR_RIGHTS), // spawning is for holders of the spawn privilege

@@ -77,11 +77,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // installer on a live boot (352-KRN-0269). ABI 38 adds STAT_KERNEL_LINES, the kernel's lines for the system log (000-KRN-0286).
 // ABI 39 moves SLOT_DYNAMIC to 48 for SLOT_UPDATE_READ, the updater's client that may only read, which a launcher may fill
 // for REQUEST_UPDATE_READ (100003-KRN-0291).
+// ABI 40: IMAGE_MAX, 512 MiB, the span of a program's loaded segments the kernel takes and the file the loader reads (8 MiB
+// and 4 MiB before); a task's stack, screen, information, exit and heap windows lie above its image's (262-KRN-0292).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 39;
+pub const ABI_VERSION: u32 = 40;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -531,6 +533,9 @@ pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; p
 // ALLOC's arg2 holds flags: ALLOC_SMALL_PAGES maps the block in 4 KiB pages only, not 2 MiB and 1 GiB ones, as for a
 // measurement of what large pages give (262-KRN-0161, ABI 19). Any other bit refuses the call.
 pub const ALLOC_SMALL_PAGES: usize = 1;
+// The largest program image: the span of its loaded segments (a large .bss included) and its file, read whole (262-KRN-0292).
+// The image's pages are charged to the spawner's memory quota, as before; the window above it starts past this bound.
+pub const IMAGE_MAX: usize = 512 * 1024 * 1024;
 // A task's stack is what its ELF's PT_GNU_STACK asks (p_memsz, the linker's -z stack-size=), in whole pages, at least
 // STACK_MIN_BYTES; an ELF asking more than STACK_MAX_BYTES is refused. An unmapped guard page lies below it (262-KRN-0164).
 pub const STACK_MIN_BYTES: usize = 64 * 1024; pub const STACK_MAX_BYTES: usize = 8 * 1024 * 1024;

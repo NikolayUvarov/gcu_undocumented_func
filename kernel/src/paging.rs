@@ -9,12 +9,14 @@ pub const PAGE: usize = 4096;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Caching { Memory, Device, WriteCombining }
 pub const USER_IMAGE: usize = mmu::USER_IMAGE; // the start of a task's window: the architecture's
-pub const USER_STACK: usize = USER_IMAGE + 0x0100_1000;
-pub const USER_SCREEN: usize = USER_IMAGE + 0x0200_0000;
-pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
+// The image's window holds IMAGE_MAX (262-KRN-0292); the others lie above it, an unmapped page below the stack.
+const ABOVE_IMAGE: usize = USER_IMAGE + crate::abi::IMAGE_MAX;
+pub const USER_STACK: usize = ABOVE_IMAGE + PAGE;
+pub const USER_SCREEN: usize = ABOVE_IMAGE + 0x0100_0000;
+pub const USER_INFO: usize = ABOVE_IMAGE + 0x0300_0000;
 pub const USER_MAILBOX: usize = USER_INFO + PAGE;
-pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
-pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
+pub const USER_EXIT: usize = ABOVE_IMAGE + 0x0400_0000;
+pub const USER_HEAP: usize = ABOVE_IMAGE + 0x0500_0000;
 pub const USER_END: usize = USER_IMAGE + (1 << 39); // the task's whole top-level entry: its heap window holds 511 GiB (262-KRN-0160)
 const TABLES: usize = 33_792; // 64 GiB mapped in 4 KiB pages and the levels above (each table a page of the frame pool, charged: 171-KRN-0032)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
