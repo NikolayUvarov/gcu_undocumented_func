@@ -12424,8 +12424,14 @@ def service_runs(vm, port):
     vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
     require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    # A string of 8 KiB read back whole in pieces of `json-text`, none splitting a character (parse.wit 5.1, 100003-NET-0100).
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/long --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    whole = LONG_JSON_TEXT.encode()
+    require(out, f"WEBCHECK JSON 1 String IN 0 KEY \"text\" LONG {len(whole)} BYTES IN {json_pieces(whole)} PIECES")
+    require(out, f"SHA-256 {hashlib.sha256(whole).hexdigest()[:16]}")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
-          "nesting refused and logged with the client's PID", flush=True)
+          f"nesting refused and logged with the client's PID; a string of {len(whole)} bytes read whole in its pieces", flush=True)
 
 
 def api_runs(vm, port):
@@ -14463,6 +14469,22 @@ class _Https(_Http):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
 
+
+# A JSON string past parse.wit 5.0's 512 bytes (100003-NET-0100): Cyrillic, a dash, quotes and a line break, about 8 KiB.
+LONG_JSON_TEXT = "".join("привет, мир — \"кавычки\" и перевод\nстроки; " for _ in range(110))
+
+
+def json_pieces(data):
+    """How many pieces parse.wit 5.1's `json-text` gives a string of `data`: at most 512 bytes, cut where a character ends."""
+    count, at = 0, 0
+    while at < len(data):
+        end = min(at + 512, len(data))
+        while end < len(data) and data[end] & 0xC0 == 0x80:
+            end -= 1
+        count, at = count + 1, end
+    return count
+
+
 class _Service(http.server.BaseHTTPRequestHandler):
     """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
     protocol_version = "HTTP/1.1"
@@ -14499,6 +14521,10 @@ class _Service(http.server.BaseHTTPRequestHandler):
             return
         if self.path.endswith("/deep"):
             self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        if self.path.endswith("/long"):
+            # A string past parse.wit 5.0's 512 bytes, multi-byte UTF-8 and an escape in it (100003-NET-0100).
+            self._chunked(json.dumps({"text": LONG_JSON_TEXT, "n": 1}, ensure_ascii=False).encode())
             return
         self._chunked(b"request %d" % type(self).served)
 

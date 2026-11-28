@@ -8,8 +8,9 @@
 /// to 8 of them; `keys`, a key file; 2.x's channel with one signature is gone. 4.0 (351-UPD-0027): a key file's roles take `root`, the keys
 /// that sign the next one; 3.x's key file of four roles is gone. 4.1 (351-UPD-0028): `timestamp`, a channel's timestamp file.
 /// 4.2 (351-UPD-0030): `order`, a recovery order. 5.0 (801-NET-0080): `http-response` also gives the server's `Date`;
-/// 4.x's response without it is gone.
-package mind:parse@5.0.0;
+/// 4.x's response without it is gone. 5.1 (100003-NET-0100): a JSON string longer than 512 bytes no longer refuses `json`,
+/// which gives its first piece; `json-text` gives a string's pieces and its whole length.
+package mind:parse@5.1.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -82,7 +83,9 @@ interface parse {
     http-response: func(head: bytes<8192>) -> result<http-response, error>;
 
     /// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
-    /// values, nesting 16 deep, a key 64 bytes and a string 512 bytes once decoded; anything else is malformed. Its values
+    /// values, nesting 16 deep, a key 64 bytes once decoded; anything else is malformed. 5.1 (100003-NET-0100): a string
+    /// of any length the text holds; its `text` here is its first piece, at most 512 bytes cut where a character ends, so
+    /// one of more than 508 bytes may go on: `json-text` gives the rest and its length. Its values
     /// in document order, 16 from `start` (a page fits a program's stack beside its own buffers): each with its kind, the index of the object or array it is in (65535 for the
     /// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme as written.
     /// The client still checks the tree against what it expects (MC-11.5); a key that comes twice is the client's to
@@ -91,6 +94,12 @@ interface parse {
     record json-value { kind: json-kind, parent: u16, key: string<64>, text: string<512> }
     record json-page { values: u32, page: list<json-value, 16> }
     json: func(text: bytes<16384>, start: u32) -> result<json-page, error>;
+    /// 5.1 (100003-NET-0100): string value `index` of the same JSON text, read whole again: its length in bytes once
+    /// decoded, and its piece from byte `offset`, at most 512 bytes cut where a character ends, so no piece splits a
+    /// UTF-8 sequence. The next piece is at `offset` plus this one's length; an empty one is the end. Malformed: a text
+    /// `json` refuses, a value that is no string, or an offset past the string or inside a character.
+    record json-text { length: u32, piece: string<512> }
+    json-text: func(text: bytes<16384>, index: u32, offset: u32) -> result<json-text, error>;
 
     /// 2.1 (110-NET-0070): an HTTP/1.x request head as a server reads it (`mind::http_serve::parse_request`, the rules
     /// of `tools/httpd`): GET or HEAD, HTTP/1.1 or 1.0, `Host` for 1.1, no folded line, at most 64 header lines, a
