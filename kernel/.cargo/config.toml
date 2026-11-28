@@ -23,6 +23,7 @@ rustflags = [
     "-C", "link-arg=--export=mind_start",
     "-C", "link-arg=--export=mind_turn",
     "-C", "link-arg=--export=mind_console_in",
+    "-C", "link-arg=--export=mind_input",
     "-C", "link-arg=--export=mind_heap_base",
     "-C", "link-arg=-zstack-size=8388608",
 ]

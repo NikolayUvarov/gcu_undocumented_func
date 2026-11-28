@@ -1,7 +1,8 @@
 // MIND Core's wasm kernel in Node (215-PRT-0017): the console on stdout, keys from stdin or from a script.
 //   node web/node/run.mjs KERNEL.wasm AARCH64_ROOT [--volume FAT.img] [--seconds N] [--until TEXT] [--screenshot OUT.png]
 //                         [--after TEXT --type TEXT]...
-// Each --after/--type pair types TEXT (\n as Enter) once the console has shown AFTER since the step before. With --until
+// Each --after/--type pair types TEXT (\n as Enter) once the console has shown AFTER since the step before; --after/--input
+// sends evdev events instead, "DEVICE,TYPE,CODE,VALUE;..." (device 0 the tablet, 1 the keyboard). With --until
 // the run ends at TEXT, 0; at --seconds without it, 1; when the kernel stops, 2 unless it halted (0). --screenshot
 // writes the screen as it is at the end.
 import { readFileSync, existsSync } from 'node:fs';
@@ -23,6 +24,7 @@ for (let i = 2; i < args.length; i += 2) {
     else if (flag === '--screenshot') screenshot = value;
     else if (flag === '--after') steps.push({ after: value, type: null });
     else if (flag === '--type' && steps.length && steps.at(-1).type === null) steps.at(-1).type = value.replaceAll('\\n', '\r');
+    else if (flag === '--input' && steps.length && steps.at(-1).type === null) steps.at(-1).events = value.split(';').map((e) => e.split(',').map(Number));
     else { console.error(`unknown or misplaced ${flag}`); process.exit(2); }
 }
 
@@ -54,6 +56,7 @@ function turn() {
         if (step < steps.length && seen.indexOf(steps[step].after, since) >= 0) {
             since = seen.indexOf(steps[step].after, since) + steps[step].after.length;
             mind.type(new TextEncoder().encode(steps[step].type ?? ''));
+            for (const [device, kind, code, value] of steps[step].events ?? []) mind.input(device, kind, code, value);
             step++;
         }
         if (performance.now() - begun > seconds * 1000) { console.error(`\n[mind] ${seconds} s passed${until === null ? '' : ` without "${until}"`}`); done = until === null ? 0 : 1; break; }

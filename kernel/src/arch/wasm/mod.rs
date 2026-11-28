@@ -5,6 +5,7 @@ pub mod acpi;
 pub mod clock;
 pub mod context;
 pub mod cpu;
+pub mod devices;
 pub mod host;
 pub mod interrupts;
 pub mod mmu;

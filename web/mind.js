@@ -15,6 +15,7 @@ export async function start({ kernel, files, volume, write, stopped, memoryMiB =
         now_ns: () => BigInt(Math.floor(performance.now() * 1e6)),
         halt: (why) => { halted = why; stopped?.(why); },
         random: () => { crypto.getRandomValues(word); return word[0]; },
+        wall_s: () => BigInt(Math.floor(Date.now() / 1000)),
     } });
     const e = instance.exports, memory = e.memory;
     const total = memoryMiB << 20;
@@ -37,6 +38,8 @@ export async function start({ kernel, files, volume, write, stopped, memoryMiB =
         /// Runs the kernel for about `ms`: 0 when it has more to do at once, else the milliseconds to its next tick.
         turn: (ms) => (halted === null ? Number(e.mind_turn(BigInt(ms))) : -1),
         type: (bytes) => { for (const b of bytes) e.mind_console_in(b); },
+        /// An evdev event for the tablet (0) or the keyboard (1); a report ends with EV_SYN (0, 0, 0).
+        input: (device, kind, code, value) => e.mind_input(device, kind, code, value >>> 0),
         /// The screen's pixels, BGRX, as the kernel's framebuffer holds them.
         screen: () => new Uint8Array(memory.buffer, screen, width * height * 4),
         width, height, halted: () => halted,

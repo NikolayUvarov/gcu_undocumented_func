@@ -38,9 +38,11 @@ pub fn memory_bytes() -> usize { core::arch::wasm64::memory_size(0) * 65536 }
 pub fn flush_translations() { unsafe { (*addr_of_mut!(TLB)).flush(); } }
 pub fn set_root(root: u64) { unsafe { ROOT = root; } flush_translations(); }
 
-/// The page's side of the emulator: RNDR and the counter (CNTVCT in nanoseconds).
+/// The page's side of the emulator: its devices' registers, RNDR and the counter (CNTVCT in nanoseconds).
 struct Page;
 impl Devices for Page {
+    fn read(&mut self, pa: u64, size: u32) -> Option<u64> { super::devices::read(pa, size) }
+    fn write(&mut self, pa: u64, size: u32, value: u64) -> bool { super::devices::write(pa, size, value) }
     fn random(&mut self) -> Option<u64> { Some(unsafe { host::random() }) }
     fn counter(&mut self) -> u64 { clock::now_ns() }
     fn frequency(&mut self) -> u64 { 1_000_000_000 }
@@ -121,6 +123,10 @@ pub unsafe extern "C" fn mind_start(words: *const u64) {
     frame(idle)[KIND] = SYNC_KERNEL;
     CURRENT = idle;
 }
+
+/// An input event from the page for device `device` (0 the tablet, 1 the keyboard), as evdev's type, code and value.
+#[no_mangle]
+pub extern "C" fn mind_input(device: u32, kind: u32, code: u32, value: u32) { super::devices::input(device as usize, kind as u16, code as u16, value); }
 
 /// A byte typed on the page's console.
 #[no_mangle]
