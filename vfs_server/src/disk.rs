@@ -6,7 +6,8 @@ use crate::fat::{Sectors, SECTOR};
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use mind::abi::BLOCK_MAX_SECTORS;
-use mind::block::Device;
+use mind::block::{Device, MODEL_MAX};
+use mind::idl::codec::Text;
 use mind::mem::Pages;
 use mind::sys::{Error, Result};
 
@@ -53,6 +54,8 @@ impl Io {
     // One drive behind every window: one flush empties its cache.
     pub fn flush(&mut self) -> Result<()> { match self { Io::Whole(device) => device.flush(), Io::Windows(windows) => windows.first_mut().ok_or(Error::NotFound)?.1.flush() } }
     pub fn kind(&self) -> usize { self.devices().next().map_or(0, Device::kind) }
+    /// One drive behind every window: its model (block.wit 2.1, 352-KRN-0294).
+    pub fn model(&self) -> Text<MODEL_MAX> { self.devices().next().map(Device::model).unwrap_or_default() }
     pub fn read_only(&self) -> bool { self.devices().any(Device::read_only) }
     /// Up to the end of the last window.
     pub fn sectors(&self) -> u64 { match self { Io::Whole(device) => device.sectors(), Io::Windows(windows) => windows.iter().map(|(first, device)| first + device.sectors()).max().unwrap_or(0) } }
@@ -65,6 +68,7 @@ impl Disk {
         Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, missing_since: 0, said: false, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
     }
     pub fn kind(&self) -> usize { self.device.kind() }
+    pub fn model(&self) -> Text<MODEL_MAX> { self.device.model() }
     /// The volumes are mounted: sectors read from now on are not part of the medium's identity.
     pub fn mounted(&mut self) { self.recording = false; }
 
@@ -309,6 +313,7 @@ pub struct Shared(Rc<RefCell<Disk>>);
 impl Shared {
     pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
     pub fn kind(&self) -> usize { self.0.borrow().kind() }
+    pub fn model(&self) -> Text<MODEL_MAX> { self.0.borrow().model() }
     pub fn mounted(&self) { self.0.borrow_mut().mounted() }
     /// The same disk, through another handle (352-KRN-0269: a disk with a mounted volume is not installed onto).
     pub fn same(&self, other: &Shared) -> bool { Rc::ptr_eq(&self.0, &other.0) }

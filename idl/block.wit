@@ -5,7 +5,8 @@
 /// set, after a driver's restart too, every call of its client is not-found, never the whole device. A drive that fails
 /// or does not answer is io (2.0, 000-KRN-0228), never peer: a client repeats a call only after peer or not-found, which
 /// a restarted driver answers. A major version: the answers of read, write and flush mean something else than in 1.x.
-package mind:block@2.0.0;
+/// 2.1 (352-KRN-0294): `model`, the drive's name for the installer's list.
+package mind:block@2.1.0;
 
 interface block {
     /// Number of sectors; error not-found without a drive.
@@ -34,4 +35,8 @@ interface block {
     /// `mind::block::BADGE_WINDOWS`, `init`'s own, may: rights for any other, named in the log; invalid for an index out
     /// of range, a count of 0, or a range past the device; not-found without a drive.
     window: func(index: u8, count: u32, first: u64) -> result<_, error-code>;
+    /// The drive's model as it names itself (2.1, 352-KRN-0294): printable ASCII with trailing spaces and NULs cut, any
+    /// other byte `?`, at most 40 bytes; empty when the driver keeps none or there is no drive. A window's client sees its
+    /// drive's model.
+    model: func() -> string<40>;
 }
