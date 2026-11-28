@@ -1532,7 +1532,11 @@ impl Init {
                 // The SSH service's, with the right to badge, lent on for REQUEST_SSH (351-KRN-0115); the updater's, for the
                 // shell's own `update` command and no program (351-KRN-0116).
                 if self.present("ssh") { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
-                if self.present("updater") { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
+                if self.present("updater") {
+                    self.lend(&mut grants, SLOT_UPDATE, "updater")?;
+                    // One that may only read its state, the shell's: it lends a copy for REQUEST_UPDATE_READ (100003-KRN-0291).
+                    grants.add(SLOT_UPDATE_READ, self.badged(&mut minted, "updater", mind::process::BADGE_UPDATE_READ)?, CLIENT);
+                }
                 // The model service's, with the right to badge, lent for REQUEST_NN with a badge for each start: a copy of the
                 // client init keeps, revoked before a new shell starts (262-KRN-0178).
                 if self.present("nnd") { grants.copy(SLOT_NN, self.shell_nn()?, CLIENT | CAP_BADGE); }

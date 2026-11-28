@@ -243,6 +243,33 @@ fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
 }
 
 #[test]
+fn an_image_up_to_image_max_is_taken_and_the_windows_lie_above_it() {
+    // 262-KRN-0292: app.elf's last segment grown by a .bss to just under IMAGE_MAX loads; past it, the kernel refuses.
+    let data = std::fs::read("usb_root/app.elf").unwrap();
+    let grown = |to: usize| {
+        let mut elf = data.clone();
+        let (offset, count) = (u64::from_le_bytes(elf[32..40].try_into().unwrap()) as usize, u16::from_le_bytes(elf[56..58].try_into().unwrap()) as usize);
+        let last = (0..count).map(|i| offset + i * 56).filter(|&p| u32::from_le_bytes(elf[p..p + 4].try_into().unwrap()) == 1)
+            .max_by_key(|&p| u64::from_le_bytes(elf[p + 16..p + 24].try_into().unwrap())).unwrap();
+        let address = u64::from_le_bytes(elf[last + 16..last + 24].try_into().unwrap()) as usize & !4095;
+        elf[last + 40..last + 48].copy_from_slice(&((to - address) as u64).to_le_bytes());
+        elf
+    };
+    let near = grown(abi::IMAGE_MAX - 4096);
+    let image = elf::Image::parse(&near).unwrap();
+    assert!(image.size > 8 << 20 && image.size <= abi::IMAGE_MAX, "{}", image.size);
+    let mut memory = vec![0xaa; image.size];
+    assert_eq!(image.load(&mut memory, 0x100000).unwrap() - 0x100000, u64::from_le_bytes(data[24..32].try_into().unwrap()) as usize);
+    assert!(memory[image.size - 4096..].iter().all(|&b| b == 0), "the .bss ends zeroed");
+    assert_eq!(elf::Image::parse(&grown(abi::IMAGE_MAX + 4096)).err(), Some("ELF IMAGE ABOVE 512 MIB"));
+    // The image's window, then an unmapped page, the stack (up to STACK_MAX_BYTES), the screen, the task's pages and the heap.
+    use paging::*;
+    assert_eq!(USER_STACK, USER_IMAGE + abi::IMAGE_MAX + PAGE);
+    assert!(USER_STACK + abi::STACK_MAX_BYTES <= USER_SCREEN && USER_SCREEN + (32 << 20) <= USER_INFO);
+    assert!(USER_MAILBOX + PAGE <= USER_EXIT && USER_EXIT + PAGE <= USER_HEAP && USER_HEAP + (510 << 30) < USER_END);
+}
+
+#[test]
 fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
     let data = std::fs::read("usb_root/app.elf").unwrap();
     for length in [0, 1, 7, 63, 64, 100] {
@@ -400,19 +427,19 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
         SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
         SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
-        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_OWN, SLOT_SECRETS, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER, SLOT_PASSPHRASE, SLOT_EFFECTOR, SLOT_INSTALL];
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_OWN, SLOT_SECRETS, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER, SLOT_PASSPHRASE, SLOT_EFFECTOR, SLOT_INSTALL, SLOT_UPDATE_READ];
     let mut seen = std::collections::BTreeSet::new();
     for slot in named {
         assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!([SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_OWN, SLOT_SECRETS, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER, SLOT_PASSPHRASE, SLOT_EFFECTOR, SLOT_INSTALL],
-        [30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]);
-    assert_eq!((SLOT_DYNAMIC, ABI_VERSION), (47, 38));
+    assert_eq!([SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_OWN, SLOT_SECRETS, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER, SLOT_PASSPHRASE, SLOT_EFFECTOR, SLOT_INSTALL, SLOT_UPDATE_READ],
+        [30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]);
+    assert_eq!((SLOT_DYNAMIC, ABI_VERSION), (48, 40));
     // 262-KRN-0178: the shell lends nnd's client, badged for each start, to a program's SLOT_NN.
-    for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
-    assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
+    for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH, SLOT_NN, SLOT_STOREFS, SLOT_RECOVER, SLOT_UPDATE_READ] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone; programs get the reading one (100003-KRN-0291)");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_PASSPHRASE), "the passphrase's client is the shell's alone (308-KRN-0205)");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_EFFECTOR), "the Effector gateway's owner client is the shell's alone (801-KRN-0246)");
