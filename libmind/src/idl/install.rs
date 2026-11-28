@@ -66,8 +66,8 @@ impl Wire for Error {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// A disk vfs_server holds: its number for `install`, its bus, its model as the drive names itself (empty where the
-/// driver reads none: `block.wit` 2.0 carries none yet, so empty for every disk today), its size in MiB, its MBR
+/// A disk vfs_server holds: its number for `install`, its bus, its model as the drive names itself (`block.wit` 2.1
+/// `model`, 352-KRN-0294; empty where the driver keeps none, as every driver until 352-DRV-0118), its size in MiB, its MBR
 /// signature as 8 hex digits or `EMPTY` (sector 0 blank), the partitions its MBR lists, the words to type back (bus,
 /// MiB, the signature's first four digits or `EMPTY`; never the model), and why it is not offered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

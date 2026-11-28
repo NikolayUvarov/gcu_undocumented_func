@@ -60,6 +60,22 @@ pub trait Driver {
     /// A write or flush refused before it reached the driver (no write badge, or a read-only medium), with the client's
     /// badge and PID: a driver that keeps a record of such attempts says so (213-DRV-0060); the default says nothing.
     fn refused(&mut self, _what: Refused, _badge: u16, _sender: u64) {}
+    /// The drive's model as it names itself (block.wit 2.1, 352-KRN-0294), as the drive gives it; `shown_model` makes it
+    /// fit to show. A driver that keeps none keeps the default.
+    fn model(&self) -> &[u8] { &[] }
+}
+
+/// The longest model `model` answers.
+pub const MODEL_MAX: usize = 40;
+
+/// A drive's model fit for a person's list: trailing spaces and NULs cut, at most MODEL_MAX bytes, and any byte that is
+/// not printable ASCII `?`, so that no driver puts a control character there. Returns the bytes and their count.
+pub fn shown_model(raw: &[u8]) -> ([u8; MODEL_MAX], usize) {
+    let end = raw.iter().rposition(|&b| b != b' ' && b != 0).map_or(0, |i| i + 1);
+    let mut out = [0u8; MODEL_MAX];
+    let len = end.min(MODEL_MAX);
+    for (o, &b) in out.iter_mut().zip(&raw[..len]) { *o = if (0x20..0x7F).contains(&b) { b } else { b'?' }; }
+    (out, len)
 }
 
 /// Clients of one driver instance that hold a buffer at once, each badge its own (307-KRN-0177): clients that share a

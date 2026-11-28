@@ -13,8 +13,9 @@ use mind::idl::install::{Bus, Disk, Error, Layout, Refusal};
 const ISO_DESCRIPTOR: u32 = 64; // ISO 9660's first volume descriptor, block 16 of 2048 bytes, in 512-byte sectors
 
 // A disk the installer may write: its MBR signature, whether sector 0 is blank, the entries its MBR lists, and whether it
-// is the live medium (an ISO 9660 image whose volume at 1 MiB is the one the loader read into memory).
-pub struct Target { disk: Shared, signature: [u8; 4], blank: bool, partitions: u8, live: bool }
+// is the live medium (an ISO 9660 image whose volume at 1 MiB is the one the loader read into memory), and the drive's model
+// as its driver gives it (block.wit 2.1, 352-KRN-0294), asked once.
+pub struct Target { disk: Shared, signature: [u8; 4], blank: bool, partitions: u8, live: bool, model: Text<40> }
 
 // The disks, and the boot volume's disk the system is copied from (ramdisk#2's).
 pub struct Live { targets: Vec<Target>, source: Shared }
@@ -23,7 +24,8 @@ impl Live {
     pub fn new(disks: Vec<Shared>, source: Shared) -> Self {
         let mut live = Live { targets: Vec::new(), source };
         for disk in disks {
-            let mut target = Target { disk, signature: [0; 4], blank: false, partitions: 0, live: false };
+            let model = disk.model();
+            let mut target = Target { disk, signature: [0; 4], blank: false, partitions: 0, live: false, model };
             if live.look(&mut target) { live.targets.push(target); }
         }
         live
@@ -59,8 +61,7 @@ impl Live {
     pub fn disks(&self, mounted: &dyn Fn(&Shared) -> bool) -> Vec<Disk> {
         self.targets.iter().enumerate().map(|(index, target)| {
             let (bus, _) = bus(target.disk.kind());
-            // The model stays empty until block.wit gives the drive's own name (requests-DRV.md, 352-KRN-0269).
-            Disk { number: index as u8 + 1, bus, model: Text::default(), mib: (target.disk.sectors() >> 11).min(u32::MAX as u64) as u32, signature: Text::new(&signature_text(target)).unwrap_or_default(),
+            Disk { number: index as u8 + 1, bus, model: target.model, mib: (target.disk.sectors() >> 11).min(u32::MAX as u64) as u32, signature: Text::new(&signature_text(target)).unwrap_or_default(),
                    partitions: target.partitions, words: Text::new(&words(target)).unwrap_or_default(), refusal: self.refusal(target, mounted) }
         }).collect()
     }
@@ -85,7 +86,9 @@ impl Live {
             let Ok(mut volume) = Volume::mount_at(disk.clone(), layout.esp.0) else { return Err(Error::Manifest) };
             if check(&mut volume, signature.to_le_bytes()) { Ok(layout) } else { Err(Error::Manifest) }
         });
-        let mut target = Target { disk, signature: [0; 4], blank: false, partitions: 0, live: false };
+        // The same drive: its model stays.
+        let model = self.targets[index].model;
+        let mut target = Target { disk, signature: [0; 4], blank: false, partitions: 0, live: false, model };
         self.look(&mut target);
         self.targets[index] = target;
         match result {

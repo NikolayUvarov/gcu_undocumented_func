@@ -14,7 +14,7 @@ mod sys;
 #[path = "../libmind/src/block_protocol.rs"]
 mod block_protocol;
 use abi::*;
-use block_protocol::{badge_for, flush, read, sectors, window_of, writable, write, Buffers, Driver, DriverError, Outcome, Windows, BUFFERS, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, WINDOWS};
+use block_protocol::{badge_for, flush, read, sectors, shown_model, window_of, writable, write, Buffers, Driver, DriverError, Outcome, Windows, BUFFERS, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, MODEL_MAX, WINDOWS};
 use sys::Error;
 
 struct Memory { data: Vec<u8>, protected: bool, flushes: usize, fail: Option<DriverError> }
@@ -237,4 +237,27 @@ fn each_client_badge_reads_into_a_buffer_of_its_own() {
     // A mapping that fails leaves the badge without a buffer, as before the change.
     assert_eq!(buffers.attach(vfs, || Err(Error::Invalid)), Err(Error::Invalid));
     assert!(buffers.get(vfs).is_none());
+}
+
+// A drive that names itself as an NVMe controller does: 40 bytes, padded with spaces (352-KRN-0294).
+struct Named(&'static [u8]);
+impl Driver for Named {
+    fn sectors(&self) -> u64 { 16 }
+    fn read(&mut self, _: u64, _: usize, _: &mut [u8]) -> Outcome { Ok(()) }
+    fn model(&self) -> &[u8] { self.0 }
+}
+
+#[test]
+fn a_drives_model_is_shown_cut_and_printable() {
+    let shown = |d: &dyn Driver| { let (bytes, len) = shown_model(d.model()); String::from_utf8(bytes[..len].to_vec()).unwrap() };
+    assert_eq!(shown(&Named(b"Samsung SSD 980 PRO 1TB                 ")), "Samsung SSD 980 PRO 1TB", "the padding cut");
+    assert_eq!(shown(&Named(b"QEMU HARDDISK\0\0\0 \0")), "QEMU HARDDISK", "NULs and spaces at the end cut");
+    assert_eq!(shown(&Named(b"Evil\x1b[2J\x07 drive\xff")), "Evil?[2J? drive?", "control bytes and others become ?");
+    assert_eq!(shown(&Named(b"  leading spaces stay")), "  leading spaces stay");
+    let long = [b'A'; 64];
+    let (bytes, len) = shown_model(&long);
+    assert_eq!((len, &bytes[..len]), (MODEL_MAX, &[b'A'; MODEL_MAX][..]), "at most 40 bytes");
+    // A driver that keeps none, and a model of spaces alone: empty.
+    assert_eq!(shown(&ReadOnly), "");
+    assert_eq!(shown(&Named(b"        ")), "");
 }
