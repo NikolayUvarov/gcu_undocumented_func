@@ -160,6 +160,7 @@ The SBC test vectors (`bt_host/tests/data/sbc_*.hex`) are this encoder's output.
 - QEMU, Rust toolchain, Python.
 - The TLA+ tools (`tla2tools.jar` 1.7.4, MIT licence, [tlaplus/tlaplus](https://github.com/tlaplus/tlaplus)) to check the models of `docs/assurance`; `scripts/model_check.sh` fetches them and checks their SHA-256; Java.
 - Optional: a Vosk speech model for the `tts` test (`--asr-model`).
+- Binaryen (`binaryen` 132.0.0 from npm, Apache-2.0, [WebAssembly/binaryen](https://github.com/WebAssembly/binaryen)): `wasm-opt` lowers the wasm64 kernel to wasm32 for a browser tab (215-PRT-0017); `web/package.json` and its lock file pin it, and `scripts/build_wasm.sh` fetches it with `npm ci`. Nothing of it is in the module it writes.
 
 The optional NRL `nrl/tools/generate_evaluation_fixture.py` uses the same pinned PyTorch environment and decoder-oracle provenance to generate original next-token metric checks in `nrl/tests/fixtures/evaluate-v0.json`; no additional model, corpus or third-party implementation is imported.
 
