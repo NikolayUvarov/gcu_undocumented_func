@@ -50,3 +50,32 @@ fn chooses_the_network_last_joined_else_the_strongest_remembered() {
     assert_eq!(choose(heard.iter().copied(), |_| false, b""), None);
     assert_eq!(choose([(&b""[..], 20u8)].into_iter(), |_| true, b""), None);
 }
+
+#[test]
+fn an_access_point_set_aside_waits_its_time_and_a_join_lets_all_go() {
+    use auto::{SetAside, SET_ASIDE, SET_ASIDE_MS};
+    let (a, b) = ([1; 6], [2; 6]);
+    let mut set = SetAside::new();
+    let mut out = [[0; 6]; SET_ASIDE];
+    set.add(a, 1_000);
+    let n = set.at(1_000, &mut out);
+    assert_eq!(&out[..n], &[a]);
+    // Set aside again later: its time starts again, and it is held once.
+    set.add(b, 2_000);
+    set.add(a, 3_000);
+    let n = set.at(3_000, &mut out);
+    assert_eq!(&out[..n], &[a, b]);
+    // B's time ends first; A's a moment after.
+    let n = set.at(2_000 + SET_ASIDE_MS, &mut out);
+    assert_eq!(&out[..n], &[a]);
+    assert_eq!(set.at(3_000 + SET_ASIDE_MS, &mut out), 0);
+    // When full, a new one takes the oldest one's place.
+    for i in 0..SET_ASIDE as u8 { set.add([10 + i; 6], 10_000 + i as u64); }
+    set.add([99; 6], 20_000);
+    let n = set.at(20_000, &mut out);
+    assert_eq!(n, SET_ASIDE);
+    assert!(!out[..n].contains(&[10; 6]) && out[..n].contains(&[99; 6]));
+    // A join lets every one go.
+    set.clear();
+    assert_eq!(set.at(20_000, &mut out), 0);
+}

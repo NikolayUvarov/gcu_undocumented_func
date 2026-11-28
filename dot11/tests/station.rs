@@ -837,3 +837,28 @@ fn a_frame_sent_later_counts_at_the_rate_it_went_at() {
     air.station.sent_rate(held, false, 15);
     assert_eq!(air.station.data_rate(), 24);
 }
+
+#[test]
+fn an_access_point_set_aside_goes_after_the_networks_others() {
+    // CoolNet2 on channel 40 (refused by the radio under 00) and on channel 8, as the Ryzen heard it on 2026-11-27 (550-NET-0097).
+    let mut ap = wpa2();
+    let mut heard = |last: u8, channel: u8, weakness: u8| {
+        ap.channel = channel;
+        let mut f = ap.beacon();
+        (f[15], f[21]) = (last, last);
+        let h = frame::header(&f).unwrap();
+        scan::describe(&f, &h, channel, weakness, 0).unwrap()
+    };
+    let (forty, eight) = (heard(1, 40, 50), heard(2, 8, 45));
+    let mut list = scan::List::default();
+    list.insert(forty);
+    list.insert(eight);
+    assert_eq!(list.best_of(SSID, Security::Wpa2).map(|b| b.channel), Some(40), "5 GHz first while nothing is set aside");
+    assert_eq!(list.best_avoiding(SSID, Security::Wpa2, &[forty.bssid]).map(|b| b.channel), Some(8));
+    // Both set aside: the usual order again, so a network is never left untried.
+    assert_eq!(list.best_avoiding(SSID, Security::Wpa2, &[forty.bssid, eight.bssid]).map(|b| b.channel), Some(40));
+    // A network with one access point: that one, set aside or not.
+    let mut one = scan::List::default();
+    one.insert(forty);
+    assert_eq!(one.best_avoiding(SSID, Security::Wpa2, &[forty.bssid]).map(|b| b.channel), Some(40));
+}
