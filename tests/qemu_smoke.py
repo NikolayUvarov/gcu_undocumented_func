@@ -1062,6 +1062,29 @@ def recover_lending_check(vm):
           "holds no copy (308-KRN-0204)", flush=True)
 
 
+def update_reading_check(vm):
+    """100003-KRN-0291: the shell holds the updater's client badged BADGE_UPDATE_READ (2) in SLOT_UPDATE_READ (47) beside
+    its own unbadged one in SLOT_UPDATE (35); a program started without REQUEST_UPDATE_READ holds nothing in slot 47, as
+    the shell lends a copy only for that request (APP's part)."""
+    real = vm.services()
+    if "updater" not in real:
+        return
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    updaters = lambda held: {int(m[1]): int(m[2]) for m in re.finditer(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", held, re.M)
+                             if servers.get(int(m[3])) == real["updater"]}
+    shell = vm.command(f"stat caps {real['shell']}", raw=True)
+    assert updaters(shell) == {35: 0, 47: 2}, shell
+    shown = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    held = vm.command(f"stat caps {task}", raw=True)
+    require(held, "STAT CAPS VERSION=")
+    assert not updaters(held) and not re.search(r"^SLOT=47 ", held, re.M), held
+    require(vm.command(f"kill {shown}"), f"KILLED PID={shown}")
+    task_rows_reaped(vm)
+    print("PASS: the updater's reading client is the shell's, in slot 47, beside its own in slot 35; a program started without "
+          "REQUEST_UPDATE_READ holds none (100003-KRN-0291)", flush=True)
+
+
 def hardware_report_check(vm):
     """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
     and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
@@ -1274,6 +1297,7 @@ def normal_suite(vm):
             vm.command(f"kill {pid}")
     stack_check(vm)
     recover_lending_check(vm)
+    update_reading_check(vm)
     # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
