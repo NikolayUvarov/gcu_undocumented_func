@@ -1,11 +1,13 @@
 //! 213-DRV-0099: what display does at start, by the word after the device's index in its argument (`24 light`), which
 //! init passes from the machine's `data/displays.txt` line `output second off|read|light`. No word, or one it does not
-//! know, is `off`, and the log says which. Three build switches stay for bring-up only (`Bringup`), off in a release; a
-//! build with one set says so in its first line. `tests/display_light_host.rs` checks it.
+//! know, is `off`, and the log says which. Under `light` a release lights every HDMI socket that has a monitor: the one
+//! taken first, then the other in full beside it, offered as the third screen (213-DRV-0113, the maintainer's word of
+//! 2026-11-27). The build switches (`Bringup`) stay for bring-up, to go less far than a release does; a build with one
+//! set away from the release's value says so in its first line. `tests/display_light_host.rs` checks it.
 
 use crate::batches::{Order, BATCHES};
-use crate::dcn::STAGES;
-use crate::light::{SHORT_WATCH_FRAMES, WATCH_FRAMES};
+use crate::dcn::{Output, FIRST_LIGHT, STAGES};
+use crate::light::{HDMI_A_2, SHORT_WATCH_FRAMES, WATCH_FRAMES};
 use core::fmt;
 
 /// The machine's setting for its second output (HDMI-A-1).
@@ -15,7 +17,8 @@ pub enum Setting {
     Off,
     /// Step 1 read, the stages described; nothing written (step 2 is left out: it writes the I2C engine).
     Read,
-    /// Steps 1 to 4 in the production order, the EDID deciding the mode, then HPD 1 followed and the standing check.
+    /// Steps 1 to 4 in the production order on each HDMI socket with a monitor, its EDID deciding its mode, then both
+    /// HPDs followed and each picture's standing check.
     Light,
 }
 
@@ -48,7 +51,7 @@ impl fmt::Display for Args<'_> {
         let what = match self.setting {
             Setting::Off => "NO REGISTER MAPPED, NOTHING READ OR WRITTEN",
             Setting::Read => "STEP 1 READ, THE STAGES DESCRIBED, NOTHING WRITTEN",
-            Setting::Light => "STEPS 1 TO 4, THE EDID DECIDING THE MODE, THEN HPD 1 FOLLOWED AND THE STANDING CHECK",
+            Setting::Light => "STEPS 1 TO 4 ON EACH HDMI SOCKET WITH A MONITOR IN ITS EDID'S MODE, THEN BOTH HPDS FOLLOWED AND THE STANDING CHECKS",
         };
         let name = match self.setting { Setting::Off => "OFF", Setting::Read => "READ", Setting::Light => "LIGHT" };
         match self.given {
@@ -62,14 +65,21 @@ impl fmt::Display for Args<'_> {
     }
 }
 
-/// The build switches kept for bring-up (213-DRV-0099), all off in a release: the survey's order (213-DRV-0098), the
-/// stages undone after they ran, and fewer stages than all 16. They change only what `Light` does.
+/// The build switches kept for bring-up (213-DRV-0099), each at the release's value in a release: the production order
+/// (not the survey's, 213-DRV-0098), the stages left in place (not undone after they ran), all 16 stages, HDMI-A-2
+/// driven in full (213-DRV-0112), HDMI-A-1 taken first when both sockets have a monitor, and a second HDMI run in full
+/// beside the first (213-DRV-0113). A bring-up build sets one away from it to go less far. They change only what `Light`
+/// does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8 }
+pub struct Bringup { pub survey_order: bool, pub undo_after_stages: bool, pub stages_allowed: u8, pub hdmi_a_2: HdmiA2, pub hdmi_first: HdmiFirst, pub second_hdmi: SecondHdmi }
 
 impl Bringup {
-    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES };
-    pub fn is_release(&self) -> bool { !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES }
+    pub const RELEASE: Bringup = Bringup { survey_order: false, undo_after_stages: false, stages_allowed: STAGES, hdmi_a_2: HdmiA2::Full, hdmi_first: HdmiFirst::HdmiA1,
+                                           second_hdmi: SecondHdmi::Full };
+    pub fn is_release(&self) -> bool {
+        !self.survey_order && !self.undo_after_stages && self.stages_allowed >= STAGES && self.hdmi_a_2 == HdmiA2::Full && self.hdmi_first == HdmiFirst::HdmiA1
+            && self.second_hdmi == SecondHdmi::Full
+    }
 }
 
 impl fmt::Display for Bringup {
@@ -79,7 +89,60 @@ impl fmt::Display for Bringup {
         if self.survey_order { f.write_str(" SURVEY_ORDER")?; }
         if self.undo_after_stages { f.write_str(" UNDO_AFTER_STAGES")?; }
         if self.stages_allowed < STAGES { write!(f, " STAGES_ALLOWED {} OF {}", self.stages_allowed, STAGES)?; }
+        if self.hdmi_a_2 != HdmiA2::Full { write!(f, " HDMI_A_2 {}", self.hdmi_a_2.word())?; }
+        if self.hdmi_first != HdmiFirst::HdmiA1 { write!(f, " HDMI_FIRST {}", self.hdmi_first.word())?; }
+        // Named only: its word, with every switch set, would take the line past 180 bytes; the start's lines name it.
+        if self.second_hdmi != SecondHdmi::Full { f.write_str(" SECOND_HDMI")?; }
         f.write_str("; ONLY WHAT LIGHT DOES CHANGES")
+    }
+}
+
+/// How far display goes on HDMI-A-2, the second HDMI socket (213-DRV-0112): its blocks read only; then its EDID over
+/// DDC2 with its stages described; first light's eight stages; all sixteen, as a release does (213-DRV-0113). Each level
+/// does what the ones before it do; the build's STAGES_ALLOWED bounds both outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HdmiA2 { Read, Edid, FirstLight, Full }
+
+impl HdmiA2 {
+    pub fn word(self) -> &'static str { match self { HdmiA2::Read => "READ", HdmiA2::Edid => "EDID", HdmiA2::FirstLight => "FIRST_LIGHT", HdmiA2::Full => "FULL" } }
+    /// What it lets display do there, for the log.
+    pub fn what(self) -> &'static str {
+        match self {
+            HdmiA2::Read => "ITS BLOCKS READ ONLY", HdmiA2::Edid => "ITS EDID READ OVER DDC2, ITS STAGES DESCRIBED",
+            HdmiA2::FirstLight => "ITS EDID AND FIRST LIGHT'S 8 STAGES", HdmiA2::Full => "ITS EDID AND ALL 16 STAGES",
+        }
+    }
+}
+
+/// Which HDMI socket steps 2 to 4 take when both have a monitor (213-DRV-0112): HDMI-A-1, as a release does, or HDMI-A-2
+/// in a bench build, HDMI-A-1 then dark and named as not driven. HDMI-A-2 only where `HdmiA2` lets display take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HdmiFirst { HdmiA1, HdmiA2 }
+
+impl HdmiFirst {
+    pub fn word(self) -> &'static str { match self { HdmiFirst::HdmiA1 => "HDMI-A-1", HdmiFirst::HdmiA2 => "HDMI-A-2" } }
+}
+
+/// The second HDMI run (213-DRV-0113), beside the first socket lit, on the other socket's monitor: none (one socket lit at
+/// a time); the pipe it would take read first and its stages described; first light's eight stages there, left in place
+/// or undone after them; or all sixteen, its picture offered as the screen its run holds, as a release does (stage 4). On
+/// HDMI-A-2 never further than `HdmiA2` lets display go; STAGES_ALLOWED bounds it too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecondHdmi { Off, Read, FirstLight, FirstLightUndone, Full }
+
+impl SecondHdmi {
+    pub fn word(self) -> &'static str {
+        match self {
+            SecondHdmi::Off => "OFF", SecondHdmi::Read => "READ", SecondHdmi::FirstLight => "FIRST_LIGHT", SecondHdmi::FirstLightUndone => "FIRST_LIGHT_UNDONE",
+            SecondHdmi::Full => "FULL",
+        }
+    }
+    pub fn what(self) -> &'static str {
+        match self {
+            SecondHdmi::Off => "NONE", SecondHdmi::Read => "ITS PIPE READ FIRST, ITS STAGES DESCRIBED",
+            SecondHdmi::FirstLight => "FIRST LIGHT'S 8 STAGES, LEFT IN PLACE", SecondHdmi::FirstLightUndone => "FIRST LIGHT'S 8 STAGES, UNDONE AFTER THEM",
+            SecondHdmi::Full => "ALL 16 STAGES, ITS PICTURE OFFERED AS ITS OWN SCREEN",
+        }
     }
 }
 
@@ -101,18 +164,43 @@ pub struct Plan {
     pub standing_check: bool,
     /// Stage 15's watch: the short one only together with the standing check.
     pub watch_frames: u32,
+    /// How far display goes on HDMI-A-2 (213-DRV-0112).
+    pub hdmi_a_2: HdmiA2,
+    /// Which socket is taken when both have a monitor (213-DRV-0112).
+    pub hdmi_first: HdmiFirst,
+    /// The second HDMI run beside the first (213-DRV-0113).
+    pub second_hdmi: SecondHdmi,
 }
 
 impl Plan {
     /// Whether anything is written (step 2's I2C engine, or a stage): only then is a writer made.
     pub fn writes(&self) -> bool { self.edid || self.stages > 0 }
+    /// Whether steps 2 to 4 may take output `o` when its monitor is the one there (213-DRV-0112): HDMI-A-1 always;
+    /// HDMI-A-2 when the plan writes nothing (its stages only described), or from `HdmiA2::Edid` on.
+    pub fn takes(&self, o: &Output) -> bool { *o != HDMI_A_2 || !self.writes() || self.hdmi_a_2 >= HdmiA2::Edid }
+    /// Whether step 2 reads `o`'s EDID.
+    pub fn edid_on(&self, o: &Output) -> bool { self.edid && (*o != HDMI_A_2 || self.hdmi_a_2 >= HdmiA2::Edid) }
+    /// How many stages the second HDMI run may run on `o` (213-DRV-0113): as `stages_on` bounds `o`, first light's at most
+    /// but at `Full`.
+    pub fn second_stages(&self, o: &Output) -> u8 {
+        match self.second_hdmi { SecondHdmi::Off | SecondHdmi::Read => 0, SecondHdmi::Full => self.stages_on(o), _ => self.stages_on(o).min(FIRST_LIGHT) }
+    }
+    /// Whether the second HDMI run's stages are undone after they ran.
+    pub fn second_undone(&self) -> bool { self.second_hdmi == SecondHdmi::FirstLightUndone }
+    /// How many stages `o` may run.
+    pub fn stages_on(&self, o: &Output) -> u8 {
+        if *o != HDMI_A_2 { return self.stages; }
+        match self.hdmi_a_2 { HdmiA2::Read | HdmiA2::Edid => 0, HdmiA2::FirstLight => self.stages.min(FIRST_LIGHT), HdmiA2::Full => self.stages }
+    }
 }
 
 /// The plan for `setting`: `Off` and `Read` whatever the build; `Light` as boots 95 to 100 ran it on the Ryzen (11
-/// batches, the EDID, 16 stages, HPD 1 followed, the standing check, the watch of 60), less what a bring-up switch takes.
+/// batches, the EDID, 16 stages, both HPDs followed, the standing check, the watch of 60), on each HDMI socket with a
+/// monitor (release 202611271307's three screens), less what a bring-up switch takes.
 pub fn plan(setting: Setting, b: Bringup) -> Plan {
     let order = if b.survey_order { Order::Survey } else { Order::Production };
-    let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES };
+    let none = Plan { setting, order, batches: 0, edid: false, stages: 0, undo_after_stages: false, hotplug: false, standing_check: false, watch_frames: WATCH_FRAMES,
+                      hdmi_a_2: HdmiA2::Read, hdmi_first: HdmiFirst::HdmiA1, second_hdmi: SecondHdmi::Off };
     match setting {
         Setting::Off => none,
         Setting::Read => Plan { batches: BATCHES, ..none },
@@ -122,7 +210,7 @@ pub fn plan(setting: Setting, b: Bringup) -> Plan {
             let follows = stages > 0 && !b.undo_after_stages;
             let standing_check = follows && stages >= 15;
             Plan { batches: BATCHES, edid: true, stages, undo_after_stages: b.undo_after_stages && stages > 0, hotplug: follows, standing_check,
-                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, ..none }
+                   watch_frames: if standing_check { SHORT_WATCH_FRAMES } else { WATCH_FRAMES }, hdmi_a_2: b.hdmi_a_2, hdmi_first: b.hdmi_first, second_hdmi: b.second_hdmi, ..none }
         }
     }
 }

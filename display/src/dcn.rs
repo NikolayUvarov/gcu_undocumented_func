@@ -112,10 +112,13 @@ pub enum R {
     DcI2cData,
     // HDMI signalling's (213-DRV-0095): the DIG front end's HDMI and AFMT registers, written by stage 6.
     HdmiControl, HdmiVbiPacketControl, HdmiGc, HdmiGenericPacketControl0, HdmiGenericPacketControl1, AfmtCntl, AfmtVbiPacketControl, AfmtVbiPacketControl1, AfmtGenericHdr, AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7,
+    // Read by batch 12 (213-DRV-0112): DDC line 2 (HDMI-A-2's, DC_GPIO_DDC2) and the DDC pads' I2C mode, which Display
+    // Core's hw_ddc sets for a hardware I2C transfer on DCN 2.x.
+    DcI2cDdc2HwStatus, DcI2cDdc2Speed, DcI2cDdc2Setup, DcGpioDdc2Mask, DcGpioDdc2A, DcGpioDdc2En, DcGpioDdc2Y, DcGpioAuxCtrl5, PhyAuxCntl,
 }
 
 /// Every register of the map, for walks over all of them.
-pub const ALL: [R; 173] = {
+pub const ALL: [R; 182] = {
     use R::*;
     [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgHTimingCntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax,
      OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgBlankControl, OtgInterlaceControl, OtgStatus,
@@ -146,7 +149,8 @@ pub const ALL: [R; 173] = {
      HubpreqDebugDb,
      DcI2cControl, DcI2cArbitration, DcI2cSwStatus, DcI2cDdc1HwStatus, DcI2cDdc1Speed, DcI2cDdc1Setup, DcI2cTransaction,
      MicrosecondTimeBaseDiv, DcGpioDdc1Mask, DcGpioDdc1A, DcGpioDdc1En, DcGpioDdc1Y, DcI2cData,
-     HdmiControl, HdmiVbiPacketControl, HdmiGc, HdmiGenericPacketControl0, HdmiGenericPacketControl1, AfmtCntl, AfmtVbiPacketControl, AfmtVbiPacketControl1, AfmtGenericHdr, AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7]
+     HdmiControl, HdmiVbiPacketControl, HdmiGc, HdmiGenericPacketControl0, HdmiGenericPacketControl1, AfmtCntl, AfmtVbiPacketControl, AfmtVbiPacketControl1, AfmtGenericHdr, AfmtGeneric0, AfmtGeneric1, AfmtGeneric2, AfmtGeneric3, AfmtGeneric4, AfmtGeneric5, AfmtGeneric6, AfmtGeneric7,
+     DcI2cDdc2HwStatus, DcI2cDdc2Speed, DcI2cDdc2Setup, DcGpioDdc2Mask, DcGpioDdc2A, DcGpioDdc2En, DcGpioDdc2Y, DcGpioAuxCtrl5, PhyAuxCntl]
 };
 
 impl R {
@@ -166,6 +170,8 @@ impl R {
             DcI2cTransaction => 4,
             DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | MicrosecondTimeBaseDiv
                 | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => 1,
+            DcI2cDdc2HwStatus | DcI2cDdc2Speed | DcI2cDdc2Setup | DcGpioDdc2Mask | DcGpioDdc2A | DcGpioDdc2En | DcGpioDdc2Y | DcGpioAuxCtrl5
+                | PhyAuxCntl => 1,
             DchubbubArbDramStateCntl => 1,
             DchubbubArbWatermarkChangeCntl => 1,
             DchubbubGlobalTimerCntl => 1,
@@ -291,6 +297,10 @@ impl R {
             DcI2cDdc1Speed => (2, 0x1EA2), DcI2cDdc1Setup => (2, 0x1EA3), DcI2cTransaction => (2, 0x1EAE + i),
             MicrosecondTimeBaseDiv => (1, 0x7B), DcGpioDdc1Mask => (2, 0x28D0), DcGpioDdc1A => (2, 0x28D1), DcGpioDdc1En => (2, 0x28D2),
             DcGpioDdc1Y => (2, 0x28D3), DcI2cData => (2, 0x1EB2),
+            // DDC2's beside DDC1's, the pads' I2C mode and receiver select (dcn_2_1_0_offset.h, Linux v7.0).
+            DcI2cDdc2HwStatus => (2, 0x1E9D), DcI2cDdc2Speed => (2, 0x1EA4), DcI2cDdc2Setup => (2, 0x1EA5),
+            DcGpioDdc2Mask => (2, 0x28D4), DcGpioDdc2A => (2, 0x28D5), DcGpioDdc2En => (2, 0x28D6), DcGpioDdc2Y => (2, 0x28D7),
+            DcGpioAuxCtrl5 => (2, 0x291D), PhyAuxCntl => (2, 0x28FF),
             HdmiControl => (2, 0x2071 + 0x100 * i),
             HdmiVbiPacketControl => (2, 0x2075 + 0x100 * i),
             HdmiGc => (2, 0x207B + 0x100 * i),
@@ -426,6 +436,9 @@ impl R {
             DcI2cTransaction => "DC_I2C_TRANSACTION", MicrosecondTimeBaseDiv => "MICROSECOND_TIME_BASE_DIV",
             DcGpioDdc1Mask => "DC_GPIO_DDC1_MASK", DcGpioDdc1A => "DC_GPIO_DDC1_A", DcGpioDdc1En => "DC_GPIO_DDC1_EN", DcGpioDdc1Y => "DC_GPIO_DDC1_Y",
             DcI2cData => "DC_I2C_DATA",
+            DcI2cDdc2HwStatus => "DC_I2C_DDC2_HW_STATUS", DcI2cDdc2Speed => "DC_I2C_DDC2_SPEED", DcI2cDdc2Setup => "DC_I2C_DDC2_SETUP",
+            DcGpioDdc2Mask => "DC_GPIO_DDC2_MASK", DcGpioDdc2A => "DC_GPIO_DDC2_A", DcGpioDdc2En => "DC_GPIO_DDC2_EN", DcGpioDdc2Y => "DC_GPIO_DDC2_Y",
+            DcGpioAuxCtrl5 => "DC_GPIO_AUX_CTRL_5", PhyAuxCntl => "PHY_AUX_CNTL",
             HdmiControl => "HDMI_CONTROL",
             HdmiVbiPacketControl => "HDMI_VBI_PACKET_CONTROL",
             HdmiGc => "HDMI_GC",
@@ -464,6 +477,8 @@ impl R {
                 | DmcubGpintDataout | DmcubTimerCurrent => "",
             DcI2cControl | DcI2cArbitration | DcI2cSwStatus | DcI2cDdc1HwStatus | DcI2cDdc1Speed | DcI2cDdc1Setup | DcI2cTransaction
                 | MicrosecondTimeBaseDiv | DcGpioDdc1Mask | DcGpioDdc1A | DcGpioDdc1En | DcGpioDdc1Y | DcI2cData => "",
+            DcI2cDdc2HwStatus | DcI2cDdc2Speed | DcI2cDdc2Setup | DcGpioDdc2Mask | DcGpioDdc2A | DcGpioDdc2En | DcGpioDdc2Y | DcGpioAuxCtrl5
+                | PhyAuxCntl => "",
             HubpAddrConfig | HubpTilingConfig | HubpPriViewportStart | HubpPriViewportDimension | HubpReqSizeConfig | HubpReqSizeConfigC | HubpClkCntl => "HUBP",
             HubpreqSurfaceControl | HubpreqExpansionMode | HubpreqTtuQosWm | HubpreqGlobalTtuCntl | HubpreqSurf0TtuCntl0 | HubpreqSurf0TtuCntl1 | HubpreqCur0TtuCntl0 | HubpreqCur0TtuCntl1 | HubpreqVmMxL1TlbCntl | HubpreqBlankOffset0 | HubpreqBlankOffset1 | HubpreqDstDimensions | HubpreqDstAfterScaler | HubpreqPrefetchSettings | HubpreqVblankParameters0 | HubpreqVblankParameters1 | HubpreqVblankParameters2 | HubpreqVblankParameters3 | HubpreqVblankParameters4 | HubpreqNomParameters0 | HubpreqNomParameters1 | HubpreqNomParameters4 | HubpreqNomParameters5 | HubpreqPerLineDeliveryPre | HubpreqPerLineDelivery | HubpreqCursorSettings | HubpreqRefFreqToPixFreq | HubpreqDstYDeltaDrqLimit => "HUBPREQ",
             HubpretControl => "HUBPRET",
@@ -655,6 +670,12 @@ pub mod field {
     pub const AUX_PAD1_MODE: Field = f(16, 1);
     pub const DC_GPIO_DDC1CLK_BIT: Field = f(0, 1);
     pub const DC_GPIO_DDC1DATA_BIT: Field = f(8, 1);
+    // DDC2's fields lie where DDC1's do (dcn_2_1_0_sh_mask.h): the same constants serve both lines.
+    /// DC_GPIO_AUX_CTRL_5's I2C mode of DDC pads 1 and 2, and PHY_AUX_CNTL's receiver select of AUX pads 1 and 2.
+    pub const DDC_PAD1_I2CMODE: Field = f(12, 1);
+    pub const DDC_PAD2_I2CMODE: Field = f(13, 1);
+    pub const AUX1_PAD_RXSEL: Field = f(10, 2);
+    pub const AUX2_PAD_RXSEL: Field = f(12, 2);
     pub const QOS_LEVEL_HIGH_WM: Field = f(16, 14);
     pub const QOS_LEVEL_FIXED: Field = f(24, 4);
     pub const QOS_RAMP_DISABLE: Field = f(28, 1);
