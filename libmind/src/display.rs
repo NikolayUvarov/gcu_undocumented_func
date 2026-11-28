@@ -67,6 +67,43 @@ pub fn source_of(at: usize, picture: usize, source: usize) -> usize {
     ((at as u64 * source as u64 / picture.max(1) as u64) as usize).min(source.saturating_sub(1))
 }
 
+/// The source columns (or rows) a picture's column or row `at` blends, as `first << 16 | w1 << 8 | w2` (213-KRN-0290):
+/// `first` and the two after it, weighted `256 - w1 - w2`, `w1` and `w2` of 256 by their shares of the span the
+/// picture's pixel covers. Three are all a span holds whole down to half the size, and a pixel past them is the larger
+/// part of its neighbour's. A picture as large as its source has no weight past `first`, a copy pixel for pixel; a shrunk
+/// one leaves no source row or column out, so a stroke one pixel thick comes out lighter but whole. `first` is
+/// `source_of`'s nearest.
+pub fn taps_of(at: usize, picture: usize, source: usize) -> u32 {
+    let (p, s) = (picture.max(1) as u64, source.max(1).min(0xFFFF) as u64);
+    let (start, end) = (at as u64 * s * 256 / p, (at as u64 + 1) * s * 256 / p);
+    let first = (start / 256).min(s - 1);
+    let part = |i: u64| if first + i < s { end.min((first + i + 1) * 256).saturating_sub(start.max((first + i) * 256)) } else { 0 };
+    let (c0, c1, c2) = (part(0), part(1), part(2));
+    let total = (c0 + c1 + c2).max(1);
+    (first as u32) << 16 | ((c1 * 256 / total).min(255) as u32) << 8 | (c2 * 256 / total).min(255) as u32
+}
+
+/// `a`, `b` and `c` (a channel to each byte, the top one dropped) blended, weighted `256 - w1 - w2`, `w1` and `w2` of
+/// 256; `a` itself when both are 0.
+pub fn blend(a: u32, b: u32, c: u32, w1: u32, w2: u32) -> u32 {
+    if w1 == 0 && w2 == 0 { return a; }
+    let w0 = 256 - w1 - w2;
+    let mix = |mask: u32| (((a & mask) * w0 + (b & mask) * w1 + (c & mask) * w2) >> 8) & mask;
+    mix(0xFF00FF) | mix(0x00FF00)
+}
+
+/// The picture's pixel at the column and row `taps_of` gave: up to nine source pixels of `pixel(x, y)`, blended.
+pub fn sampled(col: u32, row: u32, pixel: impl Fn(usize, usize) -> u32) -> u32 {
+    let (x, x1, x2) = ((col >> 16) as usize, (col >> 8) & 0xFF, col & 0xFF);
+    let (y, y1, y2) = ((row >> 16) as usize, (row >> 8) & 0xFF, row & 0xFF);
+    let line = |y| {
+        let at = |i: usize, w: u32| if w == 0 { 0 } else { pixel(x + i, y) };
+        blend(pixel(x, y), at(1, x1), at(2, x2), x1, x2)
+    };
+    let at = |i: usize, w: u32| if w == 0 { 0 } else { line(y + i) };
+    blend(line(y), at(1, y1), at(2, y2), y1, y2)
+}
+
 /// The picture's columns (or rows) `[first, last]` that show source columns `from..=to`, for a picture `picture`
 /// wide of a source `source` wide; None when the picture shows none of them.
 pub fn shown(from: usize, to: usize, picture: usize, source: usize) -> Option<(usize, usize)> {

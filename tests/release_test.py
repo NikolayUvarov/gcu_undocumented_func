@@ -4,7 +4,7 @@ directory verifies; a version not above the channel's is refused; an upload cut 
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
 refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014); a bundle
 holds what a device needs of the channel, stored, the same for the same release, and only of a layout that verifies
-(751-UPD-0032). A release's downloads (352-UPD-0050): listed in SHA256SUMS, signed by the release keys of the key file
+(751-UPD-0032). A release's COMMIT (100003-UPD-0053): its manifests' commit, one for every architecture. A release's downloads (352-UPD-0050): listed in SHA256SUMS, signed by the release keys of the key file
 beside it, and every changed, missing or added file refused. The key file (351-UPD-0026): made, signed a root key at a time and checked against the root threshold;
 published only above the server's version; a channel signed by a key it does not name refused; real keys refused on a
 server without one."""
@@ -55,6 +55,24 @@ class Releases(unittest.TestCase):
 
     def check(self, **kw):
         return release.check(self.dest, now=NOW, **kw)
+
+    def test_a_release_names_the_commit_its_manifests_name(self):
+        # 100003-UPD-0053: releases/<version>/COMMIT, published beside the manifests, for MIND Hub to link a release's tasks.
+        release.publish(self.staged(1), self.dest, now=NOW)
+        self.assertEqual((self.dest / "releases/1/COMMIT").read_text(), "c" * 40 + "\n")
+        self.assertIsNone(self.check())
+        # Two architectures built from two commits are refused before anything is staged.
+        a = volume(self.dir / "a", b"\x7fELF kernel a", 2)
+        b = volume(self.dir / "b", b"\x7fELF kernel b", 2)
+        sm.sign_volume(b, sm.TEST_SEED, ("e" * 40, "nightly-x", "d" * 64), version=2)
+        with self.assertRaises(release.ReleaseError):
+            release.stage(2, self.dir / "two", {"x86_64": a, "aarch64": b})
+        self.assertFalse((self.dir / "two").exists())
+        # A build that did not know its commit gets no COMMIT, and the release is made all the same.
+        sm.sign_volume(a, sm.TEST_SEED, ("unknown", "nightly-x", "d" * 64), version=2)
+        staged = release.stage(2, self.dir / "unknown", {"x86_64": a})
+        self.assertFalse((staged / "releases/2/COMMIT").exists())
+        self.assertTrue((staged / "releases/2/x86_64/MANIFEST").exists())
 
     def test_a_published_release_verifies(self):
         body = release.publish(self.staged(1), self.dest, now=NOW)

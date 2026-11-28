@@ -84,6 +84,9 @@ pub enum Event {
     /// A send refused on a listen-only channel (213-DRV-0087): no beacon of its receiver heard there since the tune, or a
     /// probe request; logged once a tune.
     ListenOnly { channel: u8, receiver: [u8; 6], heard: usize },
+    /// A channel whose admission the calibration's policy refused before anything was sent there (213-DRV-0116): the
+    /// station's sends there are refused until its country changes, and the radio stays up receiving.
+    NotAdmitted { channel: u8, reason: &'static str },
     /// An access point first heard on a 5 GHz channel in this run (213-DRV-0087), the first HEARD_LOGGED of them.
     Heard5 { channel: u8, bssid: [u8; 6] },
     /// The receiver a send was refused for on a listen-only channel (`ListenOnly`), heard there `tune_ms` after the tune and
@@ -207,6 +210,8 @@ pub(crate) struct ReceiveOnly {
     logged: [(u8, [u8; 6]); HEARD_LOGGED], logged_count: usize, fresh: [Option<(u8, [u8; 6])>; 4],
     // The frame kept last, for the report that follows it (213-DRV-0087).
     signal: ppdu::Matcher,
+    // Channels whose admission the policy refused under the limits now (213-DRV-0116), a bit each.
+    not_admitted: [u64; 3],
 }
 
 impl ReceiveOnly {
@@ -216,7 +221,8 @@ impl ReceiveOnly {
             frames: [[0; FRAME_BYTES]; FRAMES], lengths: [0; FRAMES], head: 0, count: 0, dropped: 0,
             waiters: [const { None }; WAITERS], last_ms: time::monotonic_ns() / 1_000_000, failure: None, tally: Tally::default(),
             narrow: false, narrowing: None, set: false, heard: [None; HEARD], told: false, tuned_ms: 0, refused: None, refused_heard: None,
-            logged: [(0, [0; 6]); HEARD_LOGGED], logged_count: 0, fresh: [None; 4], signal: ppdu::Matcher::default() }
+            logged: [(0, [0; 6]); HEARD_LOGGED], logged_count: 0, fresh: [None; 4], signal: ppdu::Matcher::default(),
+            not_admitted: [0; 3] }
     }
     pub(crate) fn limits(&self) -> Option<&Limits> { self.limits.as_ref() }
     /// The `set-country` requests taken so far, which number the next.
@@ -234,6 +240,16 @@ impl ReceiveOnly {
         self.tuned_ms = time::monotonic_ns() / 1_000_000; self.refused = None;
         self.signal.forget();
         self.tally.tunes = self.tally.tunes.saturating_add(1); self.tally.longest_us = self.tally.longest_us.max(took_us);
+    }
+    /// The admission of `channel` refused by the policy (213-DRV-0116): its sends refused from now on under these limits,
+    /// the filter opened again as before the send that asked it, the refusal logged.
+    pub(crate) fn not_admitted(&mut self, channel: u8, reason: &'static str, events: &mut impl FnMut(Event)) {
+        if let Some(word) = self.not_admitted.get_mut(usize::from(channel) / 64) { *word |= 1 << (channel % 64); }
+        if self.narrow { self.narrow = false; self.narrowing = Some(false); }
+        events(Event::NotAdmitted { channel, reason });
+    }
+    fn refused_here(&self, channel: u8) -> bool {
+        self.not_admitted.get(usize::from(channel) / 64).is_some_and(|word| word >> (channel % 64) & 1 == 1)
     }
     /// Before the data service takes the endpoint: every waiter answered, no frame kept.
     pub(crate) fn hand_over(&mut self) {
@@ -310,7 +326,7 @@ impl ReceiveOnly {
         let Ok(taken) = Limits::world(self.settings) else { return };
         let listen_only = taken.channels().filter(|&ch| taken.applied(ch).is_some_and(|a| a.listen)).count();
         events(Event::NoCountry { channels: taken.channels().count(), listen_only });
-        self.limits = Some(taken);
+        self.limits = Some(taken); self.not_admitted = [0; 3];
     }
     fn info(&self) -> wlanhw::Info {
         // Its own channels are 1 to 13 and the 5 GHz ones at 20 MHz (wlanhw.wit 2.0, 213-DRV-0087), each tuned passively;
@@ -387,7 +403,8 @@ impl ReceiveOnly {
                 let probe = frame.first().is_some_and(|control| control & 0xfc == 0x40);
                 if !probe && self.set && self.limits.is_none() && self.admits { self.world(events); }
                 let receiver: [u8; 6] = frame.get(4..10).and_then(|r| r.try_into().ok()).unwrap_or([0xff; 6]);
-                let allowed = if probe || !self.set { Err(()) } else { self.sends_on(self.channel, receiver) };
+                let refused_here = self.refused_here(self.channel);
+                let allowed = if probe || !self.set || refused_here { Err(()) } else { self.sends_on(self.channel, receiver) };
                 let admit = allowed.is_ok() && self.ask.is_none();
                 let _ = wlanhw::reply_send(call, Err(if admit { wlanhw::Error::Busy } else { wlanhw::Error::Failed }));
                 if let (true, Ok(heard)) = (admit, allowed) {
@@ -397,7 +414,7 @@ impl ReceiveOnly {
                     if !self.filter.all_beacons() && !self.narrow { self.narrow = true; self.narrowing = Some(true); }
                 }
                 let listen = self.limits.as_ref().filter(|_| self.admits).and_then(|l| l.applied(self.channel)).is_some_and(|a| a.listen);
-                if allowed.is_err() && listen && self.set && !self.told {
+                if allowed.is_err() && listen && self.set && !self.told && !refused_here {
                     self.told = true; events(Event::ListenOnly { channel: self.channel, receiver, heard: self.heard.iter().flatten().count() });
                     self.refused = Some((receiver, now));
                 }
@@ -428,7 +445,7 @@ impl ReceiveOnly {
                         let listen_only = taken.channels().filter(|&ch| taken.applied(ch).is_some_and(|a| a.listen)).count();
                         events(Event::CountryTaken { code: taken.code(), channels: taken.channels().count(), listen_only,
                             applied: self.admits });
-                        self.limits = Some(taken);
+                        self.limits = Some(taken); self.not_admitted = [0; 3];
                         // Applied: each channel is calibrated when the station first sends there. With the platform's power
                         // policy unknown, 1.2's `failed` keeps the station listening.
                         if self.admits { Ok(()) } else { Err(wlanhw::Error::Failed) }
@@ -487,10 +504,7 @@ pub(crate) fn calibrate<B: DeviceIo>(phy: &mut Phy<'_, Session<'_, '_, '_, B>>, 
     tables: &DefaultTables, prepared: &initial_phy::Prepared, limits: &Limits, channel: u8, heard: Option<&Heard>,
     platform: PlatformInput, filter: Filter) -> Result<(channel::Tuned, channel_rfk::Completed, station::Prepared), connection::Failure> {
     use connection::Failure as F;
-    let applied = limits.applied(channel).filter(|a| !a.listen || heard.is_some_and(|h| h.channel == channel))
-        .ok_or(F::Admission(channel::calibration_policy::Error::Passive))?;
-    let rule = Rule::station(limits.code(), limits.version(), channel, applied.eirp_half_dbm, false);
-    let resolved = Resolved::resolve(board, rule, platform).map_err(F::Admission)?;
+    let resolved = admission(board, limits, channel, heard, platform).map_err(F::Admission)?;
     let mut tuned = channel::run(phy, board, &prepared.prefix, &prepared.paths, tables, resolved.policy()).map_err(F::Channel)?;
     let [iqk, tssi, dpk] = resolved.grant(phy, board, tables, &mut tuned, &prepared.owner).map_err(F::Admission)?;
     let calibrated = channel_rfk::run(phy, board, &prepared.prefix, &tuned, &prepared.owner,
@@ -499,6 +513,28 @@ pub(crate) fn calibrate<B: DeviceIo>(phy: &mut Phy<'_, Session<'_, '_, '_, B>>, 
     let filter = station.filter(filter.all_beacons(), filter.bssid(), filter.own());
     station.configure_filter(phy, board, &tuned, &prepared.owner, filter).map_err(F::Station)?;
     Ok((tuned, calibrated, station))
+}
+
+/// The policy's answer for admitting `channel` under `limits`, before any RF write: the country's power there, a listen-only
+/// channel's access point heard, and the calibration's TSSI bursts within the channel's maximum (213-DRV-0087).
+pub(crate) fn admission(board: &Board, limits: &Limits, channel: u8, heard: Option<&Heard>, platform: PlatformInput)
+    -> Result<Resolved, channel::calibration_policy::Error> {
+    let applied = limits.applied(channel).filter(|a| !a.listen || heard.is_some_and(|h| h.channel == channel))
+        .ok_or(channel::calibration_policy::Error::Passive)?;
+    let rule = Rule::station(limits.code(), limits.version(), channel, applied.eirp_half_dbm, false);
+    Resolved::resolve(board, rule, platform)
+}
+
+/// What a refused admission is said as (213-DRV-0116).
+pub(crate) fn refusal(error: &channel::calibration_policy::Error) -> &'static str {
+    use channel::calibration_policy::Error as E;
+    match error {
+        E::TssiPower => "THE CALIBRATION'S 12 DBM IS ABOVE THE CHANNEL'S MAXIMUM UNDER THIS COUNTRY",
+        E::Passive => "THE COUNTRY KEEPS IT LISTEN-ONLY",
+        E::Policy(_) => "THE COUNTRY'S POLICY",
+        E::Board => "THIS BOARD IS NOT ONE THE CALIBRATION KNOWS",
+        _ => "THE PLATFORM'S POWER POLICY",
+    }
 }
 
 /// Consume this successful firmware startup: initial PHY, a receive-only channel tuned passively wherever the station
@@ -551,7 +587,12 @@ pub fn serve<B: DeviceIo>(bus: &mut B, queues: &mut Queues<'_>, receiving: &post
                     }
                 }
             }
-            Some(Ask::Admit(channel, heard)) => break (channel, heard),
+            // 213-DRV-0116: a channel the policy refuses is refused to the station, the radio left receiving; before, the
+            // driver ended and init quarantined it after three starts (the Ryzen, channel 40 under 00, 2026-11-27).
+            Some(Ask::Admit(channel, heard)) => match service.limits().map(|l| admission(board, l, channel, heard.as_ref(), platform)) {
+                Some(Err(error)) => service.not_admitted(channel, refusal(&error), &mut events),
+                _ => break (channel, heard),
+            },
         }
     };
     let (admit, heard) = admit;
