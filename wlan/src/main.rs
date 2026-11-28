@@ -366,7 +366,7 @@ impl Wlan {
         if let Some(code) = self.chosen.filter(|&c| catalogue::entry(c).is_some()) { self.run_under(code, Source::Chosen); return; }
         let plan = catalogue::listening(self.radio_channels());
         let mut out = Out::default();
-        self.station.restrict(plan.allowed(), &mut out, &mut self.tx);
+        self.station.restrict(plan.allowed(), &mut out);
         self.apply(out);
         let mut out = Out::default();
         let started = self.station.scan(mind::time::uptime_ms() as u64, &mut out, &mut self.tx);
@@ -408,7 +408,7 @@ impl Wlan {
         let allowed = if self.refused { catalogue::listening(self.radio_channels()) } else { plan };
         if first { self.station.relax(allowed.allowed()); } else {
             let mut out = Out::default();
-            self.station.restrict(allowed.allowed(), &mut out, &mut self.tx);
+            self.station.restrict(allowed.allowed(), &mut out);
             self.apply(out);
         }
         self.running = Some((code, source));
@@ -487,6 +487,14 @@ impl Wlan {
         // once another PID answered (801-NET-0085), so the old station sends nothing to a fresh driver it never tuned.
         let restarted = self.restarted.is_some() || (out.channel.is_some() && self.restarted_before_tune());
         if restarted || FRESH.load(Ordering::Relaxed) != 0 { return; }
+        // The goodbye to a network left, on its channel before any tune (550-NET-0102). It carries no packet number, so
+        // it goes ahead of frames held back; held when the radio is busy only if no tune follows.
+        if let Some(leave) = out.leave {
+            self.busy_ms = mind::time::uptime_ms() as u64;
+            if !self.transmit(&leave.frame, leave.rate, false) && out.channel.is_none() {
+                self.backlog.push(&leave.frame, leave.rate, false, mind::time::uptime_ms() as u64);
+            }
+        }
         if let Some(channel) = out.channel {
             match radio_call(self.deadline, || wlanhw::set_channel(RADIO, channel)) {
                 Ok(Ok(())) => { self.tuned = true; self.tuned_to = channel; }
@@ -702,7 +710,7 @@ impl Wlan {
             wifi::Request::Join { ssid, passphrase, remember } => wifi::reply_join(call, self.join(ssid.as_slice(), passphrase.as_str(), remember, now)),
             wifi::Request::Leave => {
                 let mut out = Out::default();
-                self.station.leave(&mut out, &mut self.tx);
+                self.station.leave(&mut out);
                 self.apply(out);
                 // The user's word: no automatic join until the station next joins a network, and nothing held.
                 self.auto.left();
@@ -746,7 +754,7 @@ impl Wlan {
         // A client's join ends an automatic try, and the next try waits a first wait, so the client's outcome is the
         // station's for a while. A join that came during a scan waited for its end (550-NET-0098), so none runs now.
         if let Some(Try::Scanning(_)) = self.trying.take() {
-            if self.station.state() == State::Scanning { let mut out = Out::default(); self.station.leave(&mut out, &mut self.tx); self.apply(out); }
+            if self.station.state() == State::Scanning { let mut out = Out::default(); self.station.leave(&mut out); self.apply(out); }
         }
         self.auto.idle(now);
         let secret = self.join_kept(ssid, passphrase, remember, now)?;

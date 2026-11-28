@@ -32,10 +32,18 @@ pub enum State { Off, Scanning, Joining, Joined, Failed }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reason { None, WrongPassphrase, NoAnswer, Refused, NotFound, Unsupported, Lost }
 
-/// What the radio is to do after a call, in this order: tune, filter, send `tx[..len]` at `rate` (500 kb/s units); and
-/// whether `rx` holds a received Ethernet frame of that length.
+/// What the radio is to do after a call, in this order: send `leave` on the channel it is on, tune, filter, send
+/// `tx[..len]` at `rate` (500 kb/s units); and whether `rx` holds a received Ethernet frame of that length.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Out { pub channel: Option<u8>, pub filter: Option<Filter>, pub send: Option<(usize, u8)>, pub deliver: Option<usize> }
+pub struct Out { pub leave: Option<Leave>, pub channel: Option<u8>, pub filter: Option<Filter>, pub send: Option<(usize, u8)>, pub deliver: Option<usize> }
+
+/// The length of a deauthentication: the management header and the reason.
+pub const LEAVE_LEN: usize = 26;
+
+/// The deauthentication of a network the station left, at `rate`: sent before the tune that may follow, so the access
+/// point hears it on its own channel (550-NET-0102).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Leave { pub frame: [u8; LEAVE_LEN], pub rate: u8 }
 
 /// The radio's receive filter: every beacon (a scan), and the frames of `bssid` (zero: none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,8 +142,8 @@ impl Station {
     /// Puts the station under a country's rules (550-NET-0035): `channels` are the only ones it uses from now on, each
     /// with what it may send there. Nothing chosen under the rules before stays: it leaves the network, ends a scan and
     /// drops the networks it heard.
-    pub fn restrict(&mut self, channels: &[(u8, Allowed)], out: &mut Out, tx: &mut [u8]) {
-        self.leave(out, tx);
+    pub fn restrict(&mut self, channels: &[(u8, Allowed)], out: &mut Out) {
+        self.leave(out);
         self.list.clear();
         out.filter = Some(Filter { all_beacons: false, bssid: [0; 6] });
         let count = channels.len().min(64);
@@ -220,7 +228,7 @@ impl Station {
         };
         // No country applied, or one whose rules leave the station nothing to send there (550-NET-0035).
         if !self.may_join(bss.channel) { self.fail(Reason::Unsupported); return Err(Error::Unsupported); }
-        if matches!(self.state, State::Joined | State::Joining) { self.leave(out, tx); }
+        if matches!(self.state, State::Joined | State::Joining) { self.leave(out); }
         self.start(bss, secret, now, out, tx)
     }
 
@@ -269,13 +277,14 @@ impl Station {
         self.beacon_wait = None;
     }
 
-    /// Leaves the network (deauthentication, reason 3) and forgets its keys; nothing is sent while a rejoin still waits
-    /// for the network's beacon on a listen-only channel.
-    pub fn leave(&mut self, out: &mut Out, tx: &mut [u8]) {
+    /// Leaves the network (deauthentication, reason 3, in `out.leave`) and forgets its keys; nothing is sent while a
+    /// rejoin still waits for the network's beacon on a listen-only channel.
+    pub fn leave(&mut self, out: &mut Out) {
         if let (Some(join), State::Joined | State::Joining, None) = (self.join, self.state, self.beacon_wait) {
             let sequence = self.next_sequence();
-            if let Ok(len) = frame::deauthentication(tx, &self.own, &join.bss.bssid, 3, sequence) {
-                out.send = Some((len, Self::basic_rate(join.bss.channel)));
+            let mut frame = [0u8; LEAVE_LEN];
+            if let Ok(LEAVE_LEN) = frame::deauthentication(&mut frame, &self.own, &join.bss.bssid, 3, sequence) {
+                out.leave = Some(Leave { frame, rate: Self::basic_rate(join.bss.channel) });
             }
         }
         self.join = None;
@@ -318,7 +327,7 @@ impl Station {
         match self.state {
             State::Joining if now >= join.deadline && join.step == Step::Handshake => {
                 let reason = if join.answered { Reason::WrongPassphrase } else { Reason::NoAnswer };
-                self.leave(out, tx);
+                self.leave(out);
                 self.fail(reason);
                 Ok(())
             }
@@ -520,8 +529,8 @@ impl Station {
         let step = match supplicant.receive(key, random, keys, &mut reply) {
             Ok(step) => step,
             // The key service gave no keys (it no longer keeps the network, or its budget is spent): the join ends.
-            Err(wpa::Error::NoKey) => { self.leave(out, tx); self.fail(Reason::Refused); return Err(Error::NoKey); }
-            Err(wpa::Error::Downgrade) => { self.leave(out, tx); self.fail(Reason::Refused); return Err(Error::Downgrade); }
+            Err(wpa::Error::NoKey) => { self.leave(out); self.fail(Reason::Refused); return Err(Error::NoKey); }
+            Err(wpa::Error::Downgrade) => { self.leave(out); self.fail(Reason::Refused); return Err(Error::Downgrade); }
             Err(wpa::Error::Replay) => return Err(Error::Replay),
             Err(wpa::Error::Mic) => return Err(Error::Integrity),
             Err(_) => return Err(Error::Malformed),
