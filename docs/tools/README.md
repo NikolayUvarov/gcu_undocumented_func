@@ -158,8 +158,8 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Constitution.** FAT and USB media are external media; writing goes through a separate path with separate rights (Appendix B.6); persistent native storage is track B (Article 4). FAT writing is therefore an export/compatibility path, declared as such in the profile, not the native store.
 - **Separate write right on block devices.** Two options: (a) a second endpoint per driver (`block.rw`) that `init` gives only to `vfs_server`; (b) **endpoint badges**: `CAP_MINT` sets a badge, `IPC_RECV` reports the badge of the capability the sender used, so one endpoint distinguishes read-only and read-write clients (as in seL4). (b) is a small, general kernel mechanism that `vfs_server` and `sysmon` also need; recommended, as its own issue.
 - **Block protocol:** `write` and `flush` (`block.wit` 1.1); the data reaches the driver as sealed read-only memory, so it writes exactly what was checked.
-  - `ata`: WRITE SECTORS (0x30, PIO), FLUSH CACHE (0xE7);
-  - `ahci`: WRITE DMA EXT (0x35), FLUSH CACHE EXT (0xEA);
+  - `ata`: WRITE SECTORS (0x30, PIO); a flush as `ahci`'s;
+  - `ahci`: WRITE DMA EXT (0x35); FLUSH CACHE EXT (0xEA), or FLUSH CACHE (0xE7) without 48-bit addressing, and no command for a drive whose IDENTIFY says it has no write cache or has it off (307-DRV-0055);
   - `usb_storage`: SCSI WRITE(10) (0x2A), SYNCHRONIZE CACHE(10) (0x35), write protection from MODE SENSE.
 - **`ramdisk`** (new block service): memory-backed device of a size set by `init`'s policy, FAT-formatted on first use. It is `/tmp` and the target of all write tests, so FAT writing is developed without touching the boot disk. Done in issue 065 (8 MiB, a constant of the service; `vfs_server` formats it FAT16 when blank and mounts it as `ram:`).
 - **`vfs_server` v2** on `vfs.wit` — this is VFS's C8 port, done once:

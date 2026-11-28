@@ -2,7 +2,9 @@
 #![no_main]
 // Ring 3 VirtIO block driver (issue 202): the modern interface over one BAR, one request virtqueue in its own DMA
 // region, requests polled to completion one at a time like ahci's, against the clock (wait.rs). Reads, writes (for clients with the write badge,
-// mind::block_protocol) and flushes; a read-only device (VIRTIO_BLK_F_RO) refuses writes. Holds its BAR and DMA only.
+// mind::block_protocol) and flushes; a read-only device (VIRTIO_BLK_F_RO) refuses writes. A device that offers no
+// VIRTIO_BLK_F_FLUSH writes through (virtio 1.1, 5.2.6.2): its flush is answered done with no request; one that fails or
+// does not answer a flush is answered failed, each said once (307-DRV-0055). Holds its BAR and DMA only.
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, BLOCK_KIND_VIRTIO, BLOCK_MAX_SECTORS, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver, DriverError, Outcome};
@@ -20,7 +22,12 @@ const QUEUE: u16 = 16; // entries; one request uses three
 const AVAIL: usize = 16 * QUEUE as usize; const USED: usize = 0x1000; const HEADER: usize = 0x2000; const STATUS: usize = 0x2010;
 const DATA: usize = 0x10000;
 
-struct VirtioBlk { modern: Modern, dma: Dma, size: u16, notify: usize, last_used: u16, sectors: u64, features: u64 }
+// `said`: the flush lines already said.
+struct VirtioBlk { modern: Modern, dma: Dma, size: u16, notify: usize, last_used: u16, sectors: u64, features: u64, said: u8 }
+
+// The kinds of flush line, each said once (307-DRV-0055).
+const DONE: u8 = 1; const NO_CACHE: u8 = 2; const REFUSED: u8 = 4; const UNANSWERED: u8 = 8;
+fn first(said: &mut u8, kind: u8) -> bool { let first = *said & kind == 0; *said |= kind; first }
 
 // Waits for a request's end: polled for wait::SPIN_NS, then with sleeps, until wait::DEADLINE_NS.
 fn wait(done: impl FnMut() -> bool) -> bool { wait::wait(mind::time::monotonic_ns, || { mind::time::sleep(1); }, done) }
@@ -39,7 +46,7 @@ impl VirtioBlk {
         if size < 3 { return None; }
         let sectors = modern.bar.read64(modern.layout.device.offset as usize); // capacity, in 512-byte sectors
         modern.ready();
-        Some(Self { modern, dma, size, notify, last_used: 0, sectors, features })
+        Some(Self { modern, dma, size, notify, last_used: 0, sectors, features, said: 0 })
     }
 
     fn descriptor(&mut self, index: usize, address: u64, length: u32, flags: u16, next: u16) {
@@ -48,8 +55,9 @@ impl VirtioBlk {
         self.dma.bytes(at + 12, 4).copy_from_slice(&[flags as u8, (flags >> 8) as u8, next as u8, (next >> 8) as u8]);
     }
 
-    // One request: header, `bytes` of the data buffer (device-written for reads), status; true when it succeeded.
-    fn request(&mut self, kind: u32, sector: u64, bytes: usize) -> bool {
+    // One request: header, `bytes` of the data buffer (device-written for reads), status; the status the device wrote,
+    // None when it did not end in time.
+    fn request(&mut self, kind: u32, sector: u64, bytes: usize) -> Option<u8> {
         self.dma.write32(HEADER, kind); self.dma.write32(HEADER + 4, 0); self.dma.write64(HEADER + 8, sector);
         self.dma.bytes(STATUS, 1)[0] = 0xFF;
         let (header, data, status) = (self.dma.physical(HEADER), self.dma.physical(DATA), self.dma.physical(STATUS));
@@ -66,10 +74,10 @@ impl VirtioBlk {
         let expected = self.last_used.wrapping_add(1);
         let dma = &mut self.dma;
         let done = wait(|| { fence(Ordering::SeqCst); u16::from_le_bytes(dma.bytes(USED + 2, 2).try_into().unwrap()) == expected });
-        if !done { return false; }
+        if !done { return None; }
         self.last_used = expected;
         fence(Ordering::SeqCst);
-        self.dma.bytes(STATUS, 1)[0] == S_OK
+        Some(self.dma.bytes(STATUS, 1)[0])
     }
 }
 
@@ -77,16 +85,29 @@ impl Driver for VirtioBlk {
     fn sectors(&self) -> u64 { self.sectors }
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome {
         let bytes = count * 512;
-        if !self.request(T_IN, lba, bytes) { return Err(DriverError::Io); }
+        if self.request(T_IN, lba, bytes) != Some(S_OK) { return Err(DriverError::Io); }
         out[..bytes].copy_from_slice(self.dma.bytes(DATA, bytes));
         Ok(())
     }
     fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome {
         let bytes = count * 512;
         self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
-        if self.request(T_OUT, lba, bytes) { Ok(()) } else { Err(DriverError::Io) }
+        if self.request(T_OUT, lba, bytes) == Some(S_OK) { Ok(()) } else { Err(DriverError::Io) }
     }
-    fn flush(&mut self) -> Outcome { if self.features & F_FLUSH == 0 || self.request(T_FLUSH, 0, 0) { Ok(()) } else { Err(DriverError::Io) } }
+    fn flush(&mut self) -> Outcome {
+        if self.features & F_FLUSH == 0 {
+            if first(&mut self.said, NO_CACHE) { mind::println!("[VIRTIO_BLK] FLUSH: NO WRITE CACHE TO EMPTY (NO VIRTIO_BLK_F_FLUSH OFFERED: IT WRITES THROUGH): ANSWERED DONE, NO REQUEST SENT"); }
+            return Ok(());
+        }
+        match self.request(T_FLUSH, 0, 0) {
+            Some(S_OK) => { if first(&mut self.said, DONE) { mind::println!("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH SENT, THE DEVICE SAID DONE"); } Ok(()) }
+            Some(status) => {
+                if first(&mut self.said, REFUSED) { mind::println!("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH REFUSED BY THE DEVICE (STATUS {}): ANSWERED AS FAILED, NEVER AS DONE", status); }
+                Err(DriverError::Io)
+            }
+            None => { if first(&mut self.said, UNANSWERED) { mind::println!("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH NOT ANSWERED BY ITS DEADLINE: ANSWERED AS FAILED, NEVER AS DONE"); } Err(DriverError::Io) }
+        }
+    }
     fn read_only(&self) -> bool { self.features & F_RO != 0 }
 }
 

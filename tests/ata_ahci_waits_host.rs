@@ -30,7 +30,7 @@ impl ide::Bus for Channel {
     fn sleep(&self) { self.sleeps.set(self.sleeps.get() + 1); self.clock.set(self.clock.get() + 1_000_000); }
 }
 
-fn disk(status: u8) -> ide::Ide<Channel> { ide::Ide { bus: Channel::new(status), sectors: 1_000 } }
+fn disk(status: u8) -> ide::Ide<Channel> { ide::Ide { bus: Channel::new(status), sectors: 1_000, identify: [0; 256] } }
 
 #[test]
 fn a_drive_that_stays_busy_fails_at_the_deadline() {
@@ -43,7 +43,7 @@ fn a_drive_that_stays_busy_fails_at_the_deadline() {
     // The command was never written: its start waits for the drive.
     assert!(d.bus.writes.borrow().iter().all(|&(port, _)| port != ide::COMMAND));
     let d = disk(ide::BSY);
-    assert_eq!(d.flush(), Err(ide::Fault::Busy));
+    assert_eq!(d.flush(0xEA), Err(ide::Fault::Busy));
     assert!(d.bus.clock.get() < ide::COMMAND_NS + 2_000_000);
 }
 
@@ -70,8 +70,13 @@ fn a_ready_drive_reads_and_writes() {
     assert!(d.bus.writes.borrow().contains(&(ide::COMMAND, 0x20)) && d.bus.writes.borrow().contains(&(ide::LBA0, 5)));
     assert_eq!(d.write(5, 2, &out), Ok(()));
     assert_eq!(d.bus.words.borrow().len(), 512);
-    assert_eq!(d.flush(), Ok(()));
+    // The flush sends the command it is given, FLUSH CACHE or FLUSH CACHE EXT (307-DRV-0055), and a drive's error fails it.
+    assert_eq!(d.flush(0xE7), Ok(()));
+    assert_eq!(d.bus.writes.borrow().last(), Some(&(ide::COMMAND, 0xE7)));
+    assert_eq!(d.flush(0xEA), Ok(()));
+    assert_eq!(d.bus.writes.borrow().last(), Some(&(ide::COMMAND, 0xEA)));
     assert_eq!(disk(ide::ERR).read(0, 1, &mut out[..512]), Err(ide::Fault::Error));
+    assert_eq!(disk(ide::ERR).flush(0xEA), Err(ide::Fault::Error));
 }
 
 #[test]
