@@ -8,11 +8,11 @@ use crate::sys::{Error, Result};
 const RECEIVED_CAP: usize = 9;
 pub const BUFFER: usize = BLOCK_MAX_SECTORS * BLOCK_SECTOR;
 
-pub use crate::block_protocol::{badge_for, window_of, Buffers, Driver, DriverError, Outcome, Refused, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, WINDOWS};
+pub use crate::block_protocol::{badge_for, shown_model, window_of, Buffers, Driver, DriverError, Outcome, Refused, Windows, BADGE_WINDOW, BADGE_WINDOWS, BADGE_WRITE, KIND_RAM, MODEL_MAX, WINDOWS};
 use crate::block_protocol as protocol;
 
-/// Driver loop for idl/block.wit: sectors, kind, attach of the client's buffer, read, and for a client with the write
-/// badge write (from sealed memory) and flush. Without a device every call reports not-found. A client of a window sees
+/// Driver loop for idl/block.wit: sectors, kind, attach of the client's buffer, read, the drive's model (2.1), and for a
+/// client with the write badge write (from sealed memory) and flush. Without a device every call reports not-found. A client of a window sees
 /// the window as the device; `init`'s client badged BADGE_WINDOWS sets the windows (1.2, 307-DRV-0054), which a
 /// restarted instance holds none of. Each client badge attaches a buffer of its own (BUFFERS, 307-KRN-0177). A write or
 /// flush refused for want of the write right is told to the driver with the client's badge and PID (213-DRV-0060).
@@ -78,6 +78,11 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
                 }
                 block::reply_window(call, set)
             }
+            Ok((block::Request::Model, call)) => {
+                // Printable ASCII by now, so a str; nothing without a drive (2.1, 352-KRN-0294).
+                let (bytes, len) = protocol::shown_model(driver.as_deref().map_or(&[][..], |d| d.model()));
+                block::reply_model(call, core::str::from_utf8(&bytes[..len]).unwrap_or(""))
+            }
         };
         if returned { crate::process::exit(); }
     }
@@ -129,6 +134,8 @@ impl Device {
         self.attach()
     }
     pub fn sectors(&self) -> u64 { self.sectors }
+    /// The drive's model as its driver gives it (block.wit 2.1, 352-KRN-0294); empty when it keeps none or did not answer.
+    pub fn model(&self) -> crate::idl::codec::Text<MODEL_MAX> { block::model(self.endpoint).unwrap_or_default() }
     /// Device kind (BLOCK_KIND_*, KIND_RAM), to tell drives apart.
     pub fn kind(&self) -> usize { self.kind }
     /// Writes are refused: the medium is protected or this capability has no write badge.

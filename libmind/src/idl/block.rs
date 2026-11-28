@@ -6,6 +6,7 @@
 //! set, after a driver's restart too, every call of its client is not-found, never the whole device. A drive that fails
 //! or does not answer is io (2.0, 000-KRN-0228), never peer: a client repeats a call only after peer or not-found, which
 //! a restarted driver answers. A major version: the answers of read, write and flush mean something else than in 1.x.
+//! 2.1 (352-KRN-0294): `model`, the drive's name for the installer's list.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -15,7 +16,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:block";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Number of sectors; error not-found without a drive.
@@ -95,6 +96,21 @@ pub fn window(endpoint: Endpoint, index: u8, count: u32, first: u64) -> Result<(
     wire::check_reply(&reply, [0, 0], false).map(drop)
 }
 
+/// The drive's model as it names itself (2.1, 352-KRN-0294): printable ASCII with trailing spaces and NULs cut, any
+/// other byte `?`, at most 40 bytes; empty when the driver keeps none or there is no drive. A window's client sees its
+/// drive's model.
+pub fn model(endpoint: Endpoint) -> Result<Text<40>> {
+    let mut buffer = wire::Wiped(Pages::new(4096).ok_or(Error::NoMemory)?);
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 42, false, false)?;
+    let length = length.ok_or(Error::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<40> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(Error::Invalid)? })
+}
+
 /// A request to the `block` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -106,6 +122,7 @@ pub enum Request {
     Write { data: usize, count: u16, lba: u64 },
     Flush,
     Window { index: u8, count: u32, first: u64 },
+    Model,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -147,6 +164,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::Window { index: wire::field(&words, 0, 16, 8) as u8, count: wire::field(&words, 0, 24, 32) as u32, first: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
         }
+        9 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 42, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Model, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -180,4 +204,7 @@ pub fn reply_flush(call: Call, value: Result<()>) -> Result<()> {
 pub fn reply_window(call: Call, value: Result<()>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_model(call: Call, value: &str) -> Result<()> {
+    wire::reply_buffer(call, |w| codec::encode_str::<40>(value, w))
 }
