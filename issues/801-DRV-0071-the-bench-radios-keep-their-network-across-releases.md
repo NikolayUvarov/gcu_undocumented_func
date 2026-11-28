@@ -176,4 +176,4 @@ The DEXP's `wlan` of d83c98c5 never sends `00`. There the radio is capped until 
 
 ## Related
 
-[801](801-the-bench-stays-manageable.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (801-KRN-0243), [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0069](550-DRV-0069-rtw89-says-no-channel-until-its-client-sets-one.md), [the service notes](../hwdocs/rtl8852be-service.md#an-unknown-platform-word-an-unknown-country-and-a-stalled-receive-801-drv-0071-2026-11-14).
+[801](801-the-bench-stays-manageable.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) (801-KRN-0243), [213-DRV-0032](../issues-done/213-DRV-0032-rtl8852be-wifi.done), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0069](../issues-done/550-DRV-0069-rtw89-says-no-channel-until-its-client-sets-one.done), [the service notes](../hwdocs/rtl8852be-service.md#an-unknown-platform-word-an-unknown-country-and-a-stalled-receive-801-drv-0071-2026-11-14).
