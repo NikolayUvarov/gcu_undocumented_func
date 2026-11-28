@@ -163,7 +163,10 @@ impl List {
         self.iter().filter(|b| b.ssid() == ssid && matches!(b.security, Security::Open | Security::Wpa2)).min_by_key(preference)
     }
     /// The same among the network's access points with `security` (801-NET-0084).
-    pub fn best_of(&self, ssid: &[u8], security: Security) -> Option<&Bss> {
-        self.iter().filter(|b| b.ssid() == ssid && b.security == security).min_by_key(preference)
+    pub fn best_of(&self, ssid: &[u8], security: Security) -> Option<&Bss> { self.best_avoiding(ssid, security, &[]) }
+    /// As `best_of`, but one of the network's other access points before any in `avoid`; one in `avoid` only when the
+    /// network has no other (550-NET-0097).
+    pub fn best_avoiding(&self, ssid: &[u8], security: Security, avoid: &[Mac]) -> Option<&Bss> {
+        self.iter().filter(|b| b.ssid() == ssid && b.security == security).min_by_key(|b| (avoid.contains(&b.bssid), preference(b)))
     }
 }
