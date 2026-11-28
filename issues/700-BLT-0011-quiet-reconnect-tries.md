@@ -14,8 +14,9 @@ tried again 2 s later. Each try put three lines in the system log:
 [BT] C4:E7:E1:93:0C:C4: NOT CONNECTED (STATUS 04), TRIED AGAIN IN 2 S
 ```
 
-That is about 340 lines an hour. In the ring read at 05:18 UTC they were 801 of 2 048 lines. The ring covered only the
-last 2.5 hours, so the night's other lines were gone. A classic device switched off (the speaker) does the same, at
+That is about 340 lines an hour. In the ring read at 05:18 UTC they were 801 of 2 048 lines, so the ring covered only
+the last 2.5 hours. The boot's file on the disk keeps every line, but a reader of the ring (the server's `ring` log, the
+cable) saw nothing of the night before that, and the file grows by some 30 KB an hour for nothing. A classic device switched off (the speaker) does the same, at
 three lines a minute once its wait reaches 60 s.
 
 ## Plan
