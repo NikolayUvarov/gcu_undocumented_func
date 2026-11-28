@@ -1,6 +1,6 @@
 # 700-BLT-0011 — A device asleep all night is looked for quietly: its tries summed up, not three lines each
 
-**Type:** driver (`bt_host`, `bt_hci`) · **Owner:** `BLT` · **Priority:** P2 · **Status:** open (2026-11-28) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-6.1, MC-12.1
+**Type:** driver (`bt_host`, `bt_hci`) · **Owner:** `BLT` · **Priority:** P2 · **Status:** open (2026-11-28: in `main` with round 183, c2318c10b; one night on the Ryzen left) · **Blocked by:** — · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
