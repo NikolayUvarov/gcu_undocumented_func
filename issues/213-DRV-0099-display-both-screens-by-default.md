@@ -1,6 +1,6 @@
 # 213-DRV-0099 — `display`: both screens by default
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-26) · **Blocked by:** KRN's part, `init` passing the word (asked by the DRV owner session, 2026-11-26), for criterion 2 as written · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-26) · **Blocked by:** — (KRN's part, `init` passing the word, is [213-KRN-0281](213-KRN-0281-display-told-its-second-outputs-word.md), in `main` since round 177; only criterion 2's run on the Ryzen is left) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
 
 ## Problem
 
