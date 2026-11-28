@@ -65,3 +65,7 @@ Thumbs.db
 
 # --- scripts/qemu_scenes.py's default output (000-KRN-0093) ---
 /media-scenes/
+
+# The page (215-PRT-0017): its build tools and its built kernel module.
+web/node_modules/
+web/build/

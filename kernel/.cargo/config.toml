@@ -16,3 +16,14 @@ rustflags = [
     "-C", "link-arg=--no-dynamic-linker",
     "-C", "link-arg=-znotext"
 ]
+
+# wasm64 (215-PRT-0017): a module the page drives; its entry points exported, a stack of 8 MiB.
+[target.wasm64-unknown-unknown]
+rustflags = [
+    "-C", "link-arg=--export=mind_start",
+    "-C", "link-arg=--export=mind_turn",
+    "-C", "link-arg=--export=mind_console_in",
+    "-C", "link-arg=--export=mind_input",
+    "-C", "link-arg=--export=mind_heap_base",
+    "-C", "link-arg=-zstack-size=8388608",
+]

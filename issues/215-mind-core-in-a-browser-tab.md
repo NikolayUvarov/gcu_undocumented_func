@@ -22,7 +22,7 @@ The way is B of [docs/wasm/README.md](../docs/wasm/README.md):
 | Step | Task | What |
 |---|---|---|
 | 0 | [215-PRT-0016](../issues-done/215-PRT-0016-an-a64-user-mode-emulator.done) (done, round 184) | The emulator: user-mode A64, integer, with a page-table walk; one MIND program run to its system calls, in Node |
-| 1 | numbered when it starts | `arch/wasm` and the page: init, the services, `wm` and its applications on a canvas; the boot volume in memory; keys and the pointer from the page |
+| 1 | [215-PRT-0017](215-PRT-0017-arch-wasm-the-kernel-as-a-module-the-page-drives.md) | `arch/wasm` and the page: init, the services, `wm` and its applications on a canvas; the boot volume in memory; keys and the pointer from the page |
 | 2 | numbered when it starts | Published: the page on a static host, a link in the README, a CI group that boots it in Node |
 | 3 | later | Writes kept in the browser, the network through a proxy, sound, a JIT, more CPUs |
 
@@ -30,6 +30,17 @@ The way is B of [docs/wasm/README.md](../docs/wasm/README.md):
 - the kernel keeps no stack per task, so it needs no JSPI;
 - the aarch64 build of 2026-11-10 holds no FP or SIMD instruction in any program but one test fixture, and no LSE atomic;
 - its programs read only three system registers, NZCV, RNDR and CNTVCT.
+
+## Progress
+
+**2026-11-28:**
+- **Step 0 (215-PRT-0016)** is in the landing queue.
+- **Step 1 (215-PRT-0017)** runs on its branch:
+  - in Node and in a headless Chromium tab, the shell and the desktop come up;
+  - keys and the pointer reach `wm`;
+  - `fm` and `edit` open in windows.
+
+  Its runs are in [docs/profile/wasm/README.md](../docs/profile/wasm/README.md).
 
 ## Acceptance criteria
 

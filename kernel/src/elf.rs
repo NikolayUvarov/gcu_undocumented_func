@@ -3,10 +3,10 @@
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_GNU_STACK: u32 = 0x6474_e551; // its p_memsz: the stack the program asks for (262-KRN-0164)
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(target_arch = "x86_64")]
 const MACHINE: u16 = 62; // x86-64
-#[cfg(target_arch = "aarch64")]
-const MACHINE: u16 = 183; // AArch64
+#[cfg(any(target_arch = "aarch64", target_arch = "wasm64"))]
+const MACHINE: u16 = 183; // AArch64 (on wasm, the emulator's, 215-PRT-0017)
 
 fn u16_at(data: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(data[at..at + 2].try_into().unwrap())

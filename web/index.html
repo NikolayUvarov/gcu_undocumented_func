@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIND Core in a tab</title>
+<style>
+  :root { color-scheme: dark; --bg: #0e141b; --panel: #16202b; --text: #d7e0ea; --muted: #8a99a8; --accent: #6cb6ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  main { max-width: 1060px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 0 0 8px; color: var(--muted); }
+  #status { color: var(--accent); min-height: 1.4em; }
+  canvas { display: block; width: 100%; max-width: 1024px; aspect-ratio: 4 / 3; background: #000; outline: none; cursor: none; image-rendering: pixelated; }
+  canvas:focus { box-shadow: 0 0 0 2px var(--accent); }
+  details { margin-top: 12px; background: var(--panel); border-radius: 6px; padding: 8px 12px; }
+  summary { cursor: pointer; }
+  pre { margin: 8px 0 0; max-height: 320px; overflow: auto; font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+  form { display: flex; gap: 8px; margin-top: 8px; }
+  input { flex: 1; background: var(--bg); color: var(--text); border: 1px solid #2c3b4b; border-radius: 4px; padding: 4px 8px; font: 13px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MIND Core in a tab</h1>
+  <p>The kernel built for WebAssembly; init, the services, the window manager and the applications are the aarch64 programs of the release, run on an emulator in this tab. Nothing leaves the tab, and nothing is kept when it closes.</p>
+  <p id="status">Starting…</p>
+  <canvas id="screen" width="1024" height="768" tabindex="0" aria-label="MIND Core's screen: click to type into it"></canvas>
+  <p>Click the screen to type into it. In the shell, <code>wm</code> starts the desktop; there Enter or Alt+R runs a program (<code>fm</code>, <code>edit</code>, <code>view</code>), F1 shows the keys.</p>
+  <details>
+    <summary>The console (the kernel's serial line)</summary>
+    <pre id="console"></pre>
+    <form id="line"><input id="typed" placeholder="A line for the console, e.g. ps" autocomplete="off"></form>
+  </details>
+</main>
+<script type="module" src="page.js"></script>
+</body>
+</html>
