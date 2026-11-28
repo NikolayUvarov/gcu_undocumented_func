@@ -71,3 +71,37 @@ fn every_bound_is_refused_past_it() {
     assert_eq!(walk(b"[1,2,3]", &mut |_, _| { seen += 1; if seen == 2 { Err(Malformed) } else { Ok(()) } }), Err(Malformed));
     assert_eq!(seen, 2);
 }
+
+#[test]
+fn a_long_string_is_read_whole_in_pieces_that_never_split_a_character() {
+    // 8 KiB of text with two- and three-byte characters and an escape, as a hub's message can be (100003-NET-0100).
+    let mut body = String::new();
+    while body.len() < 8192 { body.push_str("привет, мир — "); body.push('a'); }
+    let doc = format!("{{\"text\":\"{}\\u00e9\",\"n\":1}}", body);
+    let whole = format!("{}é", body);
+    // Within 512 bytes, `walk` refuses it as before.
+    assert!(json::walk(doc.as_bytes(), &mut |_, _| Ok(())).is_err());
+    let mut string = vec![0u8; json::STRING_MAX];
+    let mut got: Option<Vec<u8>> = None;
+    json::walk_with(doc.as_bytes(), &mut string, &mut |index, value| {
+        if index == 1 { got = Some(value.text.to_vec()); }
+        Ok(())
+    }).unwrap();
+    let text = got.unwrap();
+    assert_eq!(text, whole.as_bytes());
+    // Pieces from 0, each at most 512 bytes, cut where a character ends, until an empty one.
+    let (mut offset, mut joined) = (0, Vec::new());
+    loop {
+        let piece = json::piece(&text, offset).unwrap();
+        assert!(piece.len() <= json::TEXT_MAX && core::str::from_utf8(piece).is_ok());
+        if piece.is_empty() { break; }
+        joined.extend_from_slice(piece);
+        offset += piece.len();
+    }
+    assert_eq!(joined, text);
+    // An offset inside a character, or past the string, gives nothing.
+    let inside = text.iter().position(|&b| b & 0xC0 == 0x80).unwrap();
+    assert!(json::piece(&text, inside).is_none());
+    assert!(json::piece(&text, text.len() + 1).is_none());
+    assert_eq!(json::piece(&text, text.len()), Some(&[][..]));
+}
