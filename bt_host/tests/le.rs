@@ -177,3 +177,54 @@ fn a_report_maps_keyboard_id() {
     // Cut short: none.
     assert_eq!(keyboard_id(&[0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85]), None);
 }
+
+#[test]
+fn a_mouse_asleep_all_night_is_looked_for_quietly_and_said_when_it_comes() {
+    let mut s = Sim::new("CA:BB:CC:DD:EE:FF le-hid random\n");
+    let lines = |s: &mut Sim| { s.drain_log(); s.log.len() };
+    let mut tries = 0;
+    // A night of tries: each LE connection waited for, cancelled, tried again 2 s later.
+    for _ in 0..700 {
+        let c = s.tick(2_001);
+        if ops(&c) == vec![hci::LE_CREATE_CONNECTION] { tries += 1; }
+        s.tick(bt_host::stack::LE_CONNECT_MS);
+        s.tick(1);
+    }
+    assert!(tries > 600, "every try made: {}", tries);
+    let said = |s: &mut Sim, needle: &str| { s.drain_log(); s.log.iter().filter(|l| l.contains(needle)).count() };
+    // The first three said one by one, the third saying the rest are summed up.
+    assert_eq!(said(&mut s, "CONNECTING OVER LE"), 3);
+    assert_eq!(said(&mut s, "NOT ADVERTISING: CANCELLED"), 3);
+    assert_eq!(said(&mut s, "NOT CONNECTED (STATUS 04), TRIED AGAIN IN 2 S"), 3);
+    assert!(s.logged("3 TRIES FAILED IN A ROW, THE NEXT ARE SUMMED UP EACH 10 MIN"));
+    // The rest: a line each 10 minutes, so about 37 for the 6.2 hours, not three lines a try.
+    let summed = said(&mut s, "STILL NOT CONNECTED:");
+    let hours = s.now as f64 / 3_600_000.0;
+    assert!(summed >= (hours * 6.0) as usize - 1 && summed <= (hours * 6.0) as usize + 1, "{} lines in {:.1} h", summed, hours);
+    assert!(s.logged("TRIES IN 10 MIN FAILED (THE LAST STATUS 04)") && s.logged("TRIED AGAIN EACH 2 S"));
+    assert!(lines(&mut s) < 60, "{} lines in all", lines(&mut s));
+    // Woken by a click: it advertises, the pending connection takes it, and the line says how long it was looked for.
+    let c = s.tick(2_001);
+    assert_eq!(ops(&c), vec![hci::LE_CREATE_CONNECTION]);
+    let mut ev = vec![hci::LE_CONNECTION_COMPLETE, 0, H as u8, 0, 0, 1];
+    ev.extend_from_slice(&MOUSE.0);
+    ev.extend_from_slice(&[0x18, 0, 0, 0, 0xF4, 0x01, 0]);
+    s.event(hci::EV_LE_META, &ev);
+    assert!(s.logged(&format!("CONNECTED AFTER {} FAILED TRIES", tries)));
+    // Its failures start again from none: the next stretch is said one by one at first again.
+    let d = s.stack.devices.get(MOUSE).unwrap();
+    assert_eq!((d.failures, d.quiet_tries), (0, 0));
+}
+
+#[test]
+fn a_device_that_fails_twice_then_connects_is_said_as_before() {
+    let mut s = Sim::new("CA:BB:CC:DD:EE:FF le-hid random\n");
+    for _ in 0..2 { s.tick(2_001); s.tick(bt_host::stack::LE_CONNECT_MS); s.tick(1); }
+    assert_eq!(ops(&s.tick(2_001)), vec![hci::LE_CREATE_CONNECTION]);
+    let mut ev = vec![hci::LE_CONNECTION_COMPLETE, 0, H as u8, 0, 0, 1];
+    ev.extend_from_slice(&MOUSE.0);
+    ev.extend_from_slice(&[0x18, 0, 0, 0, 0xF4, 0x01, 0]);
+    s.event(hci::EV_LE_META, &ev);
+    assert!(s.logged("CONNECTED OVER LE: HANDLE 040, WE PAGED IT"));
+    assert!(!s.logged("FAILED TRIES") && !s.logged("SUMMED UP") && !s.logged("STILL NOT CONNECTED"));
+}
