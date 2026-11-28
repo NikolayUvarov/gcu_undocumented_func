@@ -26,7 +26,7 @@ The kernel session's answer to DRV on 2026-11-28 (`DRV/2026-11-28T1108Z-NET-re-0
 
 - [x] Host test, `dot11/tests/station.rs` (`joining_another_access_point_says_goodbye_on_the_old_channel_before_the_tune`): joined on channel 6, a join of the network's other access point on channel 11 sends two frames. The first is a deauthentication to the first access point, reason 3, on channel 6. The second is the authentication to the other, on channel 11. The other station tests pass as before (26 in all).
 - [x] `wlan` builds for x86 and aarch64 with no warning.
-- [ ] "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector" pass (wlansim's joins, leave and loss).
+- [x] "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector" pass (wlansim's joins, leave and loss): on 9cd5d4e230 through Effector, 2026-11-28, acc1 (2077 s) and acc2 (1651 s); host tests on x32 (2756 s).
 
 The goodbye is not shown on hardware: that needs a capture of the air, and no profile claims it.
 
