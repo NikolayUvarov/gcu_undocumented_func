@@ -1,0 +1,19 @@
+[package]
+name = "a64"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+description = "User-mode A64 (EL0, integer) for MIND Core's kernel in a browser tab (215-PRT-0016)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+
+[profile.test]
+opt-level = 2

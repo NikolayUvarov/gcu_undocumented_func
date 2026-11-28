@@ -1,6 +1,6 @@
 # 215-PRT-0016 — An emulator of user-mode A64 for the browser's kernel (step 0 of 215)
 
-**Type:** porting, a new crate (`a64`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md) · **Constitution:** MC-3.3, MC-12.1, MC-12.3
+**Type:** porting, a new crate (`a64`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (made on its branch, 2026-11-28; to land) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md) · **Constitution:** MC-3.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -48,6 +48,31 @@
 2. Host tests cover every class above, and the page-table walk's faults (unmapped, read-only written, a kernel page, UXN fetched).
 3. The differential run agrees on a stated number of generated sequences.
 4. A MIND aarch64 test program runs in Node to its first system calls; its instructions a second are measured and recorded here.
+
+## Progress (2026-11-28, branch `claude/215-PRT-0016-a64-user-mode-emulator`)
+
+**Made:**
+- `a64/`: the crate (`src/exec.rs`, the instructions; `src/mmu.rs`, the walk and the TLB). No dependencies; it builds for the host, `wasm32-unknown-unknown` and `wasm64-unknown-unknown` (with `-Z build-std=core`), with no warning.
+- `a64/node/`: a stand-in for the kernel compiled to wasm, and `run.mjs`.
+  - It loads a MIND Core static PIE at aarch64's USER_IMAGE and applies its `R_AARCH64_RELATIVE` relocations, as the kernel's loader does.
+  - It answers LOG, UPTIME, EXIT, ALLOC and FREE, and refuses every other system call, naming it.
+  - `tests/layout.rs` checks its offsets and numbers against `common/abi.rs`.
+- `scripts/a64_census.py`, and the crate's tests in `scripts/host_tests.sh`.
+
+**Criterion by criterion:**
+1. **Met:** the host, wasm32 and wasm64 builds above.
+2. **Met:** `tests/instructions.rs`, 12 tests:
+   - `svc`'s and `wfi`'s PC past themselves; `brk`, an undefined instruction and a fault leaving PC and the registers unchanged;
+   - the budget, a misaligned PC, the exclusive monitor and its clearing at each run, RNDR with and without entropy;
+   - the walk: a user page mapped and run through; a read-only page written; a kernel page read; a UXN page fetched; an unmapped page; the access flag clear; an address above 48 bits; a device's register;
+   - a write across two pages changing nothing when the second refuses; a changed table seen only after a flush.
+3. **Met another way, stated here.** No reference emulator was installed in this session. Instead, the same Rust work is computed natively and, built for `aarch64-unknown-none-softfloat` as MIND Core's programs are, on the emulator (`tests/native.rs`, `tests/programs/work.rs`). It covers:
+   - SHA-256, 64-, 32- and 128-bit division and products, sorting, bit operations, the flags, soft-float, `core::fmt`, atomics, copies, sign-extending loads, a state machine, narrow wrapping arithmetic.
+   - Its 16 results agree over 1,383,784 instructions.
+   - Changed on purpose, REV made wrong by one bit changed slot 5 alone, and a wrong UMULH ended the program early; both failed the test.
+4. **Met:**
+   - `uptime`, built from `main` for aarch64, ran in Node on the wasm build to its end in 6,583 instructions. It passed `check_abi` (ABI 40), took its heap through ALLOC, was refused CAP_INFO (29) and MEM_SHARE (15), and printed `uptime: no access to sysmon (start it from the shell)`.
+   - The differential program in Node gave the same 16 results as the native build, at 47–51 million instructions a second warm (this container's CPU; the host's own test build: 82–90 million).
 
 ## Related
 

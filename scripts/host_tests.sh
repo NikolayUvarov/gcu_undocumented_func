@@ -23,6 +23,7 @@ cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-targe
 cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
 cargo test --quiet --manifest-path improve/proto/Cargo.toml --target-dir "$OUT/improve-proto-target" # MIND Hub's protocol and its vectors (100003-APP-0145)
 (cd improve/proto && cargo build --quiet --release --target x86_64-unknown-none --target-dir "$OUT/improve-proto-target") # and still no_std, as MIND Core's programs link it
+cargo test --quiet --manifest-path a64/Cargo.toml --target-dir "$OUT/a64-target" # the A64 user-mode emulator for the browser's kernel: its exits, faults and page-table walk, and the same work native and emulated (215-PRT-0016)
 cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-target" # the device key under a passphrase, Argon2id against RFC 9106 (308-NET-0055)
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
