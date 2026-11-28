@@ -465,6 +465,8 @@ fn served(event: receive_service::Event) {
         receive_service::Event::Unreadable { count, register, value, reads, waited_us, ser_before, ser_after, recovered } =>
             mind::println!("[RTW89] CHECK MET {} {}: {:X} READ {:08X}, READABLE AGAIN AFTER {} READS IN {} US; SER_DBG_INFO {:08X} -> {:08X} (213-DRV-0091)",
                 if recovered { "A FIRMWARE RECOVERY" } else { "AN UNREADABLE CMAC" }, count, register, value, reads, waited_us, ser_before, ser_after),
+        receive_service::Event::NotAdmitted { channel, reason } =>
+            mind::println!("[RTW89] CHANNEL {} NOT ADMITTED: {}; THE STATION'S SENDS THERE ARE REFUSED UNTIL ITS COUNTRY CHANGES, THE RADIO STAYS UP RECEIVING (213-DRV-0116)", channel, reason),
         receive_service::Event::ListenOnly { channel, receiver: r, heard } =>
             mind::println!("[RTW89] LISTEN-ONLY CHANNEL {}: NOTHING SENT TO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, NO BEACON OF IT HEARD HERE SINCE THE TUNE ({} ACCESS POINTS HEARD; 213-DRV-0087)",
                 channel, r[0], r[1], r[2], r[3], r[4], r[5], heard),
