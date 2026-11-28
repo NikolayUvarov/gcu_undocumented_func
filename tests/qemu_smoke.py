@@ -10962,10 +10962,12 @@ def hub_check(args, disk):
         out = vm.command("cat data/improve/waiting", timeout=30)
         assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
-        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        # The admin's comment, which a verified request still takes.
+        # A text past 512 bytes (100003-NET-0100, parse.wit 5.1): `parse` takes the answer and gives the text's first piece, up
+        # to 512 bytes; the rest is improve's to read with json-text. The admin's comment, which a verified request still takes.
         call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
-        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        shown = vm.command("improve show 1", timeout=60)
+        require(shown, "long long long long")
+        assert "the parse service refused" not in shown, shown[-1500:]
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
         require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
@@ -12426,8 +12428,14 @@ def service_runs(vm, port):
     vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
     require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    # A string of 8 KiB read back whole in pieces of `json-text`, none splitting a character (parse.wit 5.1, 100003-NET-0100).
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/long --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    whole = LONG_JSON_TEXT.encode()
+    require(out, f"WEBCHECK JSON 1 String IN 0 KEY \"text\" LONG {len(whole)} BYTES IN {json_pieces(whole)} PIECES")
+    require(out, f"SHA-256 {hashlib.sha256(whole).hexdigest()[:16]}")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
-          "nesting refused and logged with the client's PID", flush=True)
+          f"nesting refused and logged with the client's PID; a string of {len(whole)} bytes read whole in its pieces", flush=True)
 
 
 def api_runs(vm, port):
@@ -14465,6 +14473,22 @@ class _Https(_Http):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
 
+
+# A JSON string past parse.wit 5.0's 512 bytes (100003-NET-0100): Cyrillic, a dash, quotes and a line break, about 8 KiB.
+LONG_JSON_TEXT = "".join("привет, мир — \"кавычки\" и перевод\nстроки; " for _ in range(110))
+
+
+def json_pieces(data):
+    """How many pieces parse.wit 5.1's `json-text` gives a string of `data`: at most 512 bytes, cut where a character ends."""
+    count, at = 0, 0
+    while at < len(data):
+        end = min(at + 512, len(data))
+        while end < len(data) and data[end] & 0xC0 == 0x80:
+            end -= 1
+        count, at = count + 1, end
+    return count
+
+
 class _Service(http.server.BaseHTTPRequestHandler):
     """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
     protocol_version = "HTTP/1.1"
@@ -14501,6 +14525,10 @@ class _Service(http.server.BaseHTTPRequestHandler):
             return
         if self.path.endswith("/deep"):
             self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        if self.path.endswith("/long"):
+            # A string past parse.wit 5.0's 512 bytes, multi-byte UTF-8 and an escape in it (100003-NET-0100).
+            self._chunked(json.dumps({"text": LONG_JSON_TEXT, "n": 1}, ensure_ascii=False).encode())
             return
         self._chunked(b"request %d" % type(self).served)
 

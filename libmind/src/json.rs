@@ -218,6 +218,9 @@ pub const VALUES_MAX: usize = 1024;
 pub const WALK_DEPTH: usize = 16;
 pub const KEY_MAX: usize = 64;
 pub const TEXT_MAX: usize = 512;
+/// A string's bytes once decoded when the caller lends `walk_with` a buffer this long (100003-NET-0100): as long as a
+/// text `parse.wit` takes, so a string is never refused for its length alone.
+pub const STRING_MAX: usize = 16384;
 
 /// One value of a text, in document order: its kind, the index of the object or array it is in (None for the
 /// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme.
@@ -225,14 +228,16 @@ pub struct Value<'v> { pub kind: Kind, pub parent: Option<u16>, pub key: &'v [u8
 
 /// Reads a whole JSON text and hands each value to `visit`, in document order, within the bounds above: anything
 /// deeper, longer or more is malformed. Returns how many values there were.
-pub fn walk(text: &[u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Result<u16> {
+pub fn walk(text: &[u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Result<u16> { walk_with(text, &mut [0; TEXT_MAX], visit) }
+
+/// As `walk`, a string's decoded bytes held in `string`, so a string may be as long as it (100003-NET-0100).
+pub fn walk_with(text: &[u8], string: &mut [u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Result<u16> {
     let mut reader = Reader::new(text)?;
     // The open containers: each one's index and whether it is an object.
     let mut stack = [(0u16, false); WALK_DEPTH];
     let mut depth = 0;
     let mut count: u16 = 0;
     let mut key = [0u8; KEY_MAX];
-    let mut string = [0u8; TEXT_MAX];
     let mut first = true;
     loop {
         // The next value's key, if its container is an object, or the end of the container.
@@ -252,7 +257,7 @@ pub fn walk(text: &[u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Re
         let index = count;
         count += 1;
         let text: &[u8] = match kind {
-            Kind::String => reader.string(&mut string)?,
+            Kind::String => reader.string(string)?,
             Kind::Number => reader.number()?,
             Kind::True => { reader.skip()?; b"" }
             Kind::False => { reader.skip()?; b"" }
@@ -269,4 +274,14 @@ pub fn walk(text: &[u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Re
     }
     reader.end()?;
     Ok(count)
+}
+
+/// The piece of a decoded string `text` from byte `offset`: at most TEXT_MAX bytes, cut where a character ends, so no
+/// piece splits a UTF-8 sequence (100003-NET-0100). None when `offset` is past the string or inside a character.
+pub fn piece(text: &[u8], offset: usize) -> Option<&[u8]> {
+    let starts = |at: usize| at == text.len() || text.get(at).is_some_and(|&b| b & 0xC0 != 0x80);
+    if offset > text.len() || !starts(offset) { return None; }
+    let mut end = (offset + TEXT_MAX).min(text.len());
+    while !starts(end) { end -= 1; }
+    Some(&text[offset..end])
 }
