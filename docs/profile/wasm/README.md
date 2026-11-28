@@ -78,7 +78,7 @@ Everything in `aarch64/QEMU-virt-0`'s TCB that remains: the kernel's generic par
 
 ## Evidence (runs, not a gate)
 
-All on 2026-11-28, this branch, the aarch64 build of the same tree, in this session's container (Intel Xeon, 2.1 GHz, 4 CPUs).
+All on 2026-11-28, on 215-PRT-0017's branch before it landed in round 185, the aarch64 build of the same tree, in this session's container (Intel Xeon, 2.1 GHz, 4 CPUs).
 
 | What | Where | Result |
 |---|---|---|
