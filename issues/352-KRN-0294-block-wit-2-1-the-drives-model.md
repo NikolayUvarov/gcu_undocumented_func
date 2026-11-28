@@ -23,7 +23,7 @@ DRV accepted KRN's split on 2026-11-28 (`KRN/2026-11-28T0926Z-DRV-re-the-drives-
 
 - [x] `block.wit` 2.1 generated, and the IDL fuzzer covers `model`.
 - [x] Host test: what `serve` answers (`shown_model` of the driver's `model`) is cut to 40 bytes, with a control byte turned to `?`, and empty for a driver that keeps none.
-- [ ] The `iso` suite's install and the block groups pass on both architectures. The disks' `model` stays empty there until 352-DRV-0118 fills it (QEMU's `virtio_blk` has none).
+- [x] The `iso` suite's install and the block groups pass on both architectures. The disks' `model` stays empty there until 352-DRV-0118 fills it (QEMU's `virtio_blk` has none).
 - [ ] DRV told that 2.1 is in `main`, so that 352-DRV-0118 can start.
 
 ## Progress
@@ -38,7 +38,11 @@ DRV accepted KRN's split on 2026-11-28 (`KRN/2026-11-28T0926Z-DRV-re-the-drives-
 - **`vfs_server`:** `Io`, `Disk` and `Shared` give the drive's model. The installer asks each disk once, when it lists the disks, and keeps it after an install, as the drive is the same.
 - **`install.wit`** and `docs/idl/README.md` say where the model comes from.
 - **Tests:** `tests/block_host.rs` passes 10 tests, the new one among them. `tests/idl_fuzz_host.rs` passes. `vfs_server` builds for x86 and aarch64 with no warning.
-- **Left:** the `iso` suite's install and the block groups on both architectures (on the machines), and DRV told once 2.1 is in `main`.
+- **On the machines, on cf9cf0a660** (2026-11-28, through Effector), all passed:
+  - i9: "x86: keys, shell, tools" (with the `iso` suite's install, 943 s) and "x86: files and block writes" (1449 s);
+  - pcu: "aarch64: tools" (with `iso`, 206 s) and "aarch64: files and the block store" (1326 s);
+  - x32-2: host tests (2206 s).
+- **Left:** DRV told once 2.1 is in `main`.
 
 ## Related
 
