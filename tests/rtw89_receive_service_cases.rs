@@ -394,3 +394,48 @@ fn a_scans_beacon_carries_its_signal_from_the_report_that_follows_it() { serve(t
     let id = ipc::buffer(3, &filter(false, 0)); step(service, phy, events); ipc::response(id).unwrap();
     assert_eq!(events.as_slice(), &[Event::Scanned { tunes: 0, longest_us: 0, kept: 4, dropped: 0, measured: 1, late: 1, unmatched: 2 }]);
 });}
+
+// 213-DRV-0116: a channel whose admission the calibration's policy refuses before any send (TSSI's 12 dBm above the
+// country's power there; channel 40 under 00 on the Ryzen, 2026-11-27) is refused to the station with the radio kept up,
+// the filter opened again, until a country is given again; a channel the policy allows is admitted as before.
+#[test]
+fn a_channel_the_policy_refuses_is_refused_to_the_station_and_the_radio_stays_up() {
+    serve(true, Vec::new(), |service, phy, receive, tables, board, events| {
+    use crate::{phy::channel::calibration_policy::{Error, PlatformInput}, receive_service::{admission, refusal}};
+    let set = |service: &mut ReceiveOnly, phy: &mut Live<'_, '_, '_, '_>, events: &mut Vec<Event>, all: bool, bssid: u64| {
+        let id = ipc::buffer(3, &filter(all, bssid)); step(service, phy, events); assert_eq!(ipc::response(id).unwrap().0, [0, 0]);
+    };
+    // US, as the modelled board's own: 36 at 23 dBm, 40 at 10 dBm, under the calibration's 12.
+    let us = country("US", &[(36, 23, false), (40, 10, false)]);
+    let id = ipc::buffer(9, &us); step(service, phy, events); info(id);
+    let id = ipc::words(2, 40); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    set(service, phy, events, false, 0x021122334455);
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    assert_eq!(service.take_narrowing(), Some(true));
+    let Some(Ask::Admit(40, heard)) = service.take_ask() else { panic!("no admission asked") };
+    // What the serving loop does with it: the policy asked before any RF write, its refusal handed to the service.
+    let refused = admission(board, service.limits().unwrap(), 40, heard.as_ref(), PlatformInput::CheckedAbsent).err().expect("refused");
+    assert!(matches!(refused, Error::TssiPower), "{refused:?}");
+    events.clear();
+    service.not_admitted(40, refusal(&refused), &mut |e| events.push(e));
+    assert_eq!(events.drain(..).collect::<Vec<_>>(),
+        [Event::NotAdmitted { channel: 40, reason: "THE CALIBRATION'S 12 DBM IS ABOVE THE CHANNEL'S MAXIMUM UNDER THIS COUNTRY" }]);
+    assert_eq!(service.take_narrowing(), Some(false), "the filter opened again");
+    // The station's next sends there: refused at once, nothing asked, nothing more logged; the radio still answers.
+    for _ in 0..3 {
+        let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Failed);
+        assert!(service.take_ask().is_none());
+    }
+    assert!(events.is_empty(), "{events:?}");
+    let id = ipc::buffer(1, &[]); step(service, phy, events); assert_eq!(info(id).channel, 40);
+    // 36 is admitted as before: the policy allows it.
+    let id = ipc::words(2, 36); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    let Some(Ask::Admit(36, heard)) = service.take_ask() else { panic!("no admission of 36") };
+    assert!(admission(board, service.limits().unwrap(), 36, heard.as_ref(), PlatformInput::CheckedAbsent).is_ok());
+    // A country given again forgets the refusal: 40 is asked of the policy again.
+    let id = ipc::buffer(9, &us); step(service, phy, events); info(id);
+    let id = ipc::words(2, 40); step(service, phy, events); tune(service, phy, receive, tables, board); ipc::response(id).unwrap();
+    let id = ipc::buffer(4, &send_frame(&management(11))); step(service, phy, events); error(id, wlanhw::Error::Busy);
+    assert!(matches!(service.take_ask(), Some(Ask::Admit(40, None))));
+});}

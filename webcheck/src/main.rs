@@ -110,7 +110,13 @@ fn show_json(text: &[u8]) {
             Ok(Ok(page)) => {
                 for (i, v) in page.page.as_slice().iter().enumerate() {
                     let parent = if v.parent == u16::MAX { -1 } else { v.parent as i32 };
-                    mind::println!("WEBCHECK JSON {} {:?} IN {} KEY {:?} TEXT {:?}", start as usize + i, v.kind, parent, v.key.as_str(), v.text.as_str());
+                    let index = start + i as u32;
+                    // A string of more than 508 bytes may go on: read whole in `json-text`'s pieces (5.1, 100003-NET-0100).
+                    if v.kind == mind::idl::parse::JsonKind::String && v.text.as_str().len() > 508 {
+                        long_string(text, index, parent, v.key.as_str());
+                        continue;
+                    }
+                    mind::println!("WEBCHECK JSON {} {:?} IN {} KEY {:?} TEXT {:?}", index, v.kind, parent, v.key.as_str(), v.text.as_str());
                 }
                 start += page.page.as_slice().len() as u32;
                 if start >= page.values || page.page.as_slice().is_empty() { mind::println!("WEBCHECK JSON {} VALUES", page.values); return; }
@@ -119,6 +125,21 @@ fn show_json(text: &[u8]) {
             Err(_) => { mind::println!("WEBCHECK JSON: NO PARSER"); return; }
         }
     }
+}
+
+// String value `index` read in `json-text`'s pieces: its length, the pieces and the SHA-256 of what they joined.
+fn long_string(text: &[u8], index: u32, parent: i32, key: &str) {
+    let (mut offset, mut pieces, mut hash) = (0u32, 0u32, mind::sha256::Sha256::new());
+    let length = loop {
+        match mind::idl::parse::json_text(Endpoint(SLOT_PARSE), text, index, offset) {
+            Ok(Ok(piece)) if piece.piece.as_str().is_empty() => break piece.length,
+            Ok(Ok(piece)) => { hash.update(piece.piece.as_str().as_bytes()); offset += piece.piece.as_str().len() as u32; pieces += 1; }
+            other => { mind::println!("WEBCHECK JSON {} TEXT REFUSED AT {}: {:?}", index, offset, other.map_err(|_| ())); return; }
+        }
+    };
+    let digest = hash.finish();
+    mind::println!("WEBCHECK JSON {} String IN {} KEY {:?} LONG {} BYTES IN {} PIECES, SHA-256 {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{}", index, parent, key, length, pieces,
+                   digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7], if offset == length { "" } else { ": NOT WHOLE" });
 }
 
 // A connection of its own for each API check, over a TLS session for https.
