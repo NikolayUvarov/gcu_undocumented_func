@@ -3,7 +3,8 @@
 //! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), a country's
 //! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035), and
 //! the access point a key joins: WPA2 alone, never an open one of the same name (801-NET-0084), and on 5 GHz: its access
-//! point first, and a rejoin on a listen-only channel that waits for the network's beacon (550-NET-0090).
+//! point first, and a rejoin on a listen-only channel that waits for the network's beacon (550-NET-0090), and the
+//! goodbye to an access point left, on its channel before the tune to another (550-NET-0102).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
 use dot11::country::{self, Rule, Standing};
@@ -200,24 +201,28 @@ impl Pairwise for Service {
     }
 }
 
-/// The station, the access point and the air between them, with the station's clock and its key service.
-struct Air { station: Station, ap: Ap, now: u64, channel: u8, tx: Vec<u8>, rx: Vec<u8>, delivered: Vec<Vec<u8>>, sent: Vec<(Vec<u8>, u8)>, service: Service }
+/// The station, the access point and the air between them, with the station's clock and its key service; `on` is the
+/// channel each frame of `sent` went out on.
+struct Air { station: Station, ap: Ap, now: u64, channel: u8, tx: Vec<u8>, rx: Vec<u8>, delivered: Vec<Vec<u8>>, sent: Vec<(Vec<u8>, u8)>, on: Vec<u8>, service: Service }
 
 impl Air {
     fn new(ap: Ap) -> Self { Air::with(ap, true) }
     /// The air with a station whose radio has OFDM on 2.4 GHz or not.
     fn with(ap: Ap, ofdm: bool) -> Self {
         Air { station: Station::new(OWN, &CHANNELS, ofdm), ap, now: 1000, channel: 0, tx: vec![0; FRAME_MAX], rx: vec![0; ETHERNET_MAX],
-              delivered: Vec::new(), sent: Vec::new(), service: Service { pmk: keys::pmk(PASSPHRASE, SSID).unwrap(), asked: 0, refuse: false } }
+              delivered: Vec::new(), sent: Vec::new(), on: Vec::new(), service: Service { pmk: keys::pmk(PASSPHRASE, SSID).unwrap(), asked: 0, refuse: false } }
     }
     fn apply(&mut self, out: Out) {
+        // In the radio's order: the goodbye on the channel it is on, the tune, then the frame.
+        if let Some(leave) = out.leave { self.air(leave.frame.to_vec(), leave.rate); }
         if let Some(channel) = out.channel { self.channel = channel; }
         if let Some(len) = out.deliver { self.delivered.push(self.rx[..len].to_vec()); }
-        if let Some((len, rate)) = out.send {
-            let f = self.tx[..len].to_vec();
-            self.sent.push((f.clone(), rate));
-            if self.channel == self.ap.channel { for reply in self.ap.answer(&f) { let _ = self.hear(&reply); } }
-        }
+        if let Some((len, rate)) = out.send { self.air(self.tx[..len].to_vec(), rate); }
+    }
+    fn air(&mut self, f: Vec<u8>, rate: u8) {
+        self.sent.push((f.clone(), rate));
+        self.on.push(self.channel);
+        if self.channel == self.ap.channel { for reply in self.ap.answer(&f) { let _ = self.hear(&reply); } }
     }
     fn hear(&mut self, f: &[u8]) -> Result<(), Error> {
         let mut out = Out::default();
@@ -619,7 +624,7 @@ fn rules(allowed: impl Fn(u8) -> Allowed) -> Vec<(u8, Allowed)> { CHANNELS.iter(
 
 fn restrict(air: &mut Air, channels: &[(u8, Allowed)]) {
     let mut out = Out::default();
-    air.station.restrict(channels, &mut out, &mut air.tx);
+    air.station.restrict(channels, &mut out);
     air.apply(out);
 }
 
@@ -703,6 +708,30 @@ fn a_channel_the_country_leaves_out_is_not_joined() {
 }
 
 #[test]
+fn joining_another_access_point_says_goodbye_on_the_old_channel_before_the_tune() {
+    // 550-NET-0102: the network's other access point, on channel 11, joined from the one on channel 6.
+    let mut air = joined();
+    let mut other = wpa2();
+    other.channel = 11;
+    let mut f = other.beacon();
+    f[10..16].copy_from_slice(&TWIN);
+    f[16..22].copy_from_slice(&TWIN);
+    let mut out = Out::default();
+    air.station.receive(&f, 11, 40, air.now, &[0x42; 32], &mut air.service, &mut out, &mut air.tx, &mut air.rx).unwrap();
+    air.apply(out);
+    let before = air.sent.len();
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join_avoiding(SSID, pmk, &[BSSID], now, out, tx)).unwrap();
+    let (sent, on) = (&air.sent[before..], &air.on[before..]);
+    assert_eq!(sent.len(), 2);
+    // The deauthentication of the access point left, reason 3, on its own channel.
+    assert_eq!((sent[0].0[0], &sent[0].0[4..10], &sent[0].0[24..26], on[0]), (frame::DEAUTHENTICATION << 4, &BSSID[..], &3u16.to_le_bytes()[..], 6));
+    // Then the other's authentication, on its channel.
+    assert_eq!((sent[1].0[0], &sent[1].0[4..10], on[1]), (frame::AUTHENTICATION << 4, &TWIN[..], 11));
+    assert_eq!(air.station.state(), State::Joining);
+}
+
+#[test]
 fn a_change_of_country_leaves_the_network_and_drops_the_scan() {
     let mut air = joined();
     let before = air.sent.len();
@@ -718,7 +747,7 @@ fn a_change_of_country_leaves_the_network_and_drops_the_scan() {
     // A scan in progress ends too, and the radio's filter is back to the station's own frames.
     air.run(|s, now, out, tx| s.scan(now, out, tx)).unwrap();
     let mut out = Out::default();
-    air.station.restrict(&rules(|_| Allowed::Nothing), &mut out, &mut air.tx);
+    air.station.restrict(&rules(|_| Allowed::Nothing), &mut out);
     assert_eq!(air.station.state(), State::Off);
     assert_eq!(out.filter.map(|f| f.all_beacons), Some(false));
 }
