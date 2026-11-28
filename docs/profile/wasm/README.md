@@ -45,7 +45,7 @@ node web/node/run.mjs web/build/kernel.wasm aarch64_root --volume web/build/volu
   - monotonic: the page's `performance.now()`, with a 10 ms tick;
   - wall: the page's `Date.now()` through a PL031 node;
   - CNTVCT counts nanoseconds, and RNDR is the page's `crypto.getRandomValues`.
-- **Input:** two virtio-input devices over virtio-pci on bus 0, a tablet and a keyboard, modelled in `arch/wasm/devices.rs` (no MSI-X, INTx lines 3 and 4). The page passes evdev events into them.
+- **Input:** two virtio-input devices over virtio-pci on bus 0, a tablet and a keyboard, modelled in the `wasm_machine` crate, outside `kernel/src` as a machine is (no MSI-X, INTx lines 3 and 4). The page passes evdev events into them.
 - **Not there:**
   - no disk that keeps writes: `ram:` is lost when the tab closes;
   - no network, no sound, no TPM, no UEFI variables, no watchdog, no second CPU.
@@ -57,7 +57,7 @@ Everything in `aarch64/QEMU-virt-0`'s TCB that remains: the kernel's generic par
 - **The `a64` emulator** (`a64/`).
   - Its stage-1 walk and permission checks are the isolation between tasks and from the kernel. A fault in it is a fault in isolation.
   - It is checked by host tests per instruction class and the walk (`a64/tests`), and by a differential run against native aarch64 code (215-PRT-0016). Neither is a proof (MC-12.2).
-- **`arch/wasm`** and its device model.
+- **`arch/wasm`**, and the page's devices in `wasm_machine/`. The devices read and write the drivers' queues in RAM directly, as hardware's DMA does, with no boundary between them (MC-1.5). Host tests (`wasm_machine/tests`) check them; they are not a proof (MC-12.2).
 - **The engine that runs the module:** the browser's or Node's WebAssembly engine.
   - The module's memory is the machine's whole physical memory.
   - The page's JavaScript can read and write all of it.
