@@ -76,9 +76,15 @@ the Kingston SSD behind the JMicron JM20329 bridge (152D:2329):
 a stall before it reads the CSW: Linux's usb-storage clears the halt, and this driver has no call for it. So MODE SENSE
 was taken as unanswered ("NO CACHING PAGE"), and the endpoint stayed stalled until the next command's recovery.
 
-**The mend.** MODE SENSE asks for the 4-byte header first, as every boot before did. Then it asks for exactly the length
-the header names (`mode::whole`, at most 192), so that no data stage ends short. `tests/flush_host.rs` checks the
-lengths asked. Whether the bridge then gives a caching page is for the next bench run to show.
+**A first mend, not enough.** MODE SENSE asked for the 4-byte header first, then exactly the length the header named
+(`mode::whole`, at most 192). On bench-54b (release 202611281225) the same line came at 2.179 s. So it is the ask
+longer than the header itself, whatever its length, and not a short data stage. `usb_host` resets a stalled endpoint on
+both sides, so a stall alone would not explain it.
+
+**The mend kept.** `usb_storage`'s `ASK_CACHING_PAGE` is off. MODE SENSE asks the header alone, as before this task, and
+a USB disk's cache is unknown, so its flush is always sent (`ITS CACHE NOT ASKED`). The parser (`mode.rs`) and its
+host cases stay, for the day the page can be asked safely. QEMU's `flush_check` now expects the USB disk's flush with its
+cache off too.
 
 ## Related
 
