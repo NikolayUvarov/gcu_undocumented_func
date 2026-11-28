@@ -1,6 +1,6 @@
-# 215-PRT-0016 — An emulator of user-mode A64 for the browser's kernel (step 0 of 215)
+# 215-PRT-0016 — An emulator of user-mode A64 for the browser's kernel (step 0 of 215) — done
 
-**Type:** porting, a new crate (`a64`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (made on its branch, 2026-11-28; to land) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md) · **Constitution:** MC-3.3, MC-12.1, MC-12.3
+**Type:** porting, a new crate (`a64`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [215](../issues/215-mind-core-in-a-browser-tab.md) · **Constitution:** MC-3.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -74,6 +74,18 @@
    - `uptime`, built from `main` for aarch64, ran in Node on the wasm build to its end in 6,583 instructions. It passed `check_abi` (ABI 40), took its heap through ALLOC, was refused CAP_INFO (29) and MEM_SHARE (15), and printed `uptime: no access to sysmon (start it from the shell)`.
    - The differential program in Node gave the same 16 results as the native build, at 47–51 million instructions a second warm (this container's CPU; the host's own test build: 82–90 million).
 
+## Resolution
+
+Landed in `main` f4b6fc6148 in round 184 (2026-11-28). Its gate was green on all 64 groups: two failed once on i9 and passed when run again on x32 (`x86: USB image`, 000-KRN-0293; `x86: TSC measured again`, 000-KRN-0296), neither in code this task touches.
+
+- **`a64/`:** the crate, the instructions in `src/exec.rs`, the walk and the TLB in `src/mmu.rs`. It has no dependencies and builds for the host, wasm32 and wasm64 with no warning. `scripts/host_tests.sh` runs its tests.
+- **Evidence (criteria 1 to 4, Progress above):**
+  - host tests per instruction class and for the walk's faults;
+  - a differential run of the same work native and emulated, 16 results agreeing over 1,383,784 instructions (a reference emulator could not be installed);
+  - `uptime` of the aarch64 build run in Node to its end;
+  - 47 to 51 million instructions a second warm in this session's container.
+- **Its use:** the browser's kernel, 215-PRT-0017 (on its branch, in the landing queue), which booted init, the services, the shell and `wm` on it in Node and in Chromium.
+
 ## Related
 
-[215](215-mind-core-in-a-browser-tab.md), [docs/wasm/README.md](../docs/wasm/README.md), [205](205-aarch64-boards.md).
+[215](../issues/215-mind-core-in-a-browser-tab.md), [docs/wasm/README.md](../docs/wasm/README.md), [205](../issues/205-aarch64-boards.md).
