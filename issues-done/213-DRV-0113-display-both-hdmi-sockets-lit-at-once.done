@@ -796,7 +796,7 @@ The one criterion left open: first light's colour squares on the third pipe, wit
 
 ## Resolution
 
-Both HDMI sockets are lit at once, each on its own pipe beside the firmware's DP-2, on the branch `claude/213-DRV-0113-display-both-hdmi-sockets` (with 213-DRV-0111 and 0112 closed on it), in `main` when its landing request lands.
+Both HDMI sockets are lit at once, each on its own pipe beside the firmware's DP-2, on the branch `claude/213-DRV-0113-display-both-hdmi-sockets` (with 213-DRV-0111 and 0112 closed on it), in `main` with round 182 (4df3fe984, 2026-11-28: 64 of 64 groups passed).
 
 - **What a release does:** every HDMI socket with a monitor is lit in the production order, HDMI-A-1 on OTG1 first, then HDMI-A-2 on OTG2. Each run is guarded against the other: its stages are refused at the other's blocks, and the other two pipes are read back after each stage. HDMI-A-1's picture is offered as the second screen; HDMI-A-2's (BAR 0's second window, slot 7) is offered as the third through slot 8 (213-KRN-0285, `display.wit` 1.5). Each unplug takes back only its own run.
 - **Shown on the Ryzen** (MC-12.1), with the maintainer at the machine:
