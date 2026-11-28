@@ -238,9 +238,13 @@ pub const REQUEST_NN: u32 = 134217728; // the model service's client in SLOT_NN,
 pub const REQUEST_WIFI_READ: u32 = 268435456; // the Wi-Fi station's reading client (BADGE_WIFI, which wlan mints) in SLOT_WIFI (550-KRN-0213, for 550-NET-0058)
 pub const REQUEST_SECRET_LINE: u32 = 536870912; // a console program's client of the shell badged BADGE_SHELL_SECRET in SLOT_SHELL: one secret line typed at its console (000-KRN-0224, for 000-APP-0126)
 pub const REQUEST_RECOVER: u32 = 1073741824; // the block store's client badged BADGE_RECOVER in SLOT_RECOVER, a copy of the shell's, the user asked each time (308-KRN-0204, for 308-APP-0122)
+pub const REQUEST_UPDATE_READ: u32 = 2147483648; // the updater's client badged BADGE_UPDATE_READ in SLOT_UPDATE_READ, a copy of the shell's: status, metadata and kept alone (100003-KRN-0291, for 100003-APP-0151); the last bit of the note's word
 /// The badge of the updater's client init gives the Effector gateway (update.wit 1.2, 751-KRN-0185): `fetch`, `apply`
 /// and `rollback` only while init's `remote-update` counts, which the updater asks at each.
 pub const BADGE_UPDATE_GATEWAY: u16 = 1;
+/// The badge of the updater's client that may only read (update.wit 2.1, 100003-UPD-0052): `status`, `metadata` and
+/// `kept`; every other call is `denied`. init mints it for the shell, in SLOT_UPDATE_READ, which lends copies.
+pub const BADGE_UPDATE_READ: u16 = 2;
 // The badge of a loader client that may only list, inspect and start helpers (loader.wit 1.10, 109-KRN-0117): the updater's.
 pub const BADGE_HELPERS_ONLY: u16 = 1;
 

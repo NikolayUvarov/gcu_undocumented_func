@@ -75,11 +75,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // firmware variable (801-KRN-0261). ABI 36: PLATFORM_BOOT_VOLUME gives the boot volume the loader read into memory, and
 // `ramdisk#2` serves it, read-only (352-KRN-0268). ABI 37 moves SLOT_DYNAMIC to 47 for SLOT_INSTALL, the shell's client of the
 // installer on a live boot (352-KRN-0269). ABI 38 adds STAT_KERNEL_LINES, the kernel's lines for the system log (000-KRN-0286).
+// ABI 39 moves SLOT_DYNAMIC to 48 for SLOT_UPDATE_READ, the updater's client that may only read, which a launcher may fill
+// for REQUEST_UPDATE_READ (100003-KRN-0291).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 38;
+pub const ABI_VERSION: u32 = 39;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes that version
 // alone, as no older one is read before the first release (AGENTS.md, section 3; 000-KRN-0175). A change to BootInfo or
@@ -342,7 +344,7 @@ pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
-pub const CAP_SLOTS: usize = 111; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246; 352-KRN-0269)
+pub const CAP_SLOTS: usize = 112; // 64 dynamic beside SLOT_DYNAMIC's fixed ones (262-KRN-0178; 308-KRN-0204, 0205; 801-KRN-0246; 352-KRN-0269; 100003-KRN-0291)
 pub const CAP_SLOTS_MAX: usize = 4096;
 // Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
 pub const DERIVE_DEPTH_MAX: usize = 64;
@@ -481,13 +483,16 @@ pub const SLOT_EFFECTOR: usize = 45;
 // vfs_server's installer (idl/install.wit), a client badged mind::fs::BADGE_INSTALL that init mints on a live boot alone:
 // the shell's alone, for its `install` command, never lent (ABI 37, 352-KRN-0269).
 pub const SLOT_INSTALL: usize = 46;
+// The updater's client badged mind::process::BADGE_UPDATE_READ, which may call status, metadata and kept alone (update.wit
+// 2.1): init gives the shell one, and the shell lends a copy for REQUEST_UPDATE_READ (ABI 39, 100003-KRN-0291).
+pub const SLOT_UPDATE_READ: usize = 47;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 47;
+pub const SLOT_DYNAMIC: usize = 48;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
-pub const LAUNCH_SLOTS: [usize; 23] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
+pub const LAUNCH_SLOTS: [usize; 24] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
     SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_NN, SLOT_STOREFS,
-    SLOT_RECOVER];
+    SLOT_RECOVER, SLOT_UPDATE_READ];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
