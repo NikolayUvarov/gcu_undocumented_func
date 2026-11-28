@@ -1,6 +1,6 @@
-# 213-KRN-0290 — The mirror blends what it shrinks, so no glyph loses a stroke
+# 213-KRN-0290 — The mirror blends what it shrinks, so no glyph loses a stroke — done
 
-**Type:** `compositor` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; the Ryzen run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md), with [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `compositor` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md), with [177-KRN-0274](../issues/177-KRN-0274-an-extended-desktop-on-two-screens.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -52,10 +52,26 @@ Measured on the host (this container's CPU, 5 runs each), a full draw of the pic
   - each channel is blended apart.
 - [x] The compositor builds with no warning.
 - [x] **Met** in round 183's gate. The display groups pass ("x86: boot, display, shell, memory, clock" and the window manager's). QEMU has no display driver that offers a second screen, so they show that the first screen is unchanged.
-- [ ] **On the Ryzen** (DRV's run, the maintainer's eye; MC-12.1): text on both HDMI screens has whole strokes, and the offers' `DRAWN IN` times are known.
+- [x] **On the Ryzen** (DRV's run, the maintainer's eye; MC-12.1): text on both HDMI screens has whole strokes, and the offers' `DRAWN IN` times are known. **Met** on bench-53 (see Resolution).
+
+## Resolution
+
+Done in round 183 (`main` c2318c10b3): `mind::display::taps_of`, `blend` and `sampled`, and the compositor's second and third screens drawing with them (full draw, changed spans, under a mark).
+
+**On the Ryzen**, DRV's bench-53 (release 202611281042, slot B, 2026-11-28; `main` 4df3fe984 with this branch at b02ae9edc, 213-DRV-0116, 700-BLT-0011 and 550-NET-0097 merged), reported in `KRN/2026-11-28T1050Z-DRV-re-213-krn-0290-the-maintainers-look-every-letter-whole-the-pointer-smooth.md` on `internal-dev-messages`:
+- **The maintainer's look** at the boot text on both HDMI monitors, with the pointer moved: «да, все так. Курсор не дергается, все буквы целые» (yes, all as said; the pointer does not jerk; every letter is whole).
+- **The offers' full draws:**
+
+| Screen | Mirrored at | `DRAWN IN` blended | Before, nearest pixel (same screens) |
+|---|---|---|---|
+| HDMI-A-1, 3440x1440 | 2304x1440 | 30877 µs | 5231 to 8568 µs |
+| HDMI-A-2, 1366x768 | 1228x768 | 11555 µs | 1491 to 2171 µs |
+
+- **What this is evidence of:** this machine, these three monitors and this build (MC-12.1). The changed spans' cost per frame was not measured on the machine. The maintainer's "no jerk" is the only word on it.
+- **What stays:** a full draw of the second screen now takes about two frames at 60 Hz. If that is ever seen to lag, the next step is the cache of source rows filtered across that "The cost" names. It is not opened as a task until a person sees it.
 
 ## Related
 
-- [213-KRN-0285](213-KRN-0285-three-screens-a-client-of-the-compositor-per-driver-screen.md) (the second and third screens);
-- [213-KRN-0273](213-KRN-0273-the-second-screen-stretched.md) (the fit);
-- [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md) (the desk, 1:1).
+- [213-KRN-0285](../issues/213-KRN-0285-three-screens-a-client-of-the-compositor-per-driver-screen.md) (the second and third screens);
+- [213-KRN-0273](../issues/213-KRN-0273-the-second-screen-stretched.md) (the fit);
+- [177-KRN-0274](../issues/177-KRN-0274-an-extended-desktop-on-two-screens.md) (the desk, 1:1).

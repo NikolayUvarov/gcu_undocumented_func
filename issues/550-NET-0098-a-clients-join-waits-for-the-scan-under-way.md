@@ -1,6 +1,6 @@
 # 550-NET-0098 — A client's join that comes during a scan waits for the scan's end
 
-**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; seen on the Ryzen in part on 2026-11-28; a 5 GHz join at boot left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -31,7 +31,23 @@ DRV's report `KRN/2026-11-26T1626Z-DRV-for-net-at-boot-the-station-joins-channel
 - [x] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector". **Met** in round 183's gate (x86 on acc-2, 2175 s; aarch64 on acc-1, 1598 s), QEMU only (MC-12.1).
 - [ ] **On the Ryzen** (DRV's run): at boot under `00`, with the autorun's `wifi join`, the station joins the 5 GHz access point when it is above the floor, and the log shows the join held.
 
+## Progress
+
+**On the Ryzen, in part** (DRV's bench-53 on the Ryzen (release 202611281042, 2026-11-28; `main` 4df3fe984 with `claude/550-NET-0097-another-access-point-after-a-refusal` aafcd2f7e, 213-DRV-0116, 700-BLT-0011 and 213-KRN-0290 merged), reported in `NET/2026-11-28T1056Z-DRV-550-net-0097-and-0098-on-the-ryzen-channel-40-set-aside-joined-on-8.md` on `internal-dev-messages`). Under `00`, CoolNet2 on channels 40 and 8:
+
+```
+[    6.266] wlan(28) [WLAN] AUTO-JOIN: TRY 1 ENDED BY A CLIENT'S JOIN
+[    6.266] wlan(28) [WLAN] A CLIENT'S JOIN OF CoolNet2 WAITS FOR THE SCAN UNDER WAY TO END
+[    9.821] rtw89_wifi(22) [RTW89] LISTEN-ONLY CHANNEL 40: A0:36:BC:11:F8:8C HEARD 36 MS AFTER THE TUNE, 36 MS AFTER THE REFUSED SEND
+[   10.090] rtw89_wifi(22) [RTW89] CHANNEL 40 NOT ADMITTED: …
+```
+
+- **Shown:** the autorun's join came during the automatic join's scan, was held, and the try was ended, as planned.
+- **Inferred, not shown:** the first send on channel 40, at 9.8 s, came right after the scan's end. So it was most likely the held join's, which took the 5 GHz access point from the whole list. The `JOINING … ON CHANNEL` line was not among those quoted.
+- **Not met:** the criterion's join on 5 GHz. Under `00` the radio refuses channel 40 (213-DRV-0087: the calibration's 12 dBm is above the channel's maximum), so no join there was possible. The station joined channel 8 (550-NET-0097).
+- **What would meet it:** a boot under `00` with the network's 5 GHz access point on a channel the radio admits under `00` (channel 100 was joined that way on 2026-11-26, after a restart of the radio).
+
 ## Related
 
 - [550-NET-0090](550-NET-0090-the-station-on-5-ghz.md): 5 GHz first.
-- [550-NET-0097](550-NET-0097-another-access-point-after-a-refusal.md): on the same branch.
+- [550-NET-0097](../issues-done/550-NET-0097-another-access-point-after-a-refusal.done): on the same branch.
