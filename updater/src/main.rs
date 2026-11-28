@@ -25,6 +25,7 @@ mod plan;
 mod source;
 mod bundle;
 mod kept;
+mod rights;
 mod store;
 mod keys { include!(concat!(env!("OUT_DIR"), "/keys.rs")); }
 
@@ -1481,41 +1482,48 @@ fn main(info: &'static BootInfo) {
         let wait = wake.map_or(0, |at| at.saturating_sub(mind::time::uptime_ms()).clamp(1, u32::MAX as usize) as u32);
         // Requests are checked against idl/update.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
-        // The Effector gateway's client (BADGE_UPDATE_GATEWAY, update.wit 1.2) stages or activates a release only while
-        // init's remote-update counts, asked at each such request so that the owner's change holds at once (751-KRN-0185).
-        let allowed = |what: &str| -> Result<(), Error> {
-            if request.badge != mind::process::BADGE_UPDATE_GATEWAY { return Ok(()); }
-            match wire::with_timeout(ASK_MS as u32, || init::mode(Endpoint(SLOT_LIFECYCLE))) {
-                Ok(Ok(modes)) if modes.remote_update => Ok(()),
-                other => {
-                    let why = if matches!(other, Ok(Ok(_))) { "REMOTE-UPDATE IS OFF" } else { "INIT DID NOT SAY" };
-                    mind::println!("[UPDATER] {} REFUSED TO THE EFFECTOR GATEWAY (PID {}): {} (MC-12.6)", what, request.sender, why);
+        // A call is answered as its badge allows (rights.rs): the Effector gateway's client (BADGE_UPDATE_GATEWAY, update.wit
+        // 1.2) stages, activates or hands over a release only while init's remote-update counts, asked at each such request
+        // so that the owner's change holds at once (751-KRN-0185); the reading client (BADGE_UPDATE_READ, 2.1) asks status,
+        // metadata and kept alone (100003-UPD-0052).
+        use rights::Call::{Bundle, Change, Check};
+        let rule = |call| rights::rule(call, request.badge, mind::process::BADGE_UPDATE_GATEWAY);
+        let may = |call, what: &str| -> Result<(), Error> {
+            match rule(call) {
+                rights::Rule::Answer => Ok(()),
+                rights::Rule::Deny => {
+                    let why = if call == Bundle && request.badge == 0 { "ONLY THE EFFECTOR GATEWAY HANDS OVER A BUNDLE (MC-12.6)" }
+                        else { "THIS CLIENT MAY ONLY READ THE UPDATER'S STATE (MC-3.11)" };
+                    mind::println!("[UPDATER] {} REFUSED (BADGE {}, PID {}): {}", what, request.badge, request.sender, why);
                     Err(Error::Denied)
                 }
+                rights::Rule::WhileRemoteUpdate => match wire::with_timeout(ASK_MS as u32, || init::mode(Endpoint(SLOT_LIFECYCLE))) {
+                    Ok(Ok(modes)) if modes.remote_update => Ok(()),
+                    other => {
+                        let why = if matches!(other, Ok(Ok(_))) { "REMOTE-UPDATE IS OFF" } else { "INIT DID NOT SAY" };
+                        mind::println!("[UPDATER] {} REFUSED TO THE EFFECTOR GATEWAY (PID {}): {} (MC-12.6)", what, request.sender, why);
+                        Err(Error::Denied)
+                    }
+                },
             }
         };
-        // Only the gateway's client hands over a bundle; its word is asked at begin and at commit.
-        let gateway = |what: &str| -> Result<(), Error> {
-            if request.badge == mind::process::BADGE_UPDATE_GATEWAY { return allowed(what); }
-            mind::println!("[UPDATER] {} REFUSED (BADGE {}, PID {}): ONLY THE EFFECTOR GATEWAY HANDS OVER A BUNDLE (MC-12.6)", what, request.badge, request.sender);
-            Err(Error::Denied)
-        };
         let _ = match api::decode(&request, RECEIVED, &mut scratch) {
-            Ok((api::Request::Check, call)) => { let offer = updater.check(); api::reply_check(call, offer.as_ref().map_err(|e| *e)) }
-            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, allowed("FETCH").and_then(|()| updater.fetch())),
-            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, allowed("APPLY").and_then(|()| updater.apply(tries))),
-            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, allowed("ROLLBACK").and_then(|()| updater.rollback())),
+            Ok((api::Request::Check, call)) => { let offer = may(Check, "CHECK").and_then(|()| updater.check()); api::reply_check(call, offer.as_ref().map_err(|e| *e)) }
+            Ok((api::Request::Fetch, call)) => api::reply_fetch(call, may(Change, "FETCH").and_then(|()| updater.fetch())),
+            Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, may(Change, "APPLY").and_then(|()| updater.apply(tries))),
+            Ok((api::Request::Rollback, call)) => api::reply_rollback(call, may(Change, "ROLLBACK").and_then(|()| updater.rollback())),
             Ok((api::Request::Status, call)) => api::reply_status(call, &updater.state()),
             Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &updater.metadata()),
             Ok((api::Request::Kept, call)) => api::reply_kept(call, &updater.releases_kept()),
             Ok((api::Request::InstallBegin { size, sha256, command }, call)) =>
-                api::reply_install_begin(call, gateway("INSTALL-BEGIN").and_then(|()| updater.install_begin(size, sha256.as_str(), command.as_str()))),
+                api::reply_install_begin(call, may(Bundle, "INSTALL-BEGIN").and_then(|()| updater.install_begin(size, sha256.as_str(), command.as_str()))),
             Ok((api::Request::InstallWrite { handle, offset, bytes }, call)) => {
-                let written = if request.badge == mind::process::BADGE_UPDATE_GATEWAY { updater.install_write(handle, offset, bytes) } else { Err(Error::Denied) };
+                // The gateway's word is asked at begin and at commit, not at each piece.
+                let written = if rule(Bundle) == rights::Rule::Deny { Err(Error::Denied) } else { updater.install_write(handle, offset, bytes) };
                 api::reply_install_write(call, written)
             }
             Ok((api::Request::InstallCommit { handle }, call)) =>
-                api::reply_install_commit(call, gateway("INSTALL-COMMIT").and_then(|()| updater.install_commit(handle))),
+                api::reply_install_commit(call, may(Bundle, "INSTALL-COMMIT").and_then(|()| updater.install_commit(handle))),
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };

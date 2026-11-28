@@ -10,7 +10,9 @@
 //! keeps releases in the block store, and `rollback` writes the last known good back from there into a slot not as its
 //! manifest lists it (1.4, 351-UPD-0033); `apply` writes the staged release back from there in the same way, and
 //! `kept` lists what the store keeps (1.5, 351-UPD-0034 and 0035). The state's failure is up to 256 bytes, so a refused
-//! trial's reason reaches the server whole (2.0, 801-UPD-0042); 1.x's of 64 is refused as another major version.
+//! trial's reason reaches the server whole (2.0, 801-UPD-0042); 1.x's of 64 is refused as another major version. A client
+//! badged `BADGE_UPDATE_READ` (2.1, 100003-UPD-0052) may call `status`, `metadata` and `kept` alone; every other call is
+//! `denied`. init gives the shell one, which lends copies to programs that ask only to read (`REQUEST_UPDATE_READ`).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -20,7 +22,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
