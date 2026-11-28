@@ -50,6 +50,8 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
+# Where a task's windows above its image start: IMAGE_MAX past the image's (kernel/src/paging.rs, 262-KRN-0292).
+ABOVE_IMAGE = 512 << 20
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "nvme#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
@@ -876,7 +878,7 @@ def stack_check(vm):
     vm.send("memstack 3072\n")
     require(vm.expect("MIND> ", timeout=60, after="memstack 3072\n"), "[MEMSTACK] 3072 KiB OF STACK USED")
     image = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    guard = image + 0x0100_1000 - 4096  # USER_STACK less one page
+    guard = image + ABOVE_IMAGE  # USER_STACK less one page
     def guard_faults():
         return [line for line in vm.command("faults").splitlines()
                 if (address := re.search(r"^FAULT PID=\d+ .* ADDR=(0x[0-9a-f]+)", line)) and guard <= int(address[1], 16) < guard + 4096]
@@ -2482,8 +2484,9 @@ def monitors_check(vm):
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
     # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
     base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
-                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+    for offset, rest in ((0, r"\S+ +r-x +image"), (ABOVE_IMAGE, r"4\.0K +--- +guard"), (ABOVE_IMAGE + 0x1000, r"64\.0K +rw- +stack"),
+                         (ABOVE_IMAGE + 0x0100_0000, r"\S+ +rw- +screen"), (ABOVE_IMAGE + 0x0300_0000, r"4\.0K +r-- +info"),
+                         (ABOVE_IMAGE + 0x0300_1000, r"4\.0K +rw- +mailbox"), (ABOVE_IMAGE + 0x0400_0000, r"4\.0K +r-x +exit")):
         line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
@@ -6564,7 +6567,7 @@ def services_suite(vm):
     heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
     assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
     layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
-    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", "0x8001000000 4096 GUARD ---"):
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", f"0x{0x80_0000_0000 + ABOVE_IMAGE:x} 4096 GUARD ---"):
         require(layout, region)
     cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
@@ -6655,10 +6658,11 @@ def services_suite(vm):
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
     assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
-    for line in ("0x0000008001001000     65536 rw- stack",
-                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+    above = 0x80_0000_0000 + ABOVE_IMAGE
+    for line in (f"0x{above + 0x1000:016x}     65536 rw- stack", f"0x{above + 0x0300_0000:016x}      4096 r-- info",
+                 f"0x{above + 0x0300_1000:016x}      4096 rw- mailbox", f"0x{above + 0x0400_0000:016x}      4096 r-x exit"):
         require(pmap, line)
-    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    assert re.search(rf"0x{above + 0x0100_0000:016x} +\d+ rw- screen", pmap), pmap
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
