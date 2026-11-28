@@ -60,4 +60,4 @@ Each stage's criteria above, met in order. The main task closes when stage 2 pas
 
 ## Related
 
-[TRACKS.md](../TRACKS.md) (the proposed track `DEV`), [501](501-effector.md), [350](350-signed-boot-images.md), [351](351-self-update.md), [211](211-intel-pc-from-a-sata-ssd.md) (a data partition), [requests-NET.md](requests-NET.md) (the SSH client), [requests-KRN.md](requests-KRN.md), ROADMAP track C.
+[TRACKS.md](../TRACKS.md) (the proposed track `DEV`), [501](501-effector.md), [350](350-signed-boot-images.md), [351](351-self-update.md), [211](211-intel-pc-from-a-sata-ssd.md) (a data partition), [requests-NET.md](requests-NET.md) (the SSH client), [requests-KRN.md](requests-KRN.md), ROADMAP track C. [264](264-ladybird-on-mind-core-a-port-kept-outside-the-os.md) (Ladybird ported, the track `LBD`: it waits for stages 2 and 3, a C/C++ cross toolchain and the POSIX layer).
