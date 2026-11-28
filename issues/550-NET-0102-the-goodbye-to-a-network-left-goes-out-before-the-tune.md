@@ -1,0 +1,36 @@
+# 550-NET-0102 — The goodbye to a network left goes out on its channel, before the tune to another
+
+**Type:** `dot11`, `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P2 · **Status:** in progress (2026-11-28) · **Blocked by:** none · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.3
+
+## Problem
+
+The kernel session's answer to DRV on 2026-11-28 (`DRV/2026-11-28T1108Z-NET-re-0097-0098-on-the-ryzen-…` on `internal-dev-messages`, section 3) names a gap: when a station joined to one access point joins another, no deauthentication goes out before the tune.
+
+- `Station::join_avoiding` calls `leave`, which writes the deauthentication into `tx` and `out.send`.
+- `start` then writes the authentication to the new access point into the same `tx` and `out.send`, and sets `out.channel`.
+- So the goodbye is lost. The old access point keeps the station associated until its own inactivity timeout, while the station is already on another channel.
+
+`Out` carries one frame and its order is tune, filter, send. A goodbye has to go out before the tune, so it cannot share that slot.
+
+## Plan
+
+1. **`dot11`:** a leave's deauthentication goes in its own field, `Out.leave` (the frame and its rate). Its order comes first: on the channel the radio is on, before the tune.
+   - `leave` and `restrict` no longer take `tx`, as the goodbye does not use it.
+   - Every leave fills `Out.leave`: `wifi leave`, a country change, a failed handshake, a key the key service refused, and a join of another access point.
+2. **`wlan`:** `apply` sends `out.leave` before it tunes.
+   - The goodbye carries no packet number, so it goes ahead of frames held back as busy ([801-NET-0095](801-NET-0095-a-busy-radio-loses-no-frame.md)).
+   - When the radio is busy, it is held only if no tune follows. Otherwise it is not sent, as it would go out on the wrong channel.
+3. **No other user:** `dot11`'s station is used by `wlan` alone. The `wifi` program and `rtw89_wifi` have stations of their own.
+
+## Acceptance criteria
+
+- [x] Host test, `dot11/tests/station.rs` (`joining_another_access_point_says_goodbye_on_the_old_channel_before_the_tune`): joined on channel 6, a join of the network's other access point on channel 11 sends two frames. The first is a deauthentication to the first access point, reason 3, on channel 6. The second is the authentication to the other, on channel 11. The other station tests pass as before (26 in all).
+- [x] `wlan` builds for x86 and aarch64 with no warning.
+- [x] "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector" pass (wlansim's joins, leave and loss): on 9cd5d4e230 through Effector, 2026-11-28, acc1 (2077 s) and acc2 (1651 s); host tests on x32 (2756 s).
+
+The goodbye is not shown on hardware: that needs a capture of the air, and no profile claims it.
+
+## Related
+
+- [550-NET-0097](../issues-done/550-NET-0097-another-access-point-after-a-refusal.done) (the joins of another access point), [550-NET-0101](550-NET-0101-a-clients-join-that-gets-no-answer-sets-the-access-point-aside.md).
+- [801-NET-0095](801-NET-0095-a-busy-radio-loses-no-frame.md): the frames `wlan` holds back while the radio is busy.
