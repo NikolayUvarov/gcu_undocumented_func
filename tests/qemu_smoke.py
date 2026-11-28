@@ -3899,7 +3899,29 @@ def protection_check(vm):
     return names
 
 
+def large_image_check(vm):
+    """262-KRN-0292: a program whose image spans 72 MiB, from a 6 MiB file, starts and runs: the kernel takes images up to
+    IMAGE_MAX (512 MiB, 8 MiB before) and the loader files of that size (4 MiB before). Its image is charged as its pages
+    are. One that spans past IMAGE_MAX is refused, and nothing of it stays."""
+    output = vm.command("run bigclock &")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=bigclock BACKGROUND", output)[1])
+    task = int(re.search(r"^(\d+) bigclock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    image = int(re.search(r"IMAGE=(\d+) ", vm.command(f"stat {task}", raw=True))[1])
+    assert image == 72 << 20, image
+    time.sleep(1)
+    assert re.search(r"^\d+ bigclock ", vm.command("ps", raw=True), re.M), "the large image ran on"
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    task_rows_reaped(vm)
+    before, frames_before = heap_used(vm), frames_free(vm)
+    require(vm.command("run hugeclock &"), "NOT A PROGRAM FILE")
+    assert not re.search(r"^\d+ hugeclock ", vm.command("ps", raw=True), re.M)
+    assert heap_used(vm) == before and frames_free(vm) == frames_before, "a refused image leaves nothing allocated"
+    print("PASS: a program spanning 72 MiB from a 6 MiB file ran; one past IMAGE_MAX (512 MiB) was refused, nothing kept "
+          "(262-KRN-0292)", flush=True)
+
+
 def memory_suite(vm):
+    large_image_check(vm)
     baseline, frames = heap_used(vm), frames_free(vm)
     # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of what applications may take, so spawns run out.
     holders = hold_frames(vm, frames, 40)
@@ -12041,6 +12063,19 @@ def large_bss(path):
     size = int.from_bytes(data[last + 40:last + 48], "little") + 7 * 1024 * 1024
     data[last + 40:last + 48] = size.to_bytes(8, "little")
     path.write_bytes(data)
+
+
+def large_image(source, path, span, file_size):
+    """A copy of `source` whose loaded segments span `span` bytes (its last one's .bss grown), its file padded with zeros
+    after the segments to `file_size` bytes (262-KRN-0292)."""
+    data = bytearray(source.read_bytes())
+    offset, count = int.from_bytes(data[32:40], "little"), int.from_bytes(data[56:58], "little")
+    loads = [offset + i * 56 for i in range(count) if int.from_bytes(data[offset + i * 56:offset + i * 56 + 4], "little") == 1]
+    first = min(int.from_bytes(data[p + 16:p + 24], "little") for p in loads) & ~4095
+    last = max(loads, key=lambda p: int.from_bytes(data[p + 16:p + 24], "little"))
+    address = int.from_bytes(data[last + 16:last + 24], "little")
+    data[last + 40:last + 48] = (first + span - address).to_bytes(8, "little")
+    path.write_bytes(bytes(data) + bytes(max(0, file_size - len(data))))
 
 
 class _Http(http.server.BaseHTTPRequestHandler):
@@ -20866,6 +20901,8 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+                large_image(disk / "clock.elf", disk / "bigclock.elf", 72 << 20, 6 << 20)  # 262-KRN-0292
+                large_image(disk / "clock.elf", disk / "hugeclock.elf", (512 << 20) + (8 << 20), 0)
             sign_manifest.sign_volume(disk)
             if suite == "boot":
                 boot_suite(args, disk)

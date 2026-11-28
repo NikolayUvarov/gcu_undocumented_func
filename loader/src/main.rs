@@ -22,7 +22,6 @@ const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; 
 const OWN_DIRS: usize = 7; // vfs_server's client badged BADGE_OWNERS: it alone opens system/own/ (000-KRN-0170)
 const OWN_ROOT: &str = "system/own"; // the programs' own directories, one by name
 const OWN_SECRETS: usize = 8; // keystore's client badged BADGE_KEY_LOADER: it asks for each program's secrets client (000-KRN-0182)
-const MAX_IMAGE: usize = 4 * 1024 * 1024;
 // Helpers (1.8, 109-KRN-0096): programs that serve one caller and hold nothing but its endpoint.
 const HELPER_MEMORY_MIB: u16 = 2;
 const HELPERS_EACH: usize = 4; // live helpers a caller may have at once
@@ -314,7 +313,7 @@ fn owners_memory(task: &[u8]) -> Option<u16> {
 // A program file read whole into memory, if it is an ELF of a size the loader takes.
 fn read_image(file: &File) -> Result<(Pages, usize), Error> {
     let size = file.size();
-    if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
+    if size < 64 || size > IMAGE_MAX { return Err(Error::Invalid); } // the kernel's bound (ABI 40, 262-KRN-0292)
     let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
     if file.read_at(0, &mut image.as_mut_slice()[..size]).map_err(file_error)? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
     Ok((image, size))
