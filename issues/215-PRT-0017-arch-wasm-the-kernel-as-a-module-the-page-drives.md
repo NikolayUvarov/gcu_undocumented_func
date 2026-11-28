@@ -1,6 +1,6 @@
 # 215-PRT-0017 — `arch/wasm`: the kernel as a module the page drives, its tasks on the A64 emulator
 
-**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** [215-PRT-0016](215-PRT-0016-an-a64-user-mode-emulator.md) (the emulator, in the landing queue) · **Main task:** [215](215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -73,4 +73,4 @@ The desktop on a canvas (the framebuffer, keys and pointer) was planned as its o
 
 ## Related
 
-- [215](215-mind-core-in-a-browser-tab.md), [215-PRT-0016](215-PRT-0016-an-a64-user-mode-emulator.md), [docs/wasm/README.md](../docs/wasm/README.md).
+- [215](215-mind-core-in-a-browser-tab.md), [215-PRT-0016](../issues-done/215-PRT-0016-an-a64-user-mode-emulator.done) (the emulator, landed in round 184), [docs/wasm/README.md](../docs/wasm/README.md).
