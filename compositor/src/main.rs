@@ -12,7 +12,7 @@
 // through its second client, each at its own size (1.5, 213-KRN-0285).
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
-use mind::display::{placed, remote_center, remote_of, remote_pixel, screen_name, screen_of, shown, source_of, Remote, DRIVER_SCREENS};
+use mind::display::{placed, remote_center, remote_of, remote_pixel, sampled, screen_name, screen_of, shown, taps_of, Remote, DRIVER_SCREENS};
 use mind::idl::display::{self, Error, Fit, Mirror, Mode, PixelFormat, RemoteState, Request};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
@@ -93,7 +93,7 @@ fn remote(mark: Remote, state: RemoteState, width: usize, height: usize) -> impl
 }
 
 // A second screen a driver lent (213-KRN-0272): its mapping, its shape, where the first screen's picture lies on it,
-// and for each of the picture's columns and rows the first screen's column and row it shows.
+// and for each of the picture's columns and rows the first screen's columns and rows it blends (taps_of, 213-KRN-0290).
 struct Second { map: Mapping, shape: Shape, pitch: usize, format: u32, cols: Pages, rows: Pages }
 
 impl Second {
@@ -117,14 +117,18 @@ impl Second {
     }
     fn tables(&self, info: &BootInfo) {
         let (w, h) = self.shape.size;
-        for c in 0..w { unsafe { core::ptr::write((self.cols.address() as *mut u32).add(c), source_of(c, w, info.width) as u32); } }
-        for r in 0..h { unsafe { core::ptr::write((self.rows.address() as *mut u32).add(r), source_of(r, h, info.height) as u32); } }
+        for c in 0..w { unsafe { core::ptr::write((self.cols.address() as *mut u32).add(c), taps_of(c, w, info.width)); } }
+        for r in 0..h { unsafe { core::ptr::write((self.rows.address() as *mut u32).add(r), taps_of(r, h, info.height)); } }
     }
     fn mirror(&self, fit: Fit) -> Mirror {
         Mirror { width: self.shape.width as u16, height: self.shape.height as u16, fit, picture_width: self.shape.size.0 as u16, picture_height: self.shape.size.1 as u16 }
     }
-    fn col(&self, c: usize) -> usize { unsafe { core::ptr::read((self.cols.address() as *const u32).add(c)) as usize } }
-    fn row(&self, r: usize) -> usize { unsafe { core::ptr::read((self.rows.address() as *const u32).add(r)) as usize } }
+    fn col(&self, c: usize) -> u32 { unsafe { core::ptr::read((self.cols.address() as *const u32).add(c)) } }
+    fn row(&self, r: usize) -> u32 { unsafe { core::ptr::read((self.rows.address() as *const u32).add(r)) } }
+    // The picture's pixel at column `c` of the row whose taps are `row`: the first screen's pixels it covers, blended.
+    fn pixel(&self, info: &BootInfo, shadow: *const u32, c: usize, row: u32) -> u32 {
+        sampled(self.col(c), row, |x, y| unsafe { core::ptr::read(shadow.add(y * info.stride + x)) })
+    }
     fn put(&self, x: usize, y: usize, pixel: u32) {
         let device = if self.format == PIXEL_BGR { pixel & 0x00FF_FFFF } else { pixel_to_device(pixel, self.format, [0; 3]) };
         unsafe { core::ptr::write_volatile(self.map.as_ptr::<u32>().add((self.shape.at.1 + y) * self.pitch + self.shape.at.0 + x), device); }
@@ -142,25 +146,33 @@ impl Second {
         }
         if !valid { return; }
         for r in 0..self.shape.size.1 {
-            let row = self.row(r) * info.stride;
-            for c in 0..self.shape.size.0 { self.put(c, r, unsafe { core::ptr::read(shadow.add(row + self.col(c))) }); }
+            let row = self.row(r);
+            for c in 0..self.shape.size.0 { self.put(c, r, self.pixel(info, shadow, c, row)); }
         }
     }
-    // The picture's pixels that show what changed: each first-screen row's changed columns, from `spans`.
+    // The picture's pixels that show what changed: the changed columns of the first-screen rows each picture row blends,
+    // from `spans`, and the picture columns whose taps reach them (up to two columns before).
     #[inline(never)]
     fn update(&self, info: &BootInfo, shadow: *const u32, spans: *const [u32; 2]) {
         for r in 0..self.shape.size.1 {
-            let sy = self.row(r);
-            let [first, last] = unsafe { core::ptr::read(spans.add(sy)) };
-            let Some((c0, c1)) = shown(first as usize, last as usize, self.shape.size.0, info.width) else { continue };
-            for c in c0..=c1 { self.put(c, r, unsafe { core::ptr::read(shadow.add(sy * info.stride + self.col(c))) }); }
+            let row = self.row(r);
+            let (sy, weights) = ((row >> 16) as usize, [(row >> 8) & 0xFF, row & 0xFF]);
+            let mut changed = unsafe { core::ptr::read(spans.add(sy)) };
+            for (i, &w) in weights.iter().enumerate() {
+                if w == 0 { continue; }
+                let [first, last] = unsafe { core::ptr::read(spans.add(sy + 1 + i)) };
+                changed = [changed[0].min(first), changed[1].max(last)];
+            }
+            let [first, last] = changed;
+            let Some((c0, c1)) = shown((first as usize).saturating_sub(2), last as usize, self.shape.size.0, info.width) else { continue };
+            for c in c0..=c1 { self.put(c, r, self.pixel(info, shadow, c, row)); }
         }
     }
     // A mark on the picture while `lit`, else what the shadow shows under it.
     #[inline(never)]
     fn mark(&self, info: &BootInfo, shadow: *const u32, valid: bool, lit: bool, shape: impl Iterator<Item = (usize, usize, u32)>) {
         for (x, y, color) in shape {
-            let pixel = if lit { color } else if valid { unsafe { core::ptr::read(shadow.add(self.row(y) * info.stride + self.col(x))) } } else { 0 };
+            let pixel = if lit { color } else if valid { self.pixel(info, shadow, x, self.row(y)) } else { 0 };
             self.put(x, y, pixel);
         }
     }
