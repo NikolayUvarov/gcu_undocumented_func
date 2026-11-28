@@ -37,11 +37,23 @@ that the host tests run.
 
 ## Acceptance criteria
 
-- [ ] The three cases pass: 3.9 s unoptimised, as `scripts/host_tests.sh` builds them; 0.6 s with `-O`.
-- [ ] A mutation check: a `parse_keys` whose hex also takes upper-case digits is caught on its first finding, with the
+- [x] The three cases pass: 3.9 s unoptimised, as `scripts/host_tests.sh` builds them; 0.6 s with `-O`.
+- [x] A mutation check: a `parse_keys` whose hex also takes upper-case digits is caught on its first finding, with the
       input that made it.
-- [ ] All of `scripts/host_tests.sh` passes with the new file in it.
+- [x] All of `scripts/host_tests.sh` passes with the new file in it.
 - [ ] Any finding goes to UPD, the owner of `release.rs`, as a message. This fuzzer changes no parser.
+
+## Progress (2026-11-28)
+
+On LEG9, on `claude/351-ASR-0017-key-file-fuzzer` (`main` merged):
+- the three cases pass: 3.85 s unoptimised, 0.57 s with `-O`;
+- the mutation check: a `parse_keys` and `parse_channel` whose hex also takes `A` to `F` fail the fuzzing case on its first
+  finding, which was a channel's manifest hash with an upper-case digit;
+- `02_build.sh` passes, and all of `scripts/host_tests.sh` exits 0, 284 `test result: ok`;
+- no finding in the parsers as they are.
+
+A second mutation check, `signed_by` without its repeat guard, was not run: the session's check of the copy it needed
+was refused. The made-up signature sets' case is the one that would catch it.
 
 ## Related
 
