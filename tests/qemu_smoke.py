@@ -10938,10 +10938,12 @@ def hub_check(args, disk):
         out = vm.command("cat data/improve/waiting", timeout=30)
         assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
-        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        # The admin's comment, which a verified request still takes.
+        # A text past 512 bytes (100003-NET-0100, parse.wit 5.1): `parse` takes the answer and gives the text's first piece, up
+        # to 512 bytes; the rest is improve's to read with json-text. The admin's comment, which a verified request still takes.
         call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
-        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        shown = vm.command("improve show 1", timeout=60)
+        require(shown, "long long long long")
+        assert "the parse service refused" not in shown, shown[-1500:]
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
         require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
