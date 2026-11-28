@@ -43,7 +43,7 @@ const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
 const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Full;
 const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
-const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Full;
+const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::FirstLight;
 const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
                                                      hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST, second_hdmi: SECOND_HDMI };
 /// Between two log lines, so that a burst is not dropped.
