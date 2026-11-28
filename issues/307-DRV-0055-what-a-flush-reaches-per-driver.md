@@ -86,6 +86,22 @@ a USB disk's cache is unknown, so its flush is always sent (`ITS CACHE NOT ASKED
 host cases stay, for the day the page can be asked safely. QEMU's `flush_check` now expects the USB disk's flush with its
 cache off too.
 
+**Shown on the Ryzen** (MC-12.1), bench-54c: release 202611281303 = `main` c2318c10b (ABI 40) with this branch at
+21b02376f. The QEMU groups "x86: keys, shell, tools", "x86: USB image" and "x86: files and block writes" passed on that
+commit. Its log:
+- no `NO ANSWER TO READ` after the probe;
+- `[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE` at 2.267 s;
+- `[RAMDISK] FLUSH: NOTHING TO REACH …`;
+- `[BLOCKSTORE] READY … DURABILITY=FLUSHED`.
+
+The second NVMe disk (`nvme#1`) is read-only at the testing stage and refuses every flush, as 213-DRV-0060 has it. So
+the Ryzen's line for this criterion is its boot stick's. The MacBook Pro's stick and the DEXP's are still to be read.
+
+**Seen once in QEMU, not this task's change:** "x86: USB image" failed once on bench-54b, in the swap of the same stick.
+The recovery's tries gave up (`THE DEVICE IS GONE`) 1.9 s after the missed READ, and usb_host enumerated the stick again
+0.8 s later. Run alone again, the group passed. The race is between `recovery::reclaim`'s tries and the enumeration. It
+is noted here for 000-DRV-0058, whose case it is.
+
 ## Related
 
 [307](307-the-stores-own-partition.md), [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), [211-DRV-0053](211-DRV-0053-a-usb-disk-that-missed-a-transfer-comes-back.md).
