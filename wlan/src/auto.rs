@@ -49,3 +49,37 @@ pub fn choose<'a>(heard: impl Iterator<Item = (&'a [u8], u8)>, remembered: impl 
     }
     best.map(|(ssid, _)| ssid)
 }
+
+/// How long an access point the radio refused, or that never answered, waits behind the network's others (550-NET-0097).
+pub const SET_ASIDE_MS: u64 = 600_000;
+/// How many such access points are held; a new one takes the oldest one's place.
+pub const SET_ASIDE: usize = 4;
+
+/// Access points (BSSIDs) a try of the automatic join set aside, each until its time: the next try takes another
+/// access point of the same network first (550-NET-0097). It outlives a restart of the radio, which ends the station.
+pub struct SetAside { entries: [([u8; 6], u64); SET_ASIDE], count: usize }
+
+impl SetAside {
+    pub const fn new() -> Self { Self { entries: [([0; 6], 0); SET_ASIDE], count: 0 } }
+
+    /// `bssid` set aside from `now`; a second time, its time starts again.
+    pub fn add(&mut self, bssid: [u8; 6], now: u64) {
+        let until = now + SET_ASIDE_MS;
+        if let Some(entry) = self.entries[..self.count].iter_mut().find(|(b, _)| *b == bssid) { entry.1 = until; return; }
+        if self.count < SET_ASIDE { self.entries[self.count] = (bssid, until); self.count += 1; return; }
+        if let Some(oldest) = self.entries.iter_mut().min_by_key(|(_, u)| *u) { *oldest = (bssid, until); }
+    }
+
+    /// Those still set aside at `now`, the others let go.
+    pub fn at(&mut self, now: u64, out: &mut [[u8; 6]; SET_ASIDE]) -> usize {
+        let mut kept = 0;
+        for i in 0..self.count {
+            if self.entries[i].1 > now { self.entries[kept] = self.entries[i]; out[kept] = self.entries[i].0; kept += 1; }
+        }
+        self.count = kept;
+        kept
+    }
+
+    /// The station joined: nothing is set aside.
+    pub fn clear(&mut self) { self.count = 0; }
+}
