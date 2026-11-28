@@ -384,7 +384,7 @@ offered the second screen, and the compositor took it.**
   213-DRV-0086's procedure.
 - [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done): the stages at start without the survey's
   pauses: a production order, and how many seconds it takes.
-- [213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md): the committed default (everything off) against a
+- [213-DRV-0099](../issues-done/213-DRV-0099-display-both-screens-by-default.done): the committed default (everything off) against a
   machine that should simply come up with both screens.
 - **DP-2 by eye through stages 11 to 16,** and stage 15's own picture: criterion 3 below.
 - **Closed at once:** [213-DRV-0100](../issues-done/213-DRV-0100-display-the-second-screens-vertical-blank.done), the
