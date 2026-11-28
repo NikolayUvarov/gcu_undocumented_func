@@ -8,3 +8,8 @@ pub use x86_64::*;
 mod aarch64;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::*;
+// A page or Node drives the kernel; the tasks' A64 runs on the `a64` emulator (215-PRT-0017).
+#[cfg(target_arch = "wasm64")]
+mod wasm;
+#[cfg(target_arch = "wasm64")]
+pub use wasm::*;

@@ -27,7 +27,7 @@ const CONSOLE_READER_NS: u64 = 1_000_000_000;
 const HOLD_NS: u64 = 1_000_000_000;
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
-static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
+static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(any(target_arch = "aarch64", target_arch = "wasm64")));
 use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const MSI_WHOLE: u16 = u16::MAX; // in `msi`: a device's MSI, not an MSI-X entry
 // An MSI storm (000-KRN-0077): this many messages that found the last one not yet taken, within STORM_MS.

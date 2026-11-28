@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))] // core::arch::wasm64::memory_size (215-PRT-0017)
 #![feature(allocator_ext)] // Box::try_new_in: a task in the frame pool, refused when the pool is full (171-KRN-0032)
 
 extern crate alloc;
@@ -56,6 +57,7 @@ mod scheduler;
 mod screen;
 mod task_state;
 mod task_table;
+#[cfg_attr(target_arch = "wasm64", allow(dead_code))] // no ACPI tables under a page (215-PRT-0017)
 mod tpm2;
 mod trial;
 mod user_heap;
@@ -96,10 +98,21 @@ pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) 
 fn serial_only(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); } } }
 fn serial_print(text: &str) { serial_only(text); screen::print(text); klog::keep(text); }
 
+#[cfg(not(target_arch = "wasm64"))]
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
-    unsafe {
+    unsafe { boot(raw_info); }
+    // The BSP idle loop reclaims exited tasks and otherwise sleeps until the next interrupt.
+    loop {
+        scheduler::reap();
+        scheduler::idle();
+    }
+}
+
+/// The boot up to init's start; on wasm the page then drives the turns (215-PRT-0017).
+pub unsafe fn boot(raw_info: *const BootInfo) {
+    {
         cpu::disable_interrupts();
         cpu::kernel_level();
         init_serial();
@@ -159,11 +172,6 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
         interrupts::init();
         clock::calibrate();
         cpu::start(info);
-    }
-    // The BSP idle loop reclaims exited tasks and otherwise sleeps until the next interrupt.
-    loop {
-        scheduler::reap();
-        scheduler::idle();
     }
 }
 

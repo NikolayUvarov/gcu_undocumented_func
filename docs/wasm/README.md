@@ -1,6 +1,22 @@
 # MIND Core in a browser tab: a plan
 
-**Status:** the plan of main task [215](../../issues/215-mind-core-in-a-browser-tab.md) (`PRT`). The maintainer chose way B on 2026-11-28, with the desktop and its applications first: «We need it to show interface and applications readyness for humans so they can support as contibutors». Nothing in it is made yet; what it says MIND Core would do in a browser is a plan, not a guarantee (MC-12.3).
+**Status:** the plan of main task [215](../../issues/215-mind-core-in-a-browser-tab.md) (`PRT`). The maintainer chose way B on 2026-11-28, with the desktop and its applications first: «We need it to show interface and applications readyness for humans so they can support as contibutors». Steps 0 and 1 are made on branches (215-PRT-0016, 215-PRT-0017), below in "Where it stands"; the rest is a plan, not a guarantee (MC-12.3).
+
+**Where it stands (2026-11-28):**
+- **The kernel builds for WebAssembly:** `kernel/src/arch/wasm`, for `wasm64` lowered to wasm32 by Binaryen, 321 KB.
+- **The programs are the aarch64 build's, unchanged,** on the `a64` emulator.
+- **In Node:** init, 24 services and the shell come up 3.5 to 3.8 s after the start. `ps`, `uptime` and `ls` answer.
+- **The desktop works,** in Node and in a tab:
+  - `wm` shows the time and date;
+  - keys and the pointer from the page reach it, as virtio-input devices;
+  - `fm` and `edit` open in windows.
+- **In a tab** (Chromium, headless, from localhost): the shell answered 4.3 s after the start, and the desktop came up by itself.
+- **How to run it, the TCB and the runs:** [docs/profile/wasm/README.md](../profile/wasm/README.md).
+- **Not yet:**
+  - writes kept, the network, sound;
+  - a published page;
+  - a CI group;
+  - speed: wm's moving background takes 8 to 9 s a frame, so the tab's volume turns it off.
 
 **The maintainer's request (2026-11-28):** «изучить как сделать следующее решение — запустить mind-core-os в webassembly, аналогично проекту unkernel.dev. Создай план и оцени реалистичность.»
 
