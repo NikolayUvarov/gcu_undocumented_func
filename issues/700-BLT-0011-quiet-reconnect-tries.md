@@ -51,7 +51,24 @@ On `claude/700-BLT-0011-quiet-reconnects` 9431db890 (main e1dfbfebf merged), on 
 - "build (x86 test programs)" PASS 160 s and "x86: services, storage, audio" PASS 1178 s (`bt_hci` starts there with no
   controller).
 
-Left: the Ryzen's night.
+## On the Ryzen (2026-11-28, bench-52)
+
+Release 202611280807 = `claude/DRV-ryzen-bench-52-quiet-bt-wifi-refusal` 8b308d9df: `main` bd350b2f5 with this branch
+and 213-DRV-0116. The QEMU groups "x86: boot, display, shell, memory, clock" and "x86: keys, shell, tools" passed on that
+commit. The MX Vertical was asleep from the start.
+
+- The first three tries were said one by one, at 26.6 s, 58.6 s and 90.7 s. The third, at 120.7 s, ends `…; 3 TRIES
+  FAILED IN A ROW, THE NEXT ARE SUMMED UP EACH 10 MIN`.
+- Then nothing for ten minutes, and at 728.7 s: `STILL NOT CONNECTED: 19 TRIES IN 10 MIN FAILED (THE LAST STATUS 04), 22
+  IN A ROW; TRIED AGAIN EACH 2 S`.
+- The maintainer clicked the mouse when called. At 842.4 s:
+  - `CONNECTED OVER LE: HANDLE 010, WE PAGED IT`, then `CONNECTED AFTER 25 FAILED TRIES`;
+  - `ENCRYPTED`, `HID READY`, the first report at 843.5 s.
+
+  His word: «указатель двигается» (the pointer moves), with `wm` started to see it.
+
+Left: a whole night on this release. The ring should hold the summing lines only.
+
 
 ## Related
 
