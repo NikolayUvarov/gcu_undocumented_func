@@ -203,10 +203,16 @@ impl Station {
     /// a WPA2 one alone; with none, an open one alone (801-NET-0084), so an open one of the same name is never taken
     /// for a WPA2 network. A WPA2 network heard and no key is `Invalid`.
     pub fn join(&mut self, ssid: &[u8], secret: Option<Secret>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
+        self.join_avoiding(ssid, secret, &[], now, out, tx)
+    }
+
+    /// As `join`, but another access point of the network before any in `avoid`, one of those only when it has no other
+    /// (550-NET-0097: one the radio refused, or that never answered).
+    pub fn join_avoiding(&mut self, ssid: &[u8], secret: Option<Secret>, avoid: &[Mac], now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         if self.state == State::Scanning { return Err(Error::Busy); }
         let named = self.list.iter().any(|b| b.ssid() == ssid);
         let security = if secret.is_some() { Security::Wpa2 } else { Security::Open };
-        let Some(bss) = self.list.best_of(ssid, security).copied() else {
+        let Some(bss) = self.list.best_avoiding(ssid, security, avoid).copied() else {
             if secret.is_none() && self.list.best_of(ssid, Security::Wpa2).is_some() { return Err(Error::Invalid); }
             let (reason, error) = if named { (Reason::Unsupported, Error::Unsupported) } else { (Reason::NotFound, Error::NotFound) };
             self.fail(reason);

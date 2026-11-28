@@ -92,7 +92,10 @@ impl<'a> Image<'a> {
             }
         }
         let size = max.checked_sub(min).ok_or("ELF HAS NO LOAD SEGMENTS")?;
-        if size == 0 || size > 8 * 1024 * 1024 || !executable_entry || dynamic_count > 1 {
+        if size > crate::abi::IMAGE_MAX {
+            return Err("ELF IMAGE ABOVE 512 MIB"); // IMAGE_MAX (262-KRN-0292)
+        }
+        if size == 0 || !executable_entry || dynamic_count > 1 {
             return Err("INVALID ELF IMAGE OR ENTRY POINT");
         }
         if stack > crate::abi::STACK_MAX_BYTES {

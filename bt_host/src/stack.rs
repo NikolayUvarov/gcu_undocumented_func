@@ -24,6 +24,10 @@ pub const LE_CONNECT_MS: u64 = 30_000;
 pub const LE_TIMEOUT: u16 = 200;
 pub const RETRY_MS: u64 = 15_000;
 pub const RETRY_MAX_MS: u64 = 60_000;
+/// A device asleep or switched off is looked for all night (700-BLT-0011): its first tries are said one by one, the
+/// rest summed up once in this long, so they cannot fill the system log's ring.
+pub const LOUD_TRIES: u32 = 3;
+pub const QUIET_LINE_MS: u64 = 600_000;
 /// After a device connects to us, how long we leave it to open its channels before we open ours.
 pub const INCOMING_MS: u64 = 3_000;
 /// The default event mask (bits 0-44) with Extended Inquiry Result (46), Encryption Key Refresh Complete (47), the
@@ -302,22 +306,39 @@ impl Stack {
     }
 
     fn page_failed(&mut self, addr: Addr, status: u8) {
+        let now = self.ctl.now;
         let Some(d) = self.devices.get_mut(addr) else { return };
         d.failures += 1;
         // An LE device is looked for again soon: the next attempt waits for its advertising.
         let wait = if d.kind == Kind::LeHid { 2_000 } else { (RETRY_MS << (d.failures - 1).min(2)).min(RETRY_MAX_MS) };
-        d.next_try = self.ctl.now + wait;
+        d.next_try = now + wait;
         // 04: page timeout, the device not there or not answering.
-        self.ctl.say(format_args!("{}: NOT CONNECTED (STATUS {:02X}), TRIED AGAIN IN {} S", addr, status, wait / 1000));
+        if d.failures < LOUD_TRIES {
+            self.ctl.say(format_args!("{}: NOT CONNECTED (STATUS {:02X}), TRIED AGAIN IN {} S", addr, status, wait / 1000));
+        } else if d.failures == LOUD_TRIES {
+            (d.quiet_tries, d.summed_at) = (0, now);
+            self.ctl.say(format_args!("{}: NOT CONNECTED (STATUS {:02X}), TRIED AGAIN IN {} S; {} TRIES FAILED IN A ROW, THE NEXT ARE SUMMED UP EACH {} MIN",
+                addr, status, wait / 1000, d.failures, QUIET_LINE_MS / 60_000));
+        } else {
+            d.quiet_tries += 1;
+            if now >= d.summed_at + QUIET_LINE_MS {
+                let (tries, since) = (d.quiet_tries, now - d.summed_at);
+                (d.quiet_tries, d.summed_at) = (0, now);
+                self.ctl.say(format_args!("{}: STILL NOT CONNECTED: {} TRIES IN {} MIN FAILED (THE LAST STATUS {:02X}), {} IN A ROW; TRIED AGAIN EACH {} S",
+                    addr, tries, since / 60_000, status, d.failures, wait / 1000));
+            }
+        }
     }
 
     fn link_up(&mut self, handle: u16, addr: Addr, le: bool, random: bool, outgoing: bool, encrypted: bool) {
         let Some(slot) = self.conns.iter().position(Option::is_none) else { self.ctl.command(hci::DISCONNECT, &[handle as u8, (handle >> 8) as u8, 0x13]); return };
         let kind = self.devices.get(addr).map(|d| d.kind);
-        if let Some(d) = self.devices.get_mut(addr) { d.failures = 0; }
+        let failed = self.devices.get(addr).map_or(0, |d| d.failures);
+        if let Some(d) = self.devices.get_mut(addr) { (d.failures, d.quiet_tries) = (0, 0); }
         self.ctl.link_up(handle, le);
         self.conns[slot] = Some(Conn { handle, addr, le, outgoing, step: Step::Up, encrypted, kind, since: self.ctl.now, started: false, repaired: false, used_key: false, pdu: Pdu::new() });
         self.say(format_args!("{} CONNECTED{}: HANDLE {:03X}, {}", addr, if le { " OVER LE" } else { "" }, handle, if outgoing { "WE PAGED IT" } else { "IT CAME TO US" }));
+        if failed >= LOUD_TRIES { self.say(format_args!("{}: CONNECTED AFTER {} FAILED TRIES", addr, failed)); }
         if le { self.le.link_up(&mut self.ctl, handle, addr, random, self.devices.get(addr).and_then(|d| d.ltk)); return; }
         if outgoing { self.secure(handle); }
     }
@@ -546,7 +567,9 @@ impl Stack {
         if let Some((addr, since)) = self.paging {
             let le = self.devices.get(addr).is_some_and(|d| d.kind == Kind::LeHid);
             if now > since + if le { LE_CONNECT_MS } else { PAGE_MS + 4_000 } {
-                self.ctl.say(format_args!("{}: {}: CANCELLED", addr, if le { "NOT ADVERTISING" } else { "NO ANSWER TO THE PAGE" }));
+                if self.devices.get(addr).is_some_and(|d| d.failures < LOUD_TRIES) {
+                    self.ctl.say(format_args!("{}: {}: CANCELLED", addr, if le { "NOT ADVERTISING" } else { "NO ANSWER TO THE PAGE" }));
+                }
                 if le { self.ctl.command(hci::LE_CREATE_CONNECTION_CANCEL, &[]); } else { self.ctl.command(hci::CREATE_CONNECTION_CANCEL, &addr.0); }
                 self.paging = None;
                 self.page_failed(addr, 0x04);
@@ -561,11 +584,12 @@ impl Stack {
             if let Some(d) = due {
                 self.paging = Some((d.addr, now));
                 if let Some(dev) = self.devices.get_mut(d.addr) { dev.next_try = now + RETRY_MS; }
+                let loud = d.failures < LOUD_TRIES;
                 if d.kind == Kind::LeHid {
-                    self.say(format_args!("{}: CONNECTING OVER LE ({} ADDRESS)", d.addr, if d.random { "RANDOM" } else { "PUBLIC" }));
+                    if loud { self.say(format_args!("{}: CONNECTING OVER LE ({} ADDRESS)", d.addr, if d.random { "RANDOM" } else { "PUBLIC" })); }
                     self.ctl.command(hci::LE_CREATE_CONNECTION, &le::create_connection(d.addr, d.random));
                 } else {
-                    self.say(format_args!("{}: PAGING ({})", d.addr, d.kind.name()));
+                    if loud { self.say(format_args!("{}: PAGING ({})", d.addr, d.kind.name())); }
                     let mut b = [0u8; 13];
                     b[..6].copy_from_slice(&d.addr.0);
                     // DM1 to DH5, page scan repetition R1, no clock offset, no role switch: we stay the central.

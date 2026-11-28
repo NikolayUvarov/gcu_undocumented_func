@@ -31,6 +31,8 @@ pub struct Device {
     pub key: Option<([u8; 16], u8)>, pub ltk: Option<Ltk>,
     /// When the stack may page it next, and how often it failed in a row.
     pub next_try: u64, pub failures: u32,
+    /// Once its failures are no longer said one by one: the tries since the last line that summed them up, and when.
+    pub quiet_tries: u32, pub summed_at: u64,
 }
 
 pub struct Devices { pub list: [Option<Device>; DEVICES] }
@@ -69,7 +71,7 @@ impl Devices {
             let (Some(addr), Some(kind), true) = (addr, kind, known) else { bad(n + 1, line); continue };
             if self.get(addr).is_some() { continue; }
             match self.list.iter_mut().find(|d| d.is_none()) {
-                Some(slot) => *slot = Some(Device { addr, kind, random, tone, hz44, volume, key: None, ltk: None, next_try: 0, failures: 0 }),
+                Some(slot) => *slot = Some(Device { addr, kind, random, tone, hz44, volume, key: None, ltk: None, next_try: 0, failures: 0, quiet_tries: 0, summed_at: 0 }),
                 None => bad(n + 1, line),
             }
         }

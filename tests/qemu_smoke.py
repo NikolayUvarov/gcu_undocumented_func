@@ -50,6 +50,8 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 STUCK_AFTER, STUCK_RECORDS = 5, 2
 STUCK_AGAIN = 1  # s between the record's two readings of the tasks and the drives (000-KRN-0234)
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
+# Where a task's windows above its image start: IMAGE_MAX past the image's (kernel/src/paging.rs, 262-KRN-0292).
+ABOVE_IMAGE = 512 << 20
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "virtio_blk#1", "nvme#1", "virtio_blk#2", "nvme", "ramdisk", "ramdisk#1", "ramdisk#2", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "bt_hci", "tpm", "keystore", "storefs", "wlansim", "wlan", "netstack", "netpolicy", "timed", "parse", "tls", "ssh", "windows", "sysmon", "nnd", "updater", "effector_gw", "effector", "httpd", "sshd", "clipboard", "display", "shell")
 # How long an idle x86 CPU is sampled for HLT=1: the compositor's copy of the last 1280x800 frame outlasted 200 ms on
 # acc-2 in round 65 and 2 s in round 70 (000-KRN-0201); an idle loop that spins never halts, however long.
@@ -882,7 +884,7 @@ def stack_check(vm):
     vm.send("memstack 3072\n")
     require(vm.expect("MIND> ", timeout=60, after="memstack 3072\n"), "[MEMSTACK] 3072 KiB OF STACK USED")
     image = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    guard = image + 0x0100_1000 - 4096  # USER_STACK less one page
+    guard = image + ABOVE_IMAGE  # USER_STACK less one page
     def guard_faults():
         return [line for line in vm.command("faults").splitlines()
                 if (address := re.search(r"^FAULT PID=\d+ .* ADDR=(0x[0-9a-f]+)", line)) and guard <= int(address[1], 16) < guard + 4096]
@@ -1066,6 +1068,29 @@ def recover_lending_check(vm):
     task_rows_reaped(vm)
     print("PASS: the store's recovery client is the shell's alone, in slot 43; a program started without REQUEST_RECOVER "
           "holds no copy (308-KRN-0204)", flush=True)
+
+
+def update_reading_check(vm):
+    """100003-KRN-0291: the shell holds the updater's client badged BADGE_UPDATE_READ (2) in SLOT_UPDATE_READ (47) beside
+    its own unbadged one in SLOT_UPDATE (35); a program started without REQUEST_UPDATE_READ holds nothing in slot 47, as
+    the shell lends a copy only for that request (APP's part)."""
+    real = vm.services()
+    if "updater" not in real:
+        return
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    updaters = lambda held: {int(m[1]): int(m[2]) for m in re.finditer(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", held, re.M)
+                             if servers.get(int(m[3])) == real["updater"]}
+    shell = vm.command(f"stat caps {real['shell']}", raw=True)
+    assert updaters(shell) == {35: 0, 47: 2}, shell
+    shown = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    held = vm.command(f"stat caps {task}", raw=True)
+    require(held, "STAT CAPS VERSION=")
+    assert not updaters(held) and not re.search(r"^SLOT=47 ", held, re.M), held
+    require(vm.command(f"kill {shown}"), f"KILLED PID={shown}")
+    task_rows_reaped(vm)
+    print("PASS: the updater's reading client is the shell's, in slot 47, beside its own in slot 35; a program started without "
+          "REQUEST_UPDATE_READ holds none (100003-KRN-0291)", flush=True)
 
 
 def hardware_report_check(vm):
@@ -1280,6 +1305,7 @@ def normal_suite(vm):
             vm.command(f"kill {pid}")
     stack_check(vm)
     recover_lending_check(vm)
+    update_reading_check(vm)
     # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
@@ -2464,8 +2490,9 @@ def monitors_check(vm):
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
     # The window starts where the architecture's does: L0 entry 255 on aarch64, clear of the kernel's identity map.
     base = (255 << 39) if vm.arch == "aarch64" else 0x80_0000_0000
-    for offset, rest in ((0, r"\S+ +r-x +image"), (0x0100_0000, r"4\.0K +--- +guard"), (0x0100_1000, r"64\.0K +rw- +stack"), (0x0200_0000, r"\S+ +rw- +screen"),
-                         (0x0400_0000, r"4\.0K +r-- +info"), (0x0400_1000, r"4\.0K +rw- +mailbox"), (0x0500_0000, r"4\.0K +r-x +exit")):
+    for offset, rest in ((0, r"\S+ +r-x +image"), (ABOVE_IMAGE, r"4\.0K +--- +guard"), (ABOVE_IMAGE + 0x1000, r"64\.0K +rw- +stack"),
+                         (ABOVE_IMAGE + 0x0100_0000, r"\S+ +rw- +screen"), (ABOVE_IMAGE + 0x0300_0000, r"4\.0K +r-- +info"),
+                         (ABOVE_IMAGE + 0x0300_1000, r"4\.0K +rw- +mailbox"), (ABOVE_IMAGE + 0x0400_0000, r"4\.0K +r-x +exit")):
         line = rf"0x{base + offset:016x} +{rest}"
         assert table_row(screen, line), (line, screen)
     vm.send("4")
@@ -3881,7 +3908,29 @@ def protection_check(vm):
     return names
 
 
+def large_image_check(vm):
+    """262-KRN-0292: a program whose image spans 72 MiB, from a 6 MiB file, starts and runs: the kernel takes images up to
+    IMAGE_MAX (512 MiB, 8 MiB before) and the loader files of that size (4 MiB before). Its image is charged as its pages
+    are. One that spans past IMAGE_MAX is refused, and nothing of it stays."""
+    output = vm.command("run bigclock &")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=bigclock BACKGROUND", output)[1])
+    task = int(re.search(r"^(\d+) bigclock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    image = int(re.search(r"IMAGE=(\d+) ", vm.command(f"stat {task}", raw=True))[1])
+    assert image == 72 << 20, image
+    time.sleep(1)
+    assert re.search(r"^\d+ bigclock ", vm.command("ps", raw=True), re.M), "the large image ran on"
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    task_rows_reaped(vm)
+    before, frames_before = heap_used(vm), frames_free(vm)
+    require(vm.command("run hugeclock &"), "NOT A PROGRAM FILE")
+    assert not re.search(r"^\d+ hugeclock ", vm.command("ps", raw=True), re.M)
+    assert heap_used(vm) == before and frames_free(vm) == frames_before, "a refused image leaves nothing allocated"
+    print("PASS: a program spanning 72 MiB from a 6 MiB file ran; one past IMAGE_MAX (512 MiB) was refused, nothing kept "
+          "(262-KRN-0292)", flush=True)
+
+
 def memory_suite(vm):
+    large_image_check(vm)
     baseline, frames = heap_used(vm), frames_free(vm)
     # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of what applications may take, so spawns run out.
     holders = hold_frames(vm, frames, 40)
@@ -6502,7 +6551,7 @@ def services_suite(vm):
     heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
     assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
     layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
-    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", "0x8001000000 4096 GUARD ---"):
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", f"0x{0x80_0000_0000 + ABOVE_IMAGE:x} 4096 GUARD ---"):
         require(layout, region)
     cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
@@ -6593,10 +6642,11 @@ def services_suite(vm):
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
     assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
-    for line in ("0x0000008001001000     65536 rw- stack",
-                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+    above = 0x80_0000_0000 + ABOVE_IMAGE
+    for line in (f"0x{above + 0x1000:016x}     65536 rw- stack", f"0x{above + 0x0300_0000:016x}      4096 r-- info",
+                 f"0x{above + 0x0300_1000:016x}      4096 rw- mailbox", f"0x{above + 0x0400_0000:016x}      4096 r-x exit"):
         require(pmap, line)
-    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    assert re.search(rf"0x{above + 0x0100_0000:016x} +\d+ rw- screen", pmap), pmap
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
@@ -11056,10 +11106,12 @@ def hub_check(args, disk):
         out = vm.command("cat data/improve/waiting", timeout=30)
         assert not re.search(r"^\d", out, re.M), ("nothing waits after the verdict", out)
         assert f'"verdict":"works","release":"{release}"' in call("admin", "GET", "/hub/admin/v1/requests/1").replace(" ", ""), "the verdict on the release the machine runs"
-        # A text past 512 bytes: `parse` refuses the answer until NET's change, and improve says so.
-        # The admin's comment, which a verified request still takes.
+        # A text past 512 bytes (100003-NET-0100, parse.wit 5.1): `parse` takes the answer and gives the text's first piece, up
+        # to 512 bytes; the rest is improve's to read with json-text. The admin's comment, which a verified request still takes.
         call("admin", "POST", "/hub/admin/v1/requests/1/messages", '{"api":"hub-api 3","kind":"comment","text":"' + "long " * 120 + '"}')
-        require(vm.command("improve show 1", timeout=60), "the parse service refused the hub's answer (a text over 512 bytes waits for NET's change)")
+        shown = vm.command("improve show 1", timeout=60)
+        require(shown, "long long long long")
+        assert "the parse service refused" not in shown, shown[-1500:]
         # Another key than the pinned one: refused, whoever signed it.
         vm.command(f"improve setup mind.test 10.0.2.2 {port} {'0' * 64}", timeout=60)
         require(vm.command("improve status", timeout=60), f"mind.test:{port}: its key is not pinned")
@@ -12137,6 +12189,19 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def large_image(source, path, span, file_size):
+    """A copy of `source` whose loaded segments span `span` bytes (its last one's .bss grown), its file padded with zeros
+    after the segments to `file_size` bytes (262-KRN-0292)."""
+    data = bytearray(source.read_bytes())
+    offset, count = int.from_bytes(data[32:40], "little"), int.from_bytes(data[56:58], "little")
+    loads = [offset + i * 56 for i in range(count) if int.from_bytes(data[offset + i * 56:offset + i * 56 + 4], "little") == 1]
+    first = min(int.from_bytes(data[p + 16:p + 24], "little") for p in loads) & ~4095
+    last = max(loads, key=lambda p: int.from_bytes(data[p + 16:p + 24], "little"))
+    address = int.from_bytes(data[last + 16:last + 24], "little")
+    data[last + 40:last + 48] = (first + span - address).to_bytes(8, "little")
+    path.write_bytes(bytes(data) + bytes(max(0, file_size - len(data))))
+
+
 class _Http(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         body = f"hello from the host: {self.path}\n".encode()
@@ -12520,8 +12585,14 @@ def service_runs(vm, port):
     vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
     require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
     require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    # A string of 8 KiB read back whole in pieces of `json-text`, none splitting a character (parse.wit 5.1, 100003-NET-0100).
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/long --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    whole = LONG_JSON_TEXT.encode()
+    require(out, f"WEBCHECK JSON 1 String IN 0 KEY \"text\" LONG {len(whole)} BYTES IN {json_pieces(whole)} PIECES")
+    require(out, f"SHA-256 {hashlib.sha256(whole).hexdigest()[:16]}")
     print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
-          "nesting refused and logged with the client's PID", flush=True)
+          f"nesting refused and logged with the client's PID; a string of {len(whole)} bytes read whole in its pieces", flush=True)
 
 
 def api_runs(vm, port):
@@ -14559,6 +14630,22 @@ class _Https(_Http):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
 
+
+# A JSON string past parse.wit 5.0's 512 bytes (100003-NET-0100): Cyrillic, a dash, quotes and a line break, about 8 KiB.
+LONG_JSON_TEXT = "".join("привет, мир — \"кавычки\" и перевод\nстроки; " for _ in range(110))
+
+
+def json_pieces(data):
+    """How many pieces parse.wit 5.1's `json-text` gives a string of `data`: at most 512 bytes, cut where a character ends."""
+    count, at = 0, 0
+    while at < len(data):
+        end = min(at + 512, len(data))
+        while end < len(data) and data[end] & 0xC0 == 0x80:
+            end -= 1
+        count, at = count + 1, end
+    return count
+
+
 class _Service(http.server.BaseHTTPRequestHandler):
     """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
     protocol_version = "HTTP/1.1"
@@ -14595,6 +14682,10 @@ class _Service(http.server.BaseHTTPRequestHandler):
             return
         if self.path.endswith("/deep"):
             self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        if self.path.endswith("/long"):
+            # A string past parse.wit 5.0's 512 bytes, multi-byte UTF-8 and an escape in it (100003-NET-0100).
+            self._chunked(json.dumps({"text": LONG_JSON_TEXT, "n": 1}, ensure_ascii=False).encode())
             return
         self._chunked(b"request %d" % type(self).served)
 
@@ -20960,6 +21051,8 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+                large_image(disk / "clock.elf", disk / "bigclock.elf", 72 << 20, 6 << 20)  # 262-KRN-0292
+                large_image(disk / "clock.elf", disk / "hugeclock.elf", (512 << 20) + (8 << 20), 0)
             sign_manifest.sign_volume(disk)
             if suite == "boot":
                 boot_suite(args, disk)

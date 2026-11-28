@@ -7,7 +7,7 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
-smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4"] }
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "auto-icmp-echo-reply"] }
 
 [profile.release]
 panic = "abort"

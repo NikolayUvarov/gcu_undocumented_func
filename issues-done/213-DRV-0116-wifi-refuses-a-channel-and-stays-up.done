@@ -1,0 +1,103 @@
+# 213-DRV-0116 — `rtw89_wifi`: a channel the calibration's policy refuses is refused to the station, the radio kept up — done
+
+**Type:** driver (`rtw89_wifi`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-12.1
+
+## Problem
+
+On the Ryzen on 2026-11-27 ([213-DRV-0087](../issues/213-DRV-0087-rtl8852be-on-5-ghz.md), "The access point moved to channel 40"), the
+access point's 5 GHz network was on channel 40 and the kept country was `00`. The station's first send there asked for
+the channel's admission. The calibration's policy refused it before any RF write: TSSI's bursts are 12 dBm, above that
+channel's maximum under the world's rules (`Admission(TssiPower)`). Then:
+
+- the driver's service stopped (`WLANHW SERVICE STOPPED 1: Admission(…)`);
+- the driver exited so that init would start a fresh one (`RESTART_AFTER_FAILURE`, a debug behaviour);
+- `wlan` joined the same network again, and the same refusal followed;
+- after three starts in a minute, init quarantined the driver for 240 s.
+
+So a refusal that depends only on the country, the channel and the board cost a driver start each time, and the
+quarantine. No answer to the station said why.
+
+## Plan
+
+- The policy's part of the admission, the part with no RF write, is a function of its own:
+  `receive_service::admission(board, limits, channel, heard, platform)`. `calibrate` uses it, as before.
+- When the station asks to admit a channel, the serving loop asks that function first. If it refuses:
+  - the receive-only service marks the channel refused under the limits now;
+  - it opens the filter again, as before the send;
+  - it logs `CHANNEL n NOT ADMITTED: <reason>; …` once.
+- Every later send on that channel is refused at once (`failed`), as on a listen-only channel with no access point
+  heard. The radio stays up receiving, so the station can scan and try another network.
+- A country given again (`set-country`, or the world rules taken) forgets the refusals, because the policy may answer
+  otherwise.
+- What happens next is `wlan`'s and is not changed here. Falling back to the network's 2.4 GHz BSS is `NET`'s, and was
+  told there on 2026-11-27.
+
+## Acceptance criteria
+
+- [x] Host case (`tests/rtw89_receive_service_cases.rs`), under `US` with channel 40 at 10 dBm:
+  - the policy refuses 40 with `TssiPower`;
+  - the refusal is logged once and the filter is opened again;
+  - three later sends are refused with nothing asked;
+  - `info` still answers;
+  - 36 is admitted;
+  - a country given again asks the policy again.
+- [x] The case fails with the refusal's check removed (a mutation check).
+- [x] `rtw89_service_host` whole and all of `scripts/host_tests.sh` pass; the driver builds.
+- [x] On the Ryzen (MC-12.1), with the access point on channel 40:
+  - under `00` the line `CHANNEL 40 NOT ADMITTED` comes once;
+  - no driver restart and no quarantine follow;
+  - `UZ` given again joins channel 40.
+
+## Progress (2026-11-28)
+
+On LEG9, at b94ccbd66 and again at b6d4eec6b (main 4df3fe984 merged):
+- `rtw89_service_host`: 370 passed, the new case among them. With `refused_here` taken out of the send's check, the
+  new case fails.
+- `rtw89_wifi` builds; `02_build.sh` passes.
+- All of `scripts/host_tests.sh` exits 0: 282 `test result: ok`, none failed.
+
+## On the Ryzen (2026-11-28, bench-52)
+
+Release 202611280807 = `claude/DRV-ryzen-bench-52-quiet-bt-wifi-refusal` 8b308d9df: `main` bd350b2f5 with this branch
+and 700-BLT-0011. The QEMU groups "x86: boot, display, shell, memory, clock" and "x86: keys, shell, tools" passed on that
+commit. The access point's 5 GHz network was on channel 40. The server stayed on the wire throughout.
+
+- **Under UZ at the start:** `DATAPATH ADMITTED ON CHANNEL 40` at 6.2 s, joined.
+- **`wifi country 00` at 67 s:** in data mode, `CHANNEL 40 NOT ALLOWED AT ITS ADMITTED POWER: SENDING SHOULD STOP; DEBUG
+  MODE KEEPS SENDING` (data mode is not this task's).
+- **`svc restart rtw89_wifi` at 85 s** (PID 22, then 53), so that the station meets the receive-only service under `00`:
+  - `THE RADIO RESTARTED (IT HAS NO CHANNEL SET): ITS COUNTRY 00 AGAIN`;
+  - the access point heard on listen-only channel 40;
+  - then, once at 91.7 s: `CHANNEL 40 NOT ADMITTED: THE CALIBRATION'S 12 DBM IS ABOVE THE CHANNEL'S MAXIMUM UNDER THIS
+    COUNTRY; THE STATION'S SENDS THERE ARE REFUSED UNTIL ITS COUNTRY CHANGES, THE RADIO STAYS UP RECEIVING`.
+- **For the next 4.5 minutes:**
+  - `wlan`'s tries 1 to 10 were answered `NO ANSWER`, at 10 s and then at 60 s apart;
+  - `rtw89_wifi` stayed PID 53;
+  - no `STOPPED CLEANLY`, no restart, no quarantine;
+  - the refusal was not logged again.
+- **`wifi country UZ` at 358 s:** `COUNTRY UZ: 21 CHANNELS`; at `wlan`'s next try (407.9 s) the calibration on 40 passed
+  on both paths, then `DATAPATH ADMITTED ON CHANNEL 40`, `AUTO-JOIN CoolNet2: JOINED (TRY 11)`, DHCP on card 2.
+
+Still not this task's: under `00` the station keeps trying the same network and does not fall back to its 2.4 GHz BSS
+(`NET`'s, told on 2026-11-27).
+
+
+## Related
+
+- [213-DRV-0087](../issues/213-DRV-0087-rtl8852be-on-5-ghz.md): the 5 GHz work, and the second open item of its channel-40 section, which this is.
+- `NET/2026-11-27T0547Z-DRV-the-access-point-moved-to-channel-40-under-00-the-station-loops-on-it-and-never-tries-2-4-ghz.md` on `internal-dev-messages`: the station's side.
+
+## Resolution
+
+`rtw89_wifi`'s serving loop asks the calibration's policy (`receive_service::admission`) before it admits a channel. The policy needs no RF write. If it refuses, the receive-only service:
+- marks the channel and opens the filter again;
+- logs `CHANNEL n NOT ADMITTED: <reason>` once;
+- refuses every later send there at once, until a country is given again.
+
+The radio stays up receiving. Before, the driver ended for a fresh start each time, until init quarantined it.
+
+- **Host case:** `a_channel_the_policy_refuses_is_refused_to_the_station_and_the_radio_stays_up`, with its mutation check; `rtw89_service_host` 370 passed, `host_tests.sh` 282 ok.
+- **On the Ryzen** (MC-12.1), bench-52 on 2026-11-28, with the access point on channel 40:
+  - under `00`, after a restart of the driver: one `CHANNEL 40 NOT ADMITTED`, then 4.5 minutes of `wlan`'s tries refused with the same driver PID, no restart and no quarantine;
+  - `UZ` again: joined on 40.
+- **Left elsewhere:** the station's fallback to the 2.4 GHz BSS is `NET`'s.
