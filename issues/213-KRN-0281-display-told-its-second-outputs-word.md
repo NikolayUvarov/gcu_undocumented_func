@@ -33,4 +33,4 @@ DRV's 213-DRV-0099 ("both screens by default") replaces build switches with a se
 
 ## Related
 
-[213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md), [213-APP-0158](213-APP-0158-the-second-screens-fit-at-the-console.md) (the shell's `second keep|stretch` in the same file).
+[213-DRV-0099](../issues-done/213-DRV-0099-display-both-screens-by-default.done), [213-APP-0158](213-APP-0158-the-second-screens-fit-at-the-console.md) (the shell's `second keep|stretch` in the same file).

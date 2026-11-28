@@ -791,7 +791,7 @@ The one criterion left open: first light's colour squares on the third pipe, wit
 [213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done) (HDMI-A-2 alone, one socket at a time),
 [213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
 [213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md) (table 12's cold path),
-[213-DRV-0099](../issues/213-DRV-0099-display-both-screens-by-default.md) (the setting),
+[213-DRV-0099](213-DRV-0099-display-both-screens-by-default.done) (the setting),
 `hwdocs/cezanne-display.md` (the survey).
 
 ## Resolution
