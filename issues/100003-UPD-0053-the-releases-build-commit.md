@@ -1,6 +1,6 @@
 # 100003-UPD-0053 — A release's build commit, published beside it: `releases/<version>/COMMIT`
 
-**Type:** release maker (`scripts/release.py`) · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md) · **Constitution:** MC-9.2, MC-9.6, MC-12.3
+**Type:** release maker (`scripts/release.py`) · **Owner:** `UPD` (the kernel session) · **Priority:** P2 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; the hub's read of it is APP's) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md) · **Constitution:** MC-9.2, MC-9.6, MC-12.3
 
 ## Problem
 

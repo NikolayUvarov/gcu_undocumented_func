@@ -1,6 +1,6 @@
 # 100003-UPD-0052 — The updater's reading badge: `status`, `metadata` and `kept` alone (`update.wit` 2.1)
 
-**Type:** `updater`, IDL (`update.wit` 2.1) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **With:** [100003-KRN-0291](100003-KRN-0291-a-reading-client-of-the-updater-for-programs.md) · **Constitution:** MC-3.11, MC-2.4, MC-12.4
+**Type:** `updater`, IDL (`update.wit` 2.1) · **Owner:** `UPD` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; criterion 3 waits for APP's lending) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **With:** [100003-KRN-0291](100003-KRN-0291-a-reading-client-of-the-updater-for-programs.md) · **Constitution:** MC-3.11, MC-2.4, MC-12.4
 
 ## Problem
 

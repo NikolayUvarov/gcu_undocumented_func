@@ -1,6 +1,6 @@
 # Requests for the drivers track (DRV), not numbered yet
 
-**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** one request (2026-11-14, KRN's, for 801-KRN-0243) · **Recorded by:** the kernel track (KRN), 2026-10-09
+**Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** empty (2026-11-28) · **Recorded by:** the kernel track (KRN), 2026-10-09
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below the list.
 
@@ -30,30 +30,10 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
   - the AC97 capture ring's overflow: [000-DRV-0066](../issues-done/000-DRV-0066-the-ac97-capture-ring-overflows.done).
 - **2026-11-10:**
   - `ahci` on a controller the firmware left untouched (STO's, for 307-STO-0044): [307-DRV-0068](307-DRV-0068-ahci-on-a-controller-the-firmware-left-untouched.md).
+- **2026-11-28:**
+  - `rtw89_wifi` sending under an `unknown` platform word (KRN's, 2026-11-14, for 801-KRN-0243): done in [801-DRV-0071](801-DRV-0071-the-bench-radios-keep-their-network-across-releases.md) (f53716689). The word is taken as held back: `PLATFORM POWER POLICY FROM INIT: UNKNOWN (…): HELD BACK, NOT ENFORCED: SENDING UNDER THE COUNTRY'S LIMITS ALONE`;
+  - the drive's own model through `block.wit` (KRN's, 2026-11-21, for the installer): DRV's part is [352-DRV-0118](352-DRV-0118-the-drives-model-for-block-wit.md), after KRN's `block.wit` 2.1. The split suits DRV.
 
 ## Requests
 
-### 1. `rtw89_wifi` sends under an `unknown` platform word, as it did before 213-KRN-0122 (KRN, 2026-11-14, for 801-KRN-0243, 801 S5)
-
-- **Why.** The maintainer (801 S5): a rule that would silence a radio that worked is held back on that machine and logged, not enforced.
-  - `init` now logs an unknown platform power policy as `HELD BACK, NOT ENFORCED`.
-  - It still gives `rtw89_wifi` the word `platform=unknown:<why>`, which is the truth.
-  - `rtw89_wifi` takes `Unknown`, and no word at all, as no transmission (`main.rs`, `receive_service.rs`).
-- **The request.** Under `Unknown`, transmit as the driver would with no platform limits: within the country's regulatory limits and calibration, as before 213-KRN-0122. Log it as held back.
-- **What stays.**
-  - `Limits` stays obeyed.
-  - `Absent` stays as it is.
-  - A second `platform=` word stays `Unknown`.
-- **Not affected:** `rtw88_wifi` (the DEXP) is given no word and reads none, so 213-KRN-0122 never silenced it.
-
-## The drive's own model through `block.wit`, for the installer (KRN, 2026-11-21)
-
-- **Why:** the installer's `disks` (`idl/install.wit` 1.0, [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done)) carries a disk's `model`, for the shell's `install` command to show. APP asked for it, so that a person can tell two drives of one size on one bus apart. `block.wit` 2.0 carries no identity, so the model is empty for every disk today.
-- **Proposed split:**
-  - **KRN** adds a call to `block.wit` (2.1), the drive's model as it names itself, at most 40 bytes. `mind::block::serve` answers it from a `Driver` method that gives none by default. `vfs_server` then fills `install.wit`'s `model`.
-  - **DRV** fills it where the driver reads the drive's identity:
-    - `ata` and `ahci`: IDENTIFY DEVICE words 27 to 46;
-    - `nvme`: Identify Controller's MN;
-    - `usb_storage`: INQUIRY's vendor and product;
-    - `virtio_blk` stays empty, unless its `VIRTIO_BLK_F_ID` serial is taken.
-- **Asked of DRV:** whether the drivers keep those bytes after their probe, and whether this split suits. KRN makes its part once DRV agrees, in a `KRN` task.
+None waiting.

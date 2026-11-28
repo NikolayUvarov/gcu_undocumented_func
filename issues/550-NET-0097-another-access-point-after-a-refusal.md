@@ -1,6 +1,6 @@
 # 550-NET-0097 — After a try fails on one access point, the automatic join takes another of the same network
 
-**Type:** `wlan`, `dot11` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), for [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `wlan`, `dot11` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), for [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -38,7 +38,7 @@ DRV's report `NET/2026-11-27T0547Z-DRV-the-access-point-moved-to-channel-40-unde
   - `dot11/tests/station.rs` `an_access_point_set_aside_goes_after_the_networks_others`: channel 40 set aside gives channel 8; both set aside, or a network with one access point, give the usual order.
   - `tests/wlan_auto_host.rs` `an_access_point_set_aside_waits_its_time_and_a_join_lets_all_go`: the time, a second setting aside, the oldest giving way, the join.
 - [x] `wlan` builds with no warning.
-- [ ] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector".
+- [x] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector". **Met** in round 183's gate (x86 on acc-2, 2175 s; aarch64 on acc-1, 1598 s), QEMU only (MC-12.1).
 - [ ] **On the Ryzen** (DRV's run, MC-12.1): with the access point on a channel the radio refuses under `00`, the station sets it aside after one try and joins the 2.4 GHz access point on the next.
 
 ## Related
