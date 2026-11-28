@@ -1,6 +1,6 @@
 # 100003-NET-0100 — `parse.json` reads strings longer than 512 bytes, in pieces that never split a character
 
-**Type:** `parse`, IDL (`parse.wit` 5.1) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **Constitution:** MC-11.11, MC-11.5, MC-12.4
+**Type:** `parse`, IDL (`parse.wit` 5.1) · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; APP's read of a long thread left) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **Constitution:** MC-11.11, MC-11.5, MC-12.4
 
 ## Problem
 
@@ -33,7 +33,7 @@
   - an offset inside a character, or past the end, gives none.
 - [x] The IDL fuzzer knows `JsonText` (`tests/idl_fuzz_host.rs`), and its three tests pass. `idl_host` passes.
 - [x] `parse`, `webcheck`, `improve` and `effector` build with no warning.
-- [ ] **QEMU, the `net` suite** ("x86: network, TLS and Effector", "aarch64: network, TLS and Effector"). `webcheck --json` reads a string of 8140 bytes from the test server in `json-text`'s pieces. Its length, the number of pieces and the SHA-256 of what they joined match the server's.
+- [x] **Met** in round 183's gate, on both architectures ("a string of 8140 bytes read whole in its pieces"). **QEMU, the `net` suite** ("x86: network, TLS and Effector", "aarch64: network, TLS and Effector"). `webcheck --json` reads a string of 8140 bytes from the test server in `json-text`'s pieces. Its length, the number of pieces and the SHA-256 of what they joined match the server's.
 - [ ] **APP's `improve` reads a hub thread with a long message.** That is APP's to show in 100003-APP-0151.
 
 ## Related

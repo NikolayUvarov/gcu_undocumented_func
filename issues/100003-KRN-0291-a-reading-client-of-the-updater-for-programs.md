@@ -1,6 +1,6 @@
 # 100003-KRN-0291 — A reading client of the updater for programs: `SLOT_UPDATE_READ` and `REQUEST_UPDATE_READ` (ABI 39)
 
-**Type:** ABI, `init` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **With:** [100003-UPD-0052](100003-UPD-0052-the-updaters-reading-badge.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
+**Type:** ABI, `init` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; the shell's lending is APP's) · **Blocked by:** — · **Main task:** [100003](100003-mind-hub-requests-conversation-check-and-updates.md), for [100003-APP-0151](100003-APP-0151-improve-on-mind-core.md) · **With:** [100003-UPD-0052](100003-UPD-0052-the-updaters-reading-badge.md) · **Constitution:** MC-3.11, MC-11.5, MC-12.4
 
 ## Problem
 
@@ -26,7 +26,7 @@
 ## Acceptance criteria
 
 1. `common/abi.rs` at ABI 39: `SLOT_UPDATE_READ` 47 in `LAUNCH_SLOTS`, `SLOT_DYNAMIC` 48, `CAP_SLOTS` 112; `tests/runtime.rs` pins them and keeps `SLOT_UPDATE` out of `LAUNCH_SLOTS`. **Met on the branch** (47 host tests pass).
-2. `init` gives the shell the updater's client badged `BADGE_UPDATE_READ` in slot 47 while the updater runs. A program started without `REQUEST_UPDATE_READ` holds nothing there. **Checked by** the `normal` suite's `update_reading_check` (`tests/qemu_smoke.py`), to be run on x86 and aarch64.
+2. `init` gives the shell the updater's client badged `BADGE_UPDATE_READ` in slot 47 while the updater runs. A program started without `REQUEST_UPDATE_READ` holds nothing there. **Met** in round 183's gate on x86 and aarch64 ("the updater's reading client is the shell's, in slot 47, beside its own in slot 35; a program started without REQUEST_UPDATE_READ holds none"). Checked by the `normal` suite's `update_reading_check` (`tests/qemu_smoke.py`), to be run on x86 and aarch64.
 3. The updater answers that client's `status`, `metadata` and `kept` alone: 100003-UPD-0052.
 4. The shell lends a copy for `REQUEST_UPDATE_READ`: APP's part (100003-APP-0151), told on `internal-dev-messages` once this is in `main`.
 

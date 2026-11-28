@@ -1,6 +1,6 @@
 # 262-KRN-0292 — Programs larger than 8 MiB: `IMAGE_MAX` 512 MiB (ABI 40)
 
-**Type:** kernel, loader, ABI · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (step 1 made, 2026-11-28) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md), and [264](264-ladybird-on-mind-core-a-port-kept-outside-the-os.md) · **Constitution:** MC-3.3, MC-3.13, MC-5.1, MC-12.4
+**Type:** kernel, loader, ABI · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (step 1 in `main` since round 183, c2318c10b3, 2026-11-28; step 2 waits in `requests-KRN.md`) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md), and [264](264-ladybird-on-mind-core-a-port-kept-outside-the-os.md) · **Constitution:** MC-3.3, MC-3.13, MC-5.1, MC-12.4
 
 ## Problem
 
@@ -32,8 +32,8 @@
 ## Acceptance criteria
 
 1. `common/abi.rs` at ABI 40 with `IMAGE_MAX`. `tests/runtime.rs` pins (48, 40). It also checks three things: `app.elf` grown to just under 512 MiB loads with its `.bss` zeroed; past 512 MiB it is refused with `ELF IMAGE ABOVE 512 MIB`; and the windows lie in order above the image. **Met on the branch** (48 host tests pass).
-2. The `memory` suite's `large_image_check`. `bigclock`, `clock.elf` whose image spans 72 MiB from a file of 6 MiB, starts and runs, and `stat` shows its image of 72 MiB. `hugeclock`, past `IMAGE_MAX`, is refused with nothing left allocated. **To be run** on x86, the one architecture whose CI runs the `memory` suite. aarch64's groups run every other program with the moved windows.
-3. Every QEMU suite on both architectures passes with the windows moved: the landing gate.
+2. **Met** in round 183's gate, on x86 ("a program spanning 72 MiB from a 6 MiB file ran; one past IMAGE_MAX (512 MiB) was refused, nothing kept"). The `memory` suite's `large_image_check`. `bigclock`, `clock.elf` whose image spans 72 MiB from a file of 6 MiB, starts and runs, and `stat` shows its image of 72 MiB. `hugeclock`, past `IMAGE_MAX`, is refused with nothing left allocated. **To be run** on x86, the one architecture whose CI runs the `memory` suite. aarch64's groups run every other program with the moved windows.
+3. Every QEMU suite on both architectures passes with the windows moved: the landing gate. **Met** in round 183's gate (64 groups, one passed on its rerun alone: "x86: USB image", whose log check failed once on i9 as in round 177).
 
 ## Related
 

@@ -1,6 +1,6 @@
 # 550-NET-0098 — A client's join that comes during a scan waits for the scan's end
 
-**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `wlan` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -28,7 +28,7 @@ DRV's report `KRN/2026-11-26T1626Z-DRV-for-net-at-boot-the-station-joins-channel
 ## Acceptance criteria
 
 - [x] `wlan` builds with no warning.
-- [ ] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector".
+- [x] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector". **Met** in round 183's gate (x86 on acc-2, 2175 s; aarch64 on acc-1, 1598 s), QEMU only (MC-12.1).
 - [ ] **On the Ryzen** (DRV's run): at boot under `00`, with the autorun's `wifi join`, the station joins the 5 GHz access point when it is above the floor, and the log shows the join held.
 
 ## Related

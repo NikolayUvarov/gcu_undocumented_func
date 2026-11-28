@@ -1,6 +1,6 @@
 # 213-KRN-0290 — The mirror blends what it shrinks, so no glyph loses a stroke
 
-**Type:** `compositor` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (made, 2026-11-28) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md), with [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `compositor` · **Owner:** `KRN` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; the Ryzen run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md), with [177-KRN-0274](177-KRN-0274-an-extended-desktop-on-two-screens.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -51,7 +51,7 @@ Measured on the host (this container's CPU, 5 runs each), a full draw of the pic
   - strokes one pixel thick, one row in three, all show at both scales;
   - each channel is blended apart.
 - [x] The compositor builds with no warning.
-- [ ] The display groups pass ("x86: boot, display, shell, memory, clock" and the window manager's). QEMU has no display driver that offers a second screen, so they show that the first screen is unchanged.
+- [x] **Met** in round 183's gate. The display groups pass ("x86: boot, display, shell, memory, clock" and the window manager's). QEMU has no display driver that offers a second screen, so they show that the first screen is unchanged.
 - [ ] **On the Ryzen** (DRV's run, the maintainer's eye; MC-12.1): text on both HDMI screens has whole strokes, and the offers' `DRAWN IN` times are known.
 
 ## Related
