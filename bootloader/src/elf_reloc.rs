@@ -1,7 +1,8 @@
 // Static PIE relocation support: RELATIVE (R_X86_64_RELATIVE, R_AARCH64_RELATIVE) stores load_bias + addend.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(target_arch = "aarch64", target_arch = "wasm64")))]
 const RELATIVE: u64 = 8;
-#[cfg(target_arch = "aarch64")]
+// wasm64: the emulator's aarch64 programs (215-PRT-0017).
+#[cfg(any(target_arch = "aarch64", target_arch = "wasm64"))]
 const RELATIVE: u64 = 1027;
 // https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf, section 4.4.1.
 fn range(

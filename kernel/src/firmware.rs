@@ -13,8 +13,15 @@ const ERROR: usize = 1 << 63;
 pub const NOT_FOUND: usize = ERROR | 14;
 pub const BUFFER_TOO_SMALL: usize = ERROR | 5;
 
+#[cfg(not(target_arch = "wasm64"))]
 type GetVariable = unsafe extern "efiapi" fn(*const u16, *const [u8; 16], *mut u32, *mut usize, *mut u8) -> usize;
+#[cfg(not(target_arch = "wasm64"))]
 type SetVariable = unsafe extern "efiapi" fn(*const u16, *const [u8; 16], u32, usize, *const u8) -> usize;
+// No UEFI under a page (215-PRT-0017): the table is never there, so these are never called.
+#[cfg(target_arch = "wasm64")]
+type GetVariable = unsafe extern "C" fn(*const u16, *const [u8; 16], *mut u32, *mut usize, *mut u8) -> usize;
+#[cfg(target_arch = "wasm64")]
+type SetVariable = unsafe extern "C" fn(*const u16, *const [u8; 16], u32, usize, *const u8) -> usize;
 
 /// The runtime services table the bootloader passed, if it is one.
 pub fn init(table: u64) {

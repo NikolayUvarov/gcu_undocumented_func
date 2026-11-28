@@ -140,8 +140,11 @@ impl Scheduler {
             STAT_PHYSMAP => {
                 for index in 0..self.boot.memory_map_len { out.push(unsafe { *self.boot.memory_map.add(index) }); }
                 let pages = |bytes: usize| bytes.div_ceil(4096) as u64;
-                extern "C" { static __kernel_end: u8; }
-                let (kernel_start, kernel_end) = (crate::_start as *const () as usize, core::ptr::addr_of!(__kernel_end) as usize);
+                #[cfg(not(target_arch = "wasm64"))]
+                let (kernel_start, kernel_end) = { extern "C" { static __kernel_end: u8; } (crate::_start as *const () as usize, core::ptr::addr_of!(__kernel_end) as usize) };
+                // On wasm, the module's own data and stack below the page's heap base (215-PRT-0017).
+                #[cfg(target_arch = "wasm64")]
+                let (kernel_start, kernel_end) = (0, crate::arch::run::mind_heap_base() as usize);
                 out.push(StatPhys { kind: PHYS_KERNEL, index: 0, start: kernel_start as u64, pages: pages(kernel_end - kernel_start) });
                 out.push(StatPhys { kind: PHYS_ARENA, index: 0, start: self.boot.heap_ptr as u64, pages: pages(self.boot.heap_len) });
                 out.push(StatPhys { kind: PHYS_FRAMEBUFFER, index: 0, start: self.boot.fb_ptr as u64, pages: pages(frame_bytes(&self.boot)) });

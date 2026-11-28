@@ -1,0 +1,10 @@
+{
+  "name": "mind-core-web",
+  "private": true,
+  "description": "MIND Core in a browser tab or Node (215): the page that drives the wasm kernel",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "devDependencies": {
+    "binaryen": "132.0.0"
+  }
+}
