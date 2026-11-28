@@ -63,6 +63,45 @@ Not shown here: what a real disk does (criterion 2), and aarch64 in QEMU, where 
 
 **`block.wit` (plan point 4): a proposal, not made.** For the store's class a flush answered done means the same with or without a cache: the sectors are on the medium either way, a write-through device putting them there before it answers the write. So `flushed` stays right for a device with no cache, and the store needs no new answer for it. What the store cannot tell apart today is a device that refuses every flush (a USB stick that answers SYNCHRONIZE CACHE with ILLEGAL REQUEST; Linux sends such a stick none, taking it as write-through) from one that failed: both are `io`, so on such a stick every publication fails, as before this task. If STO wants such a medium usable with a weaker class (written, not flushed), one minor version of `block.wit` (2.1) could carry both: `flush` answering whether there was a cache to empty, and an error apart from `io` for a flush the device does not take. That is STO's to decide with DRV.
 
+## On the Ryzen: a stall after the 192-byte MODE SENSE, mended (2026-11-28)
+
+Bench-54 (release 202611281143: `main` c2318c10b, ABI 40, with this branch at 27176f771) on the Ryzen. Its boot stick is
+the Kingston SSD behind the JMicron JM20329 bridge (152D:2329):
+- `FLUSH: SYNCHRONIZE CACHE(10) SENT (IT GAVE NO CACHING PAGE), THE DEVICE SAID DONE`;
+- but at 2.166 s, right after the probe: `NO ANSWER TO READ: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN`, then
+  `THE DEVICE IS BACK, NOT ENUMERATED AGAIN, THE SAME CAPACITY`. None of the eight boots before, with the 4-byte ask, had
+  that line.
+
+**The reading.** The bridge sends less than 192 bytes and then stalls the bulk IN endpoint. `bot_cycle` does not clear
+a stall before it reads the CSW: Linux's usb-storage clears the halt, and this driver has no call for it. So MODE SENSE
+was taken as unanswered ("NO CACHING PAGE"), and the endpoint stayed stalled until the next command's recovery.
+
+**A first mend, not enough.** MODE SENSE asked for the 4-byte header first, then exactly the length the header named
+(`mode::whole`, at most 192). On bench-54b (release 202611281225) the same line came at 2.179 s. So it is the ask
+longer than the header itself, whatever its length, and not a short data stage. `usb_host` resets a stalled endpoint on
+both sides, so a stall alone would not explain it.
+
+**The mend kept.** `usb_storage`'s `ASK_CACHING_PAGE` is off. MODE SENSE asks the header alone, as before this task, and
+a USB disk's cache is unknown, so its flush is always sent (`ITS CACHE NOT ASKED`). The parser (`mode.rs`) and its
+host cases stay, for the day the page can be asked safely. QEMU's `flush_check` now expects the USB disk's flush with its
+cache off too.
+
+**Shown on the Ryzen** (MC-12.1), bench-54c: release 202611281303 = `main` c2318c10b (ABI 40) with this branch at
+21b02376f. The QEMU groups "x86: keys, shell, tools", "x86: USB image" and "x86: files and block writes" passed on that
+commit. Its log:
+- no `NO ANSWER TO READ` after the probe;
+- `[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE` at 2.267 s;
+- `[RAMDISK] FLUSH: NOTHING TO REACH …`;
+- `[BLOCKSTORE] READY … DURABILITY=FLUSHED`.
+
+The second NVMe disk (`nvme#1`) is read-only at the testing stage and refuses every flush, as 213-DRV-0060 has it. So
+the Ryzen's line for this criterion is its boot stick's. The MacBook Pro's stick and the DEXP's are still to be read.
+
+**Seen once in QEMU, not this task's change:** "x86: USB image" failed once on bench-54b, in the swap of the same stick.
+The recovery's tries gave up (`THE DEVICE IS GONE`) 1.9 s after the missed READ, and usb_host enumerated the stick again
+0.8 s later. Run alone again, the group passed. The race is between `recovery::reclaim`'s tries and the enumeration. It
+is noted here for 000-DRV-0058, whose case it is.
+
 ## Related
 
 [307](307-the-stores-own-partition.md), [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), [211-DRV-0053](211-DRV-0053-a-usb-disk-that-missed-a-transfer-comes-back.md).

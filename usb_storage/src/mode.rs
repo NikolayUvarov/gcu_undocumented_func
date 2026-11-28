@@ -2,9 +2,14 @@
 // write protection from the header, and whether the device's write cache is on (WCE) from its caching page, when the
 // answer holds one (307-DRV-0055). Built on the host for tests (tests/flush_host.rs).
 
-/// All pages (3Fh) in 192 bytes, the length Linux and Windows ask of a USB disk (some take no other).
+/// All pages (3Fh): first the 4-byte header, then at most 192 bytes, the length Linux and Windows ask of a USB disk.
+pub const HEADER: usize = 4;
 pub const LENGTH: usize = 192;
-pub const ALL_PAGES: [u8; 6] = [0x1A, 0, 0x3F, 0, LENGTH as u8, 0];
+pub const fn all_pages(length: usize) -> [u8; 6] { [0x1A, 0, 0x3F, 0, length as u8, 0] }
+
+/// The whole answer's length the header names (its mode data length and itself), at most LENGTH: asked exactly, so
+/// that no data stage ends short, which a bridge may end in a stall (the Ryzen's JMicron JM20329, bench-54).
+pub fn whole(header: &[u8]) -> usize { header.first().map_or(HEADER, |&n| (n as usize + 1).clamp(HEADER, LENGTH)) }
 
 /// The header's WP bit (byte 2, bit 7), None in an answer shorter than the header.
 pub fn protected(answer: &[u8]) -> Option<bool> { (answer.len() >= 4).then(|| answer[2] & 0x80 != 0) }

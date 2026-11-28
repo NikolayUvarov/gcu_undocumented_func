@@ -9421,8 +9421,9 @@ FLUSH_DRIVERS = {
               "[AHCI] PORT 0: FLUSH: NO WRITE CACHE TO EMPTY (IDENTIFY WORD 85 BIT 5 CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
               "[AHCI] PORT 0: FLUSH: FLUSH CACHE EXT REFUSED BY THE DRIVE (ERROR 04, STATUS 41): ANSWERED AS FAILED, NEVER AS DONE\n")),
     "usb_storage": (3, "fusb", ["-device", "qemu-xhci,id=fxhci", "-device", "usb-storage,drive=fusb,bus=fxhci.0"],
-                    ("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHING PAGE: WCE SET), THE DEVICE SAID DONE\n",
-                     "[USB] STORAGE: FLUSH: NO WRITE CACHE TO EMPTY (MODE SENSE'S CACHING PAGE, WCE CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+                    # Its cache is not asked (usb_storage's ASK_CACHING_PAGE, off since bench-54): its flush is sent with the cache off too.
+                    ("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE\n",
+                     "[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE\n",
                      "[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) REFUSED BY THE DEVICE (ITS SENSE ABOVE): ANSWERED AS FAILED, NEVER AS DONE\n")),
     "virtio_blk": (5, "fvirtio", ["-device", "virtio-blk-pci,drive=fvirtio"],
                    ("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH SENT, THE DEVICE SAID DONE\n",
@@ -9510,7 +9511,8 @@ def flush_check(args, block_elf):
         # Each boot the trace saw every device's writes, so it ran while the flushes were or were not sent.
         assert all(writes["ide buses"] == 2 and writes["nvme"] and writes["scsi"] and writes["virtio"] for _, writes in seen.values()), seen
         assert on["ide buses"] == 2 and on["nvme"] >= 1 and on["scsi"] >= 1 and on["virtio"] >= 1, on
-        assert not any(off.values()), off
+        # With the caches off no flush reaches a device, but the USB disk's, which is sent with its cache not asked.
+        assert not any(count for bus, count in off.items() if bus != "scsi") and off["scsi"] >= 1, off
     print(f"PASS: what a flush reaches (307-DRV-0055): ata, ahci, usb_storage, virtio_blk and nvme each write, flush and read back on QEMU's disk; "
           f"caches on, each device got its flush (QEMU's trace from the kernel's start: {on}) and each driver said once it was done; caches off, "
           f"none reached a device ({off}) and each driver said once it had no cache to empty, the flush answered done; every flush failed by the host, "

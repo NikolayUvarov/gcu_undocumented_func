@@ -74,7 +74,10 @@ fn a_usb_disks_caching_page_says_whether_its_cache_is_on() {
     let off = answer(0x80, 8, &[&recovery, &geometry, &flexible, &caching(0x01)]);
     assert_eq!((mode::write_cache(&off), mode::protected(&off)), (Some(false), Some(true)), "RCD alone is not WCE; WP from the header");
     assert_eq!(mode::write_cache(&answer(0, 0, &[&caching(0x04)])), Some(true), "no block descriptors");
-    assert!(on.len() <= mode::LENGTH && mode::ALL_PAGES == [0x1A, 0, 0x3F, 0, 192, 0]);
+    assert!(on.len() <= mode::LENGTH && mode::all_pages(mode::HEADER) == [0x1A, 0, 0x3F, 0, 4, 0] && mode::all_pages(192) == [0x1A, 0, 0x3F, 0, 192, 0]);
+    // The second ask is exactly the length the header names, so that no data stage ends short (bench-54's JMicron).
+    assert_eq!(mode::whole(&on[..4]), on.len());
+    assert_eq!((mode::whole(&[3, 0, 0, 0]), mode::whole(&[0xFF, 0, 0, 0]), mode::whole(&[0, 0, 0, 0]), mode::whole(&[])), (4, 192, 4, 4));
 }
 
 #[test]
