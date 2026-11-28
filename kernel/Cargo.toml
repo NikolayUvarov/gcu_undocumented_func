@@ -8,9 +8,10 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 [dependencies]
 linked_list_allocator = "0.10.5"
 
-# The tasks' A64 on wasm (215-PRT-0017).
+# The tasks' A64 on wasm and the page's devices (215-PRT-0017).
 [target.'cfg(target_arch = "wasm64")'.dependencies]
 a64 = { path = "../a64" }
+wasm_machine = { path = "../wasm_machine" }
 
 [features]
 # Test-only kernel: panics on the first LOG system call (inside the scheduler lock) to check the panic report.

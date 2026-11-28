@@ -1,6 +1,6 @@
 # 215-PRT-0017 — `arch/wasm`: the kernel as a module the page drives, its tasks on the A64 emulator
 
-**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** [215-PRT-0016](215-PRT-0016-an-a64-user-mode-emulator.md) (the emulator, in the landing queue) · **Main task:** [215](215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -32,7 +32,7 @@ The desktop on a canvas (the framebuffer, keys and pointer) was planned as its o
 4. **The page, `web/`:**
    - `mind.js`, the same in a tab and in Node. It lays the memory out above the module's heap base: the screen, the kernel's heap, the ELF files of `BOOT_FILES`, the boot volume as a live boot's (an ISO's FAT image) and the frame pool. It then starts the kernel and runs its turns.
    - `node/run.mjs` runs it with the console on stdout and a script of keys.
-5. **The page's devices** (`arch/wasm/devices.rs`):
+5. **The page's devices** (the `wasm_machine` crate, outside `kernel/src`, since 2026-11-28 below):
    - a PL031 on the page's wall clock;
    - a tablet and a keyboard as virtio-input over virtio-pci, so that `rtc` and `virtio_input` serve them unchanged.
 
@@ -43,6 +43,7 @@ The desktop on a canvas (the framebuffer, keys and pointer) was planned as its o
 - [x] The kernel builds for `wasm64-unknown-unknown` with no warning, and lowers to wasm32 (321 KB with the page's devices) with five imports from the page.
 - [x] In Node 22, from the aarch64 build of this tree: the kernel boots, init starts the services, and the shell's prompt answers `uptime`, `ps` and `ls`. The boot's time to the prompt is recorded. **Met** on 2026-11-28 (see Progress).
 - [ ] The x86 and aarch64 kernels still build, and their boot groups pass (the gate).
+- [x] The kernel within its size budget (`scripts/kernel_budget.py`): 8499 lines against 8580, the budget raised in a commit of its own (below).
 - [x] `docs/wasm/README.md` says what runs and how to run it. `docs/profile/wasm/README.md` names the TCB (the browser or Node, the page's JS, the emulator) and what is not there (MC-12.3).
 
 ## Progress
@@ -60,6 +61,16 @@ The desktop on a canvas (the framebuffer, keys and pointer) was planned as its o
 - **The x86 kernel still builds.** The gate is still to run.
 - **Measured cost:** wm's moving background takes 8 to 9 s a frame on the emulator. The tab's volume sets `background = none`.
 
+**2026-11-28, round 184: returned, then reworked.**
+- **Why returned:** the candidate's host tests failed the kernel's size budget. The kernel had 8688 lines against 8100: `arch/wasm` added 618, and the common part 18.
+- **The page's devices moved out of the kernel.** They are 196 lines: the PL031 and the two virtio-input devices over virtio-pci. They are the machine the page stands for, as QEMU is for `virt`, so they are now the `wasm_machine` crate beside `a64`.
+  - A `Board` trait gives them what they reach of the module: its RAM, the wall clock and the interrupt lines.
+  - Host tests in `wasm_machine/tests/machine.rs`, run by `scripts/host_tests.sh`, check the PCI configuration space, a BAR sized and placed, the PL031, a key into a driver's buffer with its line, an event waiting for a buffer, and a reset.
+- **The budget raised to 8580 for the rest**, in a commit of its own (MC-1.2). That is 429 lines of `arch/wasm` and 18 common: the context, the descriptors, the tick and the turn, which the kernel has on every platform. A kernel built for one platform holds 6698 lines on x86_64, 5936 on aarch64 and 4993 on wasm.
+- **Checked again in Node 22:**
+  - both inputs found, and `uptime` answers;
+  - in `wm`, Enter opens the run dialog, and `fm` typed there opens in a window, all through the moved devices.
+
 ## Related
 
-- [215](215-mind-core-in-a-browser-tab.md), [215-PRT-0016](215-PRT-0016-an-a64-user-mode-emulator.md), [docs/wasm/README.md](../docs/wasm/README.md).
+- [215](215-mind-core-in-a-browser-tab.md), [215-PRT-0016](../issues-done/215-PRT-0016-an-a64-user-mode-emulator.done) (the emulator, landed in round 184), [docs/wasm/README.md](../docs/wasm/README.md).

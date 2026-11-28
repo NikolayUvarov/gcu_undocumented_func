@@ -1,6 +1,6 @@
 {
-  "budget": 8100,
-  "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
+  "budget": 8580,
+  "unit": "lines of Rust in kernel/src, without blank lines and comments, every architecture (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
     "commit": "3de6a4b",
@@ -55,6 +55,11 @@
       "date": "2026-11-23",
       "to": 8100,
       "why": "000-KRN-0276 (41 lines in kernel/src/scheduler.rs: the Lateness counters in select, timers, expire and wake_idle, and the minute's line) and 000-KRN-0277 (3 lines: a console's reader and its run time in CONSOLE_READ and LOG): a timed wait's end, the tick that found it, the wake IPI sent or held back, the task a CPU ran before, and a reader's CPU time are the scheduler's own state, which no user-space service sees; the counters name where DRV's late waits on the Ryzen go before the wake path is mended"
+    },
+    {
+      "date": "2026-11-28",
+      "to": 8580,
+      "why": "215-PRT-0017 (447 lines: kernel/src/arch/wasm, 429, and 18 in the common part: boot taken out of _start, the ELF machine and the kernel's range for STAT on wasm): the kernel's layer for a browser tab, a third architecture beside x86_64 and aarch64. Its context (aarch64's frame), the descriptors paging.rs builds, its tick and lines, and the turn that hands a task's exits to scheduler::interrupt are MC-1.2's duties (protected execution contexts, mappings, hardware events) on that platform; they are the kernel's on every platform, so they cannot live in user space. The page's devices are not in it: they are the wasm_machine crate, as the a64 emulator is. A kernel built for one platform holds the common part and its own layer: 6698 lines on x86_64, 5936 on aarch64, 4993 on wasm. 8499 lines in all after it; about 80 of room."
     }
   ]
 }

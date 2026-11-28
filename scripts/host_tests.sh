@@ -21,6 +21,7 @@ done
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
 cargo test --quiet --manifest-path a64/Cargo.toml --target-dir "$OUT/a64-target" # the A64 user-mode emulator for the browser's kernel: its exits, faults and page-table walk, and the same work native and emulated (215-PRT-0016)
+cargo test --quiet --manifest-path wasm_machine/Cargo.toml --target-dir "$OUT/wasm-machine-target" # the page's devices for the browser's kernel: PCI configuration, the PL031, virtio-input's events into a driver's buffers (215-PRT-0017)
 cargo test --quiet --manifest-path passlock/Cargo.toml --target-dir "$OUT/wpa-target" # the device key under a passphrase, Argon2id against RFC 9106 (308-NET-0055)
 cargo test --quiet --manifest-path nnpkg/Cargo.toml --target-dir "$OUT/nnpkg-target" # nnd's package checks and clients on NRL's pinned model (262-APP-0112)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target" # the deadlines (550-NET-0031) and a listening port's backlog (110-NET-0052, tests/listen_host.rs)
