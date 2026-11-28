@@ -6636,10 +6636,11 @@ def services_suite(vm):
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
     assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
-    for line in ("0x0000008001001000     65536 rw- stack",
-                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+    above = 0x80_0000_0000 + ABOVE_IMAGE
+    for line in (f"0x{above + 0x1000:016x}     65536 rw- stack", f"0x{above + 0x0300_0000:016x}      4096 r-- info",
+                 f"0x{above + 0x0300_1000:016x}      4096 rw- mailbox", f"0x{above + 0x0400_0000:016x}      4096 r-x exit"):
         require(pmap, line)
-    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    assert re.search(rf"0x{above + 0x0100_0000:016x} +\d+ rw- screen", pmap), pmap
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
