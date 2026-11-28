@@ -193,10 +193,21 @@ impl Storage {
                 None => mind::println!("[USB] STORAGE: {:04X}:{:04X} HAS NO MEDIUM OR IS NOT READY; THE NEXT DEVICE", bot.vendor, bot.product),
             }
         };
-        // MODE SENSE(6), all pages (mode.rs): WP from the header, WCE from the caching page. A device that does not answer
-        // is taken as writable, its cache as unknown: a write it refuses fails anyway, and a flush is sent.
-        let answer = match bot_cycle(&mut host, &mut bot, &mode::ALL_PAGES, mode::LENGTH, false, PROBE) { Cycle::Done(n) => &host.buffer()[PROBE..PROBE + n.min(mode::LENGTH)], _ => &[][..] };
-        let (protected, cache) = (mode::protected(answer).unwrap_or(false), mode::write_cache(answer));
+        // MODE SENSE(6), all pages (mode.rs): WP from the 4-byte header, as before 307-DRV-0055; then, asked for exactly the
+        // length it names, WCE from the caching page. A device that does not answer is taken as writable, its cache as
+        // unknown: a write it refuses fails anyway, and a flush is sent.
+        let mut header = [0u8; mode::HEADER];
+        if let Cycle::Done(n) = bot_cycle(&mut host, &mut bot, &mode::all_pages(mode::HEADER), mode::HEADER, false, PROBE) {
+            if n >= mode::HEADER { header.copy_from_slice(&host.buffer()[PROBE..PROBE + mode::HEADER]); }
+        }
+        let protected = mode::protected(&header).unwrap_or(false);
+        let whole = mode::whole(&header);
+        let cache = if header == [0; mode::HEADER] || whole <= mode::HEADER { None } else {
+            match bot_cycle(&mut host, &mut bot, &mode::all_pages(whole), whole, false, PROBE) {
+                Cycle::Done(n) => mode::write_cache(&host.buffer()[PROBE..PROBE + n.min(whole)]),
+                _ => None,
+            }
+        };
         Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0, retried: 0, cache, denied: false, said: 0 })
     }
 

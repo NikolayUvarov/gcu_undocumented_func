@@ -63,6 +63,23 @@ Not shown here: what a real disk does (criterion 2), and aarch64 in QEMU, where 
 
 **`block.wit` (plan point 4): a proposal, not made.** For the store's class a flush answered done means the same with or without a cache: the sectors are on the medium either way, a write-through device putting them there before it answers the write. So `flushed` stays right for a device with no cache, and the store needs no new answer for it. What the store cannot tell apart today is a device that refuses every flush (a USB stick that answers SYNCHRONIZE CACHE with ILLEGAL REQUEST; Linux sends such a stick none, taking it as write-through) from one that failed: both are `io`, so on such a stick every publication fails, as before this task. If STO wants such a medium usable with a weaker class (written, not flushed), one minor version of `block.wit` (2.1) could carry both: `flush` answering whether there was a cache to empty, and an error apart from `io` for a flush the device does not take. That is STO's to decide with DRV.
 
+## On the Ryzen: a stall after the 192-byte MODE SENSE, mended (2026-11-28)
+
+Bench-54 (release 202611281143: `main` c2318c10b, ABI 40, with this branch at 27176f771) on the Ryzen. Its boot stick is
+the Kingston SSD behind the JMicron JM20329 bridge (152D:2329):
+- `FLUSH: SYNCHRONIZE CACHE(10) SENT (IT GAVE NO CACHING PAGE), THE DEVICE SAID DONE`;
+- but at 2.166 s, right after the probe: `NO ANSWER TO READ: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN`, then
+  `THE DEVICE IS BACK, NOT ENUMERATED AGAIN, THE SAME CAPACITY`. None of the eight boots before, with the 4-byte ask, had
+  that line.
+
+**The reading.** The bridge sends less than 192 bytes and then stalls the bulk IN endpoint. `bot_cycle` does not clear
+a stall before it reads the CSW: Linux's usb-storage clears the halt, and this driver has no call for it. So MODE SENSE
+was taken as unanswered ("NO CACHING PAGE"), and the endpoint stayed stalled until the next command's recovery.
+
+**The mend.** MODE SENSE asks for the 4-byte header first, as every boot before did. Then it asks for exactly the length
+the header names (`mode::whole`, at most 192), so that no data stage ends short. `tests/flush_host.rs` checks the
+lengths asked. Whether the bridge then gives a caching page is for the next bench run to show.
+
 ## Related
 
 [307](307-the-stores-own-partition.md), [307-DRV-0054](../issues-done/307-DRV-0054-a-block-client-bounded-to-a-window.done), [211-DRV-0053](211-DRV-0053-a-usb-disk-that-missed-a-transfer-comes-back.md).
