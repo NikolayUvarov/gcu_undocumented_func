@@ -1,10 +1,10 @@
-# 215-PRT-0017 — `arch/wasm`: the kernel as a module the page drives, its tasks on the A64 emulator
+# 215-PRT-0017 — `arch/wasm`: the kernel as a module the page drives, its tasks on the A64 emulator — done
 
-**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** in progress (2026-11-28) · **Blocked by:** — · **Main task:** [215](215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/wasm`), the page (`web/`) · **Owner:** `PRT` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [215](../issues/215-mind-core-in-a-browser-tab.md), step 1 · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
-Step 1 of [215](215-mind-core-in-a-browser-tab.md): the kernel built for WebAssembly, so that init, the services and the shell run in Node and then in a tab. The way is B of [docs/wasm/README.md](../docs/wasm/README.md), section 4.1.
+Step 1 of [215](../issues/215-mind-core-in-a-browser-tab.md): the kernel built for WebAssembly, so that init, the services and the shell run in Node and then in a tab. The way is B of [docs/wasm/README.md](../docs/wasm/README.md), section 4.1.
 
 This task is the kernel's half and the page's start:
 - `arch/wasm`;
@@ -71,6 +71,20 @@ The desktop on a canvas (the framebuffer, keys and pointer) was planned as its o
   - both inputs found, and `uptime` answers;
   - in `wm`, Enter opens the run dialog, and `fm` typed there opens in a window, all through the moved devices.
 
+## Resolution
+
+Landed in `main` 7243abc367 in round 185 (2026-11-28), its gate green on all 64 groups with no failure. Criterion 3 is met by that gate.
+
+- **The kernel:** `kernel/src/arch/wasm`, a third architecture, 429 lines.
+  - The page's devices are the `wasm_machine` crate, outside the kernel.
+  - The size budget was raised to 8580 in a commit of its own (MC-1.2).
+- **The page:** `web/`, a Node runner, and `scripts/build_wasm.sh`.
+- **The profile:** [docs/profile/wasm/README.md](../docs/profile/wasm/README.md), `wasm32/page-0`. It claims no requirement met and lists its TCB.
+- **Runs:**
+  - Node 22: the shell's prompt 3.5 to 3.8 s after the start;
+  - headless Chromium: 4.3 to 4.8 s, the desktop, and `fm` opened with the browser's keys.
+  - These are runs, not a gate: no CI group boots the wasm kernel yet. That is step 2 of [215](../issues/215-mind-core-in-a-browser-tab.md).
+
 ## Related
 
-- [215](215-mind-core-in-a-browser-tab.md), [215-PRT-0016](../issues-done/215-PRT-0016-an-a64-user-mode-emulator.done) (the emulator, landed in round 184), [docs/wasm/README.md](../docs/wasm/README.md).
+- [215](../issues/215-mind-core-in-a-browser-tab.md), [215-PRT-0016](../issues-done/215-PRT-0016-an-a64-user-mode-emulator.done) (the emulator, landed in round 184), [docs/wasm/README.md](../docs/wasm/README.md).

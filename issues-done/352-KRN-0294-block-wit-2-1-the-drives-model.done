@@ -1,12 +1,12 @@
-# 352-KRN-0294 — `block.wit` 2.1: the drive's model as it names itself, for the installer's disk list
+# 352-KRN-0294 — `block.wit` 2.1: the drive's model as it names itself, for the installer's disk list — done
 
-**Type:** IDL (`idl/block.wit`), `libmind` (`mind::block::serve`), `vfs_server` (the installer) · **Owner:** `KRN` (the kernel session) · **Priority:** P3 · **Status:** in progress (2026-11-28) · **Blocked by:** — · **Main task:** [352](352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-12.3, MC-12.4, MC-12.7
+**Type:** IDL (`idl/block.wit`), `libmind` (`mind::block::serve`), `vfs_server` (the installer) · **Owner:** `KRN` (the kernel session) · **Priority:** P3 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [352](../issues/352-installable-media-for-pcs-and-arm-devices.md) · **Constitution:** MC-12.3, MC-12.4, MC-12.7
 
 ## Problem
 
-`install.wit` 1.0's `disk` carries `model: string<40>`, so that a person can tell two drives of one size on one bus apart ([352-UPD-0048](352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md)). `block.wit` 2.0 carries no identity, so `vfs_server/src/installer.rs` leaves `model` empty for every disk.
+`install.wit` 1.0's `disk` carries `model: string<40>`, so that a person can tell two drives of one size on one bus apart ([352-UPD-0048](../issues/352-UPD-0048-the-installer-onto-a-disk-of-this-machine.md)). `block.wit` 2.0 carries no identity, so `vfs_server/src/installer.rs` leaves `model` empty for every disk.
 
-DRV accepted KRN's split on 2026-11-28 (`KRN/2026-11-28T0926Z-DRV-re-the-drives-model-the-split-suits-352-drv-0118.md` on `internal-dev-messages`). DRV's part is [352-DRV-0118](352-DRV-0118-the-drives-model-for-block-wit.md), blocked by this task.
+DRV accepted KRN's split on 2026-11-28 (`KRN/2026-11-28T0926Z-DRV-re-the-drives-model-the-split-suits-352-drv-0118.md` on `internal-dev-messages`). DRV's part is [352-DRV-0118](../issues/352-DRV-0118-the-drives-model-for-block-wit.md), blocked by this task.
 
 ## Plan
 
@@ -44,6 +44,16 @@ DRV accepted KRN's split on 2026-11-28 (`KRN/2026-11-28T0926Z-DRV-re-the-drives-
   - x32-2: host tests (2206 s).
 - **Left:** DRV told once 2.1 is in `main`.
 
+## Resolution
+
+Landed in `main` 7243abc367 in round 185 (2026-11-28), its gate green on all 64 groups. All four criteria are met:
+- `block.wit` 2.1 is generated, and the IDL fuzzer takes `model`;
+- the host test of `shown_model` passes;
+- the `iso` and block groups passed on both architectures, before the request and in the gate;
+- DRV is told (`DRV/2026-11-28T1753Z-KRN-…` on `internal-dev-messages`), so 352-DRV-0118 may start.
+
+The model stays empty for every disk until DRV's drivers return one.
+
 ## Related
 
-- [352-DRV-0118](352-DRV-0118-the-drives-model-for-block-wit.md) (the drivers' part), [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done) (the installer service).
+- [352-DRV-0118](../issues/352-DRV-0118-the-drives-model-for-block-wit.md) (the drivers' part), [352-KRN-0269](../issues-done/352-KRN-0269-the-installer-service.done) (the installer service).

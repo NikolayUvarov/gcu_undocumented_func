@@ -1,9 +1,9 @@
 # MIND Core in a browser tab: a plan
 
-**Status:** the plan of main task [215](../../issues/215-mind-core-in-a-browser-tab.md) (`PRT`). The maintainer chose way B on 2026-11-28, with the desktop and its applications first: «We need it to show interface and applications readyness for humans so they can support as contibutors». Steps 0 and 1 are made on branches (215-PRT-0016, 215-PRT-0017), below in "Where it stands"; the rest is a plan, not a guarantee (MC-12.3).
+**Status:** the plan of main task [215](../../issues/215-mind-core-in-a-browser-tab.md) (`PRT`). The maintainer chose way B on 2026-11-28, with the desktop and its applications first: «We need it to show interface and applications readyness for humans so they can support as contibutors». Steps 0 and 1 are in `main` (215-PRT-0016, round 184; 215-PRT-0017, round 185), below in "Where it stands"; the rest is a plan, not a guarantee (MC-12.3).
 
 **Where it stands (2026-11-28):**
-- **The kernel builds for WebAssembly:** `kernel/src/arch/wasm`, for `wasm64` lowered to wasm32 by Binaryen, 321 KB.
+- **The kernel builds for WebAssembly:** `kernel/src/arch/wasm`, for `wasm64` lowered to wasm32 by Binaryen, 320 KB. The page's devices are the `wasm_machine` crate, outside the kernel.
 - **The programs are the aarch64 build's, unchanged,** on the `a64` emulator.
 - **In Node:** init, 24 services and the shell come up 3.5 to 3.8 s after the start. `ps`, `uptime` and `ls` answer.
 - **The desktop works,** in Node and in a tab:
