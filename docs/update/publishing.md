@@ -36,6 +36,7 @@ Server layout:
 blobs/<sha256>                              every file of every release, by content
 releases/<version>/<arch>/MANIFEST          the boot manifest of that architecture
 releases/<version>/<arch>/MANIFEST.SIG      its signature (the boot key)
+releases/<version>/COMMIT                   the commit the release was built from, as its manifests' `commit` line names it (100003-UPD-0053)
 channels/<channel>                          the signed channel file (the release keys)
 keys/current                                the key file (the root keys)
 keys/<version>                              every version of it, from 1: each signed by the root of the one before and its own

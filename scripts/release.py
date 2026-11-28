@@ -10,6 +10,9 @@ Server layout:
     blobs/<sha256>                          every file of every release, by its SHA-256
     releases/<version>/<arch>/MANIFEST      the boot manifest and its signature, as the build made them
     releases/<version>/<arch>/MANIFEST.SIG
+    releases/<version>/COMMIT               the commit the release was built from, as its manifests name it (`commit`
+                                                 line, signed with the boot key): for MIND Hub to link the tasks a release
+                                                 closes (100003-UPD-0053); absent when the build did not know it
     channels/<channel>                      the channel: one line of JSON, then its release keys' signature lines
     keys/current                            the key file: each role's keys and threshold, signed by the root keys
                                                  (351-UPD-0026); a signature line is `ed25519 <key> <signature>` in hex
@@ -347,12 +350,28 @@ def manifest_files(text):
     return out
 
 
+def manifest_commit(text):
+    """The commit a manifest's `commit` line names, or None without one or when the build did not know it (100003-UPD-0053)."""
+    for line in text.decode().splitlines():
+        if line.startswith("commit "):
+            commit = line[7:].strip()
+            return commit if len(commit) == 40 and all(c in "0123456789abcdef" for c in commit) else None
+        if line.startswith("file "):
+            break
+    return None
+
+
 def stage(version, out, volumes, boot_public=None):
-    """Copies each volume's manifest and listed files into `out` as release `version`; checks each volume first."""
+    """Copies each volume's manifest and listed files into `out` as release `version`; checks each volume first. The
+    release's COMMIT is the one commit its manifests name (100003-UPD-0053); architectures built from two are refused."""
     if version < 1:
         raise ReleaseError("a version is a positive integer")
     out = Path(out)
     boot_public = boot_public or sm.public_key(sm.signing_seed())
+    commits = {arch: manifest_commit((Path(volume) / "MANIFEST").read_bytes() if (Path(volume) / "MANIFEST").exists() else b"") for arch, volume in volumes.items()}
+    if len(set(commits.values())) > 1:
+        raise ReleaseError(f"the architectures were built from different commits: {commits}")
+    commit = next(iter(commits.values()), None)
     for arch, volume in volumes.items():
         volume = Path(volume)
         reason = sm.verify_volume(volume, boot_public)
@@ -369,6 +388,10 @@ def stage(version, out, volumes, boot_public=None):
         (out / "blobs").mkdir(exist_ok=True)
         for name, _, digest in manifest_files(text):
             shutil.copyfile(volume / name, out / "blobs" / digest)
+    if commit:
+        (out / "releases" / str(version) / "COMMIT").write_text(f"{commit}\n")
+    else:
+        print(f"release {version}: its manifests name no commit, so no COMMIT is written", file=sys.stderr)
     (out / "VERSION").write_text(f"{version}\n")
     return out
 
@@ -514,7 +537,7 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
         raise ReleaseError(f"version {version} is not above the published {published}")
     if target.read(f"releases/{version}/x86_64/MANIFEST") or target.read(f"releases/{version}/aarch64/MANIFEST"):
         raise ReleaseError(f"version {version} was published before")
-    manifests = {arch.name: hashlib.sha256((arch / "MANIFEST").read_bytes()).hexdigest() for arch in sorted((staged / "releases" / str(version)).iterdir())}
+    manifests = {arch.name: hashlib.sha256((arch / "MANIFEST").read_bytes()).hexdigest() for arch in sorted((staged / "releases" / str(version)).iterdir()) if arch.is_dir()}
     now = now or datetime.datetime.now(datetime.timezone.utc)
     expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = channel_bytes(channel, version, minimum or carried, expires, manifests)

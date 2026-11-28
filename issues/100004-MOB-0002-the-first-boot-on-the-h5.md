@@ -1,6 +1,6 @@
 # 100004-MOB-0002 — The first boot on the Orange Pi Zero Plus 2 H5
 
-**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card); the kernel leaving EL2 (asked of `KRN`, 2026-11-10); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); for the console past the kernel's lines, the kernel session's answer on the busy-detect and the console channel (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
+**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); for the console past the kernel's lines, the kernel session's answer on the busy-detect and the console channel (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -48,4 +48,4 @@ MIND Core's aarch64 image has run only in QEMU. The H5 board is the nearest thin
 
 ## Related
 
-[100004-MOB-0003](100004-MOB-0003-the-first-boot-on-the-h618.md), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md), [100000](100000-a-phone-the-pinephone-first.md) (stage 1).
+[100004-MOB-0003](100004-MOB-0003-the-first-boot-on-the-h618.md), [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md), [100000-KRN-0222](100000-KRN-0222-the-kernels-console-as-a-byte-channel.md), [100000](100000-a-phone-the-pinephone-first.md) (stage 1), [100004-PRT-0014](100004-PRT-0014-a-kernel-entered-at-el2-goes-on-at-el1.md) (the kernel leaving EL2, in `main`; no longer a block).
