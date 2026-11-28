@@ -1,6 +1,6 @@
-# 213-DRV-0113 — `display`: both HDMI sockets lit at once (three screens)
+# 213-DRV-0113 — `display`: both HDMI sockets lit at once (three screens) — done
 
-**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-27); stages 1 to 4 built on `claude/213-DRV-0113-display-both-hdmi-sockets`; three screens lit on the Ryzen by a bench build of them (release 202611271307); since the sixth round a release lights every HDMI socket with a monitor, shown by host cases and not yet run as a release (see "The release's behaviour") · **Blocked by:** 213-KRN-0285 (the third screen's slots and `display.wit` 1.5, made on `claude/213-KRN-0285-three-screens`, merged into this branch; 0113 lands after it or with it, round 181) · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
+**Type:** driver (`display`), design · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-28) · **Blocked by:** 213-KRN-0285 (the third screen's slots and `display.wit` 1.5, made on `claude/213-KRN-0285-three-screens`, merged into this branch; 0113 lands after it or with it, round 181) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.2, MC-12.3, MC-12.4
 
 ## Problem
 
@@ -10,7 +10,7 @@ The maintainer wants three screens at once on the Ryzen:
 - HDMI-A-2, with a third monitor in it since 2026-11-26.
 
 `display` lights one HDMI socket at a time
-([213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done)). With a monitor in each, the one not
+([213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done)). With a monitor in each, the one not
 taken is named `NOT DRIVEN ... DISPLAY LIGHTS ONE HDMI SOCKET AT A TIME FOR NOW`.
 
 The limit is `display`'s and its interface's, not the engine's:
@@ -195,8 +195,8 @@ Not asked: init's word (`output second light`) can govern both sockets as it is;
    survey's order, a person at the machine. `UNDO_AFTER_STAGES` stays off: it would undo HDMI-A-1 too, and then no second
    run is made. PHY B's table 12 took its short path on boots 110 and 111; its long path has never run on this
    hardware, 213-DRV-0097):
-   - [ ] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop (not looked at apart: the
-     run below went through first light to the picture in one boot);
+   - [x] the colour squares on HDMI-A-2 while HDMI-A-1 shows the mirror and DP-2 the desktop (bench-51, release
+     202611280603, 2026-11-28: the maintainer's look, below);
    - [x] the firmware's pipe and pipe 1 read as before after each stage (below: `THE OTHER TWO PIPES UNCHANGED` after
      each of the 16);
    - [x] the maintainer's look (MC-12.1), at the picture of stage 4 (below).
@@ -748,6 +748,23 @@ Linux, most likely by the VBIOS when the machine starts. So on this Ryzen a star
 path, whatever is plugged in. Table 12's long path stays not shown, as in 213-DRV-0097: it would need a start where
 nothing set the PHYs up, which this bench does not give.
 
+## First light alone on HDMI-A-2, beside the other two (2026-11-28, bench-51)
+
+The one criterion left open: first light's colour squares on the third pipe, with the other two showing their own.
+
+- **The build:** `claude/DRV-ryzen-bench-51-third-squares` 6d9153d90 = this branch's c94a7de49 with one bench-only line,
+  `SECOND_HDMI FirstLight` (first light's 8 stages on pipe 2, left in place). On LEG9 at that commit: "build (x86 test
+  programs)" PASS 165 s, "x86: boot, display, shell, memory, clock" PASS 1548 s, "x86: keys, shell, tools" PASS 589 s.
+- **The release:** 202611280603 over the wire, slot A confirmed 06:08:23 UTC. Its log:
+  - `A BRING-UP BUILD, NOT A RELEASE: SECOND_HDMI`;
+  - HDMI-A-1 lit in 16 stages, offered as the second screen at 6.0 s (`THE FIRST MIRRORED AT 2304X1440 FROM 568,0`);
+  - `HDMI-A-2: S8 PHY DONE; THE OTHER TWO PIPES UNCHANGED`;
+  - `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit: 8 STAGES IN PLACE, 260 REGISTERS READ, 112 WRITES, 708 MS; HDMI-A-1 Lit ON OTG1`;
+  - no third screen offered, as the setting says; no storage refusal.
+- **The maintainer's look** (MC-12.1), asked for colour squares on the monitor in his "HDMI1" socket (HDMI-A-2), the mirror
+  on the large one (HDMI-A-1) and the desktop on USB-C (DP-2): «да, все верно».
+- **Back:** release 202611280609 = c94a7de49, slot B confirmed 06:13:10 UTC; both screens offered again (6.0 s, 8.4 s).
+
 ## Not known
 
 - Whether the firmware's DISPCLK, DPPCLK (DTO2), DCFCLK and watermarks carry three pipes without underflow. First
@@ -771,8 +788,26 @@ nothing set the PHYs up, which this bench does not give.
 
 ## Related
 
-[213-DRV-0112](../issues-done/213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done) (HDMI-A-2 alone, one socket at a time),
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
-[213-DRV-0097](213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md) (table 12's cold path),
-[213-DRV-0099](213-DRV-0099-display-both-screens-by-default.md) (the setting),
+[213-DRV-0112](213-DRV-0112-display-a-monitor-on-the-ryzens-other-hdmi-socket.done) (HDMI-A-2 alone, one socket at a time),
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md) (the picture and the mirror),
+[213-DRV-0097](../issues/213-DRV-0097-display-table-12s-cold-path-on-the-ryzen.md) (table 12's cold path),
+[213-DRV-0099](213-DRV-0099-display-both-screens-by-default.done) (the setting),
 `hwdocs/cezanne-display.md` (the survey).
+
+## Resolution
+
+Both HDMI sockets are lit at once, each on its own pipe beside the firmware's DP-2, on the branch `claude/213-DRV-0113-display-both-hdmi-sockets` (with 213-DRV-0111 and 0112 closed on it), in `main` with round 182 (4df3fe984, 2026-11-28: 64 of 64 groups passed).
+
+- **What a release does:** every HDMI socket with a monitor is lit in the production order, HDMI-A-1 on OTG1 first, then HDMI-A-2 on OTG2. Each run is guarded against the other: its stages are refused at the other's blocks, and the other two pipes are read back after each stage. HDMI-A-1's picture is offered as the second screen; HDMI-A-2's (BAR 0's second window, slot 7) is offered as the third through slot 8 (213-KRN-0285, `display.wit` 1.5). Each unplug takes back only its own run.
+- **Shown on the Ryzen** (MC-12.1), with the maintainer at the machine:
+  - three screens lit at once (releases 202611271307, 202611271414, 202611271851 on ABI 38);
+  - each monitor unplugged and plugged back, and the two monitors swapped and back, the other's picture undisturbed;
+  - the standing check clean on three pipes for an hour;
+  - both sockets emptied under Linux, then plugged;
+  - first light's colour squares on HDMI-A-2 alone beside the other two (bench-51, 2026-11-28).
+- **Host cases:** the second run's stages, guards, unplugs and moves on the model, and on the Ryzen's own tables when `MIND_AMD_VBIOS` names the image.
+- **Not shown, and carried elsewhere:**
+  - a cold PHY's long path through table 12: never reachable on this bench, because the VBIOS sets both PHYs at power-on (213-DRV-0097);
+  - a start not made through Linux;
+  - the desk spread over the screens rather than mirrored, which is KRN's and APP's (177-KRN-0274, 177-APP-0094).
+- **Seen by the maintainer, not display's:** glyphs that lose strokes on the mirror. The compositor shrinks the first screen by the nearest pixel (0.9 on HDMI-A-1, 0.48 on HDMI-A-2). This was told to KRN on 2026-11-27 (`KRN/2026-11-27T2017Z-DRV-…` on `internal-dev-messages`).
