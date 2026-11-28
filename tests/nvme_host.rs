@@ -1,7 +1,8 @@
 //! `nvme`'s instance rule (213-DRV-0060): init's argument names the instance, the first alone writes, and any other one
 //! sends its controller only Identify, the I/O queues' bring-up (Set Features for their number alone, unsaved; their
 //! creation) and Read; every other opcode of either queue is refused, the medium-changing ones named among them. Refusals
-//! are said one line each up to a bound, then counted.
+//! are said one line each up to a bound, then counted. A flush finds no cache to empty without VWC, or with Get Features
+//! saying it is off (307-DRV-0055).
 #[path = "../nvme/src/guard.rs"]
 mod guard;
 
@@ -93,4 +94,17 @@ fn identify_strings_are_printable_and_trimmed() {
     odd[..4].copy_from_slice(&[b'V', 0x07, b'1', 0xC3]);
     assert_eq!(guard::ascii(&odd, &mut out), "V?1?", "control and non-ASCII bytes shown as ?, trailing NULs cut");
     assert_eq!(guard::ascii(&[b' '; 8], &mut out), "");
+}
+
+#[test]
+fn an_nvme_controller_without_vwc_or_with_it_off_has_no_cache_to_empty() {
+    assert_eq!(guard::cache(0, None), guard::Cache::Absent);
+    assert_eq!(guard::cache(0, Some(1)), guard::Cache::Absent, "no VWC: Get Features is not believed");
+    assert_eq!(guard::cache(0x06, None), guard::Cache::Absent, "bits 2:1 are the broadcast NSID's support, not a cache");
+    assert_eq!(guard::cache(1, Some(0)), guard::Cache::Off);
+    assert_eq!(guard::cache(0x07, Some(0xFFFF_FFFE)), guard::Cache::Off, "WCE is dword 0's bit 0 alone");
+    assert_eq!(guard::cache(1, Some(1)), guard::Cache::On);
+    assert_eq!(guard::cache(1, None), guard::Cache::On, "a cache not asked of, or with no answer, is flushed");
+    assert_eq!((guard::OP_GET_FEATURES, guard::VWC_FEATURE), (0x0A, 0x06));
+    assert!(!guard::allowed(false, guard::Queue::Admin, guard::OP_GET_FEATURES, guard::VWC_FEATURE), "a read-only instance never asks");
 }

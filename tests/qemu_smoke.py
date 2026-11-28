@@ -114,7 +114,7 @@ def task_states_text(page):
 class VM:
     wait = 8  # s: how long command() and expect() wait by default; a suite may set its own
 
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97", serial="mon:stdio", passphrase=False, drive="", trace=None):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
@@ -123,12 +123,14 @@ class VM:
         # `serial`: the console UART's chardev; "pty" gives it to a test's own tool (100000-KRN-0221), with no prompt to wait for.
         # Where the boot waits for keystore's passphrase, the shell asks for it in place of its first prompt (308-APP-0130):
         # Esc answers it (later) unless `passphrase`, which leaves the question to the test.
+        # `drive`: options added to the boot disk's -drive. `trace`: a file and QEMU trace events written to it from the
+        # kernel's start on, so that the firmware's commands to the disks are not among them (307-DRV-0055).
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
         self.temporary = []
         self.monitor_used, self.monitor_cpu = False, None
-        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
+        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off", *(["-D", str(trace[0])] if trace else []))
         if tablet:
             extra = (*extra, "-device", "virtio-tablet-pci")
         if usb_input:
@@ -139,7 +141,7 @@ class VM:
                      "-device", "qemu-xhci,id=xhci2")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
-        source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
+        source = (f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}") + drive
         storage = (["-drive", f"{source},if=none,id=usbdisk",
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
@@ -182,6 +184,10 @@ class VM:
         if not prompt:
             return
         try:
+            if trace:
+                self.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+                for event in trace[1]:
+                    self.qmp("trace-event-set-state", name=event, enable=True)
             # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
             if self.first_of(("MIND> ", BOOT_PASSPHRASE), timeout=90) == BOOT_PASSPHRASE:
                 if passphrase:
@@ -9375,6 +9381,120 @@ def block_suite(args, block_elf):
         fsck_volume(image, start, fs_sectors)
     print("PASS: block write: ATA, AHCI and USB drivers each give the test's vfs_server windows of the disk's two partitions and no client of the whole disk; "
           "it writes, flushes and reads back in the blank one, is refused past each window's end; the raw image holds the sectors; the file system is intact", flush=True)
+    flush_check(args, block_elf)
+
+
+# QEMU's trace events that show a flush, and a write, reach an emulated device (307-DRV-0055): IDE and AHCI commands, the
+# NVMe controller's flush of a namespace and its writes, SCSI commands (the USB disk's), and VirtIO block requests, of
+# which those neither a read nor a write are flushes, as the driver sends no other kind.
+FLUSH_TRACE = ("ide_bus_exec_cmd", "pci_nvme_flush_ns", "pci_nvme_write", "scsi_req_parsed", "virtio_blk_handle_read", "virtio_blk_handle_write", "virtio_blk_req_complete")
+# Each driver's tag and kind (tests/block_app.rs's KIND), its disk's -drive id and QEMU device, and its log's flush lines:
+# done, no cache to empty, refused.
+FLUSH_DRIVERS = {
+    "ata": (1, "fata", ["-device", "ide-hd,drive=fata,bus=ide.0,unit=0"], ("[ATA] FLUSH: FLUSH CACHE EXT SENT, THE DRIVE SAID DONE\n",
+                            "[ATA] FLUSH: NO WRITE CACHE TO EMPTY (IDENTIFY WORD 85 BIT 5 CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+                            "[ATA] FLUSH: FLUSH CACHE EXT REFUSED BY THE DRIVE: ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "ahci": (2, "fsata", ["-device", "ahci,id=fahci", "-device", "ide-hd,drive=fsata,bus=fahci.0"],
+             ("[AHCI] PORT 0: FLUSH: FLUSH CACHE EXT SENT, THE DRIVE SAID DONE\n",
+              "[AHCI] PORT 0: FLUSH: NO WRITE CACHE TO EMPTY (IDENTIFY WORD 85 BIT 5 CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+              "[AHCI] PORT 0: FLUSH: FLUSH CACHE EXT REFUSED BY THE DRIVE (ERROR 04, STATUS 41): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "usb_storage": (3, "fusb", ["-device", "qemu-xhci,id=fxhci", "-device", "usb-storage,drive=fusb,bus=fxhci.0"],
+                    # Its cache is not asked (usb_storage's ASK_CACHING_PAGE, off since bench-54): its flush is sent with the cache off too.
+                    ("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE\n",
+                     "[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT (ITS CACHE NOT ASKED), THE DEVICE SAID DONE\n",
+                     "[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) REFUSED BY THE DEVICE (ITS SENSE ABOVE): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "virtio_blk": (5, "fvirtio", ["-device", "virtio-blk-pci,drive=fvirtio"],
+                   ("[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH SENT, THE DEVICE SAID DONE\n",
+                    "[VIRTIO_BLK] FLUSH: NO WRITE CACHE TO EMPTY (NO VIRTIO_BLK_F_FLUSH OFFERED: IT WRITES THROUGH): ANSWERED DONE, NO REQUEST SENT\n",
+                    "[VIRTIO_BLK] FLUSH: VIRTIO_BLK_T_FLUSH REFUSED BY THE DEVICE (STATUS 1): ANSWERED AS FAILED, NEVER AS DONE\n")),
+    "nvme": (6, "fnvme", ["-device", "nvme,serial=flush,drive=fnvme"],
+             ("[NVME] FLUSH: FLUSH SENT, THE CONTROLLER SAID DONE\n",
+              "[NVME] FLUSH: NO WRITE CACHE TO EMPTY (GET FEATURES, VOLATILE WRITE CACHE: IT IS OFF): ANSWERED DONE, NO COMMAND SENT\n",
+              "[NVME] FLUSH: FLUSH REFUSED BY THE CONTROLLER (STATUS TYPE 2, CODE 0x80): ANSWERED AS FAILED, NEVER AS DONE\n")),
+}
+
+
+def flushes_traced(trace):
+    """What QEMU's trace shows reach the devices: as flushes, the IDE buses that got FLUSH CACHE or FLUSH CACHE EXT (ata's
+    and ahci's), and how many reached the NVMe namespace, the SCSI disk (SYNCHRONIZE CACHE(10), 53) and the VirtIO disk;
+    as writes, the same for WRITE SECTORS or WRITE DMA EXT, the NVMe writes, WRITE(10) (42) and VirtIO's writes."""
+    def ide(commands):
+        return len({m[1] for m in re.finditer(rf"ide_bus_exec_cmd IDE exec cmd: bus (\S+); state \S+; cmd 0x(?:{commands})\b", trace)})
+    scsi = lambda command: len(re.findall(rf"scsi_req_parsed target \d+ lun \d+ tag \d+ command {command} ", trace))
+    writes = len(re.findall(r"virtio_blk_handle_write ", trace))
+    virtio = len(re.findall(r"virtio_blk_req_complete ", trace)) - len(re.findall(r"virtio_blk_handle_read ", trace)) - writes
+    flushes = {"ide buses": ide("ea|e7"), "nvme": trace.count("pci_nvme_flush_ns nsid "), "scsi": scsi(53), "virtio": virtio}
+    return flushes, {"ide buses": ide("30|35"), "nvme": trace.count("pci_nvme_write "), "scsi": scsi(42), "virtio": writes}
+
+
+def flush_check(args, block_elf):
+    """307-DRV-0055: what a flush reaches, per driver. The test's vfs_server boots from a disk no driver here serves (IDE's
+    secondary master) beside a disk on each bus: IDE's primary master (ata), AHCI, USB, VirtIO and NVMe, each holding a
+    blank partition, in which it writes, flushes and reads back. Three boots: QEMU's write caches on, where each device gets
+    its flush (QEMU's trace from the kernel's start) and each driver says once that it was done; the caches off
+    (cache.writeback=off; for VirtIO config-wce=off too, else QEMU offers VIRTIO_BLK_F_FLUSH and a driver that takes it
+    turns its cache on, virtio 1.1, 5.2.6.2), where no flush reaches any device and each driver says once it has none to
+    empty, the flush answered done; and every flush failed on the host (blkdebug, EINVAL, which the USB disk reports as ILLEGAL REQUEST, as
+    a stick that refuses SYNCHRONIZE CACHE does), where each driver answers it failed and says so once. Not blkdebug with
+    the caches off: QEMU then ends each write with a flush of its own. Each boot the images hold the sectors written.
+    QEMU's devices, not a machine's."""
+    import copy
+    one = copy.copy(args)
+    one.disk = "default"
+    with tempfile.TemporaryDirectory(prefix="smoke-flush-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        refuse = temp / "refuse.conf"
+        refuse.write_text('[inject-error]\nevent = "flush_to_os"\nerrno = "22"\niotype = "flush"\n')
+        seen = {}
+        for variant, options, debug in [("on", "", False), ("off", ",cache.writeback=off", False), ("refused", "", True)]:
+            where = temp / variant
+            where.mkdir()
+            boot, _, _ = raw_fat_image(where, {"vfs_server.elf": block_elf})
+            disks, extra = {}, ["-nic", "none", "-device", "ide-hd,drive=fboot,bus=ide.1,unit=0,bootindex=0"]
+            for name, (kind, drive, devices, _) in FLUSH_DRIVERS.items():
+                image = where / f"{name}.img"
+                with image.open("wb") as f:
+                    f.truncate(16 << 20)
+                    mbr = bytearray(512)
+                    mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x0C, b"\xfe\xff\xff", 2048, (16 << 11) - 2048)
+                    mbr[510:512] = b"\x55\xaa"
+                    f.write(mbr)
+                disks[name] = (image, (2048, (16 << 11) - 2048))
+                file = f"blkdebug:{refuse}:{image}" if debug else str(image)
+                devices = [device + (",config-wce=off" if variant == "off" and device.startswith("virtio-blk") else "") for device in devices]
+                extra += ["-drive", f"format=raw,file={file},if=none,id={drive}{options}", *devices]
+            trace = where / "trace.log"
+            vm = VM(one, str(boot), raw=True, snapshot=False, drive=",if=none,id=fboot", extra=extra, trace=(trace, FLUSH_TRACE))
+            try:
+                output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
+                logs = {name: vm.service_logs(name, "FLUSH: ") for name in FLUSH_DRIVERS}
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-flush-{variant}-{args.cpus}cpu.log").write_text(vm.log)
+            lines = {int(m[1]): m[0] for m in re.finditer(r"^\[BLOCKTEST\] SLOT=\d+ BADGE=\d+ KIND=(\d+) .*LBA=.*$", output, re.M)}
+            assert sorted(lines) == sorted(kind for kind, *_ in FLUSH_DRIVERS.values()), output
+            flushed = "FLUSH=FAIL" if variant == "refused" else "FLUSH=OK"
+            for name, (kind, _, _, said) in FLUSH_DRIVERS.items():
+                assert f"ATTACH=OK WRITE=OK UNSEALED=REFUSED {flushed} READBACK=OK" in lines[kind], (variant, lines[kind])
+                require(logs[name], said[["on", "off", "refused"].index(variant)])
+                assert logs[name].count(" FLUSH: ") == 1, (variant, logs[name])  # one kind of line in each boot, once
+                image, (first, count) = disks[name]
+                with image.open("rb") as f:
+                    f.seek((first + count - 8 * kind) * 512)
+                    assert f.read(8 * 512) == b"".join(block_pattern(kind, s) for s in range(8)), f"{variant}: {name}'s image does not hold the written sectors"
+            if variant == "refused":
+                require(logs["usb_storage"], "[USB] STORAGE: SYNCHRONIZE CACHE REFUSED: SENSE KEY 5 ASC 24 ASCQ 00 (ILLEGAL REQUEST); A FLUSH CANNOT EMPTY THE DEVICE'S CACHE\n")
+            seen[variant] = flushes_traced(trace.read_text(errors="replace"))
+        (on, _), (off, _) = seen["on"], seen["off"]
+        # Each boot the trace saw every device's writes, so it ran while the flushes were or were not sent.
+        assert all(writes["ide buses"] == 2 and writes["nvme"] and writes["scsi"] and writes["virtio"] for _, writes in seen.values()), seen
+        assert on["ide buses"] == 2 and on["nvme"] >= 1 and on["scsi"] >= 1 and on["virtio"] >= 1, on
+        # With the caches off no flush reaches a device, but the USB disk's, which is sent with its cache not asked.
+        assert not any(count for bus, count in off.items() if bus != "scsi") and off["scsi"] >= 1, off
+    print(f"PASS: what a flush reaches (307-DRV-0055): ata, ahci, usb_storage, virtio_blk and nvme each write, flush and read back on QEMU's disk; "
+          f"caches on, each device got its flush (QEMU's trace from the kernel's start: {on}) and each driver said once it was done; caches off, "
+          f"none reached a device ({off}) and each driver said once it had no cache to empty, the flush answered done; every flush failed by the host, "
+          f"each driver answered it failed, never done, and said so once; the images hold the sectors (QEMU's emulated devices only)", flush=True)
 
 
 def updater_suite(args, updater_elf):

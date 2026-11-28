@@ -44,7 +44,8 @@ pub fn wait<B: Bus>(bus: &B, deadline_ns: u64, mut done: impl FnMut() -> bool) -
     }
 }
 
-pub struct Ide<B: Bus> { pub bus: B, pub sectors: u64 }
+/// `identify`: the drive's IDENTIFY words, for what a flush sends (307-DRV-0055).
+pub struct Ide<B: Bus> { pub bus: B, pub sectors: u64, pub identify: [u16; 256] }
 
 impl<B: Bus> Ide<B> {
     /// The primary master, by IDENTIFY: its LBA28 sectors; None without a drive, or with ATAPI or SATA's signature.
@@ -55,13 +56,14 @@ impl<B: Bus> Ide<B> {
         for port in [COUNT, LBA0, LBA1, LBA2] { bus.out8(port, 0); }
         bus.out8(COMMAND, 0xEC);
         if bus.in8(COMMAND) == 0 { return None; }
-        let mut disk = Self { bus, sectors: 0 };
+        let mut disk = Self { bus, sectors: 0, identify: [0; 256] };
         disk.idle(PROBE_NS).ok()?;
         if disk.bus.in8(LBA1) != 0 || disk.bus.in8(LBA2) != 0 { return None; }
         disk.data().ok()?;
         let mut identify = [0u16; 256];
         if !disk.bus.read_words(DATA, &mut identify) { return None; }
         disk.sectors = (identify[60] as u64 | (identify[61] as u64) << 16).min(LBA28);
+        disk.identify = identify;
         (disk.sectors != 0).then_some(disk)
     }
 
@@ -132,11 +134,11 @@ impl<B: Bus> Ide<B> {
         self.finished(COMMAND_NS)
     }
 
-    /// FLUSH CACHE.
-    pub fn flush(&self) -> Result<(), Fault> {
+    /// `command`, FLUSH CACHE or FLUSH CACHE EXT: neither takes an address or a count.
+    pub fn flush(&self, command: u8) -> Result<(), Fault> {
         self.idle(COMMAND_NS)?;
         self.bus.out8(DRIVE, 0xE0);
-        self.bus.out8(COMMAND, 0xE7);
+        self.bus.out8(COMMAND, command);
         self.finished(FLUSH_NS)
     }
 }

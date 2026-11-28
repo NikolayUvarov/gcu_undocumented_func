@@ -2,13 +2,16 @@
 #![no_main]
 // Ring 3 USB mass storage class driver: the first mass storage interface usb_host gives it (idl/usb.wit; its client
 // with the storage badge in SLOT_DEV0 can claim only such interfaces, issue 164), Bulk-Only Transport, SCSI READ(10),
-// WRITE(10) and SYNCHRONIZE CACHE(10); MODE SENSE(6) tells a write-protected medium. Writes only for clients with the
+// WRITE(10) and SYNCHRONIZE CACHE(10); MODE SENSE(6) tells a write-protected medium and, in its caching page, whether
+// the write cache is on (mode.rs): a flush with it off is answered done with no command, and one the device refuses or
+// does not answer is answered failed, each said once (307-DRV-0055). Writes only for clients with the
 // write badge (mind::block_protocol). A device that only missed a transfer is claimed again and the command repeated
 // (reads and rewrites of the same data are idempotent, MC-6.6). One that came back (enumerated again, through usb_host
 // started again, or saying its medium changed) may hold another medium: the command fails, and `returned` tells
 // block::serve, which ends this instance for a fresh one, so every client attaches again (000-DRV-0058); one of another
 // capacity is not used. A refused command is explained by REQUEST SENSE in the log; a lost device, its return and a
 // reset it reports are logged (211-DRV-0019).
+mod mode;
 mod recovery;
 
 use mind::abi::{BootInfo, BLOCK_KIND_USB, SLOT_DEV0};
@@ -32,8 +35,18 @@ impl Bot {
 }
 
 // `lost`: the device stopped answering and was not claimed again; `returned`: a device came back, and no command runs
-// on it here (000-DRV-0058); `seen`: refusals already logged.
-struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, returned: bool, seen: [(u8, Sense); SEEN], seen_count: usize, retried: usize }
+// on it here (000-DRV-0058); `seen`: refusals already logged; `cache`: the caching page's WCE, None without one;
+// `denied`: the device refused the command `run` last ran (CHECK CONDITION); `said`: the flush lines already said.
+struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, returned: bool, seen: [(u8, Sense); SEEN], seen_count: usize, retried: usize, cache: Option<bool>, denied: bool, said: u8 }
+
+// Off: the Ryzen's boot stick behind a JMicron JM20329 lost the next command after every all-pages ask longer than the
+// header, at 192 bytes and at the length the header named alike (bench-54, 2026-11-28); so the cache is not asked and
+// every flush is sent (307-DRV-0055).
+const ASK_CACHING_PAGE: bool = false;
+
+// The kinds of flush line, each said once (307-DRV-0055).
+const DONE: u8 = 1; const NO_CACHE: u8 = 2; const REFUSED: u8 = 4; const UNANSWERED: u8 = 8;
+fn first(said: &mut u8, kind: u8) -> bool { let first = *said & kind == 0; *said |= kind; first }
 
 // How a BOT cycle ended: done with the bytes moved, refused by the device (CHECK CONDITION), or the interface is gone.
 enum Cycle { Done(usize), Refused, Gone }
@@ -185,10 +198,22 @@ impl Storage {
                 None => mind::println!("[USB] STORAGE: {:04X}:{:04X} HAS NO MEDIUM OR IS NOT READY; THE NEXT DEVICE", bot.vendor, bot.product),
             }
         };
-        // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
-        // writable; a write it refuses fails anyway.
-        let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false, PROBE), Cycle::Done(_)) && host.buffer()[PROBE + 2] & 0x80 != 0;
-        Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0, retried: 0 })
+        // MODE SENSE(6), all pages (mode.rs): WP from the 4-byte header, as before 307-DRV-0055; with ASK_CACHING_PAGE, then
+        // the length it names, for WCE. A device that does not answer is taken as writable, its cache as unknown: a write
+        // it refuses fails anyway, and a flush is sent.
+        let mut header = [0u8; mode::HEADER];
+        if let Cycle::Done(n) = bot_cycle(&mut host, &mut bot, &mode::all_pages(mode::HEADER), mode::HEADER, false, PROBE) {
+            if n >= mode::HEADER { header.copy_from_slice(&host.buffer()[PROBE..PROBE + mode::HEADER]); }
+        }
+        let protected = mode::protected(&header).unwrap_or(false);
+        let whole = mode::whole(&header);
+        let cache = if !ASK_CACHING_PAGE || header == [0; mode::HEADER] || whole <= mode::HEADER { None } else {
+            match bot_cycle(&mut host, &mut bot, &mode::all_pages(whole), whole, false, PROBE) {
+                Cycle::Done(n) => mode::write_cache(&host.buffer()[PROBE..PROBE + n.min(whole)]),
+                _ => None,
+            }
+        };
+        Some(Self { host, bot, sectors, protected, lost: false, returned: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0, retried: 0, cache, denied: false, said: 0 })
     }
 
     // A refusal in the log, each kind once (211-DRV-0019).
@@ -247,6 +272,7 @@ impl Storage {
         match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) {
             Cycle::Done(moved) => return Ok(moved),
             Cycle::Refused => {
+                self.denied = true;
                 let sense = sense(&mut self.host, &mut self.bot);
                 self.refused(command[0], sense);
                 if sense.is_some_and(Sense::changed) { return self.came_back(Why::MediumChanged, command[0]); }
@@ -305,7 +331,27 @@ impl Driver for Storage {
         self.host.buffer_mut()[DATA..DATA + bytes].copy_from_slice(&data[..bytes]);
         if self.run(&command, bytes, true, DATA)? == bytes { Ok(()) } else { Err(DriverError::Io) }
     }
-    fn flush(&mut self) -> Outcome { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE).map(|_| ()) } // SYNCHRONIZE CACHE(10)
+    fn flush(&mut self) -> Outcome {
+        if self.cache == Some(false) {
+            if first(&mut self.said, NO_CACHE) { mind::println!("[USB] STORAGE: FLUSH: NO WRITE CACHE TO EMPTY (MODE SENSE'S CACHING PAGE, WCE CLEAR: IT IS OFF): ANSWERED DONE, NO COMMAND SENT"); }
+            return Ok(());
+        }
+        self.denied = false;
+        match self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE) { // SYNCHRONIZE CACHE(10)
+            Ok(_) => {
+                if first(&mut self.said, DONE) {
+                    mind::println!("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) SENT ({}), THE DEVICE SAID DONE", if self.cache.is_some() { "ITS CACHING PAGE: WCE SET" } else if ASK_CACHING_PAGE { "IT GAVE NO CACHING PAGE" } else { "ITS CACHE NOT ASKED" });
+                }
+                Ok(())
+            }
+            Err(DriverError::Io) => {
+                if self.denied && first(&mut self.said, REFUSED) { mind::println!("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) REFUSED BY THE DEVICE (ITS SENSE ABOVE): ANSWERED AS FAILED, NEVER AS DONE"); }
+                if !self.denied && first(&mut self.said, UNANSWERED) { mind::println!("[USB] STORAGE: FLUSH: SYNCHRONIZE CACHE(10) NOT ANSWERED: ANSWERED AS FAILED, NEVER AS DONE"); }
+                Err(DriverError::Io)
+            }
+            Err(other) => Err(other),
+        }
+    }
     fn read_only(&self) -> bool { self.protected }
     fn returned(&mut self) -> bool { self.returned }
 }
