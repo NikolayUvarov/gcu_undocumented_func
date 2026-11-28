@@ -94,6 +94,16 @@ Done by STO for the network track. It landed in round 102 (`main` c6931ded) with
   - its sent count rose 1697 → 1765 while card 2's stayed at 225;
   - `netcheck cards`: `CARD 0 Wired PRESENT UP CONFIGURED DEFAULT`, `cards OK`.
 
+**DRV's second run on the Ryzen,** 2026-11-26, 17:30–17:38 UTC by the machine's uptime (`NET/2026-11-26T1653Z-DRV-550-net-0062-on-the-ryzen-the-four-policy-lines-switch-the-route-with-the-cable-in.md`). This is DRV's run, not this session's:
+- **The machine:** boot 106, release 202611261618 (`main` 84401caf4 with the Bluetooth branch). Card 0 is the RTL8168 on the wire, card 2 the `rtw89_wifi` station joined on channel 100, the cable in throughout.
+- **How:** each line typed at the console over effector485's keys, the shell in front, `y` answered within the shell's 60 s question. The link's shell line refuses `netpolicy`, as designed; a question left unanswered ran out and changed nothing.
+- **The four lines, each in effect within milliseconds:**
+  - `add default card 2`: the default route moved to card 2; pings to the gateway and to 8.8.8.8 3 of 3, counted on card 2, card 0's sent count still.
+  - `remove default card 2`: back to card 0.
+  - `add card 0 off`: card 0's address dropped, `ip` showed it `WIRED OFF`, the route on card 2. `netbench` over the Wi-Fi alone: 4 MiB down at 356 KiB/s and up at 93 KiB/s (channel 100, a Bluetooth audio stream running). `remove` gave card 0 its lease again 21 ms after the route.
+  - `add card 2 off`: one connection aborted. The Effector agent's TLS session was made again over card 0 in 1.3 s and carried a 140 KB log and a 534 724-byte file. Card 2's sent count stood still and the station stayed joined (545 beacons in the minute). `remove` leased card 2 again.
+- **Seen, as meant:** with both cards up, a connection made on the Wi-Fi stays there until something aborts it; a new default route moves only new connections.
+
 **Not shown:** a card's own address taken first. In QEMU both cards hold 10.0.2.15, and the Ryzen's check did not try it.
 
 ## Related

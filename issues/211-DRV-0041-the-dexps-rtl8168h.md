@@ -1,6 +1,6 @@
 # 211-DRV-0041 — `rtl8168` drives the DEXP's two RTL8168H ports
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** `KRN`: a second `rtl8168` for the second port (asked on `internal-dev-messages`, 2026-10-27) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md), [550](550-network-on-real-hardware.md) · **Constitution:** MC-10.2, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** — (the second `rtl8168` for the second port is [211-KRN-0187](211-KRN-0187-a-second-rtl8168-for-the-second-port.md), in `main` since round 50; only the DEXP's run is left) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md), [550](550-network-on-real-hardware.md) · **Constitution:** MC-10.2, MC-12.1
 
 ## Problem
 
