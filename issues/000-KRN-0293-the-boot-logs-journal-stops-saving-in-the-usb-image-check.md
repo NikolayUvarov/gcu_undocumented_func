@@ -4,9 +4,10 @@
 
 ## Problem
 
-"x86: USB image" failed in two landing gates. Each time it passed when run again alone.
+"x86: USB image" failed in three landing gates. Each time it passed when run again alone.
 - **Round 177** (2026-11-26, on x32-2, 98 s).
 - **Round 183** (2026-11-28, on i9, 59 s).
+- **Round 184** (2026-11-28, on i9, 61 s; gate `r184b`, its log `logs/r184b/i9-06`): the same assertion, `LOG-PARTITION-CHECK` not in `log:boot0001.log`. It passed run again alone on x32 in 226 s.
 
 **What failed.** `tests/usb_image_smoke.py`, the log partition's check (211-KRN-0019):
 1. `logger LOG-PARTITION-CHECK` answered `LOGGED`, and `sync` answered `OK`.
