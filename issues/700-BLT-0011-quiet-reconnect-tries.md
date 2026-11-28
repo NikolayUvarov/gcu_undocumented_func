@@ -15,9 +15,9 @@ tried again 2 s later. Each try put three lines in the system log:
 ```
 
 That is about 340 lines an hour. In the ring read at 05:18 UTC they were 801 of 2 048 lines, so the ring covered only
-the last 2.5 hours. The boot's file on the disk keeps every line, but a reader of the ring (the server's `ring` log, the
-cable) saw nothing of the night before that, and the file grows by some 30 KB an hour for nothing. A classic device switched off (the speaker) does the same, at
-three lines a minute once its wait reaches 60 s.
+the last 2.5 hours. The boot's file on the disk keeps every line. But a reader of the ring (the server's `ring` log, the
+cable) saw nothing of the night before that, and the file grows by some 30 KB an hour for nothing. A classic device
+switched off (the speaker) does the same, at three lines a minute once its wait reaches 60 s.
 
 ## Plan
 
@@ -32,16 +32,28 @@ three lines a minute once its wait reaches 60 s.
 
 ## Acceptance criteria
 
-- [ ] Host case (`bt_host/tests/le.rs`): an LE mouse asleep for 6.2 hours. Every try is made. Three tries are said one by
+- [x] Host case (`bt_host/tests/le.rs`): an LE mouse asleep for 6.2 hours. Every try is made. Three tries are said one by
       one, then one line each 10 min. The night's lines number under 60. When it wakes, the line says after how many
       tries, and its counts are reset.
-- [ ] Host case: a device that fails twice and then connects logs exactly as before.
-- [ ] The case fails with the quieting removed (a mutation check).
-- [ ] `bt_host`'s whole suite, and `bt_hci`'s host and QEMU suites, pass.
+- [x] Host case: a device that fails twice and then connects logs exactly as before.
+- [x] The case fails with the quieting removed (a mutation check).
+- [x] `bt_host`'s whole suite, and `bt_hci`'s host and QEMU suites, pass.
 - [ ] On the Ryzen (MC-12.1): a night with the mouse asleep; the ring holds the summing lines only, and the mouse is
       caught when it is clicked.
+
+## Progress (2026-11-28)
+
+On `claude/700-BLT-0011-quiet-reconnects` 9431db890 (main e1dfbfebf merged), on LEG9:
+- `bt_host`'s cargo suites all pass, `le.rs` 6 of 6 with the two new cases;
+- with the quieting removed (`loud` always true), the night's case fails;
+- `02_build.sh` passes;
+- all of `scripts/host_tests.sh` exits 0: 282 `test result: ok`, none failed;
+- "build (x86 test programs)" PASS 160 s and "x86: services, storage, audio" PASS 1178 s (`bt_hci` starts there with no
+  controller).
+
+Left: the Ryzen's night.
 
 ## Related
 
 - [700-BLT-0009](../issues-done/700-BLT-0009-le-pairing-and-hid-over-gatt.done) (the LE central and its reconnect).
-- [213-DRV-0113](213-DRV-0113-display-both-hdmi-sockets-lit-at-once.md): the release whose night showed this.
+- [213-DRV-0113](../issues-done/213-DRV-0113-display-both-hdmi-sockets-lit-at-once.done): the release whose night showed this.
