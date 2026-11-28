@@ -1,6 +1,6 @@
 # 700-BLT-0008 — The classic HID host: a Bluetooth keyboard and mouse into the system's input as `usb_hid` delivers
 
-**Type:** library (`bt_host`) and driver (`bt_hci`) · **Owner:** `BLT` · **Priority:** P1 · **Status:** in progress (2026-11-26) · **Blocked by:** `KRN`: the input privilege for `bt_hci` (asked on `internal-dev-messages`, 2026-11-26) · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.5, MC-11.4, MC-12.1, MC-12.3
+**Type:** library (`bt_host`) and driver (`bt_hci`) · **Owner:** `BLT` · **Priority:** P1 · **Status:** in progress (2026-11-26) · **Blocked by:** — (the input privilege for `bt_hci` is [700-KRN-0280](700-KRN-0280-bt-hci-the-input-privilege-and-data-bluetooth.md), in `main` since round 177; only the run with the maintainer's Apple keyboard is left) · **Main task:** [700](700-bluetooth.md) · **Constitution:** MC-3.5, MC-11.4, MC-12.1, MC-12.3
 
 ## Problem
 
