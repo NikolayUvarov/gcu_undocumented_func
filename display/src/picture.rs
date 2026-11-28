@@ -78,11 +78,15 @@ pub fn glyph(c: u8) -> [u8; 7] {
 /// the surface it is drawn for.
 pub struct Lines<'a> { pub build: &'a str, pub size: Size, mode: [u8; 20], mode_len: usize }
 impl<'a> Lines<'a> {
-    pub fn new(build: &'a str, size: Size) -> Lines<'a> {
+    /// The lines for HDMI-A-1.
+    pub fn new(build: &'a str, size: Size) -> Lines<'a> { Lines::on("HDMI-A-1", build, size) }
+    /// The lines for the output named `output` (213-DRV-0112), its name cut to 10 characters.
+    pub fn on(output: &str, build: &'a str, size: Size) -> Lines<'a> {
         let mut mode = [0u8; 20];
         let mut n = 0;
         let mut put = |b: u8| { if n < mode.len() { mode[n] = b; n += 1; } };
-        for &b in b"HDMI-A-1 " { put(b); }
+        for &b in output.as_bytes().iter().take(10) { put(b); }
+        put(b' ');
         for (k, v) in [size.width, size.height].into_iter().enumerate() {
             let digits = [v / 1000 % 10, v / 100 % 10, v / 10 % 10, v % 10];
             let first = digits.iter().position(|&d| d != 0).unwrap_or(3);

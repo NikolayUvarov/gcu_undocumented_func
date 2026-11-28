@@ -4,8 +4,9 @@
 // 0271), then does what the setting after the device's index in its argument says (213-DRV-0099, setting.rs): `off`,
 // also with no word or one it does not know, maps no register; `read` runs step 1 (the firmware's display state read in
 // batches) and describes the stages; `light` runs steps 1 to 4 in the production order (213-DRV-0098: the EDID, first
-// light on HDMI-A-1 and MIND Core's picture, 213-DRV-0092 and 0095), then follows HPD 1 (213-DRV-0096) and reads both
-// pipes' underflow statuses (213-DRV-0103). start.rs is that order, on the Radeon's windows here.
+// light and MIND Core's picture, 213-DRV-0092 and 0095) on each HDMI socket with a monitor, the second beside the first
+// and offered as the third screen (213-DRV-0112, 0113), then follows both HPDs (213-DRV-0096) and checks each picture's
+// pipes for underflows (213-DRV-0103). start.rs is that order, on the Radeon's windows here.
 extern crate alloc;
 #[allow(dead_code)] mod atom;
 #[allow(dead_code)] mod batches;
@@ -24,16 +25,27 @@ use mind::abi::{BootInfo, CAP_KIND_MEMORY, CAP_KIND_MMIO, SLOT_DEV0, SLOT_DEV1, 
 use mind::{abi, dev, idl, ipc, sys};
 use mind::dev::{cap_info, device_config, Mmio};
 
-/// Bring-up only, all off in a release (213-DRV-0099): they change only what the `light` setting does, and a build with
-/// one set says so in its first line. SURVEY_ORDER: steps 1 to 4 in the survey's order of boots 70 to 81, every batch
+/// Bring-up only, each at the release's value below (213-DRV-0099): they change only what the `light` setting does, and a
+/// build with one set away from it says so in its first line. SURVEY_ORDER: steps 1 to 4 in the survey's order of boots 70 to 81, every batch
 /// named and paused, every value, write and plan logged before it is made, 1 s before each stage's writes and 3 s after
 /// it; else the production order (213-DRV-0098). UNDO_AFTER_STAGES: the stages that ran are undone, last first, before
 /// display idles, and nothing follows them. STAGES_ALLOWED: at most this many of the 16 stages (1 to 8 first light, 9 to
-/// 16 the picture); below 15 no standing check, at 0 the stages only described.
+/// 16 the picture); below 15 no standing check, at 0 the stages only described. HDMI_A_2 (213-DRV-0112): how far display
+/// goes on the Ryzen's second HDMI socket when its monitor is the one there: Read reads its blocks only (step 1's batch
+/// 12, again at each of its plugs), Edid also reads its EDID over DDC2 and describes its stages, FirstLight also runs
+/// first light's 8 stages there, Full (the release's) all 16 (STAGES_ALLOWED bounds both outputs). HDMI_FIRST: the
+/// socket taken first when both have a monitor, HdmiA1 (the release's) or HdmiA2. SECOND_HDMI (213-DRV-0113): the other
+/// socket's monitor beside the first lit: Off (one socket at a time, the other named as not driven), Read (its pipe read
+/// first, its stages described), FirstLight or FirstLightUndone (first light's 8 stages on pipe 2, left or undone), Full
+/// (the release's: all 16, its picture in slot 7 offered as the third screen through slot 8, 213-KRN-0285).
 const SURVEY_ORDER: bool = false;
 const UNDO_AFTER_STAGES: bool = false;
 const STAGES_ALLOWED: u8 = dcn::STAGES;
-const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED };
+const HDMI_A_2: setting::HdmiA2 = setting::HdmiA2::Full;
+const HDMI_FIRST: setting::HdmiFirst = setting::HdmiFirst::HdmiA1;
+const SECOND_HDMI: setting::SecondHdmi = setting::SecondHdmi::Full;
+const BRINGUP: setting::Bringup = setting::Bringup { survey_order: SURVEY_ORDER, undo_after_stages: UNDO_AFTER_STAGES, stages_allowed: STAGES_ALLOWED,
+                                                     hdmi_a_2: HDMI_A_2, hdmi_first: HDMI_FIRST, second_hdmi: SECOND_HDMI };
 /// Between two log lines, so that a burst is not dropped.
 const LINE_PACE_MS: usize = 20;
 
@@ -44,6 +56,9 @@ const ENGINE: usize = SLOT_DEV0;
 const MAILBOX: usize = SLOT_DEV1;
 const SECOND_SCREEN: usize = SLOT_MEM;
 const VBIOS: usize = SLOT_IRQ;
+// The third screen's pixels (BAR 0 [0x2400000, 0x3800000)) and display's second client of the compositor (213-KRN-0285).
+const THIRD_PIXELS: usize = mind::display::SLOT_THIRD_PIXELS;
+const THIRD_SCREEN: usize = mind::display::SLOT_THIRD_SCREEN;
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
@@ -63,6 +78,11 @@ fn main(_info: &'static BootInfo) {
     let size = |slot: usize, kind: usize| { let (k, _, len) = cap_info(slot); (k == kind).then_some(len) };
     match size(MAILBOX, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] THE SMU MAILBOX: {} BYTES GRANTED", len), None => mind::println!("[DISPLAY] NO SMU MAILBOX GRANTED") }
     match size(SECOND_SCREEN, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A SECOND SCREEN: {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO SECOND SCREEN'S MEMORY GRANTED") }
+    // Said in a build that makes a second HDMI run, as a release does; a bring-up build with SECOND_HDMI off says nothing of them.
+    if BRINGUP.second_hdmi != setting::SecondHdmi::Off {
+        match size(THIRD_PIXELS, CAP_KIND_MMIO) { Some(len) => mind::println!("[DISPLAY] BAR 0 FOR A THIRD SCREEN (SLOT 7): {} KIB GRANTED", len >> 10), None => mind::println!("[DISPLAY] NO THIRD SCREEN'S MEMORY GRANTED (SLOT 7)") }
+        mind::println!("[DISPLAY] A SECOND CLIENT OF THE COMPOSITOR (SLOT 8, THE THIRD SCREEN'S): {}", if screen::granted(THIRD_SCREEN) { "GRANTED" } else { "NOT GRANTED" });
+    }
     let vfct = size(VBIOS, CAP_KIND_MEMORY).and_then(|_| mind::mem::Mapping::new(VBIOS).ok());
     match &vfct {
         Some(table) => { let length = table.as_slice().get(4..8).map_or(0, |l| u32::from_le_bytes([l[0], l[1], l[2], l[3]]) as usize); vbios(&table.as_slice()[..length.min(table.len())]) }
@@ -78,7 +98,7 @@ fn main(_info: &'static BootInfo) {
     let begun = start::start(&mut radeon, &plan, id, engine, image, build, started, out);
     if let Ok(after) = device_config(ENGINE, 4) { mind::println!("[DISPLAY] COMMAND {:04X} AFTER STEP 1", after & 0xFFFF); }
     if let Some(mut w) = begun.writer {
-        if let Some(mut follower) = start::Follower::new(&mut radeon, &mut w, begun.run, &plan) {
+        if let Some(mut follower) = start::Follower::new(&mut radeon, &mut w, begun.run, &plan).map(|f| f.with_second(begun.second)) {
             loop {
                 mind::time::sleep(follower.sleep_ms());
                 follower.poll(&mut radeon, &mut w, &plan, image, build, out);
@@ -97,7 +117,11 @@ impl start::Device for Radeon {
     type Window = Registers;
     type Writer = Writer;
     fn map(&mut self) -> Option<Registers> { Mmio::map(ENGINE).ok().map(Registers) }
-    fn writer(&mut self, window: Registers) -> Writer { Writer(window.0, Mmio::map(SECOND_SCREEN).ok()) }
+    // Slot 7 mapped only in a build that may light the third screen.
+    fn writer(&mut self, window: Registers) -> Writer {
+        let third = (BRINGUP.second_hdmi != setting::SecondHdmi::Off).then(|| Mmio::map(THIRD_PIXELS).ok()).flatten();
+        Writer(window.0, Mmio::map(SECOND_SCREEN).ok(), third)
+    }
     fn now_us(&mut self) -> u64 { now_us() }
     fn say(&mut self, args: core::fmt::Arguments) { mind::println!("[DISPLAY] {}", args); }
 }
@@ -128,8 +152,8 @@ impl batches::Bus for Registers {
 }
 
 /// Step 2's and steps 3 and 4's engine: reads, writes (only a `light::Writable`), time, and step 4's surface in BAR 0's slot 5
-/// (its start, write-combined). Made only when the setting writes (start.rs).
-struct Writer(Mmio, Option<Mmio>);
+/// (its start, write-combined), and the third screen's in slot 7 (213-DRV-0113). Made only when the setting writes (start.rs).
+struct Writer(Mmio, Option<Mmio>, Option<Mmio>);
 impl batches::Bus for Writer {
     fn read(&mut self, reg: dcn::Reg) -> Option<u32> {
         let offset = reg.offset() as usize;
@@ -146,19 +170,28 @@ impl light::Poke for Writer {
 impl light::Screens for Writer {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.offer(width, height, pitch) }
     fn gone(&mut self) -> Result<(), light::ScreenRefused> { screen::Compositor { pixels: SECOND_SCREEN }.gone() }
+    // The third screen through display's second client, slot 7 lent as its pixels (213-DRV-0113).
+    fn offer_third(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), light::ScreenRefused> { screen::Client { pixels: THIRD_PIXELS, client: THIRD_SCREEN }.offer(width, height, pitch) }
+    fn gone_third(&mut self) -> Result<(), light::ScreenRefused> { screen::Client { pixels: THIRD_PIXELS, client: THIRD_SCREEN }.gone() }
+    fn third_granted(&mut self) -> (bool, bool) { (self.2.is_some(), screen::granted(THIRD_SCREEN)) }
+}
+// A row into a mapped surface, and a pixel read back.
+fn row_into(surface: Option<&Mmio>, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+    let (Some(surface), start) = (surface, y * pitch * 4) else { return false };
+    if pixels.len() > pitch || start + pixels.len() * 4 > surface.len() { return false; }
+    for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
+    true
+}
+fn sample_of(surface: Option<&Mmio>, x: usize, y: usize, pitch: usize) -> Option<u32> {
+    let surface = surface?;
+    let at = (y * pitch + x) * 4;
+    (x < pitch && at + 4 <= surface.len()).then(|| surface.read32(at))
 }
 impl light::Canvas for Writer {
-    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool {
-        let (Some(surface), start) = (&self.1, y * pitch * 4) else { return false };
-        if pixels.len() > pitch || start + pixels.len() * 4 > surface.len() { return false; }
-        for (x, p) in pixels.iter().enumerate() { surface.write32(start + x * 4, *p); }
-        true
-    }
-    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> {
-        let surface = self.1.as_ref()?;
-        let at = (y * pitch + x) * 4;
-        (x < pitch && at + 4 <= surface.len()).then(|| surface.read32(at))
-    }
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { row_into(self.1.as_ref(), y, pitch, pixels) }
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { sample_of(self.1.as_ref(), x, y, pitch) }
+    fn third_row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool { row_into(self.2.as_ref(), y, pitch, pixels) }
+    fn third_sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32> { sample_of(self.2.as_ref(), x, y, pitch) }
 }
 impl light::Clock for Writer {
     fn now_us(&mut self) -> u64 { mind::time::monotonic_ns() / 1000 }

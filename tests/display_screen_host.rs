@@ -70,6 +70,8 @@ mod ipc {
         pub static REPLY: Cell<Option<Message>> = Cell::new(None);
         /// The badge init gave display's client of the compositor; the call failing in the kernel instead.
         pub static BADGE: Cell<u16> = Cell::new(crate::marks::BADGE_SCREEN);
+        /// The badge init gave display's second client, in slot 8 (213-KRN-0285).
+        pub static THIRD_BADGE: Cell<u16> = Cell::new(crate::marks::BADGE_THIRD_SCREEN);
         pub static TRANSPORT: Cell<Option<crate::sys::Error>> = Cell::new(None);
     }
     pub fn slot(slot: usize) -> Option<(usize, usize)> { SLOTS.with(|s| s.borrow().get(&slot).copied()) }
@@ -80,7 +82,8 @@ mod ipc {
             SENT.with(|s| s.borrow_mut().push((self.0, *message)));
             if let Some(e) = TRANSPORT.with(|t| t.get()) { return Err(e); }
             if let Some(c) = message.cap { if let Some(k) = slot(c) { SLOTS.with(|s| s.borrow_mut().insert(RECEIVED, k)); } }
-            let request = Received { data: message.data, sender: DISPLAY, badge: BADGE.with(|b| b.get()), cap_received: message.cap.is_some(), is_call: true, irq: None };
+            let badge = if self.0 == crate::marks::SLOT_THIRD_SCREEN { THIRD_BADGE.with(|b| b.get()) } else { BADGE.with(|b| b.get()) };
+            let request = Received { data: message.data, sender: DISPLAY, badge, cap_received: message.cap.is_some(), is_call: true, irq: None };
             crate::compositor(&request);
             let reply = REPLY.with(|r| r.take()).ok_or(crate::sys::Error::Peer)?;
             Ok(Received { data: reply.data, sender: COMPOSITOR, badge: 0, cap_received: false, is_call: false, irq: None })
@@ -105,10 +108,13 @@ thread_local! {
     /// An answer the compositor gives instead of its own: a case of the interface, or raw reply words.
     static FORCED: Cell<Option<Error>> = Cell::new(None);
     static RAW: Cell<Option<[usize; 2]>> = Cell::new(None);
+    /// The driver screen each call's badge named.
+    static SCREENS: RefCell<Vec<Option<usize>>> = RefCell::new(Vec::new());
 }
 
-/// The compositor as compositor/src/main.rs serves display.wit 1.3 (213-KRN-0272): `decode`, then second_screen's rules:
-/// a client not badged BADGE_SCREEN is denied; an offer's shape must fit the lent range (`bad-screen`).
+/// The compositor as compositor/src/main.rs serves display.wit 1.3 (213-KRN-0272) and 1.5 (213-KRN-0285): `decode`, then
+/// its driver screens' rules: a client whose badge names no screen (`screen_of`) is denied; an offer's shape must fit
+/// the lent range (`bad-screen`). Each call is kept with the screen its badge names.
 fn compositor(request: &ipc::Received) {
     use idl::display::{decode, reply_offer_screen, reply_screen_gone};
     let (decoded, call) = match decode(request, ipc::RECEIVED) {
@@ -117,7 +123,8 @@ fn compositor(request: &ipc::Received) {
     };
     DECODED.with(|d| d.borrow_mut().push(decoded));
     if let Some(words) = RAW.with(|r| r.get()) { let _ = idl::wire::finish(call, words); return; }
-    let screen = request.badge == marks::BADGE_SCREEN;
+    let screen = marks::screen_of(request.badge).is_some();
+    SCREENS.with(|s| s.borrow_mut().push(marks::screen_of(request.badge)));
     let forced = FORCED.with(|f| f.get());
     match decoded {
         Request::OfferScreen { width, height, pitch, pixels, .. } => {
@@ -138,6 +145,8 @@ fn granted() {
     ipc::SENT.with(|s| s.borrow_mut().clear());
     ipc::DROPPED.with(|d| d.borrow_mut().clear());
     ipc::BADGE.with(|b| b.set(marks::BADGE_SCREEN));
+    ipc::THIRD_BADGE.with(|b| b.set(marks::BADGE_THIRD_SCREEN));
+    SCREENS.with(|s| s.borrow_mut().clear());
     ipc::TRANSPORT.with(|t| t.set(None));
     DECODED.with(|d| d.borrow_mut().clear());
     REJECTED.with(|r| r.set(0));
@@ -220,4 +229,33 @@ fn a_call_that_fails_or_an_answer_outside_the_interface_is_a_failed_call_and_no_
     assert_eq!(offer(), Err(ScreenRefused::Unavailable));
     assert_eq!(screen::Compositor { pixels: SLOT_MEM }.gone(), Err(ScreenRefused::Unavailable));
     assert!(sent().is_empty());
+}
+
+#[test]
+fn the_third_screen_goes_through_slot_8_with_slot_7_lent_and_the_second_stays_on_slot_15() {
+    use marks::{SLOT_THIRD_PIXELS, SLOT_THIRD_SCREEN};
+    // init's grants with 213-KRN-0285: slot 7's 20 MiB of BAR 0 and display's second client of the compositor in slot 8.
+    granted();
+    ipc::SLOTS.with(|s| { let mut s = s.borrow_mut(); s.insert(SLOT_THIRD_SCREEN, (CAP_KIND_ENDPOINT, 0)); s.insert(SLOT_THIRD_PIXELS, (CAP_KIND_MMIO, 0x0140_0000)); });
+    let third = || screen::Client { pixels: SLOT_THIRD_PIXELS, client: SLOT_THIRD_SCREEN };
+    assert_eq!(third().offer(1366, 768, 5632), Ok(()));
+    assert_eq!(offer(), Ok(()));
+    assert_eq!(third().gone(), Ok(()));
+    // Each through its own client, its own pixels lent; the compositor's rule names the third screen, then the second.
+    let s = sent();
+    assert_eq!(s.iter().map(|(at, m)| (*at, m.cap, m.data[0] & 0xFFFF)).collect::<Vec<_>>(),
+               [(SLOT_THIRD_SCREEN, Some(SLOT_THIRD_PIXELS), 5 | 1 << 8), (SLOT_DISPLAY, Some(SLOT_MEM), 5 | 1 << 8), (SLOT_THIRD_SCREEN, None, 6 | 1 << 8)]);
+    assert_eq!(SCREENS.with(|s| s.borrow().clone()), [Some(1), Some(0), Some(1)]);
+    assert_eq!(decoded()[0], Request::OfferScreen { width: 1366, height: 768, pitch: 5632, format: PixelFormat::Bgr, pixels: ipc::RECEIVED });
+    // Slot 8 not granted (an init without 0285): said as the third's client, nothing sent.
+    granted();
+    assert_eq!(third().offer(1366, 768, 5632), Err(ScreenRefused::ThirdUnavailable));
+    assert_eq!(third().gone(), Err(ScreenRefused::ThirdUnavailable));
+    assert!(sent().is_empty());
+    assert_eq!(ScreenRefused::ThirdUnavailable.to_string(), "NO SECOND CLIENT OF IT (SLOT 8) WAS GRANTED");
+    // A badge naming no screen on slot 8: denied.
+    granted();
+    ipc::SLOTS.with(|s| { let mut s = s.borrow_mut(); s.insert(SLOT_THIRD_SCREEN, (CAP_KIND_ENDPOINT, 0)); s.insert(SLOT_THIRD_PIXELS, (CAP_KIND_MMIO, 0x0140_0000)); });
+    ipc::THIRD_BADGE.with(|b| b.set(0));
+    assert_eq!(third().offer(1366, 768, 5632), Err(ScreenRefused::Denied));
 }
