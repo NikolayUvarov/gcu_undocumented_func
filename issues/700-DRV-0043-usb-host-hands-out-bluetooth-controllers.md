@@ -29,6 +29,13 @@ The DEXP's Bluetooth controller is the RTL8821CE's second half, `0BDA:C821`, at 
   - `libmind/src/idl/usb.rs` is regenerated.
 
   EHCI's path is unchanged: the MacBook's controller, behind EHCI, waits for its own step.
+- **2026-11-28, on the Ryzen, not the DEXP** (MC-12.1: this is evidence for the Ryzen alone, so the DEXP's criterion
+  stays open). Release 202611280609, boot 122. The RTL8852BU (`0BDA:B85B`) sits behind the AMD xHCI 1022:1639:
+  - `CONTROLLER 0BDA:B85B, INTERFACE 0, EVENTS ON 81`: the HCI interface was handed to `bt_hci`;
+  - `VERSION: HCI 11 REVISION 000B, LMP 11 SUBVERSION 8852`, after HCI Reset;
+  - `PATCH 000233C4013501F1 … 60101 BYTES IN 239 FRAGMENTS`, `PATCH DOWNLOADED IN 742 MS`, then `RTL8852B PATCHED`;
+  - `ACL ON 82 AND 02`. Since 2026-11-26, pairing (SSP and LE), A2DP to the speaker and LE HID from the mouse run over
+    it. Their events span several interrupt packets, and they arrive whole.
 
 ## Acceptance criteria
 

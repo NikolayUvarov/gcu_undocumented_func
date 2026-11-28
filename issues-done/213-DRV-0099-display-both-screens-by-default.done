@@ -1,6 +1,6 @@
-# 213-DRV-0099 — `display`: both screens by default
+# 213-DRV-0099 — `display`: both screens by default — done
 
-**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** open (2026-11-26) · **Blocked by:** KRN's part, `init` passing the word (asked by the DRV owner session, 2026-11-26), for criterion 2 as written · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
+**Type:** driver (`display`) · **Owner:** `DRV` · **Priority:** P2 · **Status:** done (2026-11-28) · **Blocked by:** — (KRN's part, `init` passing the word, is [213-KRN-0281](../issues/213-KRN-0281-display-told-its-second-outputs-word.md), in `main` since round 177; only criterion 2's run on the Ryzen is left) · **Main task:** [213](../issues/213-amd-ryzen-pc.md) · **Roadmap:** the drivers track · **Constitution:** MC-12.1, MC-12.3, MC-12.5
 
 ## Problem
 
@@ -194,4 +194,17 @@ them), behind a device that counts its maps and writers:
 
 ## Related
 
-[213-DRV-0092](213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](../issues-done/213-DRV-0098-display-both-screens-at-start-in-seconds.done).
+[213-DRV-0092](../issues/213-DRV-0092-display-mind-cores-picture-on-the-second-output.md), [213-DRV-0098](213-DRV-0098-display-both-screens-at-start-in-seconds.done).
+
+## Resolution
+
+The second output's setting is the word after `display`'s device index (`off`, `read`, `light`). `init` passes it from `data/displays.txt` (213-KRN-0281, round 177), so a release is the same for every machine, and the word decides on each.
+
+- **On the Ryzen** (MC-12.1), the word `light` and the release's own build values, no switch changed. Release 202611280609 = `claude/213-DRV-0113-display-both-hdmi-sockets` c94a7de49, landed in round 182. Four starts on 2026-11-28 (boots 120 to 123, `rz-starts2.sh`), and the same build's boot 118 the evening before. Each start's log had:
+  - `THE SECOND OUTPUT: LIGHT, THE WORD AFTER DEVICE 24`;
+  - `[COMPOSITOR] SECOND SCREEN 3440X1440` at 5.95 to 6.07 s;
+  - `THIRD SCREEN 1366X768` at 8.42 to 8.54 s;
+  - `HDMI-A-2: SECOND HDMI RUN ON OTG2 Lit … 2462 to 2471 MS`.
+
+  So all three screens came up at every start, more than the two this task asked.
+- **Elsewhere** the word is absent, and `display` reads and logs and writes nothing (the setting's host cases, `display_light_host.rs`).

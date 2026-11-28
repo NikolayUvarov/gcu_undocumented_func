@@ -1,6 +1,6 @@
 # 100004-MOB-0003 — The first boot on the Orange Pi Zero 3 (H618, 2 GiB)
 
-**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card, with U-Boot built from source for this board); the kernel leaving EL2 (asked of `KRN`, 2026-11-10); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); the kernel session's answer (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
+**Type:** porting (a board) · **Owner:** `MOB` · **Priority:** P1 · **Status:** open · **Blocked by:** [100004-MOB-0001](100004-MOB-0001-the-boards-sd-card.md) (the card, with U-Boot built from source for this board); the board wired to a host ([issues-human, section 14](../issues-human/README.md#14-the-two-allwinner-boards-on-the-bench)); the kernel session's answer (100004's message to `KRN`) · **Main task:** [100004](100004-two-allwinner-boards-before-the-phone.md) · **Constitution:** MC-1.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -32,4 +32,4 @@ Its 2 GiB are the PinePhone's smaller memory. Its first boot is the same as the 
 
 ## Related
 
-[100004-MOB-0002](100004-MOB-0002-the-first-boot-on-the-h5.md), [100004-MOB-0007](100004-MOB-0007-the-axp313a-pmic.md), [100004-MOB-0008](100004-MOB-0008-memory-and-ipc-on-the-boards.md).
+[100004-MOB-0002](100004-MOB-0002-the-first-boot-on-the-h5.md), [100004-MOB-0007](100004-MOB-0007-the-axp313a-pmic.md), [100004-MOB-0008](100004-MOB-0008-memory-and-ipc-on-the-boards.md), [100004-PRT-0014](100004-PRT-0014-a-kernel-entered-at-el2-goes-on-at-el1.md) (the kernel leaving EL2, in `main`; no longer a block).
