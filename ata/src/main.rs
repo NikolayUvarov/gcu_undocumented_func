@@ -2,10 +2,14 @@
 #![no_main]
 // LEGACY: the whole driver: primary IDE channel by PIO on ISA ports (docs/legacy.md).
 // Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server: READ SECTORS,
-// WRITE SECTORS and FLUSH CACHE (writes only for clients with the write badge, see mind::block_protocol). Every wait
-// ends at a deadline and fails the request, which the log names once (000-DRV-0064, ide.rs).
+// WRITE SECTORS and the flush IDENTIFY calls for, as ahci's (ahci/src/cache.rs; writes only for clients with the write
+// badge, see mind::block_protocol). Every wait ends at a deadline and fails the request, which the log names once
+// (000-DRV-0064, ide.rs); a flush's outcome is said once of each kind (307-DRV-0055).
+#[path = "../../ahci/src/cache.rs"]
+mod cache;
 mod ide;
 
+use cache::{Flush, Said};
 use ide::{Bus, Fault, Ide};
 use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
 use mind::block::{self, Driver, DriverError, Outcome};
@@ -23,8 +27,9 @@ impl Bus for Channel {
     fn sleep(&self) { mind::time::sleep(1); }
 }
 
-// `failing`: the fault the last request ended with, so that a run of them is logged once, and the drive's return.
-struct Ata { ide: Ide<Channel>, failing: Option<Fault> }
+// `failing`: the fault the last request ended with, so that a run of them is logged once, and the drive's return;
+// `cache`: what a flush does, from IDENTIFY.
+struct Ata { ide: Ide<Channel>, failing: Option<Fault>, cache: Flush, said: Said }
 
 impl Ata {
     fn done(&mut self, what: &str, lba: u64, count: usize, result: Result<(), Fault>) -> Outcome {
@@ -46,13 +51,29 @@ impl Driver for Ata {
     fn sectors(&self) -> u64 { self.ide.sectors }
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> Outcome { let r = self.ide.read(lba, count, out); self.done("READ", lba, count, r) }
     fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> Outcome { let r = self.ide.write(lba, count, data); self.done("WRITE", lba, count, r) }
-    fn flush(&mut self) -> Outcome { let r = self.ide.flush(); self.done("FLUSH", 0, 0, r) }
+    fn flush(&mut self) -> Outcome {
+        let command = match self.cache {
+            Flush::Send(command) => command,
+            none => {
+                if self.said.first(Said::NO_CACHE) { mind::println!("[ATA] FLUSH: NO WRITE CACHE TO EMPTY ({}): ANSWERED DONE, NO COMMAND SENT", cache::why(none)); }
+                return Ok(());
+            }
+        };
+        let r = self.ide.flush(command);
+        let name = cache::name(command);
+        match r {
+            Ok(()) => if self.said.first(Said::DONE) { mind::println!("[ATA] FLUSH: {} SENT, THE DRIVE SAID DONE", name); },
+            Err(Fault::Error) => if self.said.first(Said::REFUSED) { mind::println!("[ATA] FLUSH: {} REFUSED BY THE DRIVE: ANSWERED AS FAILED, NEVER AS DONE", name); },
+            Err(_) => if self.said.first(Said::UNANSWERED) { mind::println!("[ATA] FLUSH: {} NOT ANSWERED BY ITS DEADLINE: ANSWERED AS FAILED, NEVER AS DONE", name); },
+        }
+        self.done("FLUSH", 0, 0, r)
+    }
     fn read_only(&self) -> bool { false }
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut disk = Ide::probe(Channel { io: Ports(SLOT_DEV0), control: Ports(SLOT_DEV1) }).map(|ide| Ata { ide, failing: None });
+    let mut disk = Ide::probe(Channel { io: Ports(SLOT_DEV0), control: Ports(SLOT_DEV1) }).map(|ide| Ata { cache: cache::flush(|i| ide.identify[i]), ide, failing: None, said: Said::new() });
     match &disk {
         Some(d) => mind::println!("[ATA] PRIMARY MASTER: {} SECTORS", d.ide.sectors),
         None => mind::println!("[ATA] NO DISK ON PRIMARY CHANNEL"),

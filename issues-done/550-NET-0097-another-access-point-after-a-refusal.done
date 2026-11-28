@@ -1,6 +1,6 @@
-# 550-NET-0097 — After a try fails on one access point, the automatic join takes another of the same network
+# 550-NET-0097 — After a try fails on one access point, the automatic join takes another of the same network — done
 
-**Type:** `wlan`, `dot11` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** in progress (in `main` since round 183, c2318c10b3, 2026-11-28; DRV's run on the Ryzen left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), for [801](801-the-bench-stays-manageable.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** `wlan`, `dot11` · **Owner:** `NET` (the kernel session) · **Priority:** P1 · **Status:** done (2026-11-28) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), for [801](../issues/801-the-bench-stays-manageable.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -39,11 +39,30 @@ DRV's report `NET/2026-11-27T0547Z-DRV-the-access-point-moved-to-channel-40-unde
   - `tests/wlan_auto_host.rs` `an_access_point_set_aside_waits_its_time_and_a_join_lets_all_go`: the time, a second setting aside, the oldest giving way, the join.
 - [x] `wlan` builds with no warning.
 - [x] The groups that run the `net` suite's Wi-Fi checks pass: "x86: network, TLS and Effector" and "aarch64: network, TLS and Effector". **Met** in round 183's gate (x86 on acc-2, 2175 s; aarch64 on acc-1, 1598 s), QEMU only (MC-12.1).
-- [ ] **On the Ryzen** (DRV's run, MC-12.1): with the access point on a channel the radio refuses under `00`, the station sets it aside after one try and joins the 2.4 GHz access point on the next.
+- [x] **On the Ryzen** (DRV's run, MC-12.1): with the access point on a channel the radio refuses under `00`, the station sets it aside after one try and joins the 2.4 GHz access point on the next. **Met** on bench-53 (see Resolution).
+
+## Resolution
+
+Done in round 183 (`main` c2318c10b3): `dot11`'s `join_avoiding` and `wlan`'s `auto::SetAside`, as planned.
+
+**On the Ryzen**, DRV's bench-53 on the Ryzen (release 202611281042, 2026-11-28; `main` 4df3fe984 with `claude/550-NET-0097-another-access-point-after-a-refusal` aafcd2f7e, 213-DRV-0116, 700-BLT-0011 and 213-KRN-0290 merged), reported in `NET/2026-11-28T1056Z-DRV-550-net-0097-and-0098-on-the-ryzen-channel-40-set-aside-joined-on-8.md` on `internal-dev-messages`. Under `00`, one start, CoolNet2 on 5 GHz channel 40 and 2.4 GHz channel 8, the wire in:
+
+```
+[   10.090] rtw89_wifi(22) [RTW89] CHANNEL 40 NOT ADMITTED: THE CALIBRATION'S 12 DBM IS ABOVE THE CHANNEL'S MAXIMUM UNDER THIS COUNTRY; …
+[   42.677] wlan(28) [WLAN] AUTO-JOIN CoolNet2: NO ANSWER (TRY 2), AGAIN IN 10 S
+[   42.677] wlan(28) [WLAN] AUTO-JOIN: THE ACCESS POINT A0:36:BC:11:F8:8C ON CHANNEL 40 SET ASIDE FOR 10 MIN (NO ANSWER): THE NETWORK'S OTHERS GO FIRST
+[   58.584] rtw89_wifi(22) [RTW89] DATAPATH ADMITTED ON CHANNEL 8
+[   58.654] wlan(28) [WLAN] AUTO-JOIN CoolNet2: JOINED (TRY 3)
+[   59.184] netstack(29) [NETSTACK] DHCP 192.168.2.169/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 2
+```
+
+- The station set channel 40's access point aside after its one automatic try there, and joined channel 8 on the next try, 58.7 s from the start. The driver did not restart, and there was no quarantine.
+- This is evidence for this machine, this radio and this access point only (MC-12.1).
+- **What it left:** 32.6 s passed between the refusal (10.1 s) and try 2's end (42.7 s). By the code about 16 s of that is accounted for. And the autorun's own join, which met the refusal first, set nothing aside. Both are [550-NET-0101](../issues/550-NET-0101-a-clients-join-that-gets-no-answer-sets-the-access-point-aside.md).
 
 ## Related
 
-- [213-DRV-0087](213-DRV-0087-rtl8852be-on-5-ghz.md): the radio's side, why channel 40 is refused under `00`.
-- [550-NET-0090](550-NET-0090-the-station-on-5-ghz.md): the order of a network's access points.
-- [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done): the automatic join.
+- [213-DRV-0087](../issues/213-DRV-0087-rtl8852be-on-5-ghz.md): the radio's side, why channel 40 is refused under `00`.
+- [550-NET-0090](../issues/550-NET-0090-the-station-on-5-ghz.md): the order of a network's access points.
+- [550-NET-0041](550-NET-0041-wlan-joins-a-remembered-network-by-itself.done): the automatic join.
 - `docs/network/station.md` 0.7.

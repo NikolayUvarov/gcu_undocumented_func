@@ -4,7 +4,9 @@
 // the boards and servers whose disks are on PCIe. Registers in BAR0, an admin queue pair and one I/O queue pair in its
 // own DMA region, commands polled to completion one at a time like ahci's; reads, writes (for clients with the write
 // badge, mind::block_protocol) and flushes, 512-byte sectors only. init's argument names the instance (none: the first);
-// any other instance only reads (guard.rs, 213-DRV-0060). Holds its BAR and DMA only.
+// any other instance only reads (guard.rs, 213-DRV-0060). A flush is answered done with no command when the controller
+// has no volatile write cache or has it off, and failed when the controller refuses or does not answer it, each said
+// once in the log (307-DRV-0055). Holds its BAR and DMA only.
 use core::fmt::Write as _;
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, BLOCK_KIND_NVME, BLOCK_MAX_SECTORS, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM};
@@ -12,7 +14,7 @@ use mind::block::{self, Driver, DriverError, Outcome, Refused};
 use mind::dev::{cap_info, Dma, Mmio};
 
 mod guard;
-use guard::{Tag, OP_CREATE_CQ, OP_CREATE_SQ, OP_FLUSH, OP_IDENTIFY, OP_READ, OP_SET_FEATURES, OP_WRITE, QUEUES_FEATURE};
+use guard::{Cache, Tag, OP_CREATE_CQ, OP_CREATE_SQ, OP_FLUSH, OP_GET_FEATURES, OP_IDENTIFY, OP_READ, OP_SET_FEATURES, OP_WRITE, QUEUES_FEATURE, VWC_FEATURE};
 
 const CAP: usize = 0x00; const CC: usize = 0x14; const CSTS: usize = 0x1C; const AQA: usize = 0x24; const ASQ: usize = 0x28; const ACQ: usize = 0x30;
 const ENTRIES: u16 = 16; // per queue: 16 commands of 64 bytes, 16 completions of 16
@@ -25,7 +27,12 @@ const SHOWN_SECTORS: u64 = 2048; // a read-only instance hashes the disk's first
 // A queue pair: its submission tail, completion head and phase, and its doorbells.
 struct Queue { sq: usize, cq: usize, tail: u16, head: u16, phase: bool, sq_bell: usize, cq_bell: usize, id: u16 }
 
-struct Nvme { regs: Mmio, dma: Dma, admin: Queue, io: Queue, sectors: u64, flush: bool, writes: bool, tag: Tag, refusals: guard::Refusals }
+// `answer`: the last completion's dwords 3 (status) and 0, None when none came; `said`: the flush lines already said.
+struct Nvme { regs: Mmio, dma: Dma, admin: Queue, io: Queue, sectors: u64, cache: Cache, writes: bool, tag: Tag, refusals: guard::Refusals, answer: Option<(u32, u32)>, said: u8 }
+
+// The kinds of flush line, each said once (307-DRV-0055).
+const DONE: u8 = 1; const NO_CACHE: u8 = 2; const REFUSED: u8 = 4; const UNANSWERED: u8 = 8;
+fn first(said: &mut u8, kind: u8) -> bool { let first = *said & kind == 0; *said |= kind; first }
 
 // Waits for a condition, busy-polling first, then sleeping (QEMU completes commands asynchronously).
 fn wait(mut done: impl FnMut() -> bool) -> bool {
@@ -50,15 +57,17 @@ impl Nvme {
         regs.write32(CC, 1 | 6 << 16 | 4 << 20); // EN, IOSQES 64 bytes, IOCQES 16 bytes
         if !wait_ms(timeout_ms, || regs.read32(CSTS) & 3 == 1) { return None; } // RDY, no fatal status
         let queue = |id: u16, sq: usize, cq: usize| Queue { sq, cq, tail: 0, head: 0, phase: true, sq_bell: 0x1000 + 2 * id as usize * stride, cq_bell: 0x1000 + (2 * id as usize + 1) * stride, id };
-        let mut nvme = Self { regs, dma, admin: queue(0, ADMIN_SQ, ADMIN_CQ), io: queue(1, IO_SQ, IO_CQ), sectors: 0, flush: false, writes, tag, refusals: guard::Refusals::new() };
-        // The controller (its vendor, model and firmware for the log; the volatile write cache), then namespace 1: its
-        // size and LBA format.
+        let mut nvme = Self { regs, dma, admin: queue(0, ADMIN_SQ, ADMIN_CQ), io: queue(1, IO_SQ, IO_CQ), sectors: 0, cache: Cache::Absent, writes, tag, refusals: guard::Refusals::new(), answer: None, said: 0 };
+        // The controller (its vendor, model and firmware for the log; the volatile write cache, and for the instance that
+        // writes whether it is on), then namespace 1: its size and LBA format.
         let identify = nvme.dma.physical(IDENTIFY);
         nvme.admin_command(OP_IDENTIFY, 0, identify, [1, 0, 0, 0, 0, 0])?;
         let id = nvme.dma.bytes(IDENTIFY, 72);
         let (mut model, mut firmware) = ([0u8; 40], [0u8; 8]);
         mind::println!("{} CONTROLLER: VENDOR {:04X}, MODEL {}, FIRMWARE {}", tag, u16::from_le_bytes([id[0], id[1]]), guard::ascii(&id[24..64], &mut model), guard::ascii(&id[64..72], &mut firmware));
-        nvme.flush = nvme.dma.bytes(IDENTIFY + 525, 1)[0] & 1 != 0; // VWC
+        let vwc = nvme.dma.bytes(IDENTIFY + 525, 1)[0];
+        let wce = if vwc & 1 != 0 && writes { nvme.admin_command(OP_GET_FEATURES, 0, 0, [VWC_FEATURE, 0, 0, 0, 0, 0]).and(nvme.answer).map(|(_, dword)| dword) } else { None };
+        nvme.cache = guard::cache(vwc, wce);
         nvme.admin_command(OP_IDENTIFY, 1, identify, [0, 0, 0, 0, 0, 0])?;
         let id = nvme.dma.bytes(IDENTIFY, 4096);
         let size = u64::from_le_bytes(id[0..8].try_into().unwrap());
@@ -89,6 +98,7 @@ impl Nvme {
     // Writes a command at the queue's tail, rings its doorbell and waits for its completion; Some on success. Every
     // command passes here: one an instance that does not write may not send is refused before the queue is touched.
     fn submit(&mut self, queue: &mut Queue, opcode: u8, nsid: u32, prp1: u64, prp2: u64, dwords: [u32; 6]) -> Option<()> {
+        self.answer = None;
         let kind = if queue.id == 0 { guard::Queue::Admin } else { guard::Queue::Io };
         if !guard::allowed(self.writes, kind, opcode, dwords[0]) {
             if let Some(n) = self.refusals.one() {
@@ -113,6 +123,7 @@ impl Nvme {
         let mut status = || { fence(Ordering::SeqCst); u32::from_le_bytes(dma.bytes(entry + 12, 4).try_into().unwrap()) };
         if !wait(|| (status() >> 16 & 1 != 0) == phase) { mind::println!("{} QUEUE {} COMMAND {:#x}: NO COMPLETION", self.tag, queue.id, opcode); return None; }
         let status = status();
+        self.answer = Some((status, u32::from_le_bytes(self.dma.bytes(entry, 4).try_into().unwrap())));
         queue.head = (queue.head + 1) % ENTRIES;
         if queue.head == 0 { queue.phase = !queue.phase; }
         self.regs.write32(queue.cq_bell, queue.head as u32);
@@ -210,11 +221,24 @@ impl Driver for Nvme {
     }
     fn flush(&mut self) -> Outcome {
         if !self.writes { self.refuse(format_args!("A FLUSH INSIDE THE DRIVER")); return Err(DriverError::Range); }
-        if !self.flush { return Ok(()); }
+        if self.cache != Cache::On {
+            if first(&mut self.said, NO_CACHE) {
+                mind::println!("{} FLUSH: NO WRITE CACHE TO EMPTY ({}): ANSWERED DONE, NO COMMAND SENT", self.tag,
+                               if self.cache == Cache::Absent { "IDENTIFY'S VWC BIT CLEAR: NONE" } else { "GET FEATURES, VOLATILE WRITE CACHE: IT IS OFF" });
+            }
+            return Ok(());
+        }
         let mut queue = core::mem::replace(&mut self.io, Queue { sq: 0, cq: 0, tail: 0, head: 0, phase: true, sq_bell: 0, cq_bell: 0, id: 0 });
         let done = self.submit(&mut queue, OP_FLUSH, 1, 0, 0, [0; 6]).is_some();
         self.io = queue;
-        if done { Ok(()) } else { Err(DriverError::Io) }
+        match (done, self.answer) {
+            (true, _) => { if first(&mut self.said, DONE) { mind::println!("{} FLUSH: FLUSH SENT, THE CONTROLLER SAID DONE", self.tag); } Ok(()) }
+            (false, Some((status, _))) => {
+                if first(&mut self.said, REFUSED) { mind::println!("{} FLUSH: FLUSH REFUSED BY THE CONTROLLER (STATUS TYPE {}, CODE {:#04x}): ANSWERED AS FAILED, NEVER AS DONE", self.tag, status >> 25 & 7, status >> 17 & 0xFF); }
+                Err(DriverError::Io)
+            }
+            (false, None) => { if first(&mut self.said, UNANSWERED) { mind::println!("{} FLUSH: FLUSH NOT ANSWERED: ANSWERED AS FAILED, NEVER AS DONE", self.tag); } Err(DriverError::Io) }
+        }
     }
     fn read_only(&self) -> bool { !self.writes }
     // Who asked a read-only instance to write or flush; the first instance says nothing, as before.
@@ -239,7 +263,7 @@ fn main(_info: &'static BootInfo) {
     }
     let mut disk = Nvme::probe(tag, writes);
     match &disk {
-        Some(d) => mind::println!("{} NAMESPACE 1: {} SECTORS{}{}", tag, d.sectors, if d.flush { ", WRITE CACHE" } else { "" },
+        Some(d) => mind::println!("{} NAMESPACE 1: {} SECTORS{}{}", tag, d.sectors, match d.cache { Cache::Absent => "", Cache::Off => ", WRITE CACHE OFF", Cache::On => ", WRITE CACHE" },
                                   if writes { "" } else { ", READ-ONLY" }),
         None => mind::println!("{} NO USABLE NAMESPACE", tag),
     }
