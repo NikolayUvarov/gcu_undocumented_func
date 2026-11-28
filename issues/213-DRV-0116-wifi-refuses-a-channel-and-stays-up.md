@@ -34,19 +34,29 @@ quarantine. No answer to the station said why.
 
 ## Acceptance criteria
 
-- [ ] Host case (`tests/rtw89_receive_service_cases.rs`), under `US` with channel 40 at 10 dBm:
+- [x] Host case (`tests/rtw89_receive_service_cases.rs`), under `US` with channel 40 at 10 dBm:
   - the policy refuses 40 with `TssiPower`;
   - the refusal is logged once and the filter is opened again;
   - three later sends are refused with nothing asked;
   - `info` still answers;
   - 36 is admitted;
   - a country given again asks the policy again.
-- [ ] The case fails with the refusal's check removed (a mutation check).
-- [ ] `rtw89_service_host` whole and all of `scripts/host_tests.sh` pass; the driver builds.
+- [x] The case fails with the refusal's check removed (a mutation check).
+- [x] `rtw89_service_host` whole and all of `scripts/host_tests.sh` pass; the driver builds.
 - [ ] On the Ryzen (MC-12.1), with the access point on channel 40:
   - under `00` the line `CHANNEL 40 NOT ADMITTED` comes once;
   - no driver restart and no quarantine follow;
   - `UZ` given again joins channel 40.
+
+## Progress (2026-11-28)
+
+On LEG9, at b94ccbd66 and again at b6d4eec6b (main 4df3fe984 merged):
+- `rtw89_service_host`: 370 passed, the new case among them. With `refused_here` taken out of the send's check, the
+  new case fails.
+- `rtw89_wifi` builds; `02_build.sh` passes.
+- All of `scripts/host_tests.sh` exits 0: 282 `test result: ok`, none failed.
+
+Left: the Ryzen's run.
 
 ## Related
 
