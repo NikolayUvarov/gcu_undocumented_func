@@ -6,7 +6,8 @@
 //! pipe is left off. The write path (`Poke`, `Writable`) is not step 1's read-only `Bus`: a build that may run no stage
 //! makes no `Poke` at all and calls only `describe`. Its order is its `Out`'s (213-DRV-0098): the survey's logs every line
 //! and pauses around each stage, the production one logs a line a stage with its time and the detail of a stage that
-//! fails; the reads, writes, waits and checks are the same. `tests/display_light_host.rs` checks it on a model.
+//! fails; the reads, writes, waits and checks are the same. The output is a parameter (213-DRV-0112): HDMI-A-1 or
+//! HDMI-A-2, each with its PHY, back end, HPD and DDC line. `tests/display_light_host.rs` checks it on a model.
 
 use crate::atom::{self, Interpreter};
 use crate::batches::{Bus, Out, Store, BOARD_PHYS};
@@ -37,17 +38,24 @@ pub trait Poke { fn write(&mut self, reg: Writable, value: u32); }
 /// A monotonic clock and a delay.
 pub trait Clock { fn now_us(&mut self) -> u64; fn delay_us(&mut self, us: u32); }
 /// Step 4's surface (BAR 0's slot 5): a row of pixels written, a pixel read back; false or None when it is not mapped.
-pub trait Canvas { fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool; fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32>; }
+pub trait Canvas {
+    fn row(&mut self, y: usize, pitch: usize, pixels: &[u32]) -> bool;
+    fn sample(&mut self, x: usize, y: usize, pitch: usize) -> Option<u32>;
+    /// The third screen's surface (BAR 0's slot 7, 213-DRV-0113, 213-KRN-0285): none unless the engine has it.
+    fn third_row(&mut self, _y: usize, _pitch: usize, _pixels: &[u32]) -> bool { false }
+    fn third_sample(&mut self, _x: usize, _y: usize, _pitch: usize) -> Option<u32> { None }
+}
 /// Why the compositor did not take the second screen (213-KRN-0272): no client of it was granted (it does not run), its
 /// own answers (`display.wit` 1.3's errors), or the call itself failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScreenRefused { Unavailable, NoScreen, NoMemory, Denied, BadScreen, Call }
+pub enum ScreenRefused { Unavailable, NoScreen, NoMemory, Denied, BadScreen, Call, ThirdUnavailable }
 impl fmt::Display for ScreenRefused {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
             ScreenRefused::Unavailable => "NO CLIENT OF IT (SLOT_DISPLAY) WAS GRANTED", ScreenRefused::NoScreen => "NO SCREEN",
             ScreenRefused::NoMemory => "NO MEMORY TO MAP IT", ScreenRefused::Denied => "DENIED", ScreenRefused::BadScreen => "THE SHAPE DOES NOT FIT THE RANGE",
             ScreenRefused::Call => "THE CALL FAILED",
+            ScreenRefused::ThirdUnavailable => "NO SECOND CLIENT OF IT (SLOT 8) WAS GRANTED",
         })
     }
 }
@@ -55,7 +63,37 @@ impl fmt::Display for ScreenRefused {
 pub trait Screens {
     fn offer(&mut self, width: u16, height: u16, pitch: u32) -> Result<(), ScreenRefused>;
     fn gone(&mut self) -> Result<(), ScreenRefused>;
+    /// The third screen through display's second client of the compositor (slot 8, display.wit 1.5, 213-KRN-0285), its
+    /// pixels slot 7's: none unless the engine has them.
+    fn offer_third(&mut self, _width: u16, _height: u16, _pitch: u32) -> Result<(), ScreenRefused> { Err(ScreenRefused::ThirdUnavailable) }
+    fn gone_third(&mut self) -> Result<(), ScreenRefused> { Err(ScreenRefused::ThirdUnavailable) }
+    /// Whether init granted the third screen's pixels (slot 7) and its client (slot 8).
+    fn third_granted(&mut self) -> (bool, bool) { (false, false) }
 }
+
+/// The driver screen a run's picture goes to (213-DRV-0113): the second (slot 5's pixels, offered through SLOT_DISPLAY)
+/// or the third (slot 7's, through slot 8: display.wit 1.5). A run keeps its screen while it lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen { Second, Third }
+impl Screen {
+    pub fn name(self) -> &'static str { match self { Screen::Second => "SECOND", Screen::Third => "THIRD" } }
+    /// Its pixels' slot and its client's.
+    pub fn slot(self) -> u8 { match self { Screen::Second => 5, Screen::Third => 7 } }
+    pub fn client(self) -> u8 { match self { Screen::Second => 15, Screen::Third => 8 } }
+    /// Its pixels' place in BAR 0, so past the frame buffer's base.
+    pub fn offset(self) -> u64 { match self { Screen::Second => SURFACE_OFFSET, Screen::Third => THIRD_SURFACE_OFFSET } }
+    pub fn other(self) -> Screen { match self { Screen::Second => Screen::Third, Screen::Third => Screen::Second } }
+}
+fn row_on<E: Engine>(s: Screen, e: &mut E, y: usize, pitch: usize, pixels: &[u32]) -> bool {
+    match s { Screen::Second => e.row(y, pitch, pixels), Screen::Third => e.third_row(y, pitch, pixels) }
+}
+fn sample_on<E: Engine>(s: Screen, e: &mut E, x: usize, y: usize, pitch: usize) -> Option<u32> {
+    match s { Screen::Second => e.sample(x, y, pitch), Screen::Third => e.third_sample(x, y, pitch) }
+}
+fn offer_on<E: Engine>(s: Screen, e: &mut E, w: u16, h: u16, pitch: u32) -> Result<(), ScreenRefused> {
+    match s { Screen::Second => e.offer(w, h, pitch), Screen::Third => e.offer_third(w, h, pitch) }
+}
+fn gone_on<E: Engine>(s: Screen, e: &mut E) -> Result<(), ScreenRefused> { match s { Screen::Second => e.gone(), Screen::Third => e.gone_third() } }
 /// What steps 3 and 4 run on: reads, guarded writes, time, step 4's surface, and the compositor.
 pub trait Engine: Bus + Poke + Clock + Canvas + Screens {}
 impl<T: Bus + Poke + Clock + Canvas + Screens> Engine for T {}
@@ -149,6 +187,8 @@ pub struct Derived {
     pub min_dst_y_next_start: u32, pub line_delivery_pre: u32, pub req_delivery_pre: u32,
     /// The underflow statuses as stage 9 found them: HUBP and ODM of the firmware's pipe, then of pipe 1.
     pub underflow: [u32; 4],
+    /// The pipe lit beside this run's HUBP and ODM statuses as stage 9 found them (213-DRV-0113).
+    pub lit_underflow: Option<[u32; 2]>,
     /// Pipe 1's OTG's global sync for its plane (VUPDATE's offset and width, VREADY's offset, in pixels), the HUBP's
     /// HUBP_VREADY_AT_OR_AFTER_VSYNC by hubp2_vready_at_or_After_vsync's rule, and its QoS high watermark.
     pub vupdate_offset: u32, pub vupdate_width: u32, pub vready_offset: u32, pub vready_after_vsync: u32, pub qos_high_wm: u32,
@@ -173,8 +213,10 @@ const SKIPPED: u8 = 0x80;
 
 /// The surface's place in BAR 0 (slot 5's start) and so past the frame buffer's base.
 pub const SURFACE_OFFSET: u64 = 0x0100_0000;
-/// Slot 5's length: [0x0100_0000, 0x0240_0000) of BAR 0 (213-KRN-0271).
+/// Slot 5's length: [0x0100_0000, 0x0240_0000) of BAR 0 (213-KRN-0271); slot 7's the same.
 pub const SURFACE_BYTES: usize = 0x0140_0000;
+/// The third screen's place in BAR 0 (slot 7's start): [0x0240_0000, 0x0380_0000) (213-KRN-0285).
+pub const THIRD_SURFACE_OFFSET: u64 = 0x0240_0000;
 
 /// What steps 3 and 4 put on the stack at most, by value: the interpreter and the journal as `Box::new` builds them before
 /// they reach the heap, `Light` and its plans as they are moved between calls, step 1's values, stage 10's row, and the
@@ -267,6 +309,14 @@ pub const ATTACHED_FROM: u8 = 5;
 
 /// HDMI-A-1: VBIOS path 0, UNIPHY enum 1 on PHY A, HPD 1, connector HDMI type A.
 pub const HDMI_A_1: Output = Output { phy: 0, hpd: 0, encoder_id: 0x1E, connector_id: 0x0C };
+/// HDMI-A-2 (213-DRV-0112): VBIOS path 1, encoder 221E (UNIPHY enum 2) on PHY B, HPD 2, connector 340C (HDMI type A).
+pub const HDMI_A_2: Output = Output { phy: 1, hpd: 1, encoder_id: 0x1E, connector_id: 0x0C };
+/// The board's two HDMI sockets, in the VBIOS's order.
+pub const SOCKETS: [Output; 2] = [HDMI_A_1, HDMI_A_2];
+/// An output's name in the log, Linux's connector name.
+pub fn name(o: &Output) -> &'static str { if *o == HDMI_A_1 { "HDMI-A-1" } else if *o == HDMI_A_2 { "HDMI-A-2" } else { "AN OUTPUT OFF THE BOARD" } }
+/// The other HDMI socket.
+pub fn other(o: &Output) -> Option<Output> { if *o == HDMI_A_1 { Some(HDMI_A_2) } else if *o == HDMI_A_2 { Some(HDMI_A_1) } else { None } }
 /// What the survey expects when step 1 has not been read: the GOP on OTG 0 and PHY E (DP-2's path 4), step 3 on OTG 1,
 /// DIG front end A, PHY A, with HUBP 1 following OTG 1, blanked (as step 1 found on the Ryzen). Only for describing; a
 /// stage runs only on what step 1 found.
@@ -274,11 +324,19 @@ pub const EXPECTED: (Firmware, Choice) = (
     Firmware { otg: 0, opp: 0, dig_fe: 4, phy: 4, hubps: [true, false, false, false] },
     Choice { pipe: Pipe { otg: 1, opp: 1, dig_fe: 0 }, output: HDMI_A_1, attached: [false, true, false, false] },
 );
+/// The survey's expectation for output `o`: as `EXPECTED`, with the DIG front end of the output's own letter.
+pub fn expected(o: Output) -> (Firmware, Choice) {
+    let (f, c) = EXPECTED;
+    (f, Choice { pipe: Pipe { dig_fe: o.phy, ..c.pipe }, output: o, ..c })
+}
 
-/// Step 3 ready for its run from step 1's values, as display starts it and as a monitor plugged in starts it again
-/// (213-DRV-0096): the pipes `assess` finds, the plan for `timing` in `signal`, step 4's reference and the build.
-pub fn prepare(s: &Store, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> {
-    let (f, c) = assess(s)?;
+/// Step 3 ready for its run on HDMI-A-1, as `prepare_on`.
+pub fn prepare(s: &Store, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> { prepare_on(s, HDMI_A_1, timing, signal, build) }
+
+/// Step 3 ready for its run on `output` from step 1's values, as display starts it and as a monitor plugged in starts it
+/// again (213-DRV-0096): the pipes `assess_for` finds, the plan for `timing` in `signal`, step 4's reference, the build.
+pub fn prepare_on(s: &Store, output: Output, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> {
+    let (f, c) = assess_for(s, output)?;
     Ok(Light::new_with(f, c, timing, signal)?.with_reference(reference(s, &f, &c)).with_build(build))
 }
 
@@ -291,12 +349,12 @@ pub enum Refusal {
     RunningOtgs(u8),
     /// Not exactly one DIG back end of the board's PHYs enabled.
     BackEnds(u8),
-    /// PHY A, HDMI-A-1's, is already driven.
-    HdmiDriven,
+    /// The output's PHY is already driven.
+    HdmiDriven(Output),
     /// The firmware's DIG front end could not be told.
     FirmwareFrontEnd,
-    /// HPD 1 does not sense a monitor on HDMI-A-1.
-    NoMonitor,
+    /// The output's HPD does not sense a monitor.
+    NoMonitor(Output),
     NoFreePipe,
     NoFreeFrontEnd,
     /// The chosen pipe's blocks overlap the firmware's (a DIG block both use).
@@ -308,6 +366,20 @@ pub enum Refusal {
     /// The display microcontroller is enabled and not held in reset: it may own the PHYs and pixel clocks the VBIOS
     /// tables would program, and Linux asks it rather than run them (`dmub_command_table`).
     DmcubRuns,
+    /// Beside display's lit pipe (213-DRV-0113): the firmware's timing generator no longer runs, or its back end is off.
+    FirmwareMoved,
+    /// Display's lit timing generator does not hold its mark.
+    NotMarked(u8),
+    /// Another timing generator holds display's mark: a pipe display does not know.
+    MarkedElsewhere(u8),
+    /// A timing generator runs that is neither the firmware's nor display's.
+    OtherRunning(u8),
+    /// A back end of the board's is enabled that is neither the firmware's nor display's lit one.
+    OtherBackEnd(u8),
+    /// The chosen pipe's blocks overlap those of the pipe display has lit (213-DRV-0113).
+    SharesLit,
+    /// The guard has no room left for the blocks of another lit pipe.
+    GuardFull,
     Plan(PlanError),
 }
 
@@ -317,14 +389,21 @@ impl fmt::Display for Refusal {
             Refusal::NotRead { batch } => write!(f, "STEP 1'S BATCH {} WAS NOT READ (STEP 3 NEEDS ITS FIRST {})", batch, crate::batches::STEP3_BATCHES),
             Refusal::RunningOtgs(n) => write!(f, "{} TIMING GENERATORS RUN, NOT ONE", n),
             Refusal::BackEnds(n) => write!(f, "{} DIG BACK ENDS ARE ENABLED, NOT ONE", n),
-            Refusal::HdmiDriven => f.write_str("PHY A (HDMI-A-1) IS ALREADY DRIVEN"),
+            Refusal::HdmiDriven(o) => write!(f, "PHY {} ({}) IS ALREADY DRIVEN", LETTERS[o.phy as usize % 5], name(o)),
             Refusal::FirmwareFrontEnd => f.write_str("THE FIRMWARE'S DIG FRONT END CANNOT BE TOLD"),
-            Refusal::NoMonitor => f.write_str("HPD 1 SENSES NO MONITOR ON HDMI-A-1"),
+            Refusal::NoMonitor(o) => write!(f, "HPD {} SENSES NO MONITOR ON {}", o.hpd + 1, name(o)),
             Refusal::NoFreePipe => f.write_str("NO FREE TIMING GENERATOR AND OPP"),
             Refusal::NoFreeFrontEnd => f.write_str("NO FREE DIG FRONT END"),
             Refusal::Overlap => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE FIRMWARE'S"),
             Refusal::AttachedHubp(n) => write!(f, "HUBP{} FOLLOWS STEP 3'S TIMING GENERATOR AND IS NOT BLANKED", n),
             Refusal::DmcubRuns => f.write_str("THE DMCUB IS ENABLED AND NOT IN RESET: IT MAY OWN WHAT THE VBIOS TABLES PROGRAM"),
+            Refusal::FirmwareMoved => f.write_str("THE FIRMWARE'S PIPE IS NOT AS IT WAS FOUND AT START (ITS OTG STOPPED OR ITS BACK END OFF)"),
+            Refusal::NotMarked(t) => write!(f, "DISPLAY'S LIT OTG{} DOES NOT HOLD ITS MARK", t),
+            Refusal::MarkedElsewhere(t) => write!(f, "OTG{} HOLDS DISPLAY'S MARK, BUT IS NOT A PIPE THIS DISPLAY LIT", t),
+            Refusal::OtherRunning(t) => write!(f, "OTG{} RUNS, AND IS NEITHER THE FIRMWARE'S NOR DISPLAY'S", t),
+            Refusal::OtherBackEnd(p) => write!(f, "DIG BACK END {} IS ENABLED, AND IS NEITHER THE FIRMWARE'S NOR DISPLAY'S", LETTERS[*p as usize % 5]),
+            Refusal::SharesLit => f.write_str("THE CHOSEN PIPE SHARES A BLOCK WITH THE PIPE DISPLAY HAS LIT"),
+            Refusal::GuardFull => f.write_str("THE GUARD HAS NO ROOM LEFT FOR ANOTHER LIT PIPE'S BLOCKS"),
             Refusal::Plan(e) => write!(f, "THE PLAN: {:?}", e),
             Refusal::Surface { bytes } => write!(f, "THE MODE'S SURFACE, {} BYTES, DOES NOT FIT SLOT 5'S {}", bytes, SURFACE_BYTES),
         }
@@ -333,10 +412,15 @@ impl fmt::Display for Refusal {
 
 const LETTERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 
-/// The firmware's pipe and the pipe step 3 takes, from step 1's values; nothing assumed. Step 1's first ten batches must
-/// have been read, and step 3 does not run while batch 8 shows the DMCUB enabled and out of reset. The stages also read
-/// registers step 1 does not (each written one before its write, the frame counts, the statuses they wait for).
-pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
+/// The firmware's pipe and the pipe step 3 takes for HDMI-A-1, as `assess_for`.
+pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> { assess_for(s, HDMI_A_1) }
+
+/// The firmware's pipe and the pipe step 3 takes for `output`, from step 1's values; nothing assumed. Step 1's first ten
+/// batches must have been read, and step 3 does not run while batch 8 shows the DMCUB enabled and out of reset. The
+/// front end is the output's own letter's when free, else the lowest free one (213-DRV-0112; for HDMI-A-1 the same as
+/// before, A being the lowest). The stages also read registers step 1 does not (each written one before its write, the
+/// frame counts, the statuses they wait for).
+pub fn assess_for(s: &Store, output: Output) -> Result<(Firmware, Choice), Refusal> {
     if s.batches() < crate::batches::STEP3_BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
     if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
     let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
@@ -347,7 +431,7 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     let enabled = |p: u8| s.field(R::DigBeEnCntl, p, DIG_ENABLE) == Some(1);
     let back_ends = BOARD_PHYS.iter().filter(|&&p| enabled(p)).count() as u8;
     let Some(phy) = BOARD_PHYS.iter().copied().find(|&p| enabled(p)).filter(|_| back_ends == 1) else { return Err(Refusal::BackEnds(back_ends)) };
-    if phy == HDMI_A_1.phy { return Err(Refusal::HdmiDriven); }
+    if phy == output.phy { return Err(Refusal::HdmiDriven(output)); }
     let fe_mask = |p: u8| s.field(R::DigBeCntl, p, DIG_FE_SOURCE_SELECT).unwrap_or(0);
     let fe_on = |d: u8| s.field(R::DigFeCntl, d, DIG_SYMCLK_FE_ON) == Some(1);
     let dig_fe = match (0..5).find(|d| fe_mask(phy) & 1 << d != 0) {
@@ -356,30 +440,78 @@ pub fn assess(s: &Store) -> Result<(Firmware, Choice), Refusal> {
     };
     let powered = |n: u8| s.field(R::DomainPgStatus, 2 * n, DOMAIN_PGFSM_PWR_STATUS) == Some(PGFSM_POWER_ON);
     let hubps = [0u8, 1, 2, 3].map(|n| powered(n) && s.field(R::HubpCntl, n, HUBP_VTG_SEL) == Some(otg as u32));
-    if s.field(R::HpdIntStatus, HDMI_A_1.hpd, DC_HPD_SENSE) != Some(1) { return Err(Refusal::NoMonitor); }
+    if s.field(R::HpdIntStatus, output.hpd, DC_HPD_SENSE) != Some(1) { return Err(Refusal::NoMonitor(output)); }
     let opp_used = |o: u8| (0..4).any(|t| running(t) && source(t) == o);
     let t = (0..4).find(|&t| !running(t) && !opp_used(t)).ok_or(Refusal::NoFreePipe)?;
     let fe_used = |d: u8| d == dig_fe || d == phy || fe_on(d) || BOARD_PHYS.iter().any(|&p| enabled(p) && fe_mask(p) & 1 << d != 0);
-    let d = (0..5).find(|&d| !fe_used(d)).ok_or(Refusal::NoFreeFrontEnd)?;
+    let d = Some(output.phy).filter(|&d| d < 5 && !fe_used(d)).or_else(|| (0..5).find(|&d| !fe_used(d))).ok_or(Refusal::NoFreeFrontEnd)?;
     let attached = [0u8, 1, 2, 3].map(|n| powered(n) && !hubps[n as usize] && s.field(R::HubpCntl, n, HUBP_VTG_SEL) == Some(t as u32));
     if let Some(n) = (0..4u8).find(|&n| attached[n as usize] && s.field(R::HubpCntl, n, HUBP_BLANK_EN) != Some(1)) { return Err(Refusal::AttachedHubp(n)); }
-    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output: HDMI_A_1, attached }))
+    Ok((Firmware { otg, opp, dig_fe, phy, hubps }, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output, attached }))
+}
+
+/// The pipe step 3 takes for `output` beside `lit`, the pipe display has lit already (213-DRV-0113), from step 1's values read
+/// again: the firmware's pipe as `firmware` found it at start, kept; display's own told by its mark in its OTG. Refused
+/// where step 1 does not find them so, or as `assess_for` refuses. The timing generator is the lowest free one, the front
+/// end the output's own letter's when free.
+pub fn assess_beside(s: &Store, output: Output, firmware: &Firmware, lit: &Choice) -> Result<(Firmware, Choice), Refusal> {
+    if s.batches() < crate::batches::STEP3_BATCHES { return Err(Refusal::NotRead { batch: s.batches() + 1 }); }
+    if s.field(R::DmcubCntl, 0, DMCUB_ENABLE) != Some(0) && s.field(R::DmcubCntl, 0, DMCUB_SOFT_RESET) != Some(1) { return Err(Refusal::DmcubRuns); }
+    let running = |t: u8| s.field(R::OtgControl, t, OTG_CURRENT_MASTER_EN_STATE) == Some(1);
+    let marked = |t: u8| s.get(R::OtgVerticalInterrupt2Position, t).map(|v| v & 0x7FFF == RESTART_MARK);
+    let (fw, ours) = (firmware.otg, lit.pipe.otg);
+    if !running(fw) { return Err(Refusal::FirmwareMoved); }
+    if !running(ours) || marked(ours) != Some(true) { return Err(Refusal::NotMarked(ours)); }
+    if let Some(t) = (0..4).find(|&t| t != ours && marked(t) == Some(true)) { return Err(Refusal::MarkedElsewhere(t)); }
+    if let Some(t) = (0..4).find(|&t| t != fw && t != ours && running(t)) { return Err(Refusal::OtherRunning(t)); }
+    let enabled = |p: u8| s.field(R::DigBeEnCntl, p, DIG_ENABLE) == Some(1);
+    if !enabled(firmware.phy) { return Err(Refusal::FirmwareMoved); }
+    if enabled(output.phy) { return Err(Refusal::HdmiDriven(output)); }
+    if let Some(p) = BOARD_PHYS.iter().copied().find(|&p| enabled(p) && p != firmware.phy && p != lit.output.phy) { return Err(Refusal::OtherBackEnd(p)); }
+    if s.field(R::HpdIntStatus, output.hpd, DC_HPD_SENSE) != Some(1) { return Err(Refusal::NoMonitor(output)); }
+    let source = |t: u8| s.field(R::OptcDataSourceSelect, t, OPTC_SEG0_SRC_SEL).unwrap_or(0xF) as u8;
+    let opp_used = |o: u8| (0..4).any(|t| running(t) && source(t) == o);
+    let t = (0..4).find(|&t| !running(t) && !opp_used(t) && marked(t) != Some(true)).ok_or(Refusal::NoFreePipe)?;
+    let fe_mask = |p: u8| s.field(R::DigBeCntl, p, DIG_FE_SOURCE_SELECT).unwrap_or(0);
+    let fe_on = |d: u8| s.field(R::DigFeCntl, d, DIG_SYMCLK_FE_ON) == Some(1);
+    let fe_used = |d: u8| d == firmware.dig_fe || d == lit.pipe.dig_fe || d == firmware.phy || d == lit.output.phy || fe_on(d)
+        || BOARD_PHYS.iter().any(|&p| enabled(p) && fe_mask(p) & 1 << d != 0);
+    let d = Some(output.phy).filter(|&d| d < 5 && !fe_used(d)).or_else(|| (0..5).find(|&d| !fe_used(d))).ok_or(Refusal::NoFreeFrontEnd)?;
+    let powered = |n: u8| s.field(R::DomainPgStatus, 2 * n, DOMAIN_PGFSM_PWR_STATUS) == Some(PGFSM_POWER_ON);
+    let attached = [0u8, 1, 2, 3].map(|n| powered(n) && !firmware.hubps[n as usize] && n != ours && s.field(R::HubpCntl, n, HUBP_VTG_SEL) == Some(t as u32));
+    if let Some(n) = (0..4u8).find(|&n| attached[n as usize] && s.field(R::HubpCntl, n, HUBP_BLANK_EN) != Some(1)) { return Err(Refusal::AttachedHubp(n)); }
+    Ok((*firmware, Choice { pipe: Pipe { otg: t, opp: t, dig_fe: d }, output, attached }))
+}
+
+/// Step 3 ready for `output` beside `first`, display's lit run (213-DRV-0113): `assess_beside`'s pipe, guarded against
+/// `first`'s, which is read after each stage.
+pub fn prepare_beside(s: &Store, output: Output, first: &Light, timing: Timing, signal: Signal, build: &'static str) -> Result<Light, Refusal> {
+    let (f, c) = assess_beside(s, output, &first.firmware, &first.choice)?;
+    Ok(Light::new_with(f, c, timing, signal)?.beside(&first.choice)?.with_reference(reference(s, &f, &c)).with_build(build))
 }
 
 // --- the guard ---
 
 /// Why the guard refused a write: the byte offset, and whose it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refused { Firmware(u32), OffRoute(u32) }
+pub enum Refused { Firmware(u32), OffRoute(u32), Lit(u32) }
 
 /// Step 2's writes (213-DRV-0095, `ddc.rs`): the I2C engine's control, arbitration, DDC1's speed and set-up, its four
 /// transactions and buffer, and DDC1's pad mask; nothing else, whatever the pipe.
 pub const DDC_WRITES: [R; 7] = [R::DcI2cControl, R::DcI2cArbitration, R::DcI2cDdc1Speed, R::DcI2cDdc1Setup, R::DcI2cTransaction,
                                 R::DcI2cData, R::DcGpioDdc1Mask];
-/// A write of step 2: one of `DDC_WRITES`' registers (any of the four transactions), else refused.
-pub fn ddc_writable(reg: Reg) -> Result<Writable, Refused> {
+/// Step 2's writes on HDMI-A-2's DDC line (213-DRV-0112): the engine's, DDC2's speed and set-up and DDC2's pad mask.
+pub const DDC2_WRITES: [R; 7] = [R::DcI2cControl, R::DcI2cArbitration, R::DcI2cDdc2Speed, R::DcI2cDdc2Setup, R::DcI2cTransaction,
+                                 R::DcI2cData, R::DcGpioDdc2Mask];
+/// Step 2's writes for an output: its DDC line's.
+pub fn ddc_writes(o: &Output) -> Option<&'static [R; 7]> { if *o == HDMI_A_1 { Some(&DDC_WRITES) } else if *o == HDMI_A_2 { Some(&DDC2_WRITES) } else { None } }
+/// A write of step 2 on HDMI-A-1's line: one of `DDC_WRITES`' registers (any of the four transactions), else refused.
+pub fn ddc_writable(reg: Reg) -> Result<Writable, Refused> { ddc_writable_on(&DDC_WRITES, reg) }
+/// A write of step 2 on a line: one of `writes`' registers (any of the four transactions), else refused, the other
+/// line's speed, set-up and pads with the rest.
+pub fn ddc_writable_on(writes: &[R], reg: Reg) -> Result<Writable, Refused> {
     let o = reg.offset();
-    let ok = DDC_WRITES.iter().any(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o)));
+    let ok = writes.iter().any(|r| (0..r.instances()).any(|i| r.at(i).map(|x| x.offset()) == Some(o)));
     if ok { Ok(Writable(reg)) } else { Err(Refused::OffRoute(o)) }
 }
 
@@ -411,16 +543,52 @@ fn blocks(otg: u8, opp: u8, fe: u8, phy: u8, add: &mut impl FnMut(u32, u32)) {
     add(seg1(0xA0 + p), seg1(0xA1 + p));
 }
 
+/// The blocks of HDMI socket `o` (213-DRV-0112), as byte ranges [start, end) of BAR 5: its DIG block (only its back
+/// end's DIG_BE_CNTL, DIG_BE_EN_CNTL and DIG_LANE_ENABLE when the chosen front end is that DIG, whose front end registers
+/// table 4 writes), its DP link registers, UNIPHY, DPCS/RDPCS, PLL resync and SYMCLK, its HPD block, and its DDC line's
+/// status, speed, set-up and pads (dcn_2_1_0_offset.h, dpcs_2_1_0_offset.h; the board's DDC line n is PHY n's).
+fn socket_blocks(o: &Output, fe_shared: bool, add: &mut impl FnMut(u32, u32)) {
+    let (p, h) = (o.phy as u32, o.hpd as u32);
+    if fe_shared {
+        add(seg2(0x20AF + 0x100 * p), seg2(0x20B1 + 0x100 * p));
+        add(seg2(0x20E1 + 0x100 * p), seg2(0x20E2 + 0x100 * p));
+    } else {
+        add(seg2(0x2068 + 0x100 * p), seg2(0x20F8 + 0x100 * p));
+    }
+    add(seg2(0x2108 + 0x100 * p), seg2(0x2109 + 0x100 * p));
+    add(seg2(0x2118 + 0x100 * p), seg2(0x2119 + 0x100 * p));
+    add(seg2(0x286D + 2 * p), seg2(0x286F + 2 * p));
+    add(seg2(0x2928 + 0xD8 * p), seg2(0x2928 + 0xD8 * (p + 1)));
+    add(seg2(0x1F14 + 8 * h), seg2(0x1F1C + 8 * h));
+    add(seg2(0x1E9C + p), seg2(0x1E9D + p));
+    add(seg2(0x1EA2 + 2 * p), seg2(0x1EA4 + 2 * p));
+    add(seg2(0x28D0 + 4 * p), seg2(0x28D4 + 4 * p));
+    add(seg1(0x40 + p), seg1(0x41 + p));
+    add(seg1(0xA0 + p), seg1(0xA1 + p));
+}
+
+/// PHY A's RDPCSTX_PHY_FUSE0, which the Ryzen's table 12 sets first, for every PHY (PLL ids 20 to 24 alike): its
+/// RDPCS_PHY_DP_MPLLB_V2I to 2, the other bits kept (dpcs_2_1_0_offset.h and _sh_mask.h; 213-DRV-0112). Off HDMI-A-2's
+/// route, so that table's write of it is left unmade where the register holds that value already, and refused otherwise.
+pub const TABLE12_SETS_FOR_EVERY_PHY: u32 = seg2(0x294F);
+
+/// The spans a guard refuses as other lit pipes': two pipes' blocks (18 spans each).
+const LITS: usize = 40;
 /// PHY `p`'s DPCS/RDPCS block, whose sequence the VBIOS owns.
 pub fn phy_block(p: u8) -> (u32, u32) { (seg2(0x2928 + 0xD8 * p as u32), seg2(0x2928 + 0xD8 * (p as u32 + 1))) }
 
-/// What step 3 may write: the chosen pipe's and output's blocks, never one of the firmware's.
+/// What step 3 may write: the chosen pipe's and output's blocks, never one of the firmware's, nor one of the other HDMI
+/// socket's (213-DRV-0112), which is refused as off the route before the route's blocks are looked at.
 #[derive(Clone, Copy, Debug)]
-pub struct Guard { allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4] }
+pub struct Guard {
+    allow: [(u32, u32); 16], allows: usize, deny: [(u32, u32); 32], denies: usize, late: [(u32, u32); 4], other: [(u32, u32); 16], others: usize,
+    /// The other pipe display has lit (213-DRV-0113): its blocks, refused as the firmware's are.
+    lit: [(u32, u32); LITS], lits: usize,
+}
 
 impl Guard {
     pub fn new(firmware: &Firmware, choice: &Choice) -> Result<Guard, Refusal> {
-        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4] };
+        let mut g = Guard { allow: [(0, 0); 16], allows: 0, deny: [(0, 0); 32], denies: 0, late: [(0, 0); 4], other: [(0, 0); 16], others: 0, lit: [(0, 0); LITS], lits: 0 };
         let mut deny = |a: u32, b: u32| { if g.denies < 32 { g.deny[g.denies] = (a, b); g.denies += 1; } };
         blocks(firmware.otg, firmware.opp, firmware.dig_fe, firmware.phy, &mut deny);
         for n in 0..4u32 {
@@ -433,6 +601,10 @@ impl Guard {
         let (Pipe { otg, opp, dig_fe }, phy) = (choice.pipe, choice.output.phy);
         let mut allow = |a: u32, b: u32| { if g.allows < 16 { g.allow[g.allows] = (a, b); g.allows += 1; } };
         blocks(otg, opp, dig_fe, phy, &mut allow);
+        if let Some(o) = other(&choice.output) {
+            let mut refuse = |a: u32, b: u32| { if g.others < 16 { g.other[g.others] = (a, b); g.others += 1; } };
+            socket_blocks(&o, dig_fe == o.phy, &mut refuse);
+        }
         // Step 4's (from stage 11): pipe 1's HUBP, DPP and MPCC, and its OPP's output mux (the index of its OTG).
         let (q, o) = (otg as u32, opp as u32);
         g.late = [(seg2(0x5E5 + 0xDC * q), seg2(0x5E5 + 0xDC * (q + 1))), (seg2(0xCC5 + 0x16B * q), seg2(0xCC5 + 0x16B * (q + 1))),
@@ -441,18 +613,45 @@ impl Guard {
         if overlap { Err(Refusal::Overlap) } else { Ok(g) }
     }
 
+    /// The guard with the pipe and output of `lit`, display's other lit one, refused too (213-DRV-0113): its OTG, ODM, VTG,
+    /// OPP and DPG, its DIG blocks, PHY, PLL resync, pixel rate and SYMCLK, its HUBP, DPP, MPCC and MPC_OUT mux. Refused
+    /// when this route shares a block with it.
+    pub fn beside(mut self, lit: &Choice) -> Result<Guard, Refusal> {
+        let (Pipe { otg, opp, dig_fe }, phy) = (lit.pipe, lit.output.phy);
+        // A span refused already is not kept twice; one that finds no room refuses the whole pipe.
+        let mut full = false;
+        let mut refuse = |a: u32, b: u32| {
+            if self.lit[..self.lits].contains(&(a, b)) { return; }
+            if self.lits < LITS { self.lit[self.lits] = (a, b); self.lits += 1; } else { full = true; }
+        };
+        blocks(otg, opp, dig_fe, phy, &mut refuse);
+        let (q, o) = (otg as u32, opp as u32);
+        refuse(seg2(0x5E5 + 0xDC * q), seg2(0x5E5 + 0xDC * (q + 1)));
+        refuse(seg2(0xCC5 + 0x16B * q), seg2(0xCC5 + 0x16B * (q + 1)));
+        refuse(seg2(0x1271 + 0x1B * q), seg2(0x1271 + 0x1B * (q + 1)));
+        refuse(seg2(0x1385 + 4 * o), seg2(0x1386 + 4 * o));
+        if full { return Err(Refusal::GuardFull); }
+        let overlap = self.allow[..self.allows].iter().chain(self.late.iter()).any(|&(a, b)| self.lit[..self.lits].iter().any(|&(c, d)| a < d && c < b));
+        if overlap { Err(Refusal::SharesLit) } else { Ok(self) }
+    }
+
     /// A write to `reg` in stage `n`: as `check`, and from stage 11 pipe 1's HUBP, DPP, MPCC and output mux too.
     pub fn check_at(&self, reg: Reg, n: u8) -> Result<Writable, Refused> {
         match self.check(reg) {
-            Err(Refused::OffRoute(o)) if n >= dcn::PIPE_WRITES_FROM && self.late.iter().any(|&(a, b)| (a..b).contains(&o)) => Ok(Writable(reg)),
+            Err(Refused::OffRoute(o)) if n >= dcn::PIPE_WRITES_FROM && !self.others_(o) && self.late.iter().any(|&(a, b)| (a..b).contains(&o)) => Ok(Writable(reg)),
             other => other,
         }
     }
 
-    /// A write to `reg`: the firmware's blocks first, then the route's.
+    /// Whether byte `o` lies in the other HDMI socket's blocks.
+    fn others_(&self, o: u32) -> bool { self.other[..self.others].iter().any(|&(a, b)| (a..b).contains(&o)) }
+
+    /// A write to `reg`: the firmware's blocks first, then the other lit pipe's, then the other socket's, then the route's.
     pub fn check(&self, reg: Reg) -> Result<Writable, Refused> {
         let o = reg.offset();
         if self.deny[..self.denies].iter().any(|&(a, b)| (a..b).contains(&o)) { return Err(Refused::Firmware(o)); }
+        if self.lit[..self.lits].iter().any(|&(a, b)| (a..b).contains(&o)) { return Err(Refused::Lit(o)); }
+        if self.others_(o) { return Err(Refused::OffRoute(o)); }
         if self.allow[..self.allows].iter().any(|&(a, b)| (a..b).contains(&o)) { Ok(Writable(reg)) } else { Err(Refused::OffRoute(o)) }
     }
 }
@@ -472,6 +671,15 @@ fn steady(r: R) -> u32 {
     }
 }
 
+/// Step 1's batches 2 and 7 for a timing generator: its state, clocks, source and pixel rate.
+const BY_PIPE: [R; 21] = {
+    use R::*;
+    [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax, OtgVTotalControl,
+     OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgClockControl, OtgVerticalInterrupt1Control,
+     OtgVerticalInterrupt1Position, OtgVerticalInterrupt2Control, OtgVerticalInterrupt2Position, OptcInputGlobalControl,
+     OptcDataSourceSelect, OtgPixelRateCntl, OtgPhypllPixelRateCntl]
+};
+
 /// The firmware's registers that step 1 read and step 3 watches.
 #[derive(Clone, Copy, Debug)]
 pub struct Watch { regs: [Option<(R, u8, Reg)>; WATCH], len: usize }
@@ -481,14 +689,6 @@ impl Watch {
         let mut w = Watch { regs: [None; WATCH], len: 0 };
         let mut push = |r: R, i: u8| if let (Some(reg), true) = (r.at(i), w.len < WATCH) { w.regs[w.len] = Some((r, i, reg)); w.len += 1; };
         let p = firmware.protected();
-        // Step 1's batches 2 and 7 for the firmware's timing generator: its state, clocks, source and pixel rate.
-        const BY_PIPE: [R; 21] = {
-            use R::*;
-            [OtgHTotal, OtgHBlankStartEnd, OtgHSyncA, OtgHSyncACntl, OtgVTotal, OtgVTotalMin, OtgVTotalMax, OtgVTotalControl,
-             OtgVBlankStartEnd, OtgVSyncA, OtgVSyncACntl, OtgControl, OtgClockControl, OtgVerticalInterrupt1Control,
-             OtgVerticalInterrupt1Position, OtgVerticalInterrupt2Control, OtgVerticalInterrupt2Position, OptcInputGlobalControl,
-             OptcDataSourceSelect, OtgPixelRateCntl, OtgPhypllPixelRateCntl]
-        };
         for r in BY_PIPE { push(r, p.otg); }
         push(R::DigFeCntl, p.dig_fe);
         push(R::DigBeCntl, p.phy);
@@ -501,6 +701,21 @@ impl Watch {
         }
         w
     }
+    /// The pipe display has lit beside this one (213-DRV-0113): its timing generator's state, clocks, source and pixel
+    /// rate, its DIG front and back end, its PHY's PLL resync and its HUBP's surface and control, as the firmware's are.
+    pub fn pipe(lit: &Choice) -> Watch {
+        let mut w = Watch { regs: [None; WATCH], len: 0 };
+        let mut push = |r: R, i: u8| if let (Some(reg), true) = (r.at(i), w.len < WATCH) { w.regs[w.len] = Some((r, i, reg)); w.len += 1; };
+        for r in BY_PIPE { push(r, lit.pipe.otg); }
+        push(R::DigFeCntl, lit.pipe.dig_fe);
+        push(R::DigBeCntl, lit.output.phy);
+        push(R::DigBeEnCntl, lit.output.phy);
+        push(R::PhypllPixclkResyncCntl, lit.output.phy);
+        for r in [R::HubpreqPrimarySurfaceAddress, R::HubpreqPrimarySurfaceAddressHigh, R::HubpSurfaceConfig, R::HubpreqSurfacePitch, R::HubpCntl] { push(r, lit.pipe.otg); }
+        w
+    }
+    /// No register: a run with no other pipe lit beside it.
+    pub fn none() -> Watch { Watch { regs: [None; WATCH], len: 0 } }
     /// The DCHUBP_CNTL of each HUBP that follows step 3's timing generator.
     pub fn attached(choice: &Choice) -> Watch {
         let mut w = Watch { regs: [None; WATCH], len: 0 };
@@ -531,13 +746,15 @@ pub struct Journal {
     items: [Option<(Writable, u32, u8)>; JOURNAL], len: usize, mark: Option<(Writable, u32)>, baseline: Option<[u32; WATCH]>,
     /// The two pipes' HUBP and ODM statuses as stage 9 found them, for the standing check (213-DRV-0103).
     statuses: Option<[u32; 4]>,
+    /// The pipe lit beside this run as step 3 began (213-DRV-0113), and its HUBP's and ODM's statuses for the standing check.
+    beside: Option<[u32; WATCH]>, lit_statuses: Option<[u32; 2]>,
 }
-impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None, statuses: None } } }
+impl Default for Journal { fn default() -> Journal { Journal { items: [None; JOURNAL], len: 0, mark: None, baseline: None, statuses: None, beside: None, lit_statuses: None } } }
 impl Journal {
     /// Nothing journaled, for a run of the stages again.
     pub fn clear(&mut self) {
         for item in self.items[..self.len].iter_mut() { *item = None; }
-        (self.len, self.mark, self.baseline, self.statuses) = (0, None, None, None);
+        (self.len, self.mark, self.baseline, self.statuses, self.beside, self.lit_statuses) = (0, None, None, None, None, None);
     }
     fn push(&mut self, w: Writable, old: u32, stage: u8) -> bool {
         if self.len == JOURNAL { return false; }
@@ -570,6 +787,25 @@ fn table_name(index: u8) -> &'static str {
     match index { dcn::TABLE_SETPIXELCLOCK => "SETPIXELCLOCK 1.7", dcn::TABLE_DIGXENCODERCONTROL => "DIGXENCODERCONTROL 1.5", dcn::TABLE_DIG1TRANSMITTERCONTROL => "DIG1TRANSMITTERCONTROL 1.6", _ => "?" }
 }
 
+// The lit pipe's state at the end of a line, when a pipe is lit beside the run (213-DRV-0113); nothing otherwise.
+struct LitToo(Option<(&'static str, Option<bool>)>);
+impl fmt::Display for LitToo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Some((n, Some(true))) => write!(f, "; {}'S PIPE UNCHANGED", n),
+            Some((n, Some(false))) => write!(f, "; {}'S PIPE CHANGED", n),
+            Some((n, None)) => write!(f, "; {}'S PIPE UNREADABLE", n),
+            None => Ok(()),
+        }
+    }
+}
+
+// A table's writes left unmade, at the end of its line; nothing when none.
+struct Left(u32);
+impl fmt::Display for Left {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { if self.0 > 0 { write!(f, ", {} LEFT AS IT IS", self.0) } else { Ok(()) } }
+}
+
 struct Bytes<'a>(&'a [u8]);
 impl fmt::Display for Bytes<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -590,6 +826,10 @@ pub struct Light {
     pub reference: Option<Reference>, pub build: &'static str,
     /// Stage 15's watch, in frames: `WATCH_FRAMES`, or `SHORT_WATCH_FRAMES` with the standing check (213-DRV-0103).
     pub watch_frames: u32,
+    /// The pipe display has lit beside this run, if any (213-DRV-0113): read after each stage as the firmware's is.
+    pub lit: Option<Choice>, beside: Watch,
+    /// The driver screen its picture goes to (213-DRV-0113).
+    pub screen: Screen,
 }
 
 impl Light {
@@ -603,8 +843,33 @@ impl Light {
         for (i, s) in plan.steps().enumerate() { if let Step::Begin(n) = s { if (1..=STAGES).contains(&n) { starts[n as usize - 1] = i + 1; } } }
         let surface = picture::Size::for_mode(timing.h_active as usize, timing.v_active as usize);
         if surface.bytes() > SURFACE_BYTES || surface.width > picture::MAX_WIDTH { return Err(Refusal::Surface { bytes: surface.bytes() }); }
-        Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN", watch_frames: WATCH_FRAMES })
+        Ok(Light { firmware, choice, timing, signal, surface, plan, starts, guard, watch: Watch::of(&firmware), attached: Watch::attached(&choice), reference: None, build: "UNKNOWN", watch_frames: WATCH_FRAMES,
+                   lit: None, beside: Watch::none(), screen: Screen::Second })
     }
+    /// Beside `lit`, the pipe display has lit already (213-DRV-0113): its blocks refused to this run, its registers read after
+    /// each stage.
+    pub fn beside(mut self, lit: &Choice) -> Result<Light, Refusal> {
+        self.guard = self.guard.beside(lit)?;
+        (self.lit, self.beside) = (Some(*lit), Watch::pipe(lit));
+        Ok(self)
+    }
+    /// This lit run's guard refusing the blocks of `other`, a run display lights beside it (213-DRV-0113).
+    pub fn refuse(&mut self, other: &Choice) -> Result<(), Refusal> { self.guard = self.guard.beside(other)?; Ok(()) }
+    /// The pipe lit beside this run, read after each stage.
+    pub fn beside_watch(&self) -> &Watch { &self.beside }
+    /// The pipe beside this run taken back (213-DRV-0113): no longer read with it; its blocks stay refused.
+    pub fn alone(&mut self, journal: &mut Journal) { (self.lit, self.beside, journal.beside, journal.lit_statuses) = (None, Watch::none(), None, None); }
+    /// This lit run with `other` lit after it (213-DRV-0113): `other`'s registers read now, kept in `journal` and read again
+    /// when this run is undone or taken back.
+    pub fn watch_beside(&mut self, other: &Choice, journal: &mut Journal, bus: &mut impl Bus) -> Result<(), Failure> {
+        let beside = Watch::pipe(other);
+        journal.beside = Some(beside.read(bus)?);
+        journal.lit_statuses = Some(statuses_of(other.pipe.otg, bus)?);
+        (self.lit, self.beside) = (Some(*other), beside);
+        Ok(())
+    }
+    /// With its picture going to `screen`.
+    pub fn with_screen(mut self, screen: Screen) -> Light { self.screen = screen; self }
     /// With step 4's reference, from step 1's values.
     pub fn with_reference(mut self, r: Option<Reference>) -> Light { self.reference = r; self }
     /// With stage 15's watch of `frames` (at most `WATCH_FRAMES`): the build gives `SHORT_WATCH_FRAMES` only together
@@ -635,19 +900,25 @@ impl Light {
     fn intro(&self, allowed: u8, expected: bool, out: &mut dyn Out) {
         let (f, c) = (self.firmware, self.choice);
         out.part();
-        out.note(format_args!("STEP 3: FIRST LIGHT ON HDMI-A-1 IN {} STAGES, STEP 4 IN {} MORE (MIND CORE'S PICTURE); THIS BUILD MAY RUN {}",
-            dcn::FIRST_LIGHT, STAGES - dcn::FIRST_LIGHT, allowed));
+        out.note(format_args!("STEP 3: FIRST LIGHT ON {} IN {} STAGES, STEP 4 IN {} MORE (MIND CORE'S PICTURE); THIS BUILD MAY RUN {}",
+            name(&c.output), dcn::FIRST_LIGHT, STAGES - dcn::FIRST_LIGHT, allowed));
         out.note(format_args!("S0 THE FIRMWARE'S PIPE ({}): OTG{} OPP{} DIG {} FRONT END, PHY {}, HUBPS {}{}{}{}; NEVER WRITTEN, READ AFTER EACH STAGE ({} REGISTERS)",
             if expected { "AS THE SURVEY EXPECTS: STEP 1 NOT READ" } else { "AS STEP 1 FOUND" }, f.otg, f.opp, LETTERS[f.dig_fe as usize], LETTERS[f.phy as usize],
             f.hubps[0] as u8, f.hubps[1] as u8, f.hubps[2] as u8, f.hubps[3] as u8, self.watch.len()));
-        out.note(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} (HDMI-A-1), HPD {}; MODE {}x{} AT {} MHZ IN {} SIGNALLING (CTA VIC {})",
-            c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], c.output.hpd + 1,
+        out.note(format_args!("S0 STEP 3'S PIPE: OTG{} OPP{} DIG {} FRONT END, PHY {} ({}), HPD {}; MODE {}x{} AT {} MHZ IN {} SIGNALLING (CTA VIC {})",
+            c.pipe.otg, c.pipe.opp, LETTERS[c.pipe.dig_fe as usize], LETTERS[c.output.phy as usize], name(&c.output), c.output.hpd + 1,
             self.timing.h_active, self.timing.v_active, self.timing.pixel_khz as f32 / 1000.0,
             match self.signal { Signal::Dvi => "DVI", Signal::Hdmi => "HDMI" }, crate::timing::vic_of(&self.timing).unwrap_or(0)));
         for n in (0..4u8).filter(|&n| c.attached[n as usize]) {
             out.line(format_args!("S0 HUBP{} FOLLOWS OTG{}, POWERED AND BLANKED: NEVER WRITTEN, ITS DCHUBP_CNTL READ AFTER EACH STAGE FROM {} ON", n, c.pipe.otg, ATTACHED_FROM));
         }
+        if let Some(l) = self.lit {
+            out.note(format_args!("S0 {}'S PIPE, LIT BY DISPLAY: OTG{} OPP{} DIG {} FRONT END, PHY {}, HUBP{}; NEVER WRITTEN, READ AFTER EACH STAGE ({} REGISTERS)",
+                name(&l.output), l.pipe.otg, l.pipe.opp, LETTERS[l.pipe.dig_fe as usize], LETTERS[l.output.phy as usize], l.pipe.otg, self.beside.len()));
+        }
     }
+    /// The end of a line saying the firmware's pipe is unchanged: the same of the pipe lit beside, if any.
+    fn lit_too(&self, same: Option<bool>) -> LitToo { LitToo(self.lit.map(|l| (name(&l.output), same))) }
 
     fn step_line(&self, n: u8, verb: &str, step: Step, out: &mut dyn Out) {
         match step {
@@ -661,12 +932,14 @@ impl Light {
             Step::Reference => out.line(format_args!("S{} {} COUNT {} FRAMES OF THE FIRMWARE'S OTG{} (AT MOST {} MS) AND DERIVE PIPE {}'S DLG AND TTU FROM PIPE {}'S; NOTHING WRITTEN",
                 n, verb, MEASURED_FRAMES, self.firmware.otg, MEASURE_LIMIT_US / 1000, self.choice.pipe.otg,
                 self.reference.map_or(0, |r| r.pipe))),
-            Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT 5 (BAR 0 + 0x1000000, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
-                n, verb, self.surface.width, self.surface.height, self.surface.pitch, self.build)),
+            Step::Draw => out.line(format_args!("S{} {} DRAW {}x{} INTO SLOT {} (BAR 0 + {:#X}, PITCH {} PIXELS): BORDER, DIAGONALS, CROSS, ITS NAME AND BUILD {}; NO REGISTER WRITTEN",
+                n, verb, self.surface.width, self.surface.height, self.screen.slot(), self.screen.offset(), self.surface.pitch, self.build)),
             Step::NoUnderflow => out.line(format_args!("S{} {} CHECK FOR A NEW UNDERFLOW ON BOTH PIPES", n, verb)),
             Step::ReadBack { reg, .. } => out.line(format_args!("S{} {} READ {} BACK", n, verb, Name(reg))),
             Step::Watch { frames } => out.line(format_args!("S{} {} WATCH {} FRAMES OF OTG{} WITH THE PATTERN OFF, READING WITHOUT SLEEP: AT EACH FRAME BOTH PIPES' HUBP AND ODM; THE FIRMWARE'S UNDERFLOWING OR TIMING OUT UNDOES AT ONCE; PIPE {}'S KEPT BY FRAME, CLEARED AND WATCHED ON, THEN FAIL THE STAGE",
                 n, verb, frames, self.choice.pipe.otg, self.choice.pipe.otg)),
+            Step::Offer if self.screen == Screen::Third => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE THIRD SCREEN THROUGH SLOT 8: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.5); UNDO: SCREEN_GONE FIRST",
+                n, verb, self.surface.width, self.surface.height, self.surface.pitch * 4)),
             Step::Offer => out.line(format_args!("S{} {} OFFER THE SURFACE TO THE COMPOSITOR AS THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR (DISPLAY.WIT 1.3); UNDO: SCREEN_GONE FIRST",
                 n, verb, self.surface.width, self.surface.height, self.surface.pitch * 4)),
             Step::Hold { us } => out.line(format_args!("S{} {} HOLD IT {} US", n, verb, us)),
@@ -690,7 +963,7 @@ impl Light {
                 match n {
                     11 => out.line(format_args!("S{} {} TURN ON DPP{}'S AND HUBP{}'S CLOCKS (ITS WRITES SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q)),
                     12 => out.line(format_args!("S{} {} SET DPP{} AS DPP{}: FORMAT, COLOUR STAGES, SCALER 1:1, RECOUT {}x{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, f, self.timing.h_active, self.timing.v_active)),
-                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + 0x1000000, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.surface.pitch - 1)),
+                    13 => out.line(format_args!("S{} {} SET HUBP{}, BLANKED: THE SURFACE AT FB + {:#X}, PITCH {}, ITS DLG AND TTU (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, self.screen.offset(), self.surface.pitch - 1)),
                     14 => out.line(format_args!("S{} {} CONNECT MPCC{} FROM DPP{} TO OPP{} (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, q, o)),
                     _ => out.line(format_args!("S{} {} UNBLANK HUBP{}, THEN TURN OPP{}'S PATTERN OFF AND WATCH BOTH PIPES {} FRAMES (SHOWN WHEN STAGE 9 HAS RUN)", n, verb, q, o, self.watch_frames)),
                 }
@@ -734,8 +1007,8 @@ pub enum Failure {
     OutputMuxInUse { opp: u8, mux: u32 },
     /// Stages 11 to 15 do not fit a plan.
     PlanFull,
-    /// Stage 16: the compositor did not take the second screen.
-    Screen(ScreenRefused),
+    /// Stage 16: the compositor did not take the second screen, or the third (213-DRV-0113).
+    Screen(ScreenRefused), ThirdScreen(ScreenRefused),
     /// An underflow, new since stage 9, at this HUBP's or ODM's register.
     Underflow { offset: u32, value: u32 },
     /// A request timed out at this HUBP (its HUBP_TIMEOUT_STATUS new since stage 9).
@@ -751,6 +1024,8 @@ pub enum Failure {
     FirmwareChanged { offset: u32, before: u32, after: u32 },
     /// A HUBP that follows step 3's timing generator changed (beyond its statuses): it may have left its blank.
     AttachedChanged { offset: u32, before: u32, after: u32 },
+    /// The pipe display has lit beside this run changed (213-DRV-0113).
+    LitChanged { offset: u32, before: u32, after: u32 },
     JournalFull,
 }
 
@@ -758,7 +1033,7 @@ impl Failure {
     /// A failure of what step 4 found or prepared, not of the hardware: stage 9, 10 or 16 then stops without undoing.
     pub fn not_ready(&self) -> bool {
         matches!(self, Failure::NoReference | Failure::NoFrames(_) | Failure::MpccInUse { .. } | Failure::OutputMuxInUse { .. }
-            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. } | Failure::Screen(_))
+            | Failure::PlanFull | Failure::NoSurface | Failure::SurfaceDiffers { .. } | Failure::Screen(_) | Failure::ThirdScreen(_))
     }
 }
 
@@ -776,6 +1051,7 @@ impl fmt::Display for Failure {
             Failure::Underflow { offset, value } => write!(f, "AN UNDERFLOW AT {:05X} ({:08X})", offset, value),
             Failure::RequestTimeout { offset, value } => write!(f, "A REQUEST TIMEOUT AT {:05X} ({:08X})", offset, value),
             Failure::Screen(why) => write!(f, "THE COMPOSITOR DID NOT TAKE THE SECOND SCREEN: {}", why),
+            Failure::ThirdScreen(why) => write!(f, "THE COMPOSITOR DID NOT TAKE THE THIRD SCREEN: {}", why),
             Failure::SurfaceDiffers { x, y } => write!(f, "THE SURFACE READ BACK DIFFERS AT {},{}", x, y),
             Failure::Refused(Refused::Firmware(o)) => write!(f, "A WRITE TO THE FIRMWARE'S {:05X} WAS REFUSED", o),
             Failure::Refused(Refused::OffRoute(o)) => write!(f, "A WRITE OFF THE ROUTE, TO {:05X}, WAS REFUSED", o),
@@ -784,9 +1060,24 @@ impl fmt::Display for Failure {
             Failure::Table(e) => write!(f, "THE TABLE STOPPED: {:?}", e),
             Failure::FirmwareChanged { offset, before, after } => write!(f, "THE FIRMWARE'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
             Failure::AttachedChanged { offset, before, after } => write!(f, "THE ATTACHED HUBP'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
+            Failure::LitChanged { offset, before, after } => write!(f, "THE OTHER LIT PIPE'S {:05X} CHANGED FROM {:08X} TO {:08X}", offset, before, after),
+            Failure::Refused(Refused::Lit(o)) => write!(f, "A WRITE TO THE OTHER LIT PIPE'S {:05X} WAS REFUSED", o),
             Failure::JournalFull => f.write_str("MORE WRITES THAN THE UNDO CAN HOLD"),
         }
     }
+}
+
+/// The pipe whose HUBP or ODM status register is at `offset`, if one is (213-DRV-0113: an underflow named with its pipe).
+pub fn status_pipe(offset: u32) -> Option<(&'static str, u8)> {
+    (0..4u8).find_map(|n| {
+        if R::HubpCntl.at(n).map(|r| r.offset()) == Some(offset) { Some(("HUBP", n)) }
+        else if R::OptcInputGlobalControl.at(n).map(|r| r.offset()) == Some(offset) { Some(("ODM", n)) } else { None }
+    })
+}
+/// A pipe's HUBP and ODM statuses now, as stage 9 keeps them for the checks after it.
+fn statuses_of(q: u8, bus: &mut impl Bus) -> Result<[u32; 2], Failure> {
+    let at = |r: R| r.at(q).ok_or(Failure::NoReference);
+    Ok([read(bus, at(R::HubpCntl)?)?, read(bus, at(R::OptcInputGlobalControl)?)?])
 }
 
 /// A table's run, for its stage's line (213-DRV-0098): its index, steps and writes, and its time without the log's.
@@ -824,7 +1115,12 @@ struct Done<'a> { light: &'a Light, n: u8, us: u64, t: &'a Tally, d: Option<&'a 
 impl fmt::Display for Done<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (l, n, t) = (self.light, self.n, self.t);
-        write!(f, "S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS); {}.{} MS", n, STAGE_NAMES[n as usize - 1], l.watch.len(), self.us / 1000, self.us % 1000 / 100)?;
+        // Beside a lit pipe, the firmware's and that one, named and counted in the S0 lines: the line keeps to 180 bytes.
+        match l.lit {
+            None => write!(f, "S{} {} DONE; THE FIRMWARE'S PIPE UNCHANGED ({} REGISTERS)", n, STAGE_NAMES[n as usize - 1], l.watch.len())?,
+            Some(_) => write!(f, "S{} {} DONE; THE OTHER TWO PIPES UNCHANGED", n, STAGE_NAMES[n as usize - 1])?,
+        }
+        write!(f, "; {}.{} MS", self.us / 1000, self.us % 1000 / 100)?;
         if t.writes > 0 { write!(f, ", {} WRITES", t.writes)?; }
         if t.waits > 0 { write!(f, ", {} WAITS {} US", t.waits, t.wait_us)?; }
         for r in t.tables.iter().flatten() { write!(f, ", TABLE {} {} US ({} STEPS, {} WRITES)", r.index, r.us, r.steps, r.writes)?; }
@@ -862,12 +1158,18 @@ pub enum Outcome {
 struct Adapter<'a, E: Engine> {
     engine: &'a mut E, guard: &'a Guard, journal: &'a mut Journal, out: &'a mut dyn Out,
     tag: (char, u8, u8), record: bool, writes: u32, refused: Option<Refused>, unreadable: Option<u32>, full: bool, log_us: u64,
+    /// Writes left unmade: table 12's of a register off the route that held their value already (213-DRV-0112).
+    left: u32,
 }
 
 impl<E: Engine> atom::Machine for Adapter<'_, E> {
     fn read(&mut self, reg: Reg) -> Option<u32> { self.engine.read(reg) }
     fn write(&mut self, reg: Reg, value: u32) -> bool {
-        let w = match self.guard.check(reg) { Ok(w) => w, Err(r) => { self.refused = Some(r); return false; } };
+        let w = match self.guard.check(reg) {
+            Ok(w) => w,
+            Err(Refused::OffRoute(o) | Refused::Lit(o)) if o == TABLE12_SETS_FOR_EVERY_PHY && self.tag.2 == dcn::TABLE_SETPIXELCLOCK => return self.leave(reg, value),
+            Err(r) => { self.refused = Some(r); return false; }
+        };
         let Some(old) = self.engine.read(reg) else { self.unreadable = Some(reg.offset()); return false };
         if self.record && !self.journal.push(w, old, self.tag.1) { self.full = true; return false; }
         self.engine.write(w, value);
@@ -881,19 +1183,41 @@ impl<E: Engine> atom::Machine for Adapter<'_, E> {
     fn now_us(&mut self) -> u64 { self.engine.now_us().saturating_sub(self.log_us) }
 }
 
+impl<E: Engine> Adapter<'_, E> {
+    // Table 12's write of PHY A's FUSE0 on another output's route: not made when the register holds the value already,
+    // so that PHY A is not written; refused when it would change it.
+    fn leave(&mut self, reg: Reg, value: u32) -> bool {
+        let Some(old) = self.engine.read(reg) else { self.unreadable = Some(reg.offset()); return false };
+        let t0 = self.engine.now_us();
+        let (tag, o) = (self.tag, reg.offset());
+        let same = old == value;
+        if same {
+            self.left += 1;
+            self.out.line(format_args!("{}{} T{} LEFT PHY A'S RDPCSTX_PHY_FUSE0 AT {:05X} AS IT IS: TABLE 12 SETS IT FOR EVERY PHY, AND IT HOLDS THAT VALUE ({:08X})",
+                tag.0, tag.1, tag.2, o, old));
+        } else {
+            self.refused = Some(if self.guard.check(reg) == Err(Refused::Lit(o)) { Refused::Lit(o) } else { Refused::OffRoute(o) });
+            self.out.line(format_args!("{}{} T{} REFUSED PHY A'S RDPCSTX_PHY_FUSE0 AT {:05X}: TABLE 12 SETS IT FOR EVERY PHY, AND THIS WRITE WOULD CHANGE IT FROM {:08X} TO {:08X}",
+                tag.0, tag.1, tag.2, o, old, value));
+        }
+        self.log_us += self.engine.now_us().saturating_sub(t0);
+        same
+    }
+}
+
 /// Runs table `t` for stage `n`; `record` journals its writes for the undo.
 fn call<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, t: Table, prefix: char, n: u8, record: bool, out: &mut dyn Out) -> Result<TableRun, Failure> {
     let (p, len) = t.parameters();
     out.line(format_args!("{}{} RUNNING TABLE {} ({}) NOW", prefix, n, t.index(), table_name(t.index())));
     let begin = e.now_us();
-    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, unreadable: None, full: false, log_us: 0 };
+    let mut a = Adapter { engine: e, guard: &light.guard, journal, out, tag: (prefix, n, t.index()), record, writes: 0, refused: None, unreadable: None, full: false, log_us: 0, left: 0 };
     interp.set_time_limit(TABLE_TIME_LIMIT_US);
     let result = interp.run(t.index(), &p[..len], &mut a);
-    let (writes, refused, unreadable, full, log_us) = (a.writes, a.refused, a.unreadable, a.full, a.log_us);
+    let (writes, refused, unreadable, full, log_us, left) = (a.writes, a.refused, a.unreadable, a.full, a.log_us, a.left);
     let us = e.now_us().saturating_sub(begin).saturating_sub(log_us);
     match result {
         Ok(o) => {
-            out.line(format_args!("{}{} TABLE {} DONE: {} STEPS, {} CALLS, {} US OF DELAYS, {} WRITES", prefix, n, t.index(), o.steps, o.calls, o.delay_us, writes));
+            out.line(format_args!("{}{} TABLE {} DONE: {} STEPS, {} CALLS, {} US OF DELAYS, {} WRITES{}", prefix, n, t.index(), o.steps, o.calls, o.delay_us, writes, Left(left)));
             Ok(TableRun { index: t.index(), steps: o.steps, writes, us })
         }
         Err(_) if refused.is_some() => Err(Failure::Refused(refused.unwrap_or(Refused::OffRoute(0)))),
@@ -981,14 +1305,20 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
                     if field.get(v) & !field.get(d.underflow[i]) != 0 { return Err(Failure::Underflow { offset: x.offset(), value: v }); }
                     if reg == R::HubpCntl && HUBP_TIMEOUT_STATUS.get(v) & !HUBP_TIMEOUT_STATUS.get(d.underflow[i]) != 0 { return Err(Failure::RequestTimeout { offset: x.offset(), value: v }); }
                 }
-                out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q));
+                // The pipe lit beside, as the firmware's (213-DRV-0113).
+                if let (Some(l), Some(was)) = (light.lit, d.lit_underflow) { lit_new(l.pipe.otg, e, &was)?; }
+                match light.lit {
+                    None => out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}", n, r.pipe, r.otg, q, q)),
+                    Some(l) => out.line(format_args!("S{} NO NEW UNDERFLOW: HUBP{} AND ODM{} (THE FIRMWARE'S), HUBP{} AND ODM{}, HUBP{} AND ODM{} ({}'S)", n, r.pipe, r.otg, q, q,
+                        l.pipe.otg, l.pipe.otg, name(&l.output))),
+                }
             }
             Step::Offer => {
                 let (w, h, pitch) = (light.surface.width as u16, light.surface.height as u16, (light.surface.pitch * 4) as u32);
-                e.offer(w, h, pitch).map_err(Failure::Screen)?;
+                offer_on(light.screen, e, w, h, pitch).map_err(|why| if light.screen == Screen::Third { Failure::ThirdScreen(why) } else { Failure::Screen(why) })?;
                 tally.offered = true;
-                out.line(format_args!("S{} OFFERED THE SECOND SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT 5'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
-                    n, w, h, pitch));
+                out.line(format_args!("S{} OFFERED THE {} SCREEN: {}x{}, PITCH {} BYTES, BGR, ITS PIXELS SLOT {}'S SURFACE; THE COMPOSITOR MIRRORS THE FIRST INTO IT",
+                    n, light.screen.name(), w, h, pitch, light.screen.slot()));
             }
             Step::Watch { frames } => {
                 let d = derived.as_ref().ok_or(Failure::NoReference)?;
@@ -1000,6 +1330,17 @@ fn stage<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal:
         }
     }
     Ok(tally)
+}
+
+/// The pipe lit beside a run (`q`): a new underflow or request timeout on it since `was` (213-DRV-0113).
+fn lit_new(q: u8, e: &mut impl Bus, was: &[u32; 2]) -> Result<(), Failure> {
+    let (h, o) = (R::HubpCntl.at(q).ok_or(Failure::NoReference)?, R::OptcInputGlobalControl.at(q).ok_or(Failure::NoReference)?);
+    let (v, w) = (read(e, h)?, read(e, o)?);
+    let new = |field: dcn::Field, v: u32, before: u32| field.get(v) & !field.get(before) != 0;
+    if new(HUBP_UNDERFLOW_STATUS, v, was[0]) { return Err(Failure::Underflow { offset: h.offset(), value: v }); }
+    if new(HUBP_TIMEOUT_STATUS, v, was[0]) { return Err(Failure::RequestTimeout { offset: h.offset(), value: v }); }
+    if new(OPTC_UNDERFLOW_OCCURRED_STATUS, w, was[1]) { return Err(Failure::Underflow { offset: o.offset(), value: w }); }
+    Ok(())
 }
 
 /// Stage 15's watch with the pattern off: OTG1's frame count read without sleeping, both pipes' HUBP and ODM statuses at
@@ -1036,6 +1377,8 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
         // later than a frame shows in the frames passed between two reads and in the longest gap (213-DRV-0111).
         if c <= seen { e.delay_us(ASLEEP_POLL_US); continue; }
         let (v0, w0, v1, w1) = (read(e, h0)?, read(e, o0)?, read(e, h1)?, read(e, o1)?);
+        // The pipe lit beside (213-DRV-0113): at once, as the firmware's.
+        if let (Some(l), Some(was)) = (light.lit, d.lit_underflow) { lit_new(l.pipe.otg, e, &was)?; }
         // The firmware's pipe: at once.
         if new(HUBP_UNDERFLOW_STATUS, v0, d.underflow[0]) { return Err(Failure::Underflow { offset: h0.offset(), value: v0 }); }
         if new(HUBP_TIMEOUT_STATUS, v0, d.underflow[0]) { return Err(Failure::RequestTimeout { offset: h0.offset(), value: v0 }); }
@@ -1067,6 +1410,7 @@ fn watch<E: Engine>(light: &Light, e: &mut E, n: u8, frames: u32, d: &Derived, o
     match &found {
         Some((f, why)) => out.line(format_args!("S{} HUBP{}: UNDERFLOW IN {} FRAMES, REQUEST TIMEOUT IN {}; ODM{} UNDERFLOW IN {}; THE FIRST AT FRAME {} (ABOUT {} MS AFTER THE PATTERN WENT OFF): {}; CLEARED {} TIMES",
             n, q, with(1), with(2), q, with(4), f, *f as u64 * us / frames as u64 / 1000, why, cleared)),
+        None if light.lit.is_some() => out.line(format_args!("S{} NO UNDERFLOW OR REQUEST TIMEOUT ON ANY OF THE THREE PIPES IN {} FRAMES", n, frames)),
         None => out.line(format_args!("S{} NO UNDERFLOW OR REQUEST TIMEOUT ON EITHER PIPE IN {} FRAMES", n, frames)),
     }
     for (i, chunk) in marked.chunks(60).enumerate() {
@@ -1173,6 +1517,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
     let status = |e: &mut E, reg: R, i: u8| reg.at(i).ok_or(Failure::NoReference).and_then(|x| read(e, x));
     let underflow = [status(e, R::HubpCntl, r.pipe)?, status(e, R::OptcInputGlobalControl, r.otg)?, status(e, R::HubpCntl, q)?,
                      status(e, R::OptcInputGlobalControl, q)?];
+    let lit_underflow = match light.lit { Some(l) => Some(statuses_of(l.pipe.otg, e)?), None => None };
     // Pipe 1's global sync for its plane, as dcn20_program_tg writes DML's before the plane goes live: VSTARTUP stage
     // 3's; VUPDATE's offset a quarter line (DML's VUpdateOffsetPix); its width and VREADY's offset the firmware's times
     // (DCFCLK deep sleep and DPPCLK cycles, clocks both pipes share) at pipe 1's pixel clock, rounded up.
@@ -1190,7 +1535,7 @@ fn reference_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out
         // The prefetch's at the same rate as the line's (Display Core's for a vertical ratio of 1), or the firmware's proportion.
         line_delivery_pre: if r.line_delivery == 0 { line1 } else { scaled(line1, r.line_delivery_pre, r.line_delivery) },
         req_delivery_pre: if r.req_delivery == 0 { req1 } else { scaled(req1, r.req_delivery_pre, r.req_delivery) },
-        underflow,
+        underflow, lit_underflow,
     };
     out.line(format_args!("S{} PIPE {} FOR {}x{} AT {} KHZ: REF/PIX {}, PER HTOTAL {}, H_BLANK_END {}, V_BLANK_END {}, LINE {}, REQ {} ({} REQUESTS A LINE)",
         n, light.choice.pipe.otg, light.timing.h_active, light.timing.v_active, pix1, crate::batches::Ratio19(Some(d.ref_to_pix)),
@@ -1252,7 +1597,7 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
     put(&mut p, HubpreqTtuQosWm, q, &[(QOS_LEVEL_LOW_WM, 0), (QOS_LEVEL_HIGH_WM, d.qos_high_wm)])?;
     put(&mut p, HubpreqCur0TtuCntl0, q, &[(REFCYC_PER_REQ_DELIVERY, REFCYC_PER_REQ_DELIVERY.get(copied(r, HubpreqCur0TtuCntl0))),
         (QOS_LEVEL_FIXED, QOS_LEVEL), (QOS_RAMP_DISABLE, 0)])?;
-    let surface = r.fb_base + SURFACE_OFFSET;
+    let surface = r.fb_base + light.screen.offset();
     put(&mut p, HubpreqSurfacePitch, q, &[(WHOLE, light.surface.pitch as u32 - 1)])?;
     p.push(Step::ReadBack { reg: at(HubpreqSurfacePitch, q)?, field: PITCH }).map_err(|_| Failure::PlanFull)?;
     put(&mut p, HubpreqPrimarySurfaceAddressHigh, q, &[(WHOLE, (surface >> 32) as u32)])?;
@@ -1288,19 +1633,19 @@ pub fn pipe_plan(light: &Light, r: &Reference, d: &Derived) -> Result<Plan, Fail
 /// Stage 10: the picture drawn row by row into slot 5's memory, a few pixels read back. No register written.
 fn draw_stage<E: Engine>(light: &Light, e: &mut E, n: u8, out: &mut dyn Out) -> Result<(), Failure> {
     let size = light.surface;
-    let lines = picture::Lines::new(light.build, size);
+    let lines = picture::Lines::on(name(&light.choice.output), light.build, size);
     let mut row = [0u32; picture::MAX_WIDTH];
     for y in 0..size.height {
         picture::row(&lines, y, &mut row);
-        if !e.row(y, size.pitch, &row[..size.width]) { return Err(Failure::NoSurface); }
+        if !row_on(light.screen, e, y, size.pitch, &row[..size.width]) { return Err(Failure::NoSurface); }
     }
     let samples = picture::samples(size);
     for (x, y) in samples {
-        if e.sample(x, y, size.pitch) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
+        if sample_on(light.screen, e, x, y, size.pitch) != Some(picture::pixel(&lines, x, y)) { return Err(Failure::SurfaceDiffers { x: x as u32, y: y as u32 }); }
     }
-    out.line(format_args!("S{} DRAWN: {}x{} AT SLOT 5'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
-        size.width, size.height, size.pitch, size.pitch * 4, samples.len()));
-    out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / HDMI-A-1 {}X{} / BUILD {}", n, size.width, size.height, light.build));
+    out.line(format_args!("S{} DRAWN: {}x{} AT SLOT {}'S START, PITCH {} PIXELS ({} BYTES); {} SAMPLES READ BACK AS DRAWN", n,
+        size.width, size.height, light.screen.slot(), size.pitch, size.pitch * 4, samples.len()));
+    out.line(format_args!("S{} ITS TEXT: MIND CORE / DISPLAY / {} {}X{} / BUILD {}", n, name(&light.choice.output), size.width, size.height, light.build));
     Ok(())
 }
 
@@ -1359,7 +1704,8 @@ fn undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: 
     if n == 10 { out.line(format_args!("U{} THE SURFACE IS LEFT AS IT IS: NOTHING SCANS IT YET", n)); }
     // Stage 16's undo, before stage 15's blanks the pipe: the compositor lets the surface go (screen_gone).
     if n == 16 {
-        match e.gone() {
+        match gone_on(light.screen, e) {
+            Ok(()) if light.screen == Screen::Third => out.line(format_args!("U{} SCREEN_GONE THROUGH SLOT 8: THE COMPOSITOR HAS LET THE THIRD SCREEN'S SURFACE GO", n)),
             Ok(()) => out.line(format_args!("U{} SCREEN_GONE: THE COMPOSITOR HAS LET THE SURFACE GO", n)),
             Err(why) => { out.line(format_args!("U{} SCREEN_GONE NOT TAKEN: {}; THE UNDO GOES ON", n, why)); wrong = true; }
         }
@@ -1414,6 +1760,11 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         Err(why) => { out.note(format_args!("STEP 3 NOT RUN: THE FIRMWARE'S PIPE: {}", why)); return (Outcome::Failed { stage: 0, why }, times); }
     };
     journal.baseline = Some(baseline);
+    let beside = match light.beside.read(e) {
+        Ok(v) => v,
+        Err(why) => { out.note(format_args!("STEP 3 NOT RUN: THE OTHER LIT PIPE: {}", why)); return (Outcome::Failed { stage: 0, why }, times); }
+    };
+    journal.beside = Some(beside);
     // Once while lit: a start of display again (init restarts a program that faults) finds the mark and runs no stage;
     // else the mark is left before stage 1, and only an unplug's taking back clears it.
     if allowed > 0 {
@@ -1450,8 +1801,10 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         let result = stage(light, e, interp, journal, n, &mut derived, late.as_ref(), out).and_then(|tally| {
             let now = light.watch.read(e)?;
             if let Some((reg, before, after)) = light.watch.changed(&baseline, &now) { return Err(Failure::FirmwareChanged { offset: reg.offset(), before, after }); }
+            let now = light.beside.read(e)?;
+            if let Some((reg, before, after)) = light.beside.changed(&beside, &now) { return Err(Failure::LitChanged { offset: reg.offset(), before, after }); }
             // Stage 9 done: stages 11 to 15 built from its reference.
-            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); journal.statuses = Some(d.underflow); }
+            if let (9, Some(r), Some(d)) = (n, light.reference, derived) { late = Some(pipe_plan(light, &r, &d)?); (journal.statuses, journal.lit_statuses) = (Some(d.underflow), d.lit_underflow); }
             // The attached HUBP is guarded until step 4 takes it, from stage 11.
             if n < ATTACHED_FROM || n >= dcn::PIPE_WRITES_FROM || light.attached.is_empty() { return Ok(tally); }
             let now = light.attached.read(e)?;
@@ -1494,9 +1847,10 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
                 for m in (1..if at_once { n } else { n + 1 }).rev() { undo(light, e, interp, journal, m, false, out); }
                 let after = light.watch.read(e).ok();
                 let same = after.map(|a| light.watch.changed(&baseline, &a).is_none());
+                let lit = light.beside.read(e).ok().map(|a| light.beside.changed(&beside, &a).is_none());
                 times.total_us = e.now_us().saturating_sub(start);
-                out.note(format_args!("STEP 3 FAILED AT STAGE {} AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}", n,
-                    match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
+                out.note(format_args!("STEP 3 FAILED AT STAGE {} AND WAS UNDONE; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}", n,
+                    match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, light.lit_too(lit)));
                 return (Outcome::Failed { stage: n, why }, times);
             }
         }
@@ -1514,9 +1868,10 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
         out.line(format_args!("STEP 3 RAN {} OF {} STAGES ({} WRITES); UNDOING STAGES {} TO 1 AS THIS BUILD ASKS", allowed, STAGES, journal.len, allowed));
         let wrong = undo_all(light, e, interp, journal, allowed, out);
         let same = light.watch.read(e).ok().map(|a| light.watch.changed(&baseline, &a).is_none());
-        if same != Some(true) { out.failed(); }
-        out.note(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}", allowed, STAGES,
-            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, Wrong(wrong)));
+        let lit = light.beside.read(e).ok().map(|a| light.beside.changed(&beside, &a).is_none());
+        if same != Some(true) || (light.lit.is_some() && lit != Some(true)) { out.failed(); }
+        out.note(format_args!("STEP 3 UNDONE AFTER STAGE {} OF {} AS THIS BUILD ASKS; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}{}", allowed, STAGES,
+            match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, light.lit_too(lit), Wrong(wrong)));
         return (Outcome::Undone { done: allowed }, times);
     }
     out.note(format_args!("STEP 3 STOPPED AFTER STAGE {} OF {} AS THIS BUILD ALLOWS; {} WRITES MADE ARE LEFT IN PLACE", allowed, STAGES, journal.len));
@@ -1531,18 +1886,19 @@ pub fn run_timed<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, 
 pub fn take_back<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpreter, journal: &mut Journal, done: u8, out: &mut dyn Out) -> bool {
     out.part();
     let (start, done) = (e.now_us(), done.min(STAGES));
-    out.note(format_args!("STEP 3 TAKEN BACK: HPD 1 SENSES NO MONITOR; UNDOING STAGES {} TO 1 ({} WRITES)", done, journal.len));
+    out.note(format_args!("STEP 3 TAKEN BACK: HPD {} SENSES NO MONITOR; UNDOING STAGES {} TO 1 ({} WRITES)", light.choice.output.hpd + 1, done, journal.len));
     let wrong = undo_all(light, e, interp, journal, done, out);
     if let Some((w, was)) = journal.mark.take() {
         e.write(w, was);
         out.line(format_args!("U0 RESTORED {} = {:08X}: THE MARK OF STAGES IN PLACE CLEARED", Name(w.reg()), was));
     }
     let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
+    let lit = journal.beside.and_then(|b| light.beside.read(e).ok().map(|now| light.beside.changed(&b, &now).is_none()));
     journal.clear();
-    if same != Some(true) { out.failed(); }
-    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}{}", Ms(e.now_us().saturating_sub(start)),
-        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, Wrong(wrong)));
-    same == Some(true)
+    if same != Some(true) || (light.lit.is_some() && lit != Some(true)) { out.failed(); }
+    out.note(format_args!("STEP 3 TAKEN BACK IN {} MS: THE SECOND PIPE IS OFF, ITS MARK CLEARED; THE FIRMWARE'S PIPE {}{}{}", Ms(e.now_us().saturating_sub(start)),
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, light.lit_too(lit), Wrong(wrong)));
+    same == Some(true) && (light.lit.is_none() || lit == Some(true))
 }
 
 /// The standing check's account (213-DRV-0103): the checks made since it last said so, the longest time between two
@@ -1575,6 +1931,9 @@ pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, ac
         if underflow { return Err(Failure::Underflow { offset: reg.offset(), value: v }); }
         if timeout { return Err(Failure::RequestTimeout { offset: reg.offset(), value: v }); }
     }
+    // The pipe lit beside this run too (213-DRV-0113): named with its pipe; the follower undoes the run it is on.
+    if let (Some(l), Some(w)) = (light.lit, journal.lit_statuses) { lit_new(l.pipe.otg, e, &w)?; }
+    let pipes = if light.lit.is_some() && journal.lit_statuses.is_some() { "ANY OF THE THREE PIPES" } else { "EITHER PIPE" };
     let now = e.now_us();
     if let Some(since) = account.dark_since.take() { account.dark_us += now.saturating_sub(since); }
     if let Some(last) = account.last_us { account.longest_us = account.longest_us.max(now.saturating_sub(last)); }
@@ -1582,10 +1941,10 @@ pub fn standing_check<E: Engine>(light: &Light, e: &mut E, journal: &Journal, ac
     if now.saturating_sub(account.said_us) >= STANDING_SAID_US {
         let minutes = now.saturating_sub(account.said_us) / 60_000_000;
         match account.dark {
-            0 => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON EITHER PIPE",
-                account.checks, minutes, account.longest_us / 1000)),
-            d => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO WHILE LIT; DARK {} TIMES, {} S IN ALL; NOTHING NEW ON EITHER PIPE",
-                account.checks, minutes, account.longest_us / 1000, d, account.dark_us / 1_000_000)),
+            0 => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO; NOTHING NEW ON {}",
+                account.checks, minutes, account.longest_us / 1000, pipes)),
+            d => out.note(format_args!("S15 STANDING CHECK: {} CHECKS IN {} MIN, THE LONGEST {} MS BETWEEN TWO WHILE LIT; DARK {} TIMES, {} S IN ALL; NOTHING NEW ON {}",
+                account.checks, minutes, account.longest_us / 1000, d, account.dark_us / 1_000_000, pipes)),
         }
         (account.checks, account.longest_us, account.dark, account.dark_us, account.said_us) = (0, 0, 0, 0, now);
     }
@@ -1605,7 +1964,8 @@ pub fn standing_undo<E: Engine>(light: &Light, e: &mut E, interp: &mut Interpret
     if done >= 16 { undo(light, e, interp, journal, 16, false, out); }
     for m in (1..=done.min(14)).rev() { undo(light, e, interp, journal, m, false, out); }
     let same = journal.baseline.and_then(|b| light.watch.read(e).ok().map(|now| light.watch.changed(&b, &now).is_none()));
-    out.note(format_args!("STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT",
-        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }));
-    same == Some(true)
+    let lit = journal.beside.and_then(|b| light.beside.read(e).ok().map(|now| light.beside.changed(&b, &now).is_none()));
+    out.note(format_args!("STEP 3 UNDONE AFTER THE STANDING CHECK; THE SECOND PIPE IS OFF; THE FIRMWARE'S PIPE {}{}; THE MARK KEPT: NOT TRIED AGAIN THIS BOOT",
+        match same { Some(true) => "UNCHANGED", Some(false) => "CHANGED", None => "UNREADABLE" }, light.lit_too(lit)));
+    same == Some(true) && (light.lit.is_none() || lit == Some(true))
 }
