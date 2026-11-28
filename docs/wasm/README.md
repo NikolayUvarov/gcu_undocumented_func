@@ -1,6 +1,6 @@
 # MIND Core in a browser tab: a plan
 
-**Status:** a proposal of the kernel track, 2026-11-28, at the maintainer's request. Nothing in it is made yet; what it says MIND Core would do in a browser is a plan, not a guarantee (MC-12.3). Its tasks get numbers when the maintainer chooses the way and the track (section 8).
+**Status:** the plan of main task [215](../../issues/215-mind-core-in-a-browser-tab.md) (`PRT`). The maintainer chose way B on 2026-11-28, with the desktop and its applications first: «We need it to show interface and applications readyness for humans so they can support as contibutors». Nothing in it is made yet; what it says MIND Core would do in a browser is a plan, not a guarantee (MC-12.3).
 
 **The maintainer's request (2026-11-28):** «изучить как сделать следующее решение — запустить mind-core-os в webassembly, аналогично проекту unkernel.dev. Создай план и оцени реалистичность.»
 
